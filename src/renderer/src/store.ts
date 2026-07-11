@@ -63,6 +63,8 @@ interface AppState {
   fileContents: Record<string, FileContent>
   /** 'plan', an open file path, or a diff tab id. */
   activeTab: string | null
+  /** Saved tab sets per project, restored when switching back. */
+  workspaces: Record<string, { openFiles: OpenTab[]; activeTab: string | null }>
 
   togglePanel(): void
   loadDir(dir: string): Promise<void>
@@ -116,6 +118,28 @@ interface AppState {
   applyEvent(ev: ChatEvent): void
 }
 
+/**
+ * Tabs belong to a project. Switching projects stashes the current tab set
+ * and restores whatever was open in the target project last time.
+ */
+function projectSwitchPatch(
+  s: Pick<AppState, 'selectedCwd' | 'openFiles' | 'activeTab' | 'workspaces'>,
+  nextCwd: string | null
+): Partial<AppState> {
+  if (s.selectedCwd === nextCwd) return { selectedCwd: nextCwd }
+  const workspaces = { ...s.workspaces }
+  if (s.selectedCwd) {
+    workspaces[s.selectedCwd] = { openFiles: s.openFiles, activeTab: s.activeTab }
+  }
+  const restored = (nextCwd ? workspaces[nextCwd] : null) ?? { openFiles: [], activeTab: null }
+  return {
+    workspaces,
+    selectedCwd: nextCwd,
+    openFiles: restored.openFiles,
+    activeTab: restored.activeTab
+  }
+}
+
 function upsertMessage(messages: ChatMessage[], message: ChatMessage): ChatMessage[] {
   const idx = messages.findIndex((m) => m.id === message.id)
   if (idx === -1) return [...messages, message]
@@ -155,7 +179,7 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   setSelectedCwd(cwd) {
-    set({ selectedCwd: cwd })
+    set((s) => projectSwitchPatch(s, cwd))
   },
 
   openPlanPanel(panel) {
@@ -177,6 +201,7 @@ export const useApp = create<AppState>((set, get) => ({
   openFiles: [],
   fileContents: {},
   activeTab: null,
+  workspaces: {},
 
   togglePanel() {
     const opening = !get().panelOpen
@@ -389,17 +414,20 @@ export const useApp = create<AppState>((set, get) => ({
     // Guard against a chat switch happening while we awaited.
     if (get().activeId === id && chat) {
       const cwdChanged = get().selectedCwd !== chat.cwd
-      set({ messages: chat.messages, selectedCwd: chat.cwd })
-      if (cwdChanged && get().panelOpen) void get().refreshGit()
+      set((s) => ({ messages: chat.messages, ...projectSwitchPatch(s, chat.cwd) }))
+      if (cwdChanged && get().panelOpen) {
+        void get().refreshGit()
+        if (!get().filesByDir[chat.cwd]) void get().loadDir(chat.cwd)
+      }
     }
   },
 
   async newChat(cwd, firstMessage, opts) {
     const meta = await window.api.createChat({ cwd, ...opts })
     set((s) => ({
+      ...projectSwitchPatch(s, cwd),
       chats: [meta, ...s.chats],
       activeId: meta.id,
-      selectedCwd: cwd,
       messages: [],
       planPanel: null,
       defaults: s.defaults
@@ -446,13 +474,17 @@ export const useApp = create<AppState>((set, get) => ({
       const chats = s.chats.filter((c) => c.cwd !== cwd)
       const wasActive = s.activeId !== null && ids.includes(s.activeId)
       const recentDirs = s.defaults?.recentDirs.filter((d) => d !== cwd) ?? []
+      const patch =
+        s.selectedCwd === cwd
+          ? projectSwitchPatch(s, chats[0]?.cwd ?? recentDirs[0] ?? null)
+          : {}
+      delete patch.workspaces?.[cwd]
       return {
+        ...patch,
         chats,
         activeId: wasActive ? null : s.activeId,
         messages: wasActive ? [] : s.messages,
         planPanel: wasActive ? null : s.planPanel,
-        selectedCwd:
-          s.selectedCwd === cwd ? (chats[0]?.cwd ?? recentDirs[0] ?? null) : s.selectedCwd,
         defaults: s.defaults ? { ...s.defaults, recentDirs } : s.defaults
       }
     })
