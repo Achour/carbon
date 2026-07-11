@@ -254,6 +254,7 @@ export interface Api {
   gitPush(cwd: string): Promise<GitResult>
   gitInit(cwd: string): Promise<GitResult>
   getDefaults(): Promise<AppDefaults>
+  forgetDir(dir: string): Promise<void>
   onChatEvent(cb: (ev: ChatEvent) => void): () => void
   onNewChat(cb: () => void): () => void
 }

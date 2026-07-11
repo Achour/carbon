@@ -104,6 +104,8 @@ interface AppState {
   sendMessage(text: string): Promise<void>
   interrupt(): Promise<void>
   deleteChat(id: string): Promise<void>
+  /** Deletes every chat in the project and drops it from recent folders. */
+  removeProject(cwd: string): Promise<void>
   renameChat(id: string, title: string): Promise<void>
   setChatOptions(patch: {
     model?: string
@@ -432,6 +434,28 @@ export const useApp = create<AppState>((set, get) => ({
       activeId: s.activeId === id ? null : s.activeId,
       messages: s.activeId === id ? [] : s.messages
     }))
+  },
+
+  async removeProject(cwd) {
+    const ids = get()
+      .chats.filter((c) => c.cwd === cwd)
+      .map((c) => c.id)
+    await Promise.all(ids.map((id) => window.api.deleteChat(id)))
+    await window.api.forgetDir(cwd)
+    set((s) => {
+      const chats = s.chats.filter((c) => c.cwd !== cwd)
+      const wasActive = s.activeId !== null && ids.includes(s.activeId)
+      const recentDirs = s.defaults?.recentDirs.filter((d) => d !== cwd) ?? []
+      return {
+        chats,
+        activeId: wasActive ? null : s.activeId,
+        messages: wasActive ? [] : s.messages,
+        planPanel: wasActive ? null : s.planPanel,
+        selectedCwd:
+          s.selectedCwd === cwd ? (chats[0]?.cwd ?? recentDirs[0] ?? null) : s.selectedCwd,
+        defaults: s.defaults ? { ...s.defaults, recentDirs } : s.defaults
+      }
+    })
   },
 
   async renameChat(id, title) {

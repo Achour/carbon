@@ -1,5 +1,6 @@
 import * as React from 'react'
 import {
+  ChevronRight,
   Folder,
   FolderOpen,
   MessageSquarePlus,
@@ -145,6 +146,29 @@ export function Sidebar(): React.JSX.Element {
   const [renaming, setRenaming] = React.useState<ChatMeta | null>(null)
   const [deleting, setDeleting] = React.useState<ChatMeta | null>(null)
   const [renameValue, setRenameValue] = React.useState('')
+  const removeProject = useApp((s) => s.removeProject)
+  const [removingProject, setRemovingProject] = React.useState<{
+    cwd: string
+    count: number
+  } | null>(null)
+  const [collapsedProjects, setCollapsedProjects] = React.useState<Record<string, boolean>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem('collapsedProjects') ?? '{}') as Record<
+        string,
+        boolean
+      >
+    } catch {
+      return {}
+    }
+  })
+
+  const toggleProject = (cwd: string): void => {
+    setCollapsedProjects((prev) => {
+      const next = { ...prev, [cwd]: !prev[cwd] }
+      localStorage.setItem('collapsedProjects', JSON.stringify(next))
+      return next
+    })
+  }
 
   const filtered = filter
     ? chats.filter((c) => (c.title || 'New chat').toLowerCase().includes(filter.toLowerCase()))
@@ -247,46 +271,86 @@ export function Sidebar(): React.JSX.Element {
             {filter ? 'No chats match your search.' : 'Open a project to get started.'}
           </div>
         )}
-        {groups.map((group) => (
-          <div key={group.cwd} className="mb-1.5">
-            <div className="group/project flex items-center gap-1.5 px-2.5 pt-2.5 pb-1">
-              <Folder className="size-3 shrink-0 text-muted-foreground/70" />
-              <WithTooltip label={group.cwd}>
-                <span className="truncate text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
-                  {basename(group.cwd)}
-                </span>
-              </WithTooltip>
-              <div className="flex-1" />
-              <WithTooltip label={`New chat in ${basename(group.cwd)}`}>
-                <Button
-                  size="icon-sm"
-                  variant="ghost"
-                  className="size-5 opacity-0 transition-opacity group-hover/project:opacity-100"
-                  onClick={() => newChatIn(group.cwd)}
-                  aria-label={`New chat in ${basename(group.cwd)}`}
-                >
-                  <Plus />
-                </Button>
-              </WithTooltip>
+        {groups.map((group) => {
+          // Search results always show, even in collapsed projects.
+          const isCollapsed = !filter && Boolean(collapsedProjects[group.cwd])
+          const hasStreaming = group.chats.some((c) => (statuses[c.id] ?? 'idle') !== 'idle')
+          return (
+            <div key={group.cwd} className="mb-1.5">
+              <div className="group/project flex items-center gap-0.5 px-1 pt-2.5 pb-1">
+                <WithTooltip label={group.cwd}>
+                  <button
+                    type="button"
+                    onClick={() => toggleProject(group.cwd)}
+                    className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1.5 py-0.5 text-left transition-colors hover:bg-sidebar-accent/60"
+                    aria-expanded={!isCollapsed}
+                  >
+                    <ChevronRight
+                      className={cn(
+                        'size-3 shrink-0 text-muted-foreground/70 transition-transform duration-150',
+                        !isCollapsed && 'rotate-90'
+                      )}
+                    />
+                    <Folder className="size-3 shrink-0 text-muted-foreground/70" />
+                    <span className="truncate text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+                      {basename(group.cwd)}
+                    </span>
+                    {isCollapsed && (
+                      <span className="shrink-0 text-[10px] text-muted-foreground/60">
+                        {group.chats.length}
+                      </span>
+                    )}
+                    {isCollapsed && hasStreaming && (
+                      <span className="size-1.5 shrink-0 animate-pulse-soft rounded-full bg-primary" />
+                    )}
+                  </button>
+                </WithTooltip>
+                <WithTooltip label={`New chat in ${basename(group.cwd)}`}>
+                  <Button
+                    size="icon-sm"
+                    variant="ghost"
+                    className="size-5 shrink-0 opacity-0 transition-opacity group-hover/project:opacity-100"
+                    onClick={() => newChatIn(group.cwd)}
+                    aria-label={`New chat in ${basename(group.cwd)}`}
+                  >
+                    <Plus />
+                  </Button>
+                </WithTooltip>
+                <WithTooltip label="Remove project and its chats">
+                  <Button
+                    size="icon-sm"
+                    variant="ghost"
+                    className="size-5 shrink-0 opacity-0 transition-opacity group-hover/project:opacity-100 hover:text-destructive"
+                    onClick={() =>
+                      setRemovingProject({ cwd: group.cwd, count: group.chats.length })
+                    }
+                    aria-label={`Remove ${basename(group.cwd)} from sidebar`}
+                  >
+                    <Trash2 />
+                  </Button>
+                </WithTooltip>
+              </div>
+              {!isCollapsed && (
+                <div className="space-y-0.5">
+                  {group.chats.map((chat) => (
+                    <ChatItem
+                      key={chat.id}
+                      chat={chat}
+                      active={chat.id === activeId}
+                      streaming={(statuses[chat.id] ?? 'idle') !== 'idle'}
+                      onOpen={() => void openChat(chat.id)}
+                      onRename={() => {
+                        setRenameValue(chat.title)
+                        setRenaming(chat)
+                      }}
+                      onDelete={() => setDeleting(chat)}
+                    />
+                  ))}
+                </div>
+              )}
             </div>
-            <div className="space-y-0.5">
-              {group.chats.map((chat) => (
-                <ChatItem
-                  key={chat.id}
-                  chat={chat}
-                  active={chat.id === activeId}
-                  streaming={(statuses[chat.id] ?? 'idle') !== 'idle'}
-                  onOpen={() => void openChat(chat.id)}
-                  onRename={() => {
-                    setRenameValue(chat.title)
-                    setRenaming(chat)
-                  }}
-                  onDelete={() => setDeleting(chat)}
-                />
-              ))}
-            </div>
-          </div>
-        ))}
+          )
+        })}
       </div>
 
       {/* Footer */}
@@ -327,6 +391,35 @@ export function Sidebar(): React.JSX.Element {
               </Button>
             </div>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Remove project dialog */}
+      <Dialog
+        open={removingProject !== null}
+        onOpenChange={(open) => !open && setRemovingProject(null)}
+      >
+        <DialogContent>
+          <DialogTitle>Remove “{removingProject ? basename(removingProject.cwd) : ''}”?</DialogTitle>
+          <DialogDescription>
+            The project is removed from the sidebar and its{' '}
+            {removingProject?.count === 1 ? 'chat is' : `${removingProject?.count} chats are`}{' '}
+            deleted permanently. Files on disk are not touched.
+          </DialogDescription>
+          <div className="mt-4 flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setRemovingProject(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                if (removingProject) void removeProject(removingProject.cwd)
+                setRemovingProject(null)
+              }}
+            >
+              Remove project
+            </Button>
+          </div>
         </DialogContent>
       </Dialog>
 

@@ -40,6 +40,7 @@ const api: Api = {
   gitPush: (cwd: string) => ipcRenderer.invoke('git:push', cwd),
   gitInit: (cwd: string) => ipcRenderer.invoke('git:init', cwd),
   getDefaults: () => ipcRenderer.invoke('app:get-defaults'),
+  forgetDir: (dir: string) => ipcRenderer.invoke('app:forget-dir', dir),
   onChatEvent: (cb: (ev: ChatEvent) => void) => {
     const listener = (_e: Electron.IpcRendererEvent, ev: ChatEvent): void => cb(ev)
     ipcRenderer.on('chat:event', listener)

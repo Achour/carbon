@@ -145,6 +145,11 @@ export class Store {
     this.writeSettings()
   }
 
+  forgetDir(dir: string): void {
+    this.settings.defaults.recentDirs = this.settings.defaults.recentDirs.filter((d) => d !== dir)
+    this.writeSettings()
+  }
+
   getWindowBounds(): SettingsFile['windowBounds'] {
     return this.settings.windowBounds
   }

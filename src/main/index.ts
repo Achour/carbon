@@ -233,6 +233,8 @@ function registerIpc(): void {
 
   ipcMain.handle('app:get-defaults', () => store.getDefaults())
 
+  ipcMain.handle('app:forget-dir', (_e, dir: string) => store.forgetDir(dir))
+
   ipcMain.handle('fs:list', (_e, dir: string) => listDir(dir))
 
   ipcMain.handle('fs:read', (_e, path: string) => readFileContent(path))
