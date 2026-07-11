@@ -18,8 +18,8 @@ export function NewChat(): React.JSX.Element {
   const sidebarOpen = useApp((s) => s.sidebarOpen)
   const toggleSidebar = useApp((s) => s.toggleSidebar)
 
-  const [model, setModel] = React.useState('')
-  const [effort, setEffort] = React.useState<EffortId | ''>('')
+  const [model, setModel] = React.useState(defaults?.model ?? '')
+  const [effort, setEffort] = React.useState<EffortId | ''>(defaults?.effort ?? '')
   const [permissionMode, setPermissionMode] = React.useState<PermissionModeId>(
     defaults?.permissionMode ?? 'default'
   )

@@ -401,7 +401,13 @@ export const useApp = create<AppState>((set, get) => ({
       messages: [],
       planPanel: null,
       defaults: s.defaults
-        ? { ...s.defaults, recentDirs: [cwd, ...s.defaults.recentDirs.filter((d) => d !== cwd)].slice(0, 8) }
+        ? {
+            ...s.defaults,
+            model: opts?.model,
+            effort: opts?.effort,
+            permissionMode: opts?.permissionMode ?? s.defaults.permissionMode,
+            recentDirs: [cwd, ...s.defaults.recentDirs.filter((d) => d !== cwd)].slice(0, 8)
+          }
         : s.defaults
     }))
     await window.api.send(meta.id, firstMessage)
@@ -437,6 +443,17 @@ export const useApp = create<AppState>((set, get) => ({
     const id = get().activeId
     if (!id) return
     await window.api.setChatOptions(id, patch)
+    // Mirror the new defaults locally so the next New-chat screen uses them.
+    set((s) => ({
+      defaults: s.defaults
+        ? {
+            ...s.defaults,
+            ...(patch.model !== undefined ? { model: patch.model || undefined } : {}),
+            ...(patch.effort !== undefined ? { effort: patch.effort || undefined } : {}),
+            ...(patch.permissionMode ? { permissionMode: patch.permissionMode } : {})
+          }
+        : s.defaults
+    }))
   },
 
   async respondPermission(requestId, decision) {

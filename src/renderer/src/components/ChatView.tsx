@@ -248,6 +248,8 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
             onEffortChange={(effort) => void setChatOptions({ effort })}
             permissionMode={chat.permissionMode}
             onPermissionModeChange={(permissionMode) => void setChatOptions({ permissionMode })}
+            contextTokens={chat.contextTokens}
+            contextWindow={chat.contextWindow}
           />
         </div>
       </div>

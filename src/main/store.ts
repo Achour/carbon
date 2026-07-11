@@ -1,7 +1,7 @@
 import { app } from 'electron'
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { AppDefaults, ChatData, ChatMeta } from '@shared/types'
+import type { AppDefaults, ChatData, ChatMeta, EffortId, PermissionModeId } from '@shared/types'
 
 interface SettingsFile {
   defaults: AppDefaults
@@ -123,6 +123,19 @@ export class Store {
 
   getDefaults(): AppDefaults {
     return this.settings.defaults
+  }
+
+  /** Remember the user's last chosen options as the defaults for new chats. */
+  rememberOptions(patch: {
+    model?: string
+    effort?: EffortId | ''
+    permissionMode?: PermissionModeId
+  }): void {
+    const defaults = this.settings.defaults
+    if (patch.permissionMode !== undefined) defaults.permissionMode = patch.permissionMode
+    if (patch.model !== undefined) defaults.model = patch.model || undefined
+    if (patch.effort !== undefined) defaults.effort = patch.effort || undefined
+    this.writeSettings()
   }
 
   rememberDir(dir: string): void {

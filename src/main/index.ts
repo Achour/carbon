@@ -177,6 +177,11 @@ function registerIpc(): void {
     }
     store.addChat(chat)
     store.rememberDir(opts.cwd)
+    store.rememberOptions({
+      model: opts.model ?? '',
+      effort: opts.effort ?? '',
+      permissionMode: chat.permissionMode
+    })
     const { messages: _messages, ...meta } = chat
     return meta
     }

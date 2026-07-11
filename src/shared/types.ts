@@ -26,6 +26,10 @@ export interface ChatMeta {
   permissionMode: PermissionModeId
   /** Provider-side session id, used to resume conversations. */
   sessionId?: string
+  /** Tokens currently in the model's context (from the last API call). */
+  contextTokens?: number
+  /** Context window size of the model in use. */
+  contextWindow?: number
   createdAt: number
   updatedAt: number
 }
@@ -137,6 +141,7 @@ export type ChatEvent =
 
 export interface AppDefaults {
   model?: string
+  effort?: EffortId
   permissionMode: PermissionModeId
   recentDirs: string[]
 }

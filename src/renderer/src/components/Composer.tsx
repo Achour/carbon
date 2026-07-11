@@ -13,6 +13,47 @@ import { Button } from '@/components/ui/button'
 import { CompactSelect } from '@/components/ui/select'
 import { WithTooltip } from '@/components/ui/tooltip'
 
+function fmtTokens(n: number): string {
+  return n >= 1000 ? `${Math.round(n / 1000)}k` : String(n)
+}
+
+function ContextRing({ used, window }: { used: number; window: number }): React.JSX.Element {
+  const pct = Math.min(1, used / window)
+  const r = 5
+  const c = 2 * Math.PI * r
+  return (
+    <WithTooltip
+      label={`Context: ${fmtTokens(used)} of ${fmtTokens(window)} tokens (${Math.round(pct * 100)}%)`}
+    >
+      <div
+        className={cn(
+          'flex items-center gap-1 px-1',
+          pct > 0.9
+            ? 'text-destructive'
+            : pct > 0.7
+              ? 'text-amber-500'
+              : 'text-muted-foreground'
+        )}
+      >
+        <svg width="14" height="14" viewBox="0 0 14 14" className="-rotate-90">
+          <circle cx="7" cy="7" r={r} fill="none" strokeWidth="2.5" className="stroke-border" />
+          <circle
+            cx="7"
+            cy="7"
+            r={r}
+            fill="none"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            stroke="currentColor"
+            strokeDasharray={`${c * pct} ${c}`}
+          />
+        </svg>
+        <span className="text-[10px] tabular-nums">{Math.round(pct * 100)}%</span>
+      </div>
+    </WithTooltip>
+  )
+}
+
 export function Composer({
   onSend,
   streaming = false,
@@ -23,6 +64,8 @@ export function Composer({
   onEffortChange,
   permissionMode,
   onPermissionModeChange,
+  contextTokens,
+  contextWindow,
   disabled = false,
   placeholder = 'Ask Claude Code anything…',
   autoFocus = true
@@ -36,6 +79,8 @@ export function Composer({
   onEffortChange: (effort: EffortId | '') => void
   permissionMode: PermissionModeId
   onPermissionModeChange: (mode: PermissionModeId) => void
+  contextTokens?: number
+  contextWindow?: number
   disabled?: boolean
   placeholder?: string
   autoFocus?: boolean
@@ -118,6 +163,9 @@ export function Composer({
           icon={<Shield className="size-3" />}
         />
         <div className="flex-1" />
+        {contextTokens != null && contextTokens > 0 && (
+          <ContextRing used={contextTokens} window={contextWindow ?? 200_000} />
+        )}
         {streaming && onStop ? (
           <WithTooltip label="Stop generating">
             <Button

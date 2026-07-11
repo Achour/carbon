@@ -356,6 +356,16 @@ class ClaudeSession {
         break
 
       case 'result': {
+        if ('modelUsage' in msg && msg.modelUsage) {
+          const windows = Object.values(msg.modelUsage)
+            .map((m) => m.contextWindow)
+            .filter((w): w is number => typeof w === 'number' && w > 0)
+          const window = windows.length ? Math.max(...windows) : undefined
+          if (window && window !== this.chat.contextWindow) {
+            this.chat.contextWindow = window
+            this.emit({ type: 'meta', chatId: this.chat.id, patch: { contextWindow: window } })
+          }
+        }
         const stats = {
           costUsd: msg.total_cost_usd,
           durationMs: msg.duration_ms,
@@ -511,7 +521,30 @@ class ClaudeSession {
     }
   }
 
+  /**
+   * The usage block on each assistant message reflects the full prompt of
+   * that API call — which is exactly what currently occupies the context
+   * window, so `input + cache reads + cache writes + output` is the live
+   * context size.
+   */
+  private updateContext(usage: unknown): void {
+    if (!usage || typeof usage !== 'object') return
+    const u = usage as Record<string, unknown>
+    const n = (key: string): number => (typeof u[key] === 'number' ? (u[key] as number) : 0)
+    const total =
+      n('input_tokens') +
+      n('cache_read_input_tokens') +
+      n('cache_creation_input_tokens') +
+      n('output_tokens')
+    if (total > 0 && total !== this.chat.contextTokens) {
+      this.chat.contextTokens = total
+      this.emit({ type: 'meta', chatId: this.chat.id, patch: { contextTokens: total } })
+      this.store.saveChatSoon(this.chat.id)
+    }
+  }
+
   private reconcileAssistant(msg: SDKAssistantMessage): void {
+    this.updateContext((msg.message as { usage?: unknown }).usage)
     const message = this.ensureCurrent()
     const parts: AssistantPart[] = []
     for (const block of msg.message.content as unknown as Array<Record<string, unknown>>) {
@@ -663,6 +696,8 @@ export class ChatManager {
       if (session) this.disposeChat(chatId)
     }
     this.store.saveChat(chatId)
+    // Explicit user choices become the defaults for future chats.
+    this.store.rememberOptions(patch)
     this.emit({
       type: 'meta',
       chatId,
