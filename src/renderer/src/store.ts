@@ -9,6 +9,8 @@ import type {
   EffortId,
   FileContent,
   FileEntry,
+  GitFileChange,
+  GitStatus,
   PermissionDecision,
   PermissionRequestPayload
 } from '@shared/types'
@@ -18,6 +20,21 @@ export interface PlanPanelState {
   plan: string
   /** Set while an ExitPlanMode permission request is pending; null = read-only view. */
   requestId: string | null
+}
+
+export interface DiffTabMeta {
+  cwd: string
+  /** Repo-relative file path. */
+  file: string
+  staged: boolean
+  untracked: boolean
+}
+
+export interface OpenTab {
+  /** Absolute file path, or a `diff:` id for diff tabs. */
+  path: string
+  name: string
+  diff?: DiffTabMeta
 }
 
 interface AppState {
@@ -42,9 +59,9 @@ interface AppState {
   /** Directory listing cache, keyed by absolute dir path. */
   filesByDir: Record<string, FileEntry[]>
   expandedDirs: Record<string, boolean>
-  openFiles: { path: string; name: string }[]
+  openFiles: OpenTab[]
   fileContents: Record<string, FileContent>
-  /** 'plan' or an open file path. */
+  /** 'plan', an open file path, or a diff tab id. */
   activeTab: string | null
 
   togglePanel(): void
@@ -54,6 +71,27 @@ interface AppState {
   closeFile(path: string): void
   setActiveTab(tab: string): void
   refreshFiles(): Promise<void>
+
+  // ---- Git ----
+  /** Which view the right-panel dock column shows. */
+  rightView: 'files' | 'git'
+  git: GitStatus | null
+  /** True while a commit or push is in flight. */
+  gitBusy: boolean
+  gitError: string | null
+  commitMsg: string
+  /** Diff text per diff tab id. */
+  diffContents: Record<string, string>
+
+  setRightView(view: 'files' | 'git'): void
+  setCommitMsg(msg: string): void
+  refreshGit(): Promise<void>
+  stagePaths(paths: string[]): Promise<void>
+  unstagePaths(paths: string[]): Promise<void>
+  commitChanges(): Promise<void>
+  pushChanges(): Promise<void>
+  initRepo(): Promise<void>
+  openDiff(change: GitFileChange): Promise<void>
 
   init(): Promise<void>
   setSelectedCwd(cwd: string | null): void
@@ -146,6 +184,7 @@ export const useApp = create<AppState>((set, get) => ({
     if (opening) {
       const cwd = get().selectedCwd
       if (cwd && !get().filesByDir[cwd]) void get().loadDir(cwd)
+      void get().refreshGit()
     }
   },
 
@@ -182,11 +221,13 @@ export const useApp = create<AppState>((set, get) => ({
       const openFiles = s.openFiles.filter((f) => f.path !== path)
       const fileContents = { ...s.fileContents }
       delete fileContents[path]
+      const diffContents = { ...s.diffContents }
+      delete diffContents[path]
       let activeTab = s.activeTab
       if (activeTab === path) {
         activeTab = openFiles[openFiles.length - 1]?.path ?? (s.planPanel ? 'plan' : null)
       }
-      return { openFiles, fileContents, activeTab }
+      return { openFiles, fileContents, diffContents, activeTab }
     })
   },
 
@@ -202,11 +243,150 @@ export const useApp = create<AppState>((set, get) => ({
     ]
     await Promise.all(dirs.map((d) => s.loadDir(d)))
     await Promise.all(
-      s.openFiles.map(async (f) => {
-        const content = await window.api.readFile(f.path)
-        set((st) => ({ fileContents: { ...st.fileContents, [f.path]: content } }))
-      })
+      s.openFiles
+        .filter((f) => !f.diff)
+        .map(async (f) => {
+          const content = await window.api.readFile(f.path)
+          set((st) => ({ fileContents: { ...st.fileContents, [f.path]: content } }))
+        })
     )
+  },
+
+  // ---- Git ----
+
+  rightView: 'files',
+  git: null,
+  gitBusy: false,
+  gitError: null,
+  commitMsg: '',
+  diffContents: {},
+
+  setRightView(view) {
+    set({ rightView: view })
+    if (view === 'git') void get().refreshGit()
+  },
+
+  setCommitMsg(msg) {
+    set({ commitMsg: msg })
+  },
+
+  async refreshGit() {
+    const cwd = get().selectedCwd
+    if (!cwd) {
+      set({ git: null })
+      return
+    }
+    try {
+      const git = await window.api.gitStatus(cwd)
+      // Guard against a project switch happening while we awaited.
+      if (get().selectedCwd === cwd) set({ git })
+    } catch {
+      set({ git: null })
+    }
+    // Keep open diff tabs for this project in sync with the working tree.
+    const { openFiles, git } = get()
+    await Promise.all(
+      openFiles
+        .filter((f) => f.diff && f.diff.cwd === cwd)
+        .map(async (f) => {
+          const d = f.diff!
+          const untracked =
+            git?.changes.some((c) => c.path === d.file && !c.staged && c.status === '?') ??
+            d.untracked
+          const text = await window.api.gitDiff(cwd, { path: d.file, staged: d.staged, untracked })
+          set((st) => ({ diffContents: { ...st.diffContents, [f.path]: text } }))
+        })
+    )
+  },
+
+  async stagePaths(paths) {
+    const cwd = get().selectedCwd
+    if (!cwd) return
+    set({ gitError: null })
+    const res = await window.api.gitStage(cwd, paths)
+    if (!res.ok) set({ gitError: res.error })
+    await get().refreshGit()
+  },
+
+  async unstagePaths(paths) {
+    const cwd = get().selectedCwd
+    if (!cwd) return
+    set({ gitError: null })
+    const res = await window.api.gitUnstage(cwd, paths)
+    if (!res.ok) set({ gitError: res.error })
+    await get().refreshGit()
+  },
+
+  async commitChanges() {
+    const cwd = get().selectedCwd
+    const msg = get().commitMsg.trim()
+    if (!cwd || !msg || get().gitBusy) return
+    set({ gitBusy: true, gitError: null })
+    try {
+      // Nothing staged → commit everything, like the editors do.
+      const git = get().git
+      if (git && !git.changes.some((c) => c.staged)) {
+        const staged = await window.api.gitStage(cwd, ['.'])
+        if (!staged.ok) {
+          set({ gitError: staged.error })
+          return
+        }
+      }
+      const res = await window.api.gitCommit(cwd, msg)
+      if (res.ok) set({ commitMsg: '' })
+      else set({ gitError: res.error })
+    } finally {
+      set({ gitBusy: false })
+      await get().refreshGit()
+    }
+  },
+
+  async pushChanges() {
+    const cwd = get().selectedCwd
+    if (!cwd || get().gitBusy) return
+    set({ gitBusy: true, gitError: null })
+    try {
+      const res = await window.api.gitPush(cwd)
+      if (!res.ok) set({ gitError: res.error })
+    } finally {
+      set({ gitBusy: false })
+      await get().refreshGit()
+    }
+  },
+
+  async initRepo() {
+    const cwd = get().selectedCwd
+    if (!cwd) return
+    set({ gitError: null })
+    const res = await window.api.gitInit(cwd)
+    if (!res.ok) set({ gitError: res.error })
+    await get().refreshGit()
+  },
+
+  async openDiff(change) {
+    const cwd = get().selectedCwd
+    if (!cwd) return
+    const id = `diff:${change.staged ? 's' : 'w'}:${cwd}:${change.path}`
+    const name = change.path.split('/').pop() ?? change.path
+    const meta: DiffTabMeta = {
+      cwd,
+      file: change.path,
+      staged: change.staged,
+      untracked: change.status === '?'
+    }
+    set((s) => ({
+      openFiles: s.openFiles.some((f) => f.path === id)
+        ? s.openFiles
+        : [...s.openFiles, { path: id, name: change.staged ? `${name} • staged` : name, diff: meta }],
+      activeTab: id,
+      panelOpen: true
+    }))
+    const text = await window.api.gitDiff(cwd, {
+      path: change.path,
+      staged: change.staged,
+      untracked: meta.untracked
+    })
+    set((s) => ({ diffContents: { ...s.diffContents, [id]: text } }))
   },
 
   async openChat(id) {
@@ -217,7 +397,11 @@ export const useApp = create<AppState>((set, get) => ({
     set({ activeId: id, messages: [], planPanel: null })
     const chat = await window.api.getChat(id)
     // Guard against a chat switch happening while we awaited.
-    if (get().activeId === id && chat) set({ messages: chat.messages, selectedCwd: chat.cwd })
+    if (get().activeId === id && chat) {
+      const cwdChanged = get().selectedCwd !== chat.cwd
+      set({ messages: chat.messages, selectedCwd: chat.cwd })
+      if (cwdChanged && get().panelOpen) void get().refreshGit()
+    }
   },
 
   async newChat(cwd, firstMessage, opts) {
@@ -344,9 +528,13 @@ export const useApp = create<AppState>((set, get) => ({
 
       case 'status': {
         set((st) => ({ statuses: { ...st.statuses, [ev.chatId]: ev.status } }))
-        // Refresh the tree and open files after a turn so Claude's edits show up.
+        // Refresh the tree, open files and git status after a turn so
+        // Claude's edits show up.
         if (ev.status === 'idle' && ev.chatId === s.activeId) {
-          if (s.panelOpen || s.openFiles.length > 0) void get().refreshFiles()
+          if (s.panelOpen || s.openFiles.length > 0) {
+            void get().refreshFiles()
+            void get().refreshGit()
+          }
         }
         break
       }

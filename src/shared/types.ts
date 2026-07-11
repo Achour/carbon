@@ -187,6 +187,36 @@ export type FileContent =
   | { kind: 'too-large'; size: number }
   | { kind: 'error'; message: string }
 
+// ---------- Git ----------
+
+export interface GitFileChange {
+  /** Repo-relative path. */
+  path: string
+  /** Former path when the change is a rename. */
+  origPath?: string
+  /** One-letter status: M, A, D, R, C, T, U (conflict) or ? (untracked). */
+  status: string
+  staged: boolean
+}
+
+export interface GitStatus {
+  isRepo: boolean
+  branch: string
+  ahead: number
+  behind: number
+  hasUpstream: boolean
+  hasRemote: boolean
+  changes: GitFileChange[]
+}
+
+export type GitResult = { ok: true; output?: string } | { ok: false; error: string }
+
+export interface GitDiffTarget {
+  path: string
+  staged: boolean
+  untracked?: boolean
+}
+
 // ---------- Preload API ----------
 
 export interface Api {
@@ -211,6 +241,13 @@ export interface Api {
   pickDirectory(): Promise<string | null>
   listDir(dir: string): Promise<FileEntry[]>
   readFile(path: string): Promise<FileContent>
+  gitStatus(cwd: string): Promise<GitStatus>
+  gitDiff(cwd: string, target: GitDiffTarget): Promise<string>
+  gitStage(cwd: string, paths: string[]): Promise<GitResult>
+  gitUnstage(cwd: string, paths: string[]): Promise<GitResult>
+  gitCommit(cwd: string, message: string): Promise<GitResult>
+  gitPush(cwd: string): Promise<GitResult>
+  gitInit(cwd: string): Promise<GitResult>
   getDefaults(): Promise<AppDefaults>
   onChatEvent(cb: (ev: ChatEvent) => void): () => void
   onNewChat(cb: () => void): () => void

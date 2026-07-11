@@ -7,12 +7,14 @@ import type {
   ChatData,
   ChatEvent,
   EffortId,
+  GitDiffTarget,
   PermissionDecision,
   PermissionModeId,
   Provider
 } from '@shared/types'
 import { ChatManager } from './claude'
 import { listDir, readFileContent } from './files'
+import * as gitOps from './git'
 import { Store } from './store'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -229,6 +231,14 @@ function registerIpc(): void {
   ipcMain.handle('fs:list', (_e, dir: string) => listDir(dir))
 
   ipcMain.handle('fs:read', (_e, path: string) => readFileContent(path))
+
+  ipcMain.handle('git:status', (_e, cwd: string) => gitOps.gitStatus(cwd))
+  ipcMain.handle('git:diff', (_e, cwd: string, target: GitDiffTarget) => gitOps.gitDiff(cwd, target))
+  ipcMain.handle('git:stage', (_e, cwd: string, paths: string[]) => gitOps.gitStage(cwd, paths))
+  ipcMain.handle('git:unstage', (_e, cwd: string, paths: string[]) => gitOps.gitUnstage(cwd, paths))
+  ipcMain.handle('git:commit', (_e, cwd: string, message: string) => gitOps.gitCommit(cwd, message))
+  ipcMain.handle('git:push', (_e, cwd: string) => gitOps.gitPush(cwd))
+  ipcMain.handle('git:init', (_e, cwd: string) => gitOps.gitInit(cwd))
 }
 
 app.whenReady().then(() => {

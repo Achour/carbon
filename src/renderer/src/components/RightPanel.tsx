@@ -1,10 +1,12 @@
 import * as React from 'react'
-import { ClipboardList, FileText, X } from 'lucide-react'
+import { ClipboardList, FileDiff, FileText, Files, GitBranch, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useApp } from '@/store'
 import { PlanContent } from '@/components/PlanPanel'
 import { FileViewer } from '@/components/FileViewer'
 import { FileTree } from '@/components/FileTree'
+import { GitPanel } from '@/components/GitPanel'
+import { DiffView } from '@/components/DiffView'
 
 function Tab({
   icon,
@@ -60,6 +62,10 @@ export function RightPanel(): React.JSX.Element | null {
   const setActiveTab = useApp((s) => s.setActiveTab)
   const closeFile = useApp((s) => s.closeFile)
   const closePlanPanel = useApp((s) => s.closePlanPanel)
+  const rightView = useApp((s) => s.rightView)
+  const setRightView = useApp((s) => s.setRightView)
+  const changeCount = useApp((s) => s.git?.changes.length ?? 0)
+  const diffContents = useApp((s) => s.diffContents)
   const hasSuggestions = useApp((s) => {
     if (!s.planPanel?.requestId) return false
     return (s.permissions[s.planPanel.chatId] ?? []).some(
@@ -100,7 +106,9 @@ export function RightPanel(): React.JSX.Element | null {
           {openFiles.map((file) => (
             <Tab
               key={file.path}
-              icon={<FileText className="size-3.5" />}
+              icon={
+                file.diff ? <FileDiff className="size-3.5" /> : <FileText className="size-3.5" />
+              }
               label={file.name}
               active={current === file.path}
               onSelect={() => setActiveTab(file.path)}
@@ -110,11 +118,13 @@ export function RightPanel(): React.JSX.Element | null {
         </div>
       </header>
 
-      {/* Viewer + file tree docked on the right, Cursor-style */}
+      {/* Viewer + file tree / source control docked on the right, Cursor-style */}
       <div className="flex min-h-0 flex-1">
         <div className="min-w-0 flex-1">
           {current === 'plan' && planPanel ? (
             <PlanContent panel={planPanel} hasSuggestions={hasSuggestions} />
+          ) : current && openFiles.find((f) => f.path === current)?.diff ? (
+            <DiffView text={diffContents[current]} />
           ) : current ? (
             <FileViewer content={fileContents[current]} />
           ) : (
@@ -123,8 +133,40 @@ export function RightPanel(): React.JSX.Element | null {
             </div>
           )}
         </div>
-        <div className="flex w-56 shrink-0 flex-col border-l border-border bg-card/40 pt-1.5">
-          <FileTree />
+        <div className="flex w-56 shrink-0 flex-col border-l border-border bg-card/40">
+          {/* Files / Source control switcher */}
+          <div className="mx-2 mt-1.5 mb-1 grid shrink-0 grid-cols-2 gap-0.5 rounded-lg bg-secondary/60 p-0.5">
+            <button
+              type="button"
+              onClick={() => setRightView('files')}
+              className={cn(
+                'flex h-6 items-center justify-center gap-1.5 rounded-md text-[11px] font-medium transition-colors',
+                rightView === 'files'
+                  ? 'bg-background text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
+              )}
+            >
+              <Files className="size-3" /> Files
+            </button>
+            <button
+              type="button"
+              onClick={() => setRightView('git')}
+              className={cn(
+                'flex h-6 items-center justify-center gap-1.5 rounded-md text-[11px] font-medium transition-colors',
+                rightView === 'git'
+                  ? 'bg-background text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
+              )}
+            >
+              <GitBranch className="size-3" /> Source
+              {changeCount > 0 && (
+                <span className="rounded-full bg-primary/15 px-1 text-[9px] font-semibold text-primary">
+                  {changeCount}
+                </span>
+              )}
+            </button>
+          </div>
+          {rightView === 'git' ? <GitPanel /> : <FileTree />}
         </div>
       </div>
     </aside>
