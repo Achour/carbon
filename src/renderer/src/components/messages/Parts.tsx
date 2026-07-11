@@ -65,7 +65,7 @@ export const AssistantBlock = React.memo(function AssistantBlock({
         const isLast = i === message.parts.length - 1
         if (part.type === 'text') {
           if (!part.text) return null
-          return <Markdown key={i} text={part.text} />
+          return <Markdown key={i} text={part.text} cwd={cwd} />
         }
         if (part.type === 'thinking') {
           if (!part.text) return null

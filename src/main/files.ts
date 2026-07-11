@@ -99,3 +99,12 @@ export async function readFileContent(path: string): Promise<FileContent> {
     return { kind: 'error', message: err instanceof Error ? err.message : String(err) }
   }
 }
+
+export async function statPath(path: string): Promise<'file' | 'dir' | null> {
+  try {
+    const s = await stat(path)
+    return s.isDirectory() ? 'dir' : s.isFile() ? 'file' : null
+  } catch {
+    return null
+  }
+}

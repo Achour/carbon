@@ -13,7 +13,7 @@ import type {
   Provider
 } from '@shared/types'
 import { ChatManager } from './claude'
-import { listDir, readFileContent } from './files'
+import { listDir, readFileContent, statPath } from './files'
 import * as gitOps from './git'
 import { Store } from './store'
 
@@ -238,6 +238,8 @@ function registerIpc(): void {
   ipcMain.handle('fs:list', (_e, dir: string) => listDir(dir))
 
   ipcMain.handle('fs:read', (_e, path: string) => readFileContent(path))
+
+  ipcMain.handle('fs:stat', (_e, path: string) => statPath(path))
 
   ipcMain.handle('git:status', (_e, cwd: string) => gitOps.gitStatus(cwd))
   ipcMain.handle('git:diff', (_e, cwd: string, target: GitDiffTarget) => gitOps.gitDiff(cwd, target))

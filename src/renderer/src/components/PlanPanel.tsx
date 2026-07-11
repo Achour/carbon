@@ -14,6 +14,7 @@ export function PlanContent({
   hasSuggestions: boolean
 }): React.JSX.Element {
   const respondPermission = useApp((s) => s.respondPermission)
+  const selectedCwd = useApp((s) => s.selectedCwd)
   const [feedback, setFeedback] = React.useState('')
   const [autoAccept, setAutoAccept] = React.useState(false)
   const [busy, setBusy] = React.useState(false)
@@ -43,7 +44,7 @@ export function PlanContent({
         </div>
       )}
       <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-        <Markdown text={panel.plan} />
+        <Markdown text={panel.plan} cwd={selectedCwd} />
       </div>
 
       {pending && (

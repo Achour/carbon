@@ -32,6 +32,7 @@ const api: Api = {
   pickDirectory: () => ipcRenderer.invoke('dialog:pick-directory'),
   listDir: (dir: string) => ipcRenderer.invoke('fs:list', dir),
   readFile: (path: string) => ipcRenderer.invoke('fs:read', path),
+  statPath: (path: string) => ipcRenderer.invoke('fs:stat', path),
   gitStatus: (cwd: string) => ipcRenderer.invoke('git:status', cwd),
   gitDiff: (cwd: string, target: GitDiffTarget) => ipcRenderer.invoke('git:diff', cwd, target),
   gitStage: (cwd: string, paths: string[]) => ipcRenderer.invoke('git:stage', cwd, paths),

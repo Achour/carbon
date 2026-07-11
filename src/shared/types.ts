@@ -246,6 +246,7 @@ export interface Api {
   pickDirectory(): Promise<string | null>
   listDir(dir: string): Promise<FileEntry[]>
   readFile(path: string): Promise<FileContent>
+  statPath(path: string): Promise<'file' | 'dir' | null>
   gitStatus(cwd: string): Promise<GitStatus>
   gitDiff(cwd: string, target: GitDiffTarget): Promise<string>
   gitStage(cwd: string, paths: string[]): Promise<GitResult>
