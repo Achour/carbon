@@ -7,6 +7,7 @@ import {
   Minus,
   Plus,
   RefreshCw,
+  Sparkles,
   Upload
 } from 'lucide-react'
 import type { GitFileChange } from '@shared/types'
@@ -129,8 +130,6 @@ export function GitPanel(): React.JSX.Element {
   const git = useApp((s) => s.git)
   const gitBusy = useApp((s) => s.gitBusy)
   const gitError = useApp((s) => s.gitError)
-  const commitMsg = useApp((s) => s.commitMsg)
-  const setCommitMsg = useApp((s) => s.setCommitMsg)
   const refreshGit = useApp((s) => s.refreshGit)
   const stagePaths = useApp((s) => s.stagePaths)
   const unstagePaths = useApp((s) => s.unstagePaths)
@@ -173,7 +172,7 @@ export function GitPanel(): React.JSX.Element {
 
   const staged = git.changes.filter((c) => c.staged)
   const unstaged = git.changes.filter((c) => !c.staged)
-  const canCommit = commitMsg.trim().length > 0 && git.changes.length > 0 && !gitBusy
+  const canCommit = git.changes.length > 0
   const pushDisabled =
     gitBusy || !git.hasRemote || (git.hasUpstream && git.ahead === 0 && staged.length === 0)
 
@@ -214,31 +213,20 @@ export function GitPanel(): React.JSX.Element {
         </WithTooltip>
       </div>
 
-      {/* Commit box */}
+      {/* Actions — committing is delegated to Claude in the chat */}
       <div className="flex flex-col gap-1.5 px-2.5 pb-2">
-        <textarea
-          value={commitMsg}
-          onChange={(e) => setCommitMsg(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-              e.preventDefault()
-              if (canCommit) void commitChanges()
-            }
-          }}
-          placeholder="Commit message  (⌘↵ to commit)"
-          rows={2}
-          className="w-full resize-none rounded-md border border-border bg-background/60 px-2 py-1.5 text-xs outline-none transition-colors select-text placeholder:text-muted-foreground/50 focus:border-ring/60"
-        />
         <div className="flex gap-1.5">
-          <Button
-            size="sm"
-            className="h-6.5 flex-1 text-xs"
-            disabled={!canCommit}
-            onClick={() => void commitChanges()}
-          >
-            <Check className="size-3" />
-            {staged.length > 0 ? `Commit (${staged.length})` : 'Commit all'}
-          </Button>
+          <WithTooltip label="Asks Claude to commit in the chat">
+            <Button
+              size="sm"
+              className="h-6.5 flex-1 text-xs"
+              disabled={!canCommit}
+              onClick={() => void commitChanges()}
+            >
+              <Sparkles className="size-3" />
+              {staged.length > 0 ? `Commit (${staged.length})` : 'Commit all'}
+            </Button>
+          </WithTooltip>
           <WithTooltip
             label={
               !git.hasRemote

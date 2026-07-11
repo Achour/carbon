@@ -76,15 +76,13 @@ interface AppState {
   /** Which view the right-panel dock column shows. */
   rightView: 'files' | 'git'
   git: GitStatus | null
-  /** True while a commit or push is in flight. */
+  /** True while a push is in flight. */
   gitBusy: boolean
   gitError: string | null
-  commitMsg: string
   /** Diff text per diff tab id. */
   diffContents: Record<string, string>
 
   setRightView(view: 'files' | 'git'): void
-  setCommitMsg(msg: string): void
   refreshGit(): Promise<void>
   stagePaths(paths: string[]): Promise<void>
   unstagePaths(paths: string[]): Promise<void>
@@ -258,16 +256,11 @@ export const useApp = create<AppState>((set, get) => ({
   git: null,
   gitBusy: false,
   gitError: null,
-  commitMsg: '',
   diffContents: {},
 
   setRightView(view) {
     set({ rightView: view })
     if (view === 'git') void get().refreshGit()
-  },
-
-  setCommitMsg(msg) {
-    set({ commitMsg: msg })
   },
 
   async refreshGit() {
@@ -318,27 +311,19 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   async commitChanges() {
+    // Committing goes through the chat: we prompt Claude Code and it runs
+    // git itself, so the commit shows up in the conversation.
     const cwd = get().selectedCwd
-    const msg = get().commitMsg.trim()
-    if (!cwd || !msg || get().gitBusy) return
-    set({ gitBusy: true, gitError: null })
-    try {
-      // Nothing staged → commit everything, like the editors do.
-      const git = get().git
-      if (git && !git.changes.some((c) => c.staged)) {
-        const staged = await window.api.gitStage(cwd, ['.'])
-        if (!staged.ok) {
-          set({ gitError: staged.error })
-          return
-        }
-      }
-      const res = await window.api.gitCommit(cwd, msg)
-      if (res.ok) set({ commitMsg: '' })
-      else set({ gitError: res.error })
-    } finally {
-      set({ gitBusy: false })
-      await get().refreshGit()
-    }
+    const git = get().git
+    if (!cwd || !git || git.changes.length === 0) return
+    const hasStaged = git.changes.some((c) => c.staged)
+    const scope = hasStaged
+      ? 'Commit the currently staged changes (leave everything else unstaged).'
+      : 'Stage all current changes and commit them.'
+    const prompt = `${scope} Review the diff first and write a clear, well-formed commit message.`
+    set({ gitError: null })
+    if (get().activeId) await get().sendMessage(prompt)
+    else await get().newChat(cwd, prompt)
   },
 
   async pushChanges() {
