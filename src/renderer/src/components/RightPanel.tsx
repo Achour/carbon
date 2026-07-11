@@ -107,7 +107,11 @@ export function RightPanel(): React.JSX.Element | null {
             <Tab
               key={file.path}
               icon={
-                file.diff ? <FileDiff className="size-3.5" /> : <FileText className="size-3.5" />
+                file.diff ? (
+                  <FileDiff className="size-3.5 text-amber-500" />
+                ) : (
+                  <FileText className="size-3.5" />
+                )
               }
               label={file.name}
               active={current === file.path}

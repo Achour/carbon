@@ -362,7 +362,10 @@ export const useApp = create<AppState>((set, get) => ({
     set((s) => ({
       openFiles: s.openFiles.some((f) => f.path === id)
         ? s.openFiles
-        : [...s.openFiles, { path: id, name: change.staged ? `${name} • staged` : name, diff: meta }],
+        : [
+            ...s.openFiles,
+            { path: id, name: change.staged ? `${name} (staged)` : `${name} (diff)`, diff: meta }
+          ],
       activeTab: id,
       panelOpen: true
     }))
