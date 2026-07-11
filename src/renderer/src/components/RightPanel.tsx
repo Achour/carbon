@@ -52,6 +52,11 @@ function Tab({
   )
 }
 
+// Keep the panel between these bounds: never narrower than the tab strip +
+// tree can bear, never so wide the chat column becomes unusable.
+const PANEL_MIN_PX = 448
+const CHAT_RESERVED_PX = 480
+
 export function RightPanel(): React.JSX.Element | null {
   const panelOpen = useApp((s) => s.panelOpen)
   const planPanel = useApp((s) => s.planPanel)
@@ -73,6 +78,44 @@ export function RightPanel(): React.JSX.Element | null {
     )
   })
 
+  // 0 = default width (52%); anything else is a user-dragged pixel width.
+  const [width, setWidth] = React.useState<number>(() => {
+    const saved = Number(localStorage.getItem('rightPanelWidth'))
+    return Number.isFinite(saved) && saved >= PANEL_MIN_PX ? saved : 0
+  })
+  const draggingRef = React.useRef(false)
+
+  const onHandlePointerDown = (e: React.PointerEvent<HTMLDivElement>): void => {
+    e.preventDefault()
+    draggingRef.current = true
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId)
+    } catch {
+      // synthetic events have no active pointer to capture
+    }
+  }
+
+  const onHandlePointerMove = (e: React.PointerEvent<HTMLDivElement>): void => {
+    if (!draggingRef.current) return
+    const next = Math.round(window.innerWidth - e.clientX)
+    setWidth(Math.max(PANEL_MIN_PX, Math.min(next, window.innerWidth - CHAT_RESERVED_PX)))
+  }
+
+  const onHandlePointerUp = (): void => {
+    if (!draggingRef.current) return
+    draggingRef.current = false
+    setWidth((w) => {
+      if (w) localStorage.setItem('rightPanelWidth', String(w))
+      return w
+    })
+  }
+
+  const resetWidth = (): void => {
+    draggingRef.current = false
+    setWidth(0)
+    localStorage.removeItem('rightPanelWidth')
+  }
+
   if (!panelOpen) return null
 
   const showPlan = planPanel !== null && planPanel.chatId === activeId
@@ -86,7 +129,20 @@ export function RightPanel(): React.JSX.Element | null {
           : (openFiles[openFiles.length - 1]?.path ?? null)
 
   return (
-    <aside className="flex h-full w-[52%] max-w-4xl min-w-[28rem] shrink-0 flex-col border-l border-border bg-card/30">
+    <aside
+      style={{ width: width ? `min(${width}px, calc(100vw - ${CHAT_RESERVED_PX}px))` : '52%' }}
+      className="relative flex h-full min-w-[28rem] shrink-0 flex-col border-l border-border bg-card/30"
+    >
+      {/* Resize handle — drag to resize, double-click to reset */}
+      <div
+        data-resize-handle
+        onPointerDown={onHandlePointerDown}
+        onPointerMove={onHandlePointerMove}
+        onPointerUp={onHandlePointerUp}
+        onLostPointerCapture={onHandlePointerUp}
+        onDoubleClick={resetWidth}
+        className="no-drag absolute inset-y-0 -left-[3px] z-20 w-1.5 cursor-col-resize transition-colors hover:bg-primary/40 active:bg-primary/60"
+      />
       {/* Tab strip */}
       <header className="drag flex h-[52px] shrink-0 items-center border-b border-border px-2.5">
         <div
