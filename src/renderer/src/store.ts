@@ -35,6 +35,8 @@ export interface OpenTab {
   path: string
   name: string
   diff?: DiffTabMeta
+  /** Preview tabs (single click) are reused by the next preview; double-click pins. */
+  preview?: boolean
 }
 
 interface AppState {
@@ -71,8 +73,10 @@ interface AppState {
   togglePanel(): void
   loadDir(dir: string): Promise<void>
   toggleDir(dir: string): void
-  openFile(path: string): Promise<void>
+  openFile(path: string, opts?: { preview?: boolean }): Promise<void>
   closeFile(path: string): void
+  /** Pins a preview tab so the next preview doesn't replace it. */
+  promoteTab(path: string): void
   setActiveTab(tab: string): void
   refreshFiles(): Promise<void>
 
@@ -265,17 +269,36 @@ export const useApp = create<AppState>((set, get) => ({
     if (expanded && !get().filesByDir[dir]) void get().loadDir(dir)
   },
 
-  async openFile(path) {
+  async openFile(path, opts) {
+    const preview = opts?.preview ?? false
     const name = path.split('/').pop() ?? path
-    set((s) => ({
-      openFiles: s.openFiles.some((f) => f.path === path)
-        ? s.openFiles
-        : [...s.openFiles, { path, name }],
-      activeTab: path,
-      ...panelPatch(s, true)
-    }))
+    set((s) => {
+      const existing = s.openFiles.find((f) => f.path === path)
+      let openFiles = s.openFiles
+      if (existing) {
+        // Re-opening a preview tab explicitly (double click) pins it.
+        if (!preview && existing.preview) {
+          openFiles = openFiles.map((f) => (f.path === path ? { ...f, preview: false } : f))
+        }
+      } else if (preview) {
+        // A single-clicked file reuses the current preview slot, like Cursor.
+        const slot = openFiles.findIndex((f) => f.preview)
+        const tab: OpenTab = { path, name, preview: true }
+        openFiles =
+          slot === -1 ? [...openFiles, tab] : openFiles.map((f, i) => (i === slot ? tab : f))
+      } else {
+        openFiles = [...openFiles, { path, name }]
+      }
+      return { openFiles, activeTab: path, ...panelPatch(s, true) }
+    })
     const content = await window.api.readFile(path)
     set((s) => ({ fileContents: { ...s.fileContents, [path]: content } }))
+  },
+
+  promoteTab(path) {
+    set((s) => ({
+      openFiles: s.openFiles.map((f) => (f.path === path ? { ...f, preview: false } : f))
+    }))
   },
 
   closeFile(path) {

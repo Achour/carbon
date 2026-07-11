@@ -14,14 +14,18 @@ function Tab({
   label,
   active,
   attention = false,
+  preview = false,
   onSelect,
+  onDoubleClick,
   onClose
 }: {
   icon: React.ReactNode
   label: string
   active: boolean
   attention?: boolean
+  preview?: boolean
   onSelect: () => void
+  onDoubleClick?: () => void
   onClose: () => void
 }): React.JSX.Element {
   return (
@@ -33,11 +37,12 @@ function Tab({
           : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground'
       )}
       onClick={onSelect}
+      onDoubleClick={onDoubleClick}
       role="tab"
       aria-selected={active}
     >
       <span className={cn(attention && 'text-warning')}>{icon}</span>
-      <span className="max-w-36 truncate">{label}</span>
+      <span className={cn('max-w-36 truncate', preview && 'italic')}>{label}</span>
       <button
         type="button"
         onClick={(e) => {
@@ -96,6 +101,7 @@ export function RightPanel(): React.JSX.Element | null {
   const activeTab = useApp((s) => s.activeTab)
   const setActiveTab = useApp((s) => s.setActiveTab)
   const closeFile = useApp((s) => s.closeFile)
+  const promoteTab = useApp((s) => s.promoteTab)
   const closePlanPanel = useApp((s) => s.closePlanPanel)
   const rightView = useApp((s) => s.rightView)
   const setRightView = useApp((s) => s.setRightView)
@@ -203,7 +209,9 @@ export function RightPanel(): React.JSX.Element | null {
               }
               label={file.name}
               active={current === file.path}
+              preview={file.preview}
               onSelect={() => setActiveTab(file.path)}
+              onDoubleClick={file.preview ? () => promoteTab(file.path) : undefined}
               onClose={() => closeFile(file.path)}
             />
           ))}

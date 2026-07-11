@@ -38,8 +38,13 @@ function TreeNode({ dir, depth }: { dir: string; depth: number }): React.JSX.Ele
             <button
               type="button"
               onClick={() =>
-                entry.kind === 'dir' ? toggleDir(entry.path) : void openFile(entry.path)
+                entry.kind === 'dir'
+                  ? toggleDir(entry.path)
+                  : void openFile(entry.path, { preview: true })
               }
+              onDoubleClick={() => {
+                if (entry.kind === 'file') void openFile(entry.path)
+              }}
               className={cn(
                 'flex w-full items-center gap-1.5 rounded-md py-[3px] pr-2 text-left text-[13px] transition-colors hover:bg-accent/60',
                 activeTab === entry.path && 'bg-accent',

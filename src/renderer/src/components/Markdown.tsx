@@ -97,7 +97,7 @@ function InlineCode({
         {...props}
         className={cn(className, 'cursor-pointer underline-offset-2 hover:text-primary hover:underline')}
         title={`Open ${target}`}
-        onClick={() => void useApp.getState().openFile(target)}
+        onClick={() => void useApp.getState().openFile(target, { preview: true })}
       >
         {children}
       </code>
