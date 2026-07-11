@@ -1,7 +1,8 @@
 import * as React from 'react'
 import { ClipboardList, FileDiff, FileText, Files, GitBranch, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { useApp } from '@/store'
+import { useApp, type OpenTab } from '@/store'
+import { WithTooltip } from '@/components/ui/tooltip'
 import { PlanContent } from '@/components/PlanPanel'
 import { FileViewer } from '@/components/FileViewer'
 import { FileTree } from '@/components/FileTree'
@@ -57,6 +58,35 @@ function Tab({
 const PANEL_MIN_PX = 448
 const CHAT_RESERVED_PX = 480
 
+function PathBar({ entry, cwd }: { entry: OpenTab; cwd: string | null }): React.JSX.Element {
+  const rel = entry.diff
+    ? entry.diff.file
+    : cwd && entry.path.startsWith(`${cwd}/`)
+      ? entry.path.slice(cwd.length + 1)
+      : entry.path
+  const segments = rel.split('/').filter(Boolean)
+  const name = segments[segments.length - 1] ?? rel
+  const dirs = segments.slice(0, -1)
+  const fullPath = entry.diff ? `${entry.diff.cwd}/${entry.diff.file}` : entry.path
+  return (
+    <div className="flex h-7 shrink-0 items-center border-b border-border/60 px-3 text-[11px]">
+      <WithTooltip label={fullPath}>
+        <div className="flex min-w-0 items-center">
+          {dirs.length > 0 && (
+            <span className="truncate text-muted-foreground/60">{dirs.join('  ›  ')}&ensp;›&ensp;</span>
+          )}
+          <span className="shrink-0 font-medium text-muted-foreground">{name}</span>
+        </div>
+      </WithTooltip>
+      {entry.diff && (
+        <span className="ml-2 shrink-0 rounded bg-amber-500/10 px-1.5 py-px text-[10px] text-amber-500">
+          {entry.diff.staged ? 'staged' : 'working tree'}
+        </span>
+      )}
+    </div>
+  )
+}
+
 export function RightPanel(): React.JSX.Element | null {
   const panelOpen = useApp((s) => s.panelOpen)
   const planPanel = useApp((s) => s.planPanel)
@@ -69,6 +99,7 @@ export function RightPanel(): React.JSX.Element | null {
   const closePlanPanel = useApp((s) => s.closePlanPanel)
   const rightView = useApp((s) => s.rightView)
   const setRightView = useApp((s) => s.setRightView)
+  const selectedCwd = useApp((s) => s.selectedCwd)
   const changeCount = useApp((s) => s.git?.changes.length ?? 0)
   const diffContents = useApp((s) => s.diffContents)
   const hasSuggestions = useApp((s) => {
@@ -127,6 +158,7 @@ export function RightPanel(): React.JSX.Element | null {
         : showPlan
           ? 'plan'
           : (openFiles[openFiles.length - 1]?.path ?? null)
+  const activeEntry = current ? openFiles.find((f) => f.path === current) : undefined
 
   return (
     <aside
@@ -180,18 +212,21 @@ export function RightPanel(): React.JSX.Element | null {
 
       {/* Viewer + file tree / source control docked on the right, Cursor-style */}
       <div className="flex min-h-0 flex-1">
-        <div className="min-w-0 flex-1">
-          {current === 'plan' && planPanel ? (
-            <PlanContent panel={planPanel} hasSuggestions={hasSuggestions} />
-          ) : current && openFiles.find((f) => f.path === current)?.diff ? (
-            <DiffView text={diffContents[current]} />
-          ) : current ? (
-            <FileViewer content={fileContents[current]} />
-          ) : (
-            <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
-              Select a file from the tree
-            </div>
-          )}
+        <div className="flex min-w-0 flex-1 flex-col">
+          {activeEntry && <PathBar entry={activeEntry} cwd={selectedCwd} />}
+          <div className="min-h-0 flex-1">
+            {current === 'plan' && planPanel ? (
+              <PlanContent panel={planPanel} hasSuggestions={hasSuggestions} />
+            ) : activeEntry?.diff ? (
+              <DiffView text={diffContents[current!]} />
+            ) : current ? (
+              <FileViewer content={fileContents[current]} />
+            ) : (
+              <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
+                Select a file from the tree
+              </div>
+            )}
+          </div>
         </div>
         <div className="flex w-56 shrink-0 flex-col border-l border-border bg-card/40">
           {/* Files / Source control switcher */}
