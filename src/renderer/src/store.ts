@@ -63,11 +63,10 @@ interface AppState {
   fileContents: Record<string, FileContent>
   /** 'plan', an open file path, or a diff tab id. */
   activeTab: string | null
-  /** Saved tab sets and panel visibility per project, restored when switching back. */
-  workspaces: Record<
-    string,
-    { openFiles: OpenTab[]; activeTab: string | null; panelOpen: boolean }
-  >
+  /** Saved tab sets per project, restored when switching back. */
+  workspaces: Record<string, { openFiles: OpenTab[]; activeTab: string | null }>
+  /** Panel visibility remembered per chat. */
+  panelOpenByChat: Record<string, boolean>
 
   togglePanel(): void
   loadDir(dir: string): Promise<void>
@@ -126,31 +125,42 @@ interface AppState {
  * and restores whatever was open in the target project last time.
  */
 function projectSwitchPatch(
-  s: Pick<AppState, 'selectedCwd' | 'openFiles' | 'activeTab' | 'panelOpen' | 'workspaces'>,
+  s: Pick<AppState, 'selectedCwd' | 'openFiles' | 'activeTab' | 'workspaces'>,
   nextCwd: string | null
 ): Partial<AppState> {
   if (s.selectedCwd === nextCwd) return { selectedCwd: nextCwd }
   const workspaces = { ...s.workspaces }
   if (s.selectedCwd) {
-    workspaces[s.selectedCwd] = {
-      openFiles: s.openFiles,
-      activeTab: s.activeTab,
-      panelOpen: s.panelOpen
-    }
+    workspaces[s.selectedCwd] = { openFiles: s.openFiles, activeTab: s.activeTab }
   }
-  // A never-visited project inherits the current panel visibility.
-  const restored = (nextCwd ? workspaces[nextCwd] : null) ?? {
-    openFiles: [],
-    activeTab: null,
-    panelOpen: s.panelOpen
-  }
+  const restored = (nextCwd ? workspaces[nextCwd] : null) ?? { openFiles: [], activeTab: null }
   return {
     workspaces,
     selectedCwd: nextCwd,
     openFiles: restored.openFiles,
-    activeTab: restored.activeTab,
-    panelOpen: restored.panelOpen
+    activeTab: restored.activeTab
   }
+}
+
+/** Sets panel visibility and remembers it for the active chat. */
+function panelPatch(
+  s: Pick<AppState, 'activeId' | 'panelOpenByChat'>,
+  open: boolean
+): Partial<AppState> {
+  if (!s.activeId) return { panelOpen: open }
+  const panelOpenByChat = { ...s.panelOpenByChat, [s.activeId]: open }
+  localStorage.setItem('panelOpenByChat', JSON.stringify(panelOpenByChat))
+  return { panelOpen: open, panelOpenByChat }
+}
+
+function prunePanelState(
+  s: Pick<AppState, 'panelOpenByChat'>,
+  ids: string[]
+): Record<string, boolean> {
+  const panelOpenByChat = { ...s.panelOpenByChat }
+  for (const id of ids) delete panelOpenByChat[id]
+  localStorage.setItem('panelOpenByChat', JSON.stringify(panelOpenByChat))
+  return panelOpenByChat
 }
 
 function upsertMessage(messages: ChatMessage[], message: ChatMessage): ChatMessage[] {
@@ -200,7 +210,7 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   openPlanPanel(panel) {
-    set({ planPanel: panel, activeTab: 'plan', panelOpen: true })
+    set((s) => ({ planPanel: panel, activeTab: 'plan', ...panelPatch(s, true) }))
   },
 
   closePlanPanel() {
@@ -219,10 +229,20 @@ export const useApp = create<AppState>((set, get) => ({
   fileContents: {},
   activeTab: null,
   workspaces: {},
+  panelOpenByChat: (() => {
+    try {
+      return JSON.parse(localStorage.getItem('panelOpenByChat') ?? '{}') as Record<
+        string,
+        boolean
+      >
+    } catch {
+      return {}
+    }
+  })(),
 
   togglePanel() {
     const opening = !get().panelOpen
-    set({ panelOpen: opening })
+    set((s) => panelPatch(s, opening))
     if (opening) {
       const cwd = get().selectedCwd
       if (cwd && !get().filesByDir[cwd]) void get().loadDir(cwd)
@@ -252,7 +272,7 @@ export const useApp = create<AppState>((set, get) => ({
         ? s.openFiles
         : [...s.openFiles, { path, name }],
       activeTab: path,
-      panelOpen: true
+      ...panelPatch(s, true)
     }))
     const content = await window.api.readFile(path)
     set((s) => ({ fileContents: { ...s.fileContents, [path]: content } }))
@@ -411,7 +431,7 @@ export const useApp = create<AppState>((set, get) => ({
             { path: id, name: change.staged ? `${name} (staged)` : `${name} (diff)`, diff: meta }
           ],
       activeTab: id,
-      panelOpen: true
+      ...panelPatch(s, true)
     }))
     const text = await window.api.gitDiff(cwd, {
       path: change.path,
@@ -426,7 +446,13 @@ export const useApp = create<AppState>((set, get) => ({
       set({ activeId: null, messages: [], planPanel: null })
       return
     }
-    set({ activeId: id, messages: [], planPanel: null })
+    set((s) => ({
+      activeId: id,
+      messages: [],
+      planPanel: null,
+      // Panel visibility is per chat; unvisited chats start closed.
+      panelOpen: s.panelOpenByChat[id] ?? false
+    }))
     const chat = await window.api.getChat(id)
     // Guard against a chat switch happening while we awaited.
     if (get().activeId === id && chat) {
@@ -457,6 +483,8 @@ export const useApp = create<AppState>((set, get) => ({
           }
         : s.defaults
     }))
+    // The new chat keeps whatever panel state was showing when it was created.
+    set((s) => panelPatch(s, s.panelOpen))
     if (get().panelOpen) {
       void get().refreshGit()
       if (!get().filesByDir[cwd]) void get().loadDir(cwd)
@@ -481,7 +509,8 @@ export const useApp = create<AppState>((set, get) => ({
     set((s) => ({
       chats: s.chats.filter((c) => c.id !== id),
       activeId: s.activeId === id ? null : s.activeId,
-      messages: s.activeId === id ? [] : s.messages
+      messages: s.activeId === id ? [] : s.messages,
+      panelOpenByChat: prunePanelState(s, [id])
     }))
   },
 
@@ -506,6 +535,7 @@ export const useApp = create<AppState>((set, get) => ({
         activeId: wasActive ? null : s.activeId,
         messages: wasActive ? [] : s.messages,
         planPanel: wasActive ? null : s.planPanel,
+        panelOpenByChat: prunePanelState(s, ids),
         defaults: s.defaults ? { ...s.defaults, recentDirs } : s.defaults
       }
     })
