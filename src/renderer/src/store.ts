@@ -63,8 +63,11 @@ interface AppState {
   fileContents: Record<string, FileContent>
   /** 'plan', an open file path, or a diff tab id. */
   activeTab: string | null
-  /** Saved tab sets per project, restored when switching back. */
-  workspaces: Record<string, { openFiles: OpenTab[]; activeTab: string | null }>
+  /** Saved tab sets and panel visibility per project, restored when switching back. */
+  workspaces: Record<
+    string,
+    { openFiles: OpenTab[]; activeTab: string | null; panelOpen: boolean }
+  >
 
   togglePanel(): void
   loadDir(dir: string): Promise<void>
@@ -123,20 +126,30 @@ interface AppState {
  * and restores whatever was open in the target project last time.
  */
 function projectSwitchPatch(
-  s: Pick<AppState, 'selectedCwd' | 'openFiles' | 'activeTab' | 'workspaces'>,
+  s: Pick<AppState, 'selectedCwd' | 'openFiles' | 'activeTab' | 'panelOpen' | 'workspaces'>,
   nextCwd: string | null
 ): Partial<AppState> {
   if (s.selectedCwd === nextCwd) return { selectedCwd: nextCwd }
   const workspaces = { ...s.workspaces }
   if (s.selectedCwd) {
-    workspaces[s.selectedCwd] = { openFiles: s.openFiles, activeTab: s.activeTab }
+    workspaces[s.selectedCwd] = {
+      openFiles: s.openFiles,
+      activeTab: s.activeTab,
+      panelOpen: s.panelOpen
+    }
   }
-  const restored = (nextCwd ? workspaces[nextCwd] : null) ?? { openFiles: [], activeTab: null }
+  // A never-visited project inherits the current panel visibility.
+  const restored = (nextCwd ? workspaces[nextCwd] : null) ?? {
+    openFiles: [],
+    activeTab: null,
+    panelOpen: s.panelOpen
+  }
   return {
     workspaces,
     selectedCwd: nextCwd,
     openFiles: restored.openFiles,
-    activeTab: restored.activeTab
+    activeTab: restored.activeTab,
+    panelOpen: restored.panelOpen
   }
 }
 
@@ -180,6 +193,10 @@ export const useApp = create<AppState>((set, get) => ({
 
   setSelectedCwd(cwd) {
     set((s) => projectSwitchPatch(s, cwd))
+    if (cwd && get().panelOpen) {
+      void get().refreshGit()
+      if (!get().filesByDir[cwd]) void get().loadDir(cwd)
+    }
   },
 
   openPlanPanel(panel) {
@@ -440,6 +457,10 @@ export const useApp = create<AppState>((set, get) => ({
           }
         : s.defaults
     }))
+    if (get().panelOpen) {
+      void get().refreshGit()
+      if (!get().filesByDir[cwd]) void get().loadDir(cwd)
+    }
     await window.api.send(meta.id, firstMessage)
   },
 
