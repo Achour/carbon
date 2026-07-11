@@ -184,6 +184,18 @@
 ::-webkit-scrollbar-corner {
   background: transparent;
 }
+/* Horizontal bars stay invisible until the pointer is over the scroll area,
+   so wide code lines don't draw a permanent bar under the viewer. */
+::-webkit-scrollbar-thumb:horizontal {
+  background: transparent;
+}
+:hover::-webkit-scrollbar-thumb:horizontal,
+::-webkit-scrollbar-thumb:horizontal:hover {
+  background: oklch(0.5 0.005 90 / 45%);
+  background-clip: padding-box;
+  border: 3.5px solid transparent;
+  border-radius: 8px;
+}
 
 /* Shimmering status text */
 .shimmer-text {
