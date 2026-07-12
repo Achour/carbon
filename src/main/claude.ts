@@ -99,6 +99,22 @@ function buildPreviewServer(
   })
 }
 
+/** Pulls image blocks out of a tool_result's content (e.g. preview_screenshot). */
+function extractImages(content: unknown): { mediaType: string; data: string }[] | undefined {
+  if (!Array.isArray(content)) return undefined
+  const images: { mediaType: string; data: string }[] = []
+  for (const c of content as Array<Record<string, unknown>>) {
+    if (c?.type !== 'image') continue
+    // Anthropic shape: { source: { media_type, data } }. MCP shape: { data, mimeType }.
+    const source = c.source as { media_type?: string; data?: string } | undefined
+    const data = source?.data ?? (typeof c.data === 'string' ? c.data : undefined)
+    if (!data) continue
+    const mediaType = source?.media_type ?? (typeof c.mimeType === 'string' ? c.mimeType : 'image/png')
+    images.push({ mediaType, data })
+  }
+  return images.length ? images : undefined
+}
+
 /** Renders a picked UI element as a text block the agent can act on. */
 function describeElement(el: ElementRef): string {
   const lines = [`Selected UI element from the running app (${el.url}):`]
@@ -752,6 +768,7 @@ class ClaudeSession {
             ? existing.status
             : 'running',
           output: existing?.output,
+          outputImages: existing?.outputImages,
           denied: existing?.denied,
           // Keep sub-agent activity across the reconcile (same array ref, so
           // childToolLoc indexes stay valid).
@@ -792,6 +809,7 @@ class ClaudeSession {
           .join('\n')
       }
       part.output = output.length > 100_000 ? `${output.slice(0, 100_000)}\n… (truncated)` : output
+      part.outputImages = extractImages(block.content)
       if (!part.denied) part.status = block.is_error ? 'error' : 'success'
       this.flushDeltas()
       this.emit({
@@ -799,7 +817,12 @@ class ClaudeSession {
         chatId: this.chat.id,
         messageId: loc.message.id,
         toolUseId: part.toolUseId,
-        patch: { status: part.status, output: part.output, denied: part.denied }
+        patch: {
+          status: part.status,
+          output: part.output,
+          outputImages: part.outputImages,
+          denied: part.denied
+        }
       })
       this.store.saveChatSoon(this.chat.id)
     }

@@ -61,6 +61,8 @@ export interface ToolPart {
   input?: unknown
   status: ToolStatus
   output?: string
+  /** Image blocks a tool returned (e.g. preview_screenshot) — base64, no prefix. */
+  outputImages?: { mediaType: string; data: string }[]
   denied?: boolean
   /** Sub-agent activity for Task/Agent tools: the spawned agent's own stream. */
   children?: AssistantPart[]

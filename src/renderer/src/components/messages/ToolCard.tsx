@@ -204,6 +204,14 @@ function ToolDetails({ part }: { part: ToolPart }): React.JSX.Element {
           {part.output.length > 6000 ? `${part.output.slice(0, 6000)}\n… (truncated)` : part.output}
         </MonoBlock>
       )}
+      {part.outputImages?.map((img, i) => (
+        <img
+          key={i}
+          src={`data:${img.mediaType};base64,${img.data}`}
+          alt="Tool screenshot"
+          className="max-h-[28rem] w-full rounded-lg border border-border object-contain"
+        />
+      ))}
     </div>
   )
 }
