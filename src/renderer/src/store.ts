@@ -890,7 +890,7 @@ export const useApp = create<AppState>((set, get) => ({
     set((s) => ({
       openFiles: s.openFiles.some((f) => f.path === id)
         ? s.openFiles
-        : [...s.openFiles, { path: id, name: 'Changes' }],
+        : [...s.openFiles, { path: id, name: 'Working Tree' }],
       activeTab: id,
       changesScroll: target
         ? { key: `${target.staged ? 's' : 'w'}:${target.path}`, n: (s.changesScroll?.n ?? 0) + 1 }

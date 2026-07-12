@@ -750,7 +750,7 @@ export function RightPanel(): React.JSX.Element | null {
             onDoubleClick={resetDockWidth}
             className="no-drag absolute inset-y-0 -left-[3px] z-10 w-1.5 cursor-col-resize transition-colors hover:bg-primary/40 active:bg-primary/60"
           />
-          {/* Files / Source control switcher */}
+          {/* Files (project tree) / Changes (source control) switcher */}
           <div className="mx-2 mt-1.5 mb-1 grid shrink-0 grid-cols-2 gap-0.5 rounded-lg bg-secondary/60 p-0.5">
             <button
               type="button"
@@ -774,7 +774,7 @@ export function RightPanel(): React.JSX.Element | null {
                   : 'text-muted-foreground hover:text-foreground'
               )}
             >
-              <GitBranch className="size-3" /> Source
+              <GitBranch className="size-3" /> Changes
               {changeCount > 0 && (
                 <span className="rounded-full bg-primary/15 px-1 text-[9px] font-semibold text-primary">
                   {changeCount}
