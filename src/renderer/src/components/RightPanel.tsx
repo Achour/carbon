@@ -8,6 +8,7 @@ import {
   Files,
   FolderTree,
   GitBranch,
+  GitCompare,
   Globe,
   Maximize2,
   Minimize2,
@@ -29,6 +30,7 @@ import { FileViewer, MARKDOWN_RE } from '@/components/FileViewer'
 import { FileTree } from '@/components/FileTree'
 import { GitPanel } from '@/components/GitPanel'
 import { DiffView } from '@/components/DiffView'
+import { MultiDiffView } from '@/components/MultiDiffView'
 import { TerminalPane } from '@/components/TerminalPanel'
 import { BrowserPane } from '@/components/BrowserPane'
 
@@ -509,6 +511,7 @@ export function RightPanel(): React.JSX.Element | null {
                 null)
   const currentIsTerminal = terminals.some((t) => t.id === current)
   const currentIsPreview = previews.some((p) => p.id === current)
+  const currentIsChanges = typeof current === 'string' && current.startsWith('changes:')
   const activeEntry = openFiles.find((f) => f.path === current)
   const activeIsMarkdown = !!activeEntry && !activeEntry.diff && MARKDOWN_RE.test(activeEntry.name)
 
@@ -573,7 +576,9 @@ export function RightPanel(): React.JSX.Element | null {
             <Tab
               key={file.path}
               icon={
-                file.diff ? (
+                file.path.startsWith('changes:') ? (
+                  <GitCompare className="size-3.5 text-primary" />
+                ) : file.diff ? (
                   <FileDiff className="size-3.5 text-amber-500" />
                 ) : (
                   <FileText className="size-3.5" />
@@ -634,8 +639,9 @@ export function RightPanel(): React.JSX.Element | null {
       </header>
 
       {/* Breadcrumb row with the file-tree toggle at its right, Cursor-style.
-          Hidden for terminal and preview tabs, which carry their own toolbar. */}
-      {!currentIsTerminal && !currentIsPreview && (
+          Hidden for terminal, preview and the stacked-changes tab, which each
+          carry their own toolbar. */}
+      {!currentIsTerminal && !currentIsPreview && !currentIsChanges && (
         <div className="flex h-8 shrink-0 items-center gap-2 border-b border-border/60 pr-1.5 pl-3">
           <div className="min-w-0 flex-1">
             {activeEntry && <PathBar entry={activeEntry} cwd={selectedCwd} />}
@@ -681,6 +687,8 @@ export function RightPanel(): React.JSX.Element | null {
           <div className={cn('min-h-0 flex-1', (currentIsTerminal || currentIsPreview) && 'hidden')}>
             {current === 'plan' && planPanel ? (
               <PlanContent panel={planPanel} hasSuggestions={hasSuggestions} />
+            ) : currentIsChanges && selectedCwd ? (
+              <MultiDiffView cwd={selectedCwd} />
             ) : activeEntry?.diff ? (
               <DiffView text={diffContents[current!]} />
             ) : activeEntry ? (

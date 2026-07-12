@@ -64,13 +64,72 @@ function parseDiff(diff: string): Row[] {
   return rows
 }
 
+/** The bare diff table (no scroll wrapper) — used standalone and stacked in the
+ *  multi-file changes view. */
+export const DiffTable = React.memo(function DiffTable({
+  text
+}: {
+  text: string
+}): React.JSX.Element {
+  const rows = React.useMemo(() => parseDiff(text), [text])
+
+  if (rows.length === 0) {
+    return <div className="px-3 py-2.5 text-xs text-muted-foreground/70">No textual changes.</div>
+  }
+
+  return (
+    <table className="w-full border-collapse font-mono text-[length:var(--code-font-size)] leading-relaxed">
+      <tbody>
+        {rows.map((row, i) => (
+          <tr
+            key={i}
+            className={
+              row.kind === 'add'
+                ? 'bg-emerald-500/10'
+                : row.kind === 'del'
+                  ? 'bg-red-500/10'
+                  : row.kind === 'hunk'
+                    ? 'bg-accent/40'
+                    : undefined
+            }
+          >
+            <td className="w-10 min-w-10 border-r border-border/40 pr-2 text-right align-top text-[10px] text-muted-foreground/50 select-none">
+              {row.old ?? ''}
+            </td>
+            <td className="w-10 min-w-10 border-r border-border/40 pr-2 text-right align-top text-[10px] text-muted-foreground/50 select-none">
+              {row.new ?? ''}
+            </td>
+            <td
+              className={
+                'w-4 min-w-4 text-center align-top select-none ' +
+                (row.kind === 'add'
+                  ? 'text-emerald-600 dark:text-emerald-400'
+                  : row.kind === 'del'
+                    ? 'text-red-500'
+                    : 'text-transparent')
+              }
+            >
+              {row.kind === 'add' ? '+' : row.kind === 'del' ? '−' : ''}
+            </td>
+            <td className="px-1.5 align-top break-all whitespace-pre-wrap">
+              {row.kind === 'hunk' || row.kind === 'note' ? (
+                <span className="text-muted-foreground">{row.text}</span>
+              ) : (
+                row.text || ' '
+              )}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+})
+
 export const DiffView = React.memo(function DiffView({
   text
 }: {
   text: string | undefined
 }): React.JSX.Element {
-  const rows = React.useMemo(() => (text ? parseDiff(text) : []), [text])
-
   if (text === undefined) {
     return (
       <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
@@ -78,61 +137,9 @@ export const DiffView = React.memo(function DiffView({
       </div>
     )
   }
-
-  if (rows.length === 0) {
-    return (
-      <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
-        No changes to show.
-      </div>
-    )
-  }
-
   return (
     <div className="h-full overflow-auto">
-      <table className="w-full border-collapse font-mono text-[length:var(--code-font-size)] leading-relaxed">
-        <tbody>
-          {rows.map((row, i) => (
-            <tr
-              key={i}
-              className={
-                row.kind === 'add'
-                  ? 'bg-emerald-500/10'
-                  : row.kind === 'del'
-                    ? 'bg-red-500/10'
-                    : row.kind === 'hunk'
-                      ? 'bg-accent/40'
-                      : undefined
-              }
-            >
-              <td className="w-10 min-w-10 border-r border-border/40 pr-2 text-right align-top text-[10px] text-muted-foreground/50 select-none">
-                {row.old ?? ''}
-              </td>
-              <td className="w-10 min-w-10 border-r border-border/40 pr-2 text-right align-top text-[10px] text-muted-foreground/50 select-none">
-                {row.new ?? ''}
-              </td>
-              <td
-                className={
-                  'w-4 min-w-4 text-center align-top select-none ' +
-                  (row.kind === 'add'
-                    ? 'text-emerald-600 dark:text-emerald-400'
-                    : row.kind === 'del'
-                      ? 'text-red-500'
-                      : 'text-transparent')
-                }
-              >
-                {row.kind === 'add' ? '+' : row.kind === 'del' ? '−' : ''}
-              </td>
-              <td className="px-1.5 align-top break-all whitespace-pre-wrap">
-                {row.kind === 'hunk' || row.kind === 'note' ? (
-                  <span className="text-muted-foreground">{row.text}</span>
-                ) : (
-                  row.text || ' '
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <DiffTable text={text} />
     </div>
   )
 })

@@ -29,39 +29,37 @@ const STATUS_COLORS: Record<string, string> = {
   U: 'text-orange-500'
 }
 
+const INDENT = 12
+
 function ChangeRow({
   change,
-  showDir = true,
-  indent = false
+  depth
 }: {
   change: GitFileChange
-  showDir?: boolean
-  indent?: boolean
+  depth: number
 }): React.JSX.Element {
-  const openDiff = useApp((s) => s.openDiff)
+  const openChanges = useApp((s) => s.openChanges)
   const stagePaths = useApp((s) => s.stagePaths)
   const unstagePaths = useApp((s) => s.unstagePaths)
   const activeTab = useApp((s) => s.activeTab)
-  const selectedCwd = useApp((s) => s.selectedCwd)
+  const changesScroll = useApp((s) => s.changesScroll)
 
   const name = change.path.split('/').pop() ?? change.path
-  const dir = change.path.includes('/')
-    ? change.path.slice(0, change.path.lastIndexOf('/'))
-    : ''
-  const tabId = `diff:${change.staged ? 's' : 'w'}:${selectedCwd}:${change.path}`
+  const changesActive = typeof activeTab === 'string' && activeTab.startsWith('changes:')
+  const isCurrent =
+    changesActive && changesScroll?.key === `${change.staged ? 's' : 'w'}:${change.path}`
 
   return (
     <div
       className={cn(
-        'group flex w-full items-center gap-1.5 rounded-md py-[3px] pr-1 pl-2 text-left transition-colors hover:bg-accent/60',
-        indent && 'pl-6',
-        activeTab === tabId && 'bg-accent'
+        'group flex w-full items-center gap-1.5 rounded-md py-[3px] pr-1 text-left transition-colors hover:bg-accent/60',
+        isCurrent && 'bg-accent'
       )}
+      style={{ paddingLeft: 8 + depth * INDENT }}
     >
       <button
         type="button"
-        onClick={() => void openDiff(change, { preview: true })}
-        onDoubleClick={() => void openDiff(change)}
+        onClick={() => openChanges({ path: change.path, staged: change.staged })}
         className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
         title={change.origPath ? `${change.origPath} → ${change.path}` : change.path}
       >
@@ -74,9 +72,6 @@ function ChangeRow({
           {change.status === '?' ? 'U' : change.status}
         </span>
         <span className="truncate text-[12.5px]">{name}</span>
-        {showDir && dir && (
-          <span className="min-w-0 truncate text-[10.5px] text-muted-foreground/60">{dir}</span>
-        )}
       </button>
       <WithTooltip label={change.staged ? 'Unstage' : 'Stage'}>
         <Button
@@ -95,34 +90,83 @@ function ChangeRow({
   )
 }
 
-/** Groups changed files under collapsible folder headers, Cursor-style. */
-function ChangeTree({ changes }: { changes: GitFileChange[] }): React.JSX.Element {
-  const groups = React.useMemo(() => {
-    const m = new Map<string, GitFileChange[]>()
-    for (const c of changes) {
-      const dir = c.path.includes('/') ? c.path.slice(0, c.path.lastIndexOf('/')) : ''
-      const arr = m.get(dir)
-      if (arr) arr.push(c)
-      else m.set(dir, [c])
+interface DirNode {
+  /** Segment label; may be a compressed chain like `lib/ai-assistant`. */
+  name: string
+  /** Full path, for collapse state + keys. */
+  path: string
+  children: Map<string, DirNode>
+  files: GitFileChange[]
+}
+
+function buildTree(changes: GitFileChange[]): DirNode {
+  const root: DirNode = { name: '', path: '', children: new Map(), files: [] }
+  for (const c of changes) {
+    const parts = c.path.split('/')
+    parts.pop() // filename
+    let node = root
+    let acc = ''
+    for (const seg of parts) {
+      acc = acc ? `${acc}/${seg}` : seg
+      let child = node.children.get(seg)
+      if (!child) {
+        child = { name: seg, path: acc, children: new Map(), files: [] }
+        node.children.set(seg, child)
+      }
+      node = child
     }
-    return m
-  }, [changes])
+    node.files.push(c)
+  }
+  return root
+}
 
-  const dirs = [...groups.keys()].filter((d) => d !== '').sort()
-  const rootFiles = groups.get('') ?? []
-  const [collapsed, setCollapsed] = React.useState<Record<string, boolean>>({})
+/** Collapse single-child folder chains into one row (`lib / ai-assistant`). */
+function compress(node: DirNode): DirNode {
+  const children = new Map<string, DirNode>()
+  for (let child of node.children.values()) {
+    child = compress(child)
+    while (child.children.size === 1 && child.files.length === 0) {
+      const only = child.children.values().next().value as DirNode
+      child = { name: `${child.name}/${only.name}`, path: only.path, children: only.children, files: only.files }
+    }
+    children.set(child.name, child)
+  }
+  return { ...node, children }
+}
 
+function countFiles(node: DirNode): number {
+  let n = node.files.length
+  for (const c of node.children.values()) n += countFiles(c)
+  return n
+}
+
+function TreeLevel({
+  node,
+  depth,
+  collapsed,
+  setCollapsed
+}: {
+  node: DirNode
+  depth: number
+  collapsed: Record<string, boolean>
+  setCollapsed: React.Dispatch<React.SetStateAction<Record<string, boolean>>>
+}): React.JSX.Element {
+  const dirs = [...node.children.values()].sort((a, b) => a.name.localeCompare(b.name))
+  const files = [...node.files].sort((a, b) =>
+    (a.path.split('/').pop() ?? '').localeCompare(b.path.split('/').pop() ?? '')
+  )
   return (
     <>
       {dirs.map((dir) => {
-        const open = !collapsed[dir]
+        const open = !collapsed[dir.path]
         return (
-          <div key={dir}>
+          <div key={dir.path}>
             <button
               type="button"
-              onClick={() => setCollapsed((p) => ({ ...p, [dir]: !p[dir] }))}
-              className="flex w-full items-center gap-1 rounded-md py-[3px] pr-1 pl-1.5 text-left transition-colors hover:bg-accent/40"
-              title={dir}
+              onClick={() => setCollapsed((p) => ({ ...p, [dir.path]: !p[dir.path] }))}
+              className="flex w-full items-center gap-1 rounded-md py-[3px] pr-1 text-left transition-colors hover:bg-accent/40"
+              style={{ paddingLeft: 6 + depth * INDENT }}
+              title={dir.path}
             >
               <ChevronRight
                 className={cn(
@@ -132,26 +176,35 @@ function ChangeTree({ changes }: { changes: GitFileChange[] }): React.JSX.Elemen
               />
               <Folder className="size-3 shrink-0 text-muted-foreground/60" />
               <span className="truncate text-[11.5px] text-muted-foreground">
-                {dir.replace(/\//g, ' / ')}
+                {dir.name.replace(/\//g, ' / ')}
               </span>
               <span className="shrink-0 text-[10px] text-muted-foreground/50">
-                {groups.get(dir)!.length}
+                {countFiles(dir)}
               </span>
             </button>
-            {open &&
-              groups
-                .get(dir)!
-                .map((c) => (
-                  <ChangeRow key={`${c.staged}:${c.path}`} change={c} showDir={false} indent />
-                ))}
+            {open && (
+              <TreeLevel
+                node={dir}
+                depth={depth + 1}
+                collapsed={collapsed}
+                setCollapsed={setCollapsed}
+              />
+            )}
           </div>
         )
       })}
-      {rootFiles.map((c) => (
-        <ChangeRow key={`${c.staged}:${c.path}`} change={c} showDir={false} />
+      {files.map((c) => (
+        <ChangeRow key={`${c.staged}:${c.path}`} change={c} depth={depth} />
       ))}
     </>
   )
+}
+
+/** Renders changed files as a nested, collapsible folder tree, Cursor-style. */
+function ChangeTree({ changes }: { changes: GitFileChange[] }): React.JSX.Element {
+  const tree = React.useMemo(() => compress(buildTree(changes)), [changes])
+  const [collapsed, setCollapsed] = React.useState<Record<string, boolean>>({})
+  return <TreeLevel node={tree} depth={0} collapsed={collapsed} setCollapsed={setCollapsed} />
 }
 
 function Section({

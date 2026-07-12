@@ -218,7 +218,11 @@ interface AppState {
   initRepo(): Promise<void>
   /** Open a file's diff. Single click previews (ephemeral); double click pins it. */
   openDiff(change: GitFileChange, opts?: { preview?: boolean }): Promise<void>
-  /** Open the right panel on the source-control view and show the first diff. */
+  /** Open the single "Changes" tab (all files stacked); optionally scroll to one. */
+  openChanges(target?: { path: string; staged: boolean }): void
+  /** Signal to the Changes view to scroll to a file: key `w:path`/`s:path` + nonce. */
+  changesScroll: { key: string; n: number } | null
+  /** Open the right panel on the source-control view and the stacked changes. */
   reviewChanges(): Promise<void>
 
   init(): Promise<void>
@@ -877,14 +881,32 @@ export const useApp = create<AppState>((set, get) => ({
     set((s) => ({ diffContents: { ...s.diffContents, [id]: text } }))
   },
 
+  changesScroll: null,
+
+  openChanges(target) {
+    const cwd = get().selectedCwd
+    if (!cwd) return
+    const id = `changes:${cwd}`
+    set((s) => ({
+      openFiles: s.openFiles.some((f) => f.path === id)
+        ? s.openFiles
+        : [...s.openFiles, { path: id, name: 'Changes' }],
+      activeTab: id,
+      changesScroll: target
+        ? { key: `${target.staged ? 's' : 'w'}:${target.path}`, n: (s.changesScroll?.n ?? 0) + 1 }
+        : s.changesScroll,
+      ...panelPatch(s, true)
+    }))
+    void get().refreshGit()
+  },
+
   async reviewChanges() {
     if (!get().selectedCwd) return
-    // Open the panel with the source-control dock showing the change list.
+    // Open the panel with the source-control dock showing the change tree, and
+    // the stacked all-files diff beside it.
     set((s) => ({ rightView: 'git', ...panelPatch(s, true) }))
     get().setExplorerOpen(true) // also refreshes git
-    // Open the first change's diff (as a preview) so there's an editor beside the list.
-    const first = get().git?.changes[0]
-    if (first) await get().openDiff(first, { preview: true })
+    get().openChanges()
   },
 
   async openChat(id) {
