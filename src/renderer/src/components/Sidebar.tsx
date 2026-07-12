@@ -138,6 +138,10 @@ const SIDEBAR_DEFAULT = 264
 const SIDEBAR_MIN = 200
 const SIDEBAR_MAX = 420
 
+// Recents only: each project shows its N most-recent chats; older ones are
+// reached through search, Cursor-style. The open chat is always kept visible.
+const CHATS_PER_PROJECT = 6
+
 export function Sidebar(): React.JSX.Element {
   const chats = useApp((s) => s.chats)
   const activeId = useApp((s) => s.activeId)
@@ -389,6 +393,18 @@ export function Sidebar(): React.JSX.Element {
             !filter && (collapsedProjects[group.cwd] ?? archived)
           const hasStreaming = group.chats.some((c) => (statuses[c.id] ?? 'idle') !== 'idle')
           const firstArchived = archived && i === activeGroups.length
+          // Cap to the most-recent chats (search shows all matches). Keep the
+          // open chat visible even when it's older than the cap.
+          const visibleChats =
+            filter || group.chats.length <= CHATS_PER_PROJECT
+              ? group.chats
+              : (() => {
+                  const top = group.chats.slice(0, CHATS_PER_PROJECT)
+                  const activeInGroup = group.chats.find((c) => c.id === activeId)
+                  return activeInGroup && !top.some((c) => c.id === activeId)
+                    ? [...top, activeInGroup]
+                    : top
+                })()
           return (
             <React.Fragment key={group.cwd}>
               {firstArchived && (
