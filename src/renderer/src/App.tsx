@@ -94,6 +94,10 @@ export default function App(): React.JSX.Element {
         e.preventDefault()
         useApp.getState().toggleSidebar()
       }
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault()
+        useApp.getState().setSearchOpen(true)
+      }
       if ((e.metaKey || e.ctrlKey) && e.key === 'j') {
         e.preventDefault()
         useApp.getState().toggleTerminal()

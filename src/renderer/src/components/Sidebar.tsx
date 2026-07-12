@@ -5,7 +5,6 @@ import {
   ChevronRight,
   EyeOff,
   Folder,
-  FolderPlus,
   Loader2,
   MessageSquarePlus,
   MoreHorizontal,
@@ -269,7 +268,8 @@ export function Sidebar(): React.JSX.Element {
   }
 
   const openSettings = useApp((s) => s.openSettings)
-  const [searchOpen, setSearchOpen] = React.useState(false)
+  const searchOpen = useApp((s) => s.searchOpen)
+  const setSearchOpen = useApp((s) => s.setSearchOpen)
   const [renaming, setRenaming] = React.useState<ChatMeta | null>(null)
   const [deleting, setDeleting] = React.useState<ChatMeta | null>(null)
   const [renameValue, setRenameValue] = React.useState('')
@@ -411,6 +411,9 @@ export function Sidebar(): React.JSX.Element {
         >
           <Search className="size-4 shrink-0 text-muted-foreground" />
           Search
+          <kbd className="ml-auto rounded border border-border bg-background/40 px-1 font-mono text-[10px] text-muted-foreground">
+            ⌘K
+          </kbd>
         </button>
       </div>
 
@@ -427,7 +430,7 @@ export function Sidebar(): React.JSX.Element {
             aria-label="Add project"
             className="-mr-1 rounded p-1 text-muted-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-foreground"
           >
-            <FolderPlus className="size-3.5" />
+            <Plus className="size-3.5" />
           </button>
         </WithTooltip>
       </div>

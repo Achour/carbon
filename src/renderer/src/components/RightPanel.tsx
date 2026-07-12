@@ -303,6 +303,70 @@ function QuickOpen(): React.JSX.Element {
   )
 }
 
+/**
+ * Horizontally-scrolling tab strip with an overlay scrollbar: the native bar is
+ * hidden (so it never steals height and shoves the tabs up), and a thin bar
+ * fades in over the tabs' bottom edge while scrolling, Cursor-style.
+ */
+function TabScroller({ children }: { children: React.ReactNode }): React.JSX.Element {
+  const ref = React.useRef<HTMLDivElement>(null)
+  const [thumb, setThumb] = React.useState<{ left: number; width: number } | null>(null)
+  const [active, setActive] = React.useState(false)
+  const hideTimer = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+
+  const update = React.useCallback(() => {
+    const el = ref.current
+    if (!el) return
+    const { scrollWidth, clientWidth, scrollLeft } = el
+    if (scrollWidth <= clientWidth + 1) {
+      setThumb(null)
+      return
+    }
+    setThumb({
+      width: (clientWidth / scrollWidth) * clientWidth,
+      left: (scrollLeft / scrollWidth) * clientWidth
+    })
+  }, [])
+
+  React.useEffect(() => {
+    update()
+    const el = ref.current
+    if (!el) return
+    const ro = new ResizeObserver(update)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [update, children])
+
+  const onScroll = (): void => {
+    update()
+    setActive(true)
+    clearTimeout(hideTimer.current)
+    hideTimer.current = setTimeout(() => setActive(false), 900)
+  }
+
+  return (
+    <div className="relative flex min-w-0 flex-1 items-center">
+      <div
+        ref={ref}
+        onScroll={onScroll}
+        role="tablist"
+        className="no-drag flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+      >
+        {children}
+      </div>
+      {thumb && (
+        <div
+          className={cn(
+            'pointer-events-none absolute bottom-0 left-0 h-[3px] rounded-full bg-foreground/25 transition-opacity duration-300',
+            active ? 'opacity-100' : 'opacity-0'
+          )}
+          style={{ transform: `translateX(${thumb.left}px)`, width: thumb.width }}
+        />
+      )}
+    </div>
+  )
+}
+
 export function RightPanel(): React.JSX.Element | null {
   const panelOpen = useApp((s) => s.panelOpen)
   const planPanel = useApp((s) => s.planPanel)
@@ -494,10 +558,7 @@ export function RightPanel(): React.JSX.Element | null {
             </Button>
           </WithTooltip>
         )}
-        <div
-          className="no-drag flex min-w-0 flex-1 items-center gap-1 overflow-x-auto"
-          role="tablist"
-        >
+        <TabScroller>
           {showPlan && planPanel && (
             <Tab
               icon={<ClipboardList className="size-3.5" />}
@@ -546,7 +607,7 @@ export function RightPanel(): React.JSX.Element | null {
               onClose={() => closePreview(p.id)}
             />
           ))}
-        </div>
+        </TabScroller>
         <QuickOpen />
         <WithTooltip label={panelMaximized ? 'Restore panel' : 'Maximize panel'}>
           <Button

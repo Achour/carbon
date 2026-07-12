@@ -139,6 +139,11 @@ interface AppState {
   commands: SlashCommand[]
   loadCommands(cwd: string | null): void
 
+  // ---- Search ----
+  /** When true the "search chats across projects" dialog is open (⌘K). */
+  searchOpen: boolean
+  setSearchOpen(open: boolean): void
+
   // ---- Settings ----
   /** When true the main area shows the settings page instead of a chat. */
   settingsOpen: boolean
@@ -466,6 +471,13 @@ export const useApp = create<AppState>((set, get) => ({
       // Ignore a stale response if the project changed while awaiting.
       if (get().selectedCwd === cwd) set({ commands })
     })
+  },
+
+  // ---- Search ----
+
+  searchOpen: false,
+  setSearchOpen(open) {
+    set({ searchOpen: open })
   },
 
   // ---- Settings ----
