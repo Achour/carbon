@@ -376,6 +376,10 @@ export interface Api {
   forgetDir(dir: string): Promise<void>
   /** Bring the app window to the foreground (notification clicks). */
   focusWindow(): Promise<void>
+  // ---- Find in page (⌘F) ----
+  findInPage(text: string, options?: { forward?: boolean; findNext?: boolean }): Promise<void>
+  stopFind(): Promise<void>
+  onFindResult(cb: (r: { activeMatchOrdinal: number; matches: number }) => void): () => void
   // ---- Terminal ----
   terminalCreate(opts: TerminalCreateOpts): Promise<void>
   terminalWrite(id: string, data: string): Promise<void>

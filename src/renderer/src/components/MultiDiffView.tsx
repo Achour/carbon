@@ -1,13 +1,5 @@
 import * as React from 'react'
-import {
-  Check,
-  ChevronRight,
-  ChevronsDownUp,
-  ChevronsUpDown,
-  FolderTree,
-  Minus,
-  Plus
-} from 'lucide-react'
+import { Check, ChevronRight, ChevronsDownUp, ChevronsUpDown, Minus, Plus } from 'lucide-react'
 import type { GitFileChange } from '@shared/types'
 import { cn } from '@/lib/utils'
 import { useApp } from '@/store'
@@ -41,8 +33,6 @@ export function MultiDiffView({ cwd }: { cwd: string }): React.JSX.Element {
   const unstagePaths = useApp((s) => s.unstagePaths)
   const openDiff = useApp((s) => s.openDiff)
   const scroll = useApp((s) => s.changesScroll)
-  const dockOpen = useApp((s) => s.explorerOpen)
-  const toggleDock = useApp((s) => s.toggleExplorer)
 
   const [texts, setTexts] = React.useState<Record<string, string | undefined>>({})
   const [collapsed, setCollapsed] = React.useState<Record<string, boolean>>({})
@@ -95,19 +85,7 @@ export function MultiDiffView({ cwd }: { cwd: string }): React.JSX.Element {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex h-8 shrink-0 items-center gap-2 border-b border-border/60 pr-3 pl-2 text-[11px] text-muted-foreground">
-        <WithTooltip label={dockOpen ? 'Hide file tree' : 'Show file tree'}>
-          <Button
-            size="icon-sm"
-            variant="ghost"
-            className={cn('size-5', dockOpen && 'bg-accent text-foreground')}
-            aria-label={dockOpen ? 'Hide file tree' : 'Show file tree'}
-            aria-pressed={dockOpen}
-            onClick={toggleDock}
-          >
-            <FolderTree />
-          </Button>
-        </WithTooltip>
+      <div className="flex h-8 shrink-0 items-center gap-2 border-b border-border/60 px-3 text-[11px] text-muted-foreground">
         <span>
           {changes.length} file{changes.length === 1 ? '' : 's'} changed
         </span>

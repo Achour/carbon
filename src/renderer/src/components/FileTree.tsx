@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { ChevronRight, FileText, Folder, FolderOpen, RefreshCw } from 'lucide-react'
+import { ChevronRight, FileText, Folder, FolderOpen, RefreshCw, Search } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { basename } from '@/lib/format'
 import { useApp } from '@/store'
@@ -87,6 +87,7 @@ export function FileTree(): React.JSX.Element {
   const loaded = useApp((s) => (s.selectedCwd ? Boolean(s.filesByDir[s.selectedCwd]) : false))
   const loadDir = useApp((s) => s.loadDir)
   const refreshFiles = useApp((s) => s.refreshFiles)
+  const setFileSearchOpen = useApp((s) => s.setFileSearchOpen)
   const [refreshing, setRefreshing] = React.useState(false)
 
   React.useEffect(() => {
@@ -108,6 +109,17 @@ export function FileTree(): React.JSX.Element {
           {basename(cwd)}
         </span>
         <div className="flex-1" />
+        <WithTooltip label="Search files  ⌘P">
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            className="size-5"
+            aria-label="Search files"
+            onClick={() => setFileSearchOpen(true)}
+          >
+            <Search />
+          </Button>
+        </WithTooltip>
         <WithTooltip label="Refresh files">
           <Button
             size="icon-sm"

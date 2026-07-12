@@ -146,6 +146,9 @@ interface AppState {
   /** When true the file quick-open dialog is open (⌘P). */
   fileSearchOpen: boolean
   setFileSearchOpen(open: boolean): void
+  /** When true the find-in-page bar is open (⌘F). */
+  findOpen: boolean
+  setFindOpen(open: boolean): void
 
   // ---- Settings ----
   /** When true the main area shows the settings page instead of a chat. */
@@ -486,6 +489,10 @@ export const useApp = create<AppState>((set, get) => ({
   fileSearchOpen: false,
   setFileSearchOpen(open) {
     set({ fileSearchOpen: open })
+  },
+  findOpen: false,
+  setFindOpen(open) {
+    set({ findOpen: open })
   },
 
   // ---- Settings ----
