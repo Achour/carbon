@@ -53,6 +53,7 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
   const queued = useApp((s) => s.queued[chat.id] ?? NO_QUEUED)
   const removeQueued = useApp((s) => s.removeQueued)
   const git = useApp((s) => s.git)
+  const commands = useApp((s) => s.commands)
   const openPlanPanel = useApp((s) => s.openPlanPanel)
   const togglePanel = useApp((s) => s.togglePanel)
   const panelOpen = useApp((s) => s.panelOpen)
@@ -308,6 +309,7 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
             contextTokens={chat.contextTokens}
             contextWindow={chat.contextWindow}
             cwd={chat.cwd}
+            commands={commands}
           />
         </div>
       </div>

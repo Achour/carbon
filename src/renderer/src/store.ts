@@ -23,13 +23,21 @@ import type {
   GitFileChange,
   GitStatus,
   PermissionDecision,
-  PermissionRequestPayload
+  PermissionRequestPayload,
+  SlashCommand
 } from '@shared/types'
 
 export interface QueuedMessage {
   id: string
   text: string
   attachments?: Attachment[]
+}
+
+export interface TerminalTab {
+  /** Tab id and pty session id, e.g. `terminal:3`. */
+  id: string
+  /** Stable ordinal for the "Terminal N" label. */
+  n: number
 }
 
 export interface PlanPanelState {
@@ -73,6 +81,21 @@ interface AppState {
   loading: boolean
   sidebarOpen: boolean
   toggleSidebar(): void
+
+  // ---- Terminal ----
+  /** Open terminal tabs in the right panel; each has its own shell session. */
+  terminals: TerminalTab[]
+  /** Monotonic counter for stable "Terminal N" labels. */
+  terminalSeq: number
+  /** Opens a new terminal tab and focuses it. */
+  openTerminal(): void
+  closeTerminal(id: string): void
+  toggleTerminal(): void
+
+  // ---- Slash commands ----
+  /** Slash commands for the active project, powering the composer's / menu. */
+  commands: SlashCommand[]
+  loadCommands(cwd: string | null): void
 
   // ---- Settings ----
   /** When true the main area shows the settings page instead of a chat. */
@@ -236,6 +259,69 @@ export const useApp = create<AppState>((set, get) => ({
     })
   },
 
+  // ---- Terminal ----
+
+  // Not persisted: terminals start empty each launch so a new one always spawns
+  // in the active project's folder (the store's cwd is known by the time the
+  // user opens it), never racing a fresh-load init.
+  terminals: [],
+  terminalSeq: 0,
+
+  openTerminal() {
+    set((s) => {
+      const n = s.terminalSeq + 1
+      const id = `terminal:${n}`
+      return {
+        terminals: [...s.terminals, { id, n }],
+        terminalSeq: n,
+        activeTab: id,
+        ...panelPatch(s, true)
+      }
+    })
+  },
+
+  closeTerminal(id) {
+    // Unmounting the tab kills its pty; fall back to another tab if it was active.
+    set((s) => {
+      const terminals = s.terminals.filter((t) => t.id !== id)
+      let activeTab = s.activeTab
+      if (activeTab === id) {
+        activeTab =
+          terminals[terminals.length - 1]?.id ??
+          s.openFiles[s.openFiles.length - 1]?.path ??
+          (s.planPanel ? 'plan' : null)
+      }
+      return { terminals, activeTab }
+    })
+  },
+
+  toggleTerminal() {
+    const s = get()
+    if (s.terminals.length === 0) {
+      get().openTerminal()
+      return
+    }
+    const last = s.terminals[s.terminals.length - 1].id
+    // Showing the most recent terminal already → hide the panel; else focus it.
+    if (s.activeTab === last && s.panelOpen) set(panelPatch(s, false))
+    else set({ activeTab: last, ...panelPatch(s, true) })
+  },
+
+  // ---- Slash commands ----
+
+  commands: [],
+
+  loadCommands(cwd) {
+    if (!cwd) {
+      set({ commands: [] })
+      return
+    }
+    void window.api.getCommands(cwd).then((commands) => {
+      // Ignore a stale response if the project changed while awaiting.
+      if (get().selectedCwd === cwd) set({ commands })
+    })
+  },
+
   // ---- Settings ----
 
   settingsOpen: false,
@@ -280,11 +366,14 @@ export const useApp = create<AppState>((set, get) => ({
       loading: false,
       selectedCwd: chats[0]?.cwd ?? defaults.recentDirs[0] ?? null
     })
-    if (get().selectedCwd) void get().refreshGit()
+    const cwd = get().selectedCwd
+    if (cwd) void get().refreshGit()
+    get().loadCommands(cwd)
   },
 
   setSelectedCwd(cwd) {
     set((s) => projectSwitchPatch(s, cwd))
+    get().loadCommands(cwd)
     if (cwd) {
       void get().refreshGit()
       if (get().panelOpen && !get().filesByDir[cwd]) void get().loadDir(cwd)
@@ -572,6 +661,7 @@ export const useApp = create<AppState>((set, get) => ({
     if (get().activeId === id && chat) {
       const cwdChanged = get().selectedCwd !== chat.cwd
       set((s) => ({ messages: chat.messages, ...projectSwitchPatch(s, chat.cwd) }))
+      if (cwdChanged) get().loadCommands(chat.cwd)
       if (cwdChanged || !get().git) void get().refreshGit()
       if (cwdChanged && get().panelOpen && !get().filesByDir[chat.cwd]) {
         void get().loadDir(chat.cwd)
@@ -608,6 +698,7 @@ export const useApp = create<AppState>((set, get) => ({
     }))
     // The new chat keeps whatever panel state was showing when it was created.
     set((s) => panelPatch(s, s.panelOpen))
+    get().loadCommands(cwd)
     void get().refreshGit()
     if (get().panelOpen && !get().filesByDir[cwd]) void get().loadDir(cwd)
     await window.api.send(meta.id, firstMessage, attachments)
@@ -863,6 +954,12 @@ export const useApp = create<AppState>((set, get) => ({
           },
           planPanel: st.planPanel?.requestId === ev.requestId ? null : st.planPanel
         }))
+        break
+      }
+
+      case 'commands': {
+        // Update the composer's command list if this is the active project.
+        if (ev.cwd === get().selectedCwd) set({ commands: ev.commands })
         break
       }
     }

@@ -18,6 +18,7 @@ import type {
   EffortId,
   PermissionDecision,
   PermissionModeId,
+  SlashCommand,
   ToolPart
 } from '@shared/types'
 import type { Store } from './store'
@@ -83,7 +84,8 @@ class ClaudeSession {
     private chat: ChatData,
     private emit: Emit,
     private store: Store,
-    private onDead: () => void
+    private onDead: () => void,
+    private onCommands: (commands: SlashCommand[]) => void
   ) {
     this.q = query({
       prompt: this.input.iterate(),
@@ -110,6 +112,20 @@ class ClaudeSession {
 
   private setStatus(status: ChatStatus): void {
     this.emit({ type: 'status', chatId: this.chat.id, status })
+  }
+
+  /** Normalizes the SDK's slash-command list and pushes it to the renderer + cache. */
+  private emitCommands(
+    raw: Array<{ name: string; description: string; argumentHint?: string; aliases?: string[] }>
+  ): void {
+    const commands: SlashCommand[] = raw.map((c) => ({
+      name: c.name,
+      description: c.description,
+      argumentHint: c.argumentHint || undefined,
+      aliases: c.aliases
+    }))
+    this.emit({ type: 'commands', chatId: this.chat.id, cwd: this.chat.cwd, commands })
+    this.onCommands(commands)
   }
 
   /**
@@ -358,6 +374,16 @@ class ClaudeSession {
             })
             this.store.saveChatSoon(this.chat.id)
           }
+          // The available slash commands are known once the session initializes.
+          void this.q
+            .supportedCommands()
+            .then((cmds) => {
+              if (!this.dead) this.emitCommands(cmds)
+            })
+            .catch(() => {})
+        } else if (msg.subtype === 'commands_changed') {
+          // Skills/commands can appear mid-session as the agent enters subdirs.
+          this.emitCommands((msg as unknown as { commands: SlashCommand[] }).commands)
         } else if (msg.subtype === 'compact_boundary') {
           this.pushMessage({
             id: randomUUID(),
@@ -783,6 +809,9 @@ class ClaudeSession {
 
 export class ChatManager {
   private sessions = new Map<string, ClaudeSession>()
+  // Slash commands are the same for every chat in a folder, so cache them by cwd
+  // — new chats in a known project can show the menu before their first turn.
+  private commandsByCwd = new Map<string, SlashCommand[]>()
 
   constructor(
     private store: Store,
@@ -795,14 +824,24 @@ export class ChatManager {
     return null
   }
 
+  getCommands(cwd: string): SlashCommand[] {
+    return this.commandsByCwd.get(cwd) ?? []
+  }
+
   send(chatId: string, text: string, attachments?: Attachment[]): void {
     const chat = this.store.getChat(chatId)
     if (!chat) return
     let session = this.sessionFor(chatId)
     if (!session) {
-      session = new ClaudeSession(chat, this.emit, this.store, () => {
-        if (this.sessions.get(chatId)?.dead) this.sessions.delete(chatId)
-      })
+      session = new ClaudeSession(
+        chat,
+        this.emit,
+        this.store,
+        () => {
+          if (this.sessions.get(chatId)?.dead) this.sessions.delete(chatId)
+        },
+        (commands) => this.commandsByCwd.set(chat.cwd, commands)
+      )
       this.sessions.set(chatId, session)
     }
     session.send(text, attachments)

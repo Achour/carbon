@@ -3,6 +3,8 @@ import {
   Archive,
   ArchiveRestore,
   ChevronRight,
+  Eye,
+  EyeOff,
   Folder,
   FolderOpen,
   Loader2,
@@ -210,6 +212,27 @@ export function Sidebar(): React.JSX.Element {
     })
   }
 
+  // Hidden projects are fully removed from the list (unlike archived, which stay
+  // visible in a section) but keep all their chats, and can be restored from the
+  // footer. Distinct from Delete, which discards the chats.
+  const [hiddenProjects, setHiddenProjects] = React.useState<Record<string, boolean>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem('hiddenProjects') ?? '{}') as Record<string, boolean>
+    } catch {
+      return {}
+    }
+  })
+
+  const setHidden = (cwd: string, hidden: boolean): void => {
+    setHiddenProjects((prev) => {
+      const next = { ...prev }
+      if (hidden) next[cwd] = true
+      else delete next[cwd]
+      localStorage.setItem('hiddenProjects', JSON.stringify(next))
+      return next
+    })
+  }
+
   const [width, setWidth] = React.useState<number>(() => {
     const saved = Number(localStorage.getItem('sidebarWidth'))
     return Number.isFinite(saved) && saved >= SIDEBAR_MIN && saved <= SIDEBAR_MAX
@@ -265,8 +288,10 @@ export function Sidebar(): React.JSX.Element {
     if (group) group.chats.push(chat)
     else groups.push({ cwd: chat.cwd, chats: [chat] })
   }
-  const activeGroups = groups.filter((g) => !archivedProjects[g.cwd])
-  const archivedGroups = groups.filter((g) => archivedProjects[g.cwd])
+  const visibleGroups = groups.filter((g) => !hiddenProjects[g.cwd])
+  const activeGroups = visibleGroups.filter((g) => !archivedProjects[g.cwd])
+  const archivedGroups = visibleGroups.filter((g) => archivedProjects[g.cwd])
+  const hiddenGroups = groups.filter((g) => hiddenProjects[g.cwd])
 
   return (
     <aside
@@ -345,9 +370,13 @@ export function Sidebar(): React.JSX.Element {
 
       {/* Chats grouped by project */}
       <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-2">
-        {groups.length === 0 && (
+        {activeGroups.length === 0 && archivedGroups.length === 0 && (
           <div className="px-2 py-8 text-center text-xs text-muted-foreground">
-            {filter ? 'No chats match your search.' : 'Open a project to get started.'}
+            {filter
+              ? 'No chats match your search.'
+              : hiddenGroups.length > 0
+                ? 'All projects are hidden. Restore one from the footer.'
+                : 'Open a project to get started.'}
           </div>
         )}
         {[
@@ -437,6 +466,10 @@ export function Sidebar(): React.JSX.Element {
                         <Archive /> Archive project
                       </ContextMenuItem>
                     )}
+                    <ContextMenuItem onClick={() => setHidden(group.cwd, true)}>
+                      <EyeOff /> Hide project
+                    </ContextMenuItem>
+                    <ContextMenuSeparator />
                     <ContextMenuItem
                       destructive
                       onClick={() => setRemovingProject({ cwd: group.cwd, count: group.chats.length })}
@@ -470,7 +503,43 @@ export function Sidebar(): React.JSX.Element {
       </div>
 
       {/* Footer */}
-      <div className="flex shrink-0 items-center justify-end border-t border-sidebar-border px-3 py-2">
+      <div className="flex shrink-0 items-center justify-between border-t border-sidebar-border px-3 py-2">
+        {hiddenGroups.length > 0 ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  className="h-7 gap-1.5 px-2 text-[11px] text-muted-foreground"
+                  aria-label="Hidden projects"
+                >
+                  <EyeOff className="size-3.5" />
+                  {hiddenGroups.length} hidden
+                </Button>
+              }
+            />
+            <DropdownMenuContent align="start" side="top" className="min-w-52">
+              <div className="px-2 py-1 text-[10px] font-semibold tracking-wider text-muted-foreground/60 uppercase">
+                Hidden projects
+              </div>
+              {hiddenGroups.map((g) => (
+                <DropdownMenuItem key={g.cwd} onClick={() => setHidden(g.cwd, false)}>
+                  <Eye />
+                  <span className="min-w-0 flex-1 truncate">{basename(g.cwd)}</span>
+                  <span className="shrink-0 text-[11px] text-muted-foreground/70">
+                    {g.chats.length}
+                  </span>
+                </DropdownMenuItem>
+              ))}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => hiddenGroups.forEach((g) => setHidden(g.cwd, false))}>
+                <ArchiveRestore /> Show all
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : (
+          <span />
+        )}
         <WithTooltip label="Settings  ⌘,">
           <Button size="icon-sm" variant="ghost" onClick={openSettings} aria-label="Open settings">
             <Settings />

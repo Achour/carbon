@@ -7,7 +7,9 @@ import type {
   GitDiffTarget,
   PermissionDecision,
   PermissionModeId,
-  Provider
+  Provider,
+  TerminalCreateOpts,
+  TerminalEvent
 } from '@shared/types'
 
 const api: Api = {
@@ -53,6 +55,12 @@ const api: Api = {
   getDefaults: () => ipcRenderer.invoke('app:get-defaults'),
   forgetDir: (dir: string) => ipcRenderer.invoke('app:forget-dir', dir),
   focusWindow: () => ipcRenderer.invoke('app:focus-window'),
+  terminalCreate: (opts: TerminalCreateOpts) => ipcRenderer.invoke('terminal:create', opts),
+  terminalWrite: (id: string, data: string) => ipcRenderer.invoke('terminal:write', id, data),
+  terminalResize: (id: string, cols: number, rows: number) =>
+    ipcRenderer.invoke('terminal:resize', id, cols, rows),
+  terminalKill: (id: string) => ipcRenderer.invoke('terminal:kill', id),
+  getCommands: (cwd: string) => ipcRenderer.invoke('commands:get', cwd),
   onChatEvent: (cb: (ev: ChatEvent) => void) => {
     const listener = (_e: Electron.IpcRendererEvent, ev: ChatEvent): void => cb(ev)
     ipcRenderer.on('chat:event', listener)
@@ -62,6 +70,11 @@ const api: Api = {
     const listener = (): void => cb()
     ipcRenderer.on('ui:new-chat', listener)
     return () => ipcRenderer.removeListener('ui:new-chat', listener)
+  },
+  onTerminalEvent: (cb: (ev: TerminalEvent) => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, ev: TerminalEvent): void => cb(ev)
+    ipcRenderer.on('terminal:event', listener)
+    return () => ipcRenderer.removeListener('terminal:event', listener)
   }
 }
 

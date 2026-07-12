@@ -18,6 +18,7 @@ export function NewChat(): React.JSX.Element {
   const sidebarOpen = useApp((s) => s.sidebarOpen)
   const toggleSidebar = useApp((s) => s.toggleSidebar)
   const git = useApp((s) => s.git)
+  const commands = useApp((s) => s.commands)
 
   const [model, setModel] = React.useState(defaults?.model ?? '')
   const [effort, setEffort] = React.useState<EffortId | ''>(defaults?.effort ?? '')
@@ -104,6 +105,7 @@ export function NewChat(): React.JSX.Element {
               permissionMode={permissionMode}
               onPermissionModeChange={setPermissionMode}
               cwd={cwd}
+              commands={commands}
               placeholder={`Start working in ${basename(cwd)}…`}
             />
           ) : (

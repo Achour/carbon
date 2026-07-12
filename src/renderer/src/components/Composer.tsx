@@ -7,7 +7,8 @@ import {
   PROVIDER_LABELS,
   type Attachment,
   type EffortId,
-  type PermissionModeId
+  type PermissionModeId,
+  type SlashCommand
 } from '@shared/types'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -176,6 +177,7 @@ export function Composer({
   contextTokens,
   contextWindow,
   cwd = null,
+  commands = [],
   disabled = false,
   placeholder = 'Ask Claude Code anything…',
   autoFocus = true
@@ -193,6 +195,8 @@ export function Composer({
   contextWindow?: number
   /** Project folder used for @-file mentions; null disables them. */
   cwd?: string | null
+  /** Slash commands available in this project, for the / autocomplete. */
+  commands?: SlashCommand[]
   disabled?: boolean
   placeholder?: string
   autoFocus?: boolean
@@ -258,6 +262,47 @@ export function Composer({
     })
   }
 
+  // ---- /-slash commands ----
+  // Only while typing the command name at the very start of the message (before
+  // any space); once arguments begin, the menu closes.
+  const [slashQuery, setSlashQuery] = React.useState<string | null>(null)
+  const [slashIdx, setSlashIdx] = React.useState(0)
+
+  const updateSlash = (value: string, caret: number): void => {
+    const m = /^\/([\w:-]*)$/.exec(value.slice(0, caret))
+    setSlashQuery(m ? m[1] : null)
+  }
+
+  const slashResults = React.useMemo(() => {
+    if (slashQuery === null) return []
+    const q = slashQuery.toLowerCase()
+    const matches = (c: SlashCommand): boolean =>
+      c.name.toLowerCase().includes(q) || (c.aliases ?? []).some((a) => a.toLowerCase().includes(q))
+    return commands
+      .filter(matches)
+      .sort((a, b) => {
+        const ap = a.name.toLowerCase().startsWith(q) ? 0 : 1
+        const bp = b.name.toLowerCase().startsWith(q) ? 0 : 1
+        return ap - bp || a.name.localeCompare(b.name)
+      })
+      .slice(0, 50)
+  }, [slashQuery, commands])
+
+  React.useEffect(() => setSlashIdx(0), [slashQuery])
+
+  const pickSlash = (c: SlashCommand): void => {
+    const el = ref.current
+    const caret = el?.selectionStart ?? text.length
+    const next = `/${c.name} ${text.slice(caret)}`
+    setText(next)
+    setSlashQuery(null)
+    requestAnimationFrame(() => {
+      const pos = c.name.length + 2 // '/' + name + ' '
+      el?.focus()
+      el?.setSelectionRange(pos, pos)
+    })
+  }
+
   React.useLayoutEffect(() => {
     const el = ref.current
     if (!el) return
@@ -317,6 +362,37 @@ export function Composer({
         disabled && 'opacity-60'
       )}
     >
+      {/* /-slash command picker */}
+      {slashQuery !== null && slashResults.length > 0 && (
+        <div
+          data-slash-popover
+          className="absolute bottom-full left-3 z-30 mb-2 max-h-72 w-96 max-w-[calc(100%-1.5rem)] overflow-y-auto rounded-xl border border-border bg-popover p-1 shadow-xl"
+        >
+          {slashResults.map((c, i) => (
+            <button
+              key={c.name}
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => pickSlash(c)}
+              onMouseEnter={() => setSlashIdx(i)}
+              className={cn(
+                'flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors',
+                i === slashIdx ? 'bg-accent' : undefined
+              )}
+            >
+              <span className="shrink-0 font-mono text-xs text-foreground">/{c.name}</span>
+              {c.argumentHint && (
+                <span className="shrink-0 font-mono text-[11px] text-muted-foreground/60">
+                  {c.argumentHint}
+                </span>
+              )}
+              <span className="min-w-0 flex-1 truncate text-right text-[11px] text-muted-foreground/80">
+                {c.description}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
       {/* @-mention file picker */}
       {mention && mentionResults.length > 0 && (
         <div
@@ -367,14 +443,45 @@ export function Composer({
         value={text}
         onChange={(e) => {
           setText(e.target.value)
-          updateMention(e.target.value, e.target.selectionStart ?? e.target.value.length)
+          const caret = e.target.selectionStart ?? e.target.value.length
+          updateMention(e.target.value, caret)
+          updateSlash(e.target.value, caret)
         }}
         onSelect={(e) => {
           const el = e.currentTarget
-          updateMention(el.value, el.selectionStart ?? el.value.length)
+          const caret = el.selectionStart ?? el.value.length
+          updateMention(el.value, caret)
+          updateSlash(el.value, caret)
         }}
-        onBlur={() => setTimeout(() => setMention(null), 200)}
+        onBlur={() =>
+          setTimeout(() => {
+            setMention(null)
+            setSlashQuery(null)
+          }, 200)
+        }
         onKeyDown={(e) => {
+          if (slashQuery !== null && slashResults.length > 0) {
+            if (e.key === 'ArrowDown') {
+              e.preventDefault()
+              setSlashIdx((i) => (i + 1) % slashResults.length)
+              return
+            }
+            if (e.key === 'ArrowUp') {
+              e.preventDefault()
+              setSlashIdx((i) => (i - 1 + slashResults.length) % slashResults.length)
+              return
+            }
+            if (e.key === 'Enter' || e.key === 'Tab') {
+              e.preventDefault()
+              pickSlash(slashResults[slashIdx])
+              return
+            }
+            if (e.key === 'Escape') {
+              e.preventDefault()
+              setSlashQuery(null)
+              return
+            }
+          }
           if (mention && mentionResults.length > 0) {
             if (e.key === 'ArrowDown') {
               e.preventDefault()

@@ -29,6 +29,10 @@ export default function App(): React.JSX.Element {
         e.preventDefault()
         useApp.getState().toggleSidebar()
       }
+      if ((e.metaKey || e.ctrlKey) && e.key === 'j') {
+        e.preventDefault()
+        useApp.getState().toggleTerminal()
+      }
       if ((e.metaKey || e.ctrlKey) && e.key === ',') {
         e.preventDefault()
         const s = useApp.getState()

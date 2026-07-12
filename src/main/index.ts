@@ -11,21 +11,29 @@ import type {
   GitDiffTarget,
   PermissionDecision,
   PermissionModeId,
-  Provider
+  Provider,
+  TerminalCreateOpts,
+  TerminalEvent
 } from '@shared/types'
 import { ChatManager } from './claude'
 import { listDir, readFileContent, searchFiles, statPath } from './files'
 import * as gitOps from './git'
 import { Store } from './store'
+import { TerminalManager } from './terminal'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
 let win: BrowserWindow | null = null
 let store: Store
 let manager: ChatManager
+let terminals: TerminalManager
 
 function emit(ev: ChatEvent): void {
   win?.webContents.send('chat:event', ev)
+}
+
+function emitTerminal(ev: TerminalEvent): void {
+  win?.webContents.send('terminal:event', ev)
 }
 
 function createWindow(): void {
@@ -251,6 +259,15 @@ function registerIpc(): void {
 
   ipcMain.handle('fs:search', (_e, cwd: string, query: string) => searchFiles(cwd, query))
 
+  ipcMain.handle('terminal:create', (_e, opts: TerminalCreateOpts) => terminals.create(opts))
+  ipcMain.handle('terminal:write', (_e, id: string, data: string) => terminals.write(id, data))
+  ipcMain.handle('terminal:resize', (_e, id: string, cols: number, rows: number) =>
+    terminals.resize(id, cols, rows)
+  )
+  ipcMain.handle('terminal:kill', (_e, id: string) => terminals.kill(id))
+
+  ipcMain.handle('commands:get', (_e, cwd: string) => manager.getCommands(cwd))
+
   ipcMain.handle('git:status', (_e, cwd: string) => gitOps.gitStatus(cwd))
   ipcMain.handle('git:diff', (_e, cwd: string, target: GitDiffTarget) => gitOps.gitDiff(cwd, target))
   ipcMain.handle('git:stage', (_e, cwd: string, paths: string[]) => gitOps.gitStage(cwd, paths))
@@ -264,9 +281,12 @@ app.whenReady().then(() => {
   app.setName('Karbun')
   // Pin userData to the original folder so existing chat history carries over
   // after the rename (dev and packaged builds share this location).
-  app.setPath('userData', join(app.getPath('appData'), 'ai-gui'))
+  // AIGUI_USERDATA overrides it — used to run an isolated dev instance without
+  // colliding with an installed build's store.
+  app.setPath('userData', process.env.AIGUI_USERDATA || join(app.getPath('appData'), 'ai-gui'))
   store = new Store()
   manager = new ChatManager(store, emit)
+  terminals = new TerminalManager(emitTerminal)
   registerIpc()
   buildMenu()
   createWindow()
@@ -282,5 +302,6 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   manager.disposeAll()
+  terminals.disposeAll()
   store.flushAll()
 })

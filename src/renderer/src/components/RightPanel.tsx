@@ -10,17 +10,27 @@ import {
   Minimize2,
   PanelLeft,
   PanelRight,
+  Plus,
+  SquareTerminal,
   X
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useApp, type OpenTab } from '@/store'
 import { Button } from '@/components/ui/button'
 import { WithTooltip } from '@/components/ui/tooltip'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger
+} from '@/components/ui/dropdown-menu'
 import { PlanContent } from '@/components/PlanPanel'
 import { FileViewer } from '@/components/FileViewer'
 import { FileTree } from '@/components/FileTree'
 import { GitPanel } from '@/components/GitPanel'
 import { DiffView } from '@/components/DiffView'
+import { TerminalPane } from '@/components/TerminalPanel'
 
 function Tab({
   icon,
@@ -124,6 +134,9 @@ export function RightPanel(): React.JSX.Element | null {
   const closePlanPanel = useApp((s) => s.closePlanPanel)
   const rightView = useApp((s) => s.rightView)
   const setRightView = useApp((s) => s.setRightView)
+  const terminals = useApp((s) => s.terminals)
+  const openTerminal = useApp((s) => s.openTerminal)
+  const closeTerminal = useApp((s) => s.closeTerminal)
   const selectedCwd = useApp((s) => s.selectedCwd)
   const changeCount = useApp((s) => s.git?.changes.length ?? 0)
   const diffContents = useApp((s) => s.diffContents)
@@ -152,6 +165,19 @@ export function RightPanel(): React.JSX.Element | null {
       if (s.selectedCwd && !s.filesByDir[s.selectedCwd]) void s.loadDir(s.selectedCwd)
       void s.refreshGit()
     }
+  }
+
+  // "+" menu: reveal the file-tree dock on the requested view (opening it if
+  // needed), so Files / Review jump straight to browsing or source control.
+  const revealDock = (view: 'files' | 'git'): void => {
+    if (!dockOpen) {
+      setDockOpen(true)
+      localStorage.setItem('rightDockOpen', 'true')
+      const s = useApp.getState()
+      if (s.selectedCwd && !s.filesByDir[s.selectedCwd]) void s.loadDir(s.selectedCwd)
+      void s.refreshGit()
+    }
+    setRightView(view)
   }
 
   const [dockWidth, setDockWidth] = React.useState<number>(() => {
@@ -241,14 +267,17 @@ export function RightPanel(): React.JSX.Element | null {
 
   const showPlan = planPanel !== null && planPanel.chatId === activeId
   const current =
-    activeTab === 'plan' && showPlan
-      ? 'plan'
-      : openFiles.some((f) => f.path === activeTab)
-        ? activeTab!
-        : showPlan
-          ? 'plan'
-          : (openFiles[openFiles.length - 1]?.path ?? null)
-  const activeEntry = current ? openFiles.find((f) => f.path === current) : undefined
+    terminals.some((t) => t.id === activeTab)
+      ? activeTab!
+      : activeTab === 'plan' && showPlan
+        ? 'plan'
+        : openFiles.some((f) => f.path === activeTab)
+          ? activeTab!
+          : showPlan
+            ? 'plan'
+            : (openFiles[openFiles.length - 1]?.path ?? terminals[terminals.length - 1]?.id ?? null)
+  const currentIsTerminal = terminals.some((t) => t.id === current)
+  const activeEntry = openFiles.find((f) => f.path === current)
 
   return (
     <aside
@@ -328,7 +357,43 @@ export function RightPanel(): React.JSX.Element | null {
               onClose={() => closeFile(file.path)}
             />
           ))}
+          {terminals.map((t) => (
+            <Tab
+              key={t.id}
+              icon={<SquareTerminal className="size-3.5" />}
+              label={`Terminal ${t.n}`}
+              active={current === t.id}
+              onSelect={() => setActiveTab(t.id)}
+              onClose={() => closeTerminal(t.id)}
+            />
+          ))}
         </div>
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                className="no-drag shrink-0"
+                aria-label="Open a tab"
+              >
+                <Plus />
+              </Button>
+            }
+          />
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={() => revealDock('files')}>
+              <Files /> Files
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => revealDock('git')}>
+              <GitBranch /> Review changes
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={openTerminal}>
+              <SquareTerminal /> Terminal
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
         <WithTooltip label={panelMaximized ? 'Restore panel' : 'Maximize panel'}>
           <Button
             size="icon-sm"
@@ -353,41 +418,57 @@ export function RightPanel(): React.JSX.Element | null {
         </WithTooltip>
       </header>
 
-      {/* Breadcrumb row with the file-tree toggle at its right, Cursor-style */}
-      <div className="flex h-8 shrink-0 items-center gap-2 border-b border-border/60 pr-1.5 pl-3">
-        <div className="min-w-0 flex-1">
-          {activeEntry && <PathBar entry={activeEntry} cwd={selectedCwd} />}
+      {/* Breadcrumb row with the file-tree toggle at its right, Cursor-style.
+          Hidden for terminal tabs, which carry their own toolbar. */}
+      {!currentIsTerminal && (
+        <div className="flex h-8 shrink-0 items-center gap-2 border-b border-border/60 pr-1.5 pl-3">
+          <div className="min-w-0 flex-1">
+            {activeEntry && <PathBar entry={activeEntry} cwd={selectedCwd} />}
+          </div>
+          <WithTooltip label={dockOpen ? 'Hide file tree' : 'Show file tree'}>
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              className={cn('no-drag shrink-0', dockOpen && 'bg-accent text-foreground')}
+              aria-label={dockOpen ? 'Hide file tree' : 'Show file tree'}
+              aria-pressed={dockOpen}
+              onClick={toggleDock}
+            >
+              <FolderTree />
+            </Button>
+          </WithTooltip>
         </div>
-        <WithTooltip label={dockOpen ? 'Hide file tree' : 'Show file tree'}>
-          <Button
-            size="icon-sm"
-            variant="ghost"
-            className={cn('no-drag shrink-0', dockOpen && 'bg-accent text-foreground')}
-            aria-label={dockOpen ? 'Hide file tree' : 'Show file tree'}
-            aria-pressed={dockOpen}
-            onClick={toggleDock}
-          >
-            <FolderTree />
-          </Button>
-        </WithTooltip>
-      </div>
+      )}
 
       {/* Viewer + file tree / source control docked on the right, Cursor-style */}
       <div className="flex min-h-0 flex-1">
-        <div className="flex min-w-0 flex-1 flex-col">
-          <div className="min-h-0 flex-1">
+        <div className="relative flex min-w-0 flex-1 flex-col">
+          <div className={cn('min-h-0 flex-1', currentIsTerminal && 'hidden')}>
             {current === 'plan' && planPanel ? (
               <PlanContent panel={planPanel} hasSuggestions={hasSuggestions} />
             ) : activeEntry?.diff ? (
               <DiffView text={diffContents[current!]} />
-            ) : current ? (
-              <FileViewer content={fileContents[current]} />
+            ) : activeEntry ? (
+              <FileViewer content={fileContents[current!]} />
             ) : (
               <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
                 Select a file from the tree
               </div>
             )}
           </div>
+          {/* Each terminal stays mounted while its tab exists so scrollback
+              survives switching tabs; hidden (not unmounted) when not active. */}
+          {terminals.map((t) => (
+            <div
+              key={t.id}
+              className={cn(
+                'absolute inset-0',
+                current !== t.id && 'invisible pointer-events-none'
+              )}
+            >
+              <TerminalPane id={t.id} active={current === t.id} />
+            </div>
+          ))}
         </div>
         {dockOpen && (
         <div

@@ -152,6 +152,7 @@ export type ChatEvent =
   | { type: 'status'; chatId: string; status: ChatStatus }
   | { type: 'permission-request'; chatId: string; request: PermissionRequestPayload }
   | { type: 'permission-resolved'; chatId: string; requestId: string }
+  | { type: 'commands'; chatId: string; cwd: string; commands: SlashCommand[] }
 
 // ---------- Settings ----------
 
@@ -238,6 +239,31 @@ export interface GitDiffTarget {
   untracked?: boolean
 }
 
+// ---------- Terminal ----------
+
+export interface TerminalCreateOpts {
+  id: string
+  cwd: string
+  cols: number
+  rows: number
+}
+
+export type TerminalEvent =
+  | { type: 'data'; id: string; data: string }
+  | { type: 'exit'; id: string; exitCode: number }
+
+// ---------- Slash commands ----------
+
+/** A slash command available in a session (custom command, skill, or built-in). */
+export interface SlashCommand {
+  /** Command name without the leading slash. */
+  name: string
+  description: string
+  /** Hint for arguments, e.g. "<file>". */
+  argumentHint?: string
+  aliases?: string[]
+}
+
 // ---------- Preload API ----------
 
 export interface Api {
@@ -277,6 +303,14 @@ export interface Api {
   forgetDir(dir: string): Promise<void>
   /** Bring the app window to the foreground (notification clicks). */
   focusWindow(): Promise<void>
+  // ---- Terminal ----
+  terminalCreate(opts: TerminalCreateOpts): Promise<void>
+  terminalWrite(id: string, data: string): Promise<void>
+  terminalResize(id: string, cols: number, rows: number): Promise<void>
+  terminalKill(id: string): Promise<void>
+  /** Slash commands cached for a project folder (empty until a session inits). */
+  getCommands(cwd: string): Promise<SlashCommand[]>
   onChatEvent(cb: (ev: ChatEvent) => void): () => void
   onNewChat(cb: () => void): () => void
+  onTerminalEvent(cb: (ev: TerminalEvent) => void): () => void
 }
