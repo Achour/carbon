@@ -143,7 +143,7 @@ function ContextRing({ used, window: win }: { used: number; window: number }): R
       <PopoverTrigger
         aria-label="Context window usage"
         className={cn(
-          'no-drag flex items-center gap-1 rounded-md px-1.5 py-0.5 outline-none transition-colors hover:bg-accent data-[popup-open]:bg-accent',
+          'no-drag flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 outline-none transition-colors hover:bg-accent data-[popup-open]:bg-accent',
           pct > 0.9
             ? 'text-destructive'
             : pct > 0.7
@@ -591,7 +591,7 @@ export function Composer({
           <Button
             size="icon-sm"
             variant="ghost"
-            className="text-muted-foreground"
+            className="shrink-0 text-muted-foreground"
             onClick={() => fileInputRef.current?.click()}
             disabled={disabled}
             aria-label="Attach files"
@@ -599,39 +599,45 @@ export function Composer({
             <Paperclip />
           </Button>
         </WithTooltip>
-        <CompactSelect
-          value={model}
-          onValueChange={onModelChange}
-          options={MODEL_OPTIONS.map((m) => ({
-            value: m.id,
-            label: m.label,
-            description: m.description,
-            group: PROVIDER_LABELS[m.provider],
-            disabled: m.disabled
-          }))}
-          icon={<Sparkles className="size-3" />}
-        />
-        <CompactSelect
-          value={effort}
-          onValueChange={(v) => onEffortChange(v as EffortId | '')}
-          options={EFFORT_OPTIONS.map((e) => ({
-            value: e.id,
-            label: e.label,
-            description: e.description
-          }))}
-          icon={<Brain className="size-3" />}
-        />
-        <CompactSelect
-          value={permissionMode}
-          onValueChange={(v) => onPermissionModeChange(v as PermissionModeId)}
-          options={PERMISSION_MODES.map((m) => ({
-            value: m.id,
-            label: m.label,
-            description: m.description
-          }))}
-          icon={<Shield className="size-3" />}
-        />
-        <div className="flex-1" />
+        {/* The selects share the slack and truncate first, so the ring and
+            send button never get pushed out of the box on a narrow column. */}
+        <div className="flex min-w-0 flex-1 items-center gap-1">
+          <CompactSelect
+            value={model}
+            onValueChange={onModelChange}
+            options={MODEL_OPTIONS.map((m) => ({
+              value: m.id,
+              label: m.label,
+              description: m.description,
+              group: PROVIDER_LABELS[m.provider],
+              disabled: m.disabled
+            }))}
+            icon={<Sparkles className="size-3" />}
+            className="min-w-0"
+          />
+          <CompactSelect
+            value={effort}
+            onValueChange={(v) => onEffortChange(v as EffortId | '')}
+            options={EFFORT_OPTIONS.map((e) => ({
+              value: e.id,
+              label: e.label,
+              description: e.description
+            }))}
+            icon={<Brain className="size-3" />}
+            className="min-w-0"
+          />
+          <CompactSelect
+            value={permissionMode}
+            onValueChange={(v) => onPermissionModeChange(v as PermissionModeId)}
+            options={PERMISSION_MODES.map((m) => ({
+              value: m.id,
+              label: m.label,
+              description: m.description
+            }))}
+            icon={<Shield className="size-3" />}
+            className="min-w-0"
+          />
+        </div>
         {contextTokens != null && contextTokens > 0 && (
           <ContextRing used={contextTokens} window={contextWindow ?? 200_000} />
         )}

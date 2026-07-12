@@ -72,13 +72,13 @@ export function CompactSelect({
     >
       <Select.Trigger
         className={cn(
-          'no-drag inline-flex h-7 select-none items-center gap-1 rounded-md px-2 text-xs font-medium text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[popup-open]:bg-accent data-[popup-open]:text-foreground disabled:opacity-50',
+          'no-drag inline-flex h-7 select-none items-center gap-1 rounded-md px-2 text-xs font-medium text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[popup-open]:bg-accent data-[popup-open]:text-foreground disabled:opacity-50 [&>svg]:shrink-0',
           className
         )}
       >
         {icon}
         <span className="max-w-36 truncate">{selected?.label ?? value}</span>
-        <Select.Icon>
+        <Select.Icon className="shrink-0">
           <ChevronDown className="size-3 opacity-60" />
         </Select.Icon>
       </Select.Trigger>
