@@ -1,7 +1,9 @@
 import * as React from 'react'
 import {
   ArrowDown,
+  ArrowUp,
   Clock,
+  FileDiff,
   Folder,
   GitBranch,
   MoreHorizontal,
@@ -53,10 +55,12 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
   const permissions = useApp((s) => s.permissions[chat.id] ?? NO_PERMISSIONS)
   const queued = useApp((s) => s.queued[chat.id] ?? NO_QUEUED)
   const removeQueued = useApp((s) => s.removeQueued)
+  const sendQueuedNow = useApp((s) => s.sendQueuedNow)
   const git = useApp((s) => s.git)
   const commands = useApp((s) => s.commands)
   const openPlanPanel = useApp((s) => s.openPlanPanel)
   const togglePanel = useApp((s) => s.togglePanel)
+  const reviewChanges = useApp((s) => s.reviewChanges)
   const panelOpen = useApp((s) => s.panelOpen)
   const sidebarOpen = useApp((s) => s.sidebarOpen)
   const toggleSidebar = useApp((s) => s.toggleSidebar)
@@ -101,14 +105,31 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
   }, [chat.id, scrollToBottom])
 
   const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant')
-  // Keep the indicator up until something is actually visible — empty parts
-  // (a thinking block whose first token hasn't arrived) don't count.
-  const lastAssistantVisible =
-    lastAssistant?.parts.some((p) => p && (p.type === 'tool' || p.text.length > 0)) ?? false
-  const waitingForFirstToken =
-    busy &&
-    permissions.length === 0 &&
-    (messages[messages.length - 1]?.role === 'user' || !lastAssistant || !lastAssistantVisible)
+  // The live turn's message — only the *last* message counts, so a just-sent user
+  // message (before the reply starts) isn't mistaken for the previous reply.
+  const lastMsg = messages[messages.length - 1]
+  const liveAssistant = busy && lastMsg?.role === 'assistant' ? lastMsg : undefined
+  // Has the live turn shown anything yet? Empty parts (a thinking block whose first
+  // token hasn't arrived) don't count.
+  const producedSomething =
+    liveAssistant?.parts.some((p) => p && (p.type === 'tool' || p.text.length > 0)) ?? false
+  // The tail of the live turn: a running tool card and a streaming thinking block
+  // already animate on their own, so a second indicator under them is just noise.
+  const tail = liveAssistant
+    ? [...liveAssistant.parts].reverse().find((p) => Boolean(p))
+    : undefined
+  const tailAnimatesItself =
+    (tail?.type === 'tool' && (tail.status === 'pending' || tail.status === 'running')) ||
+    // A thinking block only shimmers once its first token lands; an empty one
+    // renders nothing, so keep the indicator up until then.
+    (tail?.type === 'thinking' && tail.text.length > 0)
+  // Show a working indicator the whole time the agent is busy — before the first
+  // token, while streaming text, and in the gaps between tool calls — not just at
+  // the very start. Hide it only while a permission prompt awaits the user, or when
+  // the tail is already animating itself.
+  const showActivity = busy && permissions.length === 0 && !tailAnimatesItself
+  // "Thinking…" until the model has produced something this turn; "Working…" after.
+  const activityLabel = producedSomething ? 'Working…' : 'Thinking…'
 
   const pendingPlanRequest = permissions.find((r) => r.toolName === 'ExitPlanMode')
 
@@ -138,7 +159,7 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
       {/* Header */}
       <header
         className={cn(
-          'drag flex h-[52px] shrink-0 items-center gap-2 border-b border-border px-4',
+          'drag flex h-[48px] shrink-0 items-center gap-2 border-b border-border px-4',
           !sidebarOpen && 'pl-[84px]'
         )}
       >
@@ -168,6 +189,28 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
             )}
           </div>
         </WithTooltip>
+        {git?.isRepo && git.changes.length > 0 && (
+          <WithTooltip
+            label={`Review changes — ${git.changes.length} file${git.changes.length === 1 ? '' : 's'}`}
+          >
+            <button
+              type="button"
+              onClick={() => void reviewChanges()}
+              aria-label="Review changes"
+              className="no-drag flex items-center gap-1.5 rounded-md border border-border bg-secondary/50 px-2 py-1 text-xs tabular-nums transition-colors hover:bg-accent hover:text-foreground"
+            >
+              <FileDiff className="size-3 text-muted-foreground" />
+              {git.additions === 0 && git.deletions === 0 ? (
+                <span className="text-muted-foreground">{git.changes.length}</span>
+              ) : (
+                <>
+                  <span className="text-success">+{git.additions}</span>
+                  <span className="text-destructive">−{git.deletions}</span>
+                </>
+              )}
+            </button>
+          </WithTooltip>
+        )}
         {/* When the panel is open its own header hosts the collapse button. */}
         {!panelOpen && (
           <WithTooltip label="Show files">
@@ -249,7 +292,7 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
               )
             return <PermissionCard key={request.id} request={request} />
           })}
-          {waitingForFirstToken && <StreamingIndicator />}
+          {showActivity && <StreamingIndicator label={activityLabel} />}
           <div className="h-2" />
         </div>
       </div>
@@ -286,6 +329,15 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
                   <span className="shrink-0 text-[10px] tracking-wide text-muted-foreground/60 uppercase">
                     queued
                   </span>
+                  <button
+                    type="button"
+                    onClick={() => void sendQueuedNow(chat.id, q.id)}
+                    aria-label="Send now"
+                    title="Send now — interrupts the current turn"
+                    className="shrink-0 rounded p-0.5 transition-colors hover:bg-accent hover:text-foreground"
+                  >
+                    <ArrowUp className="size-3" />
+                  </button>
                   <button
                     type="button"
                     onClick={() => removeQueued(chat.id, q.id)}

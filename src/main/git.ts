@@ -1,4 +1,6 @@
 import { execFile } from 'node:child_process'
+import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { promisify } from 'node:util'
 import type { GitDiffTarget, GitFileChange, GitResult, GitStatus } from '@shared/types'
 
@@ -33,7 +35,53 @@ const EMPTY_STATUS: GitStatus = {
   behind: 0,
   hasUpstream: false,
   hasRemote: false,
-  changes: []
+  changes: [],
+  additions: 0,
+  deletions: 0
+}
+
+// Safety rails for counting untracked additions by hand: skip huge files and
+// bail after enough of them that the header badge is already "big".
+const MAX_UNTRACKED_FILES = 300
+const MAX_COUNT_BYTES = 4 * 1024 * 1024
+
+/** Sums the added/removed columns of `git diff --numstat` output. */
+function numstatTotals(out: string): { additions: number; deletions: number } {
+  let additions = 0
+  let deletions = 0
+  for (const line of out.split('\n')) {
+    if (!line) continue
+    const [a, d] = line.split('\t')
+    // Binary files report "-" for both columns; Number('-') is NaN → 0.
+    additions += Number(a) || 0
+    deletions += Number(d) || 0
+  }
+  return { additions, deletions }
+}
+
+/**
+ * Untracked files never appear in `git diff --numstat`, so count their lines
+ * directly — every line is an addition. Binaries (a NUL byte early on, git's
+ * own heuristic) and oversized files are skipped.
+ */
+async function untrackedAdditions(cwd: string, paths: string[]): Promise<number> {
+  let additions = 0
+  for (const rel of paths.slice(0, MAX_UNTRACKED_FILES)) {
+    try {
+      const buf = await readFile(join(cwd, rel))
+      if (buf.length === 0 || buf.length > MAX_COUNT_BYTES) continue
+      if (buf.subarray(0, 8000).includes(0)) continue
+      let lines = 0
+      let idx = -1
+      while ((idx = buf.indexOf(10, idx + 1)) !== -1) lines++
+      // A final line with no trailing newline still counts.
+      if (buf[buf.length - 1] !== 10) lines++
+      additions += lines
+    } catch {
+      // unreadable (perms, symlink, vanished) — skip
+    }
+  }
+  return additions
 }
 
 export async function gitStatus(cwd: string): Promise<GitStatus> {
@@ -85,6 +133,28 @@ export async function gitStatus(cwd: string): Promise<GitStatus> {
   } catch {
     // leave hasRemote false
   }
+
+  // Line totals for the "+adds −dels" badge. Working-tree and staged numstats
+  // cover disjoint ranges (index→worktree and HEAD→index), so summing them is
+  // the full change vs HEAD without double-counting; untracked files are added
+  // by hand since numstat never lists them.
+  try {
+    const [work, staged] = await Promise.all([
+      git(cwd, ['diff', '--numstat']),
+      git(cwd, ['diff', '--numstat', '--cached'])
+    ])
+    const w = numstatTotals(work)
+    const s = numstatTotals(staged)
+    const untracked = await untrackedAdditions(
+      cwd,
+      changes.filter((c) => c.status === '?').map((c) => c.path)
+    )
+    status.additions = w.additions + s.additions + untracked
+    status.deletions = w.deletions + s.deletions
+  } catch {
+    // leave additions/deletions at 0
+  }
+
   return status
 }
 

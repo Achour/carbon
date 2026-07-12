@@ -262,6 +262,9 @@ export interface GitStatus {
   hasUpstream: boolean
   hasRemote: boolean
   changes: GitFileChange[]
+  /** Total added / removed lines across staged, unstaged and untracked changes. */
+  additions: number
+  deletions: number
 }
 
 export type GitResult = { ok: true; output?: string } | { ok: false; error: string }

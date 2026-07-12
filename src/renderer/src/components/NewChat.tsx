@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { Folder, FolderOpen, GitBranch, PanelLeft, PanelRight } from 'lucide-react'
+import { FileDiff, Folder, FolderOpen, GitBranch, PanelLeft, PanelRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { Attachment, EffortId, PermissionModeId } from '@shared/types'
 import { basename, greeting } from '@/lib/format'
@@ -14,6 +14,7 @@ export function NewChat(): React.JSX.Element {
   const setSelectedCwd = useApp((s) => s.setSelectedCwd)
   const newChat = useApp((s) => s.newChat)
   const togglePanel = useApp((s) => s.togglePanel)
+  const reviewChanges = useApp((s) => s.reviewChanges)
   const panelOpen = useApp((s) => s.panelOpen)
   const sidebarOpen = useApp((s) => s.sidebarOpen)
   const toggleSidebar = useApp((s) => s.toggleSidebar)
@@ -45,7 +46,7 @@ export function NewChat(): React.JSX.Element {
     <div className="relative flex h-full min-w-[420px] flex-1 flex-col">
       <header
         className={cn(
-          'drag flex h-[52px] shrink-0 items-center gap-2 px-4',
+          'drag flex h-[48px] shrink-0 items-center gap-2 px-4',
           !sidebarOpen && 'pl-[84px]'
         )}
       >
@@ -70,6 +71,28 @@ export function NewChat(): React.JSX.Element {
                 </>
               )}
             </div>
+          </WithTooltip>
+        )}
+        {cwd && git?.isRepo && git.changes.length > 0 && (
+          <WithTooltip
+            label={`Review changes — ${git.changes.length} file${git.changes.length === 1 ? '' : 's'}`}
+          >
+            <button
+              type="button"
+              onClick={() => void reviewChanges()}
+              aria-label="Review changes"
+              className="no-drag flex items-center gap-1.5 rounded-md border border-border bg-secondary/50 px-2 py-1 text-xs tabular-nums transition-colors hover:bg-accent hover:text-foreground"
+            >
+              <FileDiff className="size-3 text-muted-foreground" />
+              {git.additions === 0 && git.deletions === 0 ? (
+                <span className="text-muted-foreground">{git.changes.length}</span>
+              ) : (
+                <>
+                  <span className="text-success">+{git.additions}</span>
+                  <span className="text-destructive">−{git.deletions}</span>
+                </>
+              )}
+            </button>
           </WithTooltip>
         )}
         {/* When the panel is open its own header hosts the collapse button. */}

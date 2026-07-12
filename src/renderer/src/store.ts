@@ -212,6 +212,8 @@ interface AppState {
   pushChanges(): Promise<void>
   initRepo(): Promise<void>
   openDiff(change: GitFileChange): Promise<void>
+  /** Open the right panel on the source-control view and show the first diff. */
+  reviewChanges(): Promise<void>
 
   init(): Promise<void>
   setSelectedCwd(cwd: string | null): void
@@ -229,6 +231,8 @@ interface AppState {
     }
   ): Promise<void>
   sendMessage(text: string, attachments?: Attachment[]): Promise<void>
+  /** Force a queued message through now: interrupt the running turn and send it. */
+  sendQueuedNow(chatId: string, id: string): Promise<void>
   removeQueued(chatId: string, id: string): void
   interrupt(): Promise<void>
   stopBackgroundJob(taskId: string): void
@@ -849,6 +853,16 @@ export const useApp = create<AppState>((set, get) => ({
     set((s) => ({ diffContents: { ...s.diffContents, [id]: text } }))
   },
 
+  async reviewChanges() {
+    if (!get().selectedCwd) return
+    // Open the panel with the source-control dock showing the change list.
+    set((s) => ({ rightView: 'git', ...panelPatch(s, true) }))
+    get().setExplorerOpen(true) // also refreshes git
+    // Open the first change's diff so there's an editor beside the list.
+    const first = get().git?.changes[0]
+    if (first) await get().openDiff(first)
+  },
+
   async openChat(id) {
     if (id === null) {
       set({
@@ -931,6 +945,28 @@ export const useApp = create<AppState>((set, get) => ({
       return
     }
     await window.api.send(id, text, attachments)
+  },
+
+  async sendQueuedNow(chatId, id) {
+    const item = get().queued[chatId]?.find((q) => q.id === id)
+    if (item == null) return
+    if ((get().statuses[chatId] ?? 'idle') !== 'idle') {
+      // Promote it to the front so the idle drain fires this one first, then
+      // interrupt the running turn so "idle" comes now instead of at turn end.
+      set((s) => ({
+        queued: {
+          ...s.queued,
+          [chatId]: [item, ...(s.queued[chatId] ?? []).filter((q) => q.id !== id)]
+        }
+      }))
+      await window.api.interrupt(chatId)
+      return
+    }
+    // Already idle (e.g. the turn just ended) — send it straight away.
+    set((s) => ({
+      queued: { ...s.queued, [chatId]: (s.queued[chatId] ?? []).filter((q) => q.id !== id) }
+    }))
+    await window.api.send(chatId, item.text, item.attachments)
   },
 
   removeQueued(chatId, id) {

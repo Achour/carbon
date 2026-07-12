@@ -279,7 +279,7 @@ export function Settings(): React.JSX.Element {
 
   return (
     <div className="flex min-w-0 flex-1 flex-col">
-      <header className="drag flex h-[52px] shrink-0 items-center justify-between border-b border-border px-4">
+      <header className="drag flex h-[48px] shrink-0 items-center justify-between border-b border-border px-4">
         <span className="text-sm font-semibold">Settings</span>
         <WithTooltip label="Close settings  esc">
           <Button

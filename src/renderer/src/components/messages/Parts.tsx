@@ -162,10 +162,10 @@ export const EventRow = React.memo(function EventRow({
   }
 })
 
-export function StreamingIndicator(): React.JSX.Element {
+export function StreamingIndicator({ label = 'Thinking…' }: { label?: string }): React.JSX.Element {
   return (
     <div className="flex items-center gap-2 py-1">
-      <span className="shimmer-text text-[13px] font-medium">Thinking…</span>
+      <span className="shimmer-text text-[13px] font-medium">{label}</span>
     </div>
   )
 }
