@@ -1,6 +1,8 @@
 import * as React from 'react'
 import {
   ClipboardList,
+  Code2,
+  Eye,
   FileDiff,
   FileText,
   Files,
@@ -26,7 +28,7 @@ import {
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
 import { PlanContent } from '@/components/PlanPanel'
-import { FileViewer } from '@/components/FileViewer'
+import { FileViewer, MARKDOWN_RE } from '@/components/FileViewer'
 import { FileTree } from '@/components/FileTree'
 import { GitPanel } from '@/components/GitPanel'
 import { DiffView } from '@/components/DiffView'
@@ -151,6 +153,9 @@ export function RightPanel(): React.JSX.Element | null {
       (r) => r.id === s.planPanel!.requestId && r.hasSuggestions
     )
   })
+
+  // Markdown preview vs source; the choice sticks across files.
+  const [mdMode, setMdMode] = React.useState<'preview' | 'source'>('preview')
 
   // The Files/Source dock column starts collapsed, like Cursor's explorer.
   const [dockOpen, setDockOpen] = React.useState(
@@ -278,6 +283,7 @@ export function RightPanel(): React.JSX.Element | null {
             : (openFiles[openFiles.length - 1]?.path ?? terminals[terminals.length - 1]?.id ?? null)
   const currentIsTerminal = terminals.some((t) => t.id === current)
   const activeEntry = openFiles.find((f) => f.path === current)
+  const activeIsMarkdown = !!activeEntry && !activeEntry.diff && MARKDOWN_RE.test(activeEntry.name)
 
   return (
     <aside
@@ -425,6 +431,26 @@ export function RightPanel(): React.JSX.Element | null {
           <div className="min-w-0 flex-1">
             {activeEntry && <PathBar entry={activeEntry} cwd={selectedCwd} />}
           </div>
+          {activeIsMarkdown && (
+            <div className="flex shrink-0 items-center gap-0.5 rounded-lg bg-secondary/60 p-0.5">
+              {(['preview', 'source'] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => setMdMode(m)}
+                  className={cn(
+                    'flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium capitalize transition-colors [&_svg]:size-3',
+                    mdMode === m
+                      ? 'bg-background text-foreground shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground'
+                  )}
+                >
+                  {m === 'preview' ? <Eye /> : <Code2 />}
+                  {m}
+                </button>
+              ))}
+            </div>
+          )}
           <WithTooltip label={dockOpen ? 'Hide file tree' : 'Show file tree'}>
             <Button
               size="icon-sm"
@@ -449,7 +475,12 @@ export function RightPanel(): React.JSX.Element | null {
             ) : activeEntry?.diff ? (
               <DiffView text={diffContents[current!]} />
             ) : activeEntry ? (
-              <FileViewer content={fileContents[current!]} />
+              <FileViewer
+                content={fileContents[current!]}
+                name={activeEntry.name}
+                cwd={selectedCwd}
+                mode={mdMode}
+              />
             ) : (
               <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
                 Select a file from the tree

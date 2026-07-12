@@ -3,6 +3,8 @@ import {
   ArrowDown,
   ArrowUp,
   Check,
+  ChevronRight,
+  Folder,
   GitBranch,
   Minus,
   Plus,
@@ -27,7 +29,15 @@ const STATUS_COLORS: Record<string, string> = {
   U: 'text-orange-500'
 }
 
-function ChangeRow({ change }: { change: GitFileChange }): React.JSX.Element {
+function ChangeRow({
+  change,
+  showDir = true,
+  indent = false
+}: {
+  change: GitFileChange
+  showDir?: boolean
+  indent?: boolean
+}): React.JSX.Element {
   const openDiff = useApp((s) => s.openDiff)
   const stagePaths = useApp((s) => s.stagePaths)
   const unstagePaths = useApp((s) => s.unstagePaths)
@@ -44,6 +54,7 @@ function ChangeRow({ change }: { change: GitFileChange }): React.JSX.Element {
     <div
       className={cn(
         'group flex w-full items-center gap-1.5 rounded-md py-[3px] pr-1 pl-2 text-left transition-colors hover:bg-accent/60',
+        indent && 'pl-6',
         activeTab === tabId && 'bg-accent'
       )}
     >
@@ -62,7 +73,7 @@ function ChangeRow({ change }: { change: GitFileChange }): React.JSX.Element {
           {change.status === '?' ? 'U' : change.status}
         </span>
         <span className="truncate text-[12.5px]">{name}</span>
-        {dir && (
+        {showDir && dir && (
           <span className="min-w-0 truncate text-[10.5px] text-muted-foreground/60">{dir}</span>
         )}
       </button>
@@ -80,6 +91,65 @@ function ChangeRow({ change }: { change: GitFileChange }): React.JSX.Element {
         </Button>
       </WithTooltip>
     </div>
+  )
+}
+
+/** Groups changed files under collapsible folder headers, Cursor-style. */
+function ChangeTree({ changes }: { changes: GitFileChange[] }): React.JSX.Element {
+  const groups = React.useMemo(() => {
+    const m = new Map<string, GitFileChange[]>()
+    for (const c of changes) {
+      const dir = c.path.includes('/') ? c.path.slice(0, c.path.lastIndexOf('/')) : ''
+      const arr = m.get(dir)
+      if (arr) arr.push(c)
+      else m.set(dir, [c])
+    }
+    return m
+  }, [changes])
+
+  const dirs = [...groups.keys()].filter((d) => d !== '').sort()
+  const rootFiles = groups.get('') ?? []
+  const [collapsed, setCollapsed] = React.useState<Record<string, boolean>>({})
+
+  return (
+    <>
+      {dirs.map((dir) => {
+        const open = !collapsed[dir]
+        return (
+          <div key={dir}>
+            <button
+              type="button"
+              onClick={() => setCollapsed((p) => ({ ...p, [dir]: !p[dir] }))}
+              className="flex w-full items-center gap-1 rounded-md py-[3px] pr-1 pl-1.5 text-left transition-colors hover:bg-accent/40"
+              title={dir}
+            >
+              <ChevronRight
+                className={cn(
+                  'size-3 shrink-0 text-muted-foreground/70 transition-transform',
+                  open && 'rotate-90'
+                )}
+              />
+              <Folder className="size-3 shrink-0 text-muted-foreground/60" />
+              <span className="truncate text-[11.5px] text-muted-foreground">
+                {dir.replace(/\//g, ' / ')}
+              </span>
+              <span className="shrink-0 text-[10px] text-muted-foreground/50">
+                {groups.get(dir)!.length}
+              </span>
+            </button>
+            {open &&
+              groups
+                .get(dir)!
+                .map((c) => (
+                  <ChangeRow key={`${c.staged}:${c.path}`} change={c} showDir={false} indent />
+                ))}
+          </div>
+        )
+      })}
+      {rootFiles.map((c) => (
+        <ChangeRow key={`${c.staged}:${c.path}`} change={c} showDir={false} />
+      ))}
+    </>
   )
 }
 
@@ -265,9 +335,7 @@ export function GitPanel(): React.JSX.Element {
             actionLabel="Unstage all"
             actionIcon={<Minus />}
           >
-            {staged.map((c) => (
-              <ChangeRow key={`s:${c.path}`} change={c} />
-            ))}
+            <ChangeTree changes={staged} />
           </Section>
         )}
         {unstaged.length > 0 && (
@@ -278,9 +346,7 @@ export function GitPanel(): React.JSX.Element {
             actionLabel="Stage all"
             actionIcon={<Plus />}
           >
-            {unstaged.map((c) => (
-              <ChangeRow key={`w:${c.path}`} change={c} />
-            ))}
+            <ChangeTree changes={unstaged} />
           </Section>
         )}
       </div>

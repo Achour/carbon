@@ -1,6 +1,7 @@
 import * as React from 'react'
 import hljs from 'highlight.js'
 import type { FileContent } from '@shared/types'
+import { Markdown } from '@/components/Markdown'
 
 function Placeholder({ children }: { children: React.ReactNode }): React.JSX.Element {
   return (
@@ -11,12 +12,24 @@ function Placeholder({ children }: { children: React.ReactNode }): React.JSX.Ele
 }
 
 const HIGHLIGHT_LIMIT = 200 * 1024
+export const MARKDOWN_RE = /\.(md|markdown|mdx)$/i
 
 export const FileViewer = React.memo(function FileViewer({
-  content
+  content,
+  name,
+  cwd = null,
+  mode = 'preview'
 }: {
   content: FileContent | undefined
+  /** File name, used to detect Markdown for the preview. */
+  name?: string
+  /** Project folder, so the Markdown preview can resolve relative paths. */
+  cwd?: string | null
+  /** For Markdown files: rendered preview or raw source. */
+  mode?: 'preview' | 'source'
 }): React.JSX.Element {
+  const isMarkdown = !!name && MARKDOWN_RE.test(name)
+
   const highlighted = React.useMemo(() => {
     if (content?.kind !== 'text') return null
     if (content.content.length > HIGHLIGHT_LIMIT) return null
@@ -52,6 +65,13 @@ export const FileViewer = React.memo(function FileViewer({
         </div>
       )
     case 'text': {
+      if (isMarkdown && mode === 'preview') {
+        return (
+          <div className="h-full overflow-auto px-8 py-6">
+            <Markdown text={content.content} cwd={cwd} className="mx-auto max-w-3xl" />
+          </div>
+        )
+      }
       const lines = content.content.split('\n')
       return (
         <div className="h-full select-text overflow-auto font-mono text-[length:var(--code-font-size)] leading-[1.65]">

@@ -366,8 +366,11 @@ export function Composer({
       {slashQuery !== null && slashResults.length > 0 && (
         <div
           data-slash-popover
-          className="absolute bottom-full left-3 z-30 mb-2 max-h-72 w-96 max-w-[calc(100%-1.5rem)] overflow-y-auto rounded-xl border border-border bg-popover p-1 shadow-xl"
+          className="absolute bottom-full left-3 z-30 mb-2 max-h-80 w-[440px] max-w-[calc(100%-1.5rem)] overflow-y-auto rounded-xl border border-border bg-popover p-1 shadow-xl"
         >
+          <div className="px-2 pt-1 pb-0.5 text-[10px] font-semibold tracking-wider text-muted-foreground/50 uppercase">
+            Commands
+          </div>
           {slashResults.map((c, i) => (
             <button
               key={c.name}
@@ -376,19 +379,28 @@ export function Composer({
               onClick={() => pickSlash(c)}
               onMouseEnter={() => setSlashIdx(i)}
               className={cn(
-                'flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors',
+                'flex w-full items-baseline gap-2 rounded-lg px-2 py-1.5 text-left transition-colors',
                 i === slashIdx ? 'bg-accent' : undefined
               )}
             >
-              <span className="shrink-0 font-mono text-xs text-foreground">/{c.name}</span>
+              <span
+                className={cn(
+                  'shrink-0 font-mono text-[13px]',
+                  i === slashIdx ? 'text-primary' : 'text-foreground'
+                )}
+              >
+                /{c.name}
+              </span>
               {c.argumentHint && (
-                <span className="shrink-0 font-mono text-[11px] text-muted-foreground/60">
+                <span className="shrink-0 font-mono text-[11px] text-muted-foreground/50">
                   {c.argumentHint}
                 </span>
               )}
-              <span className="min-w-0 flex-1 truncate text-right text-[11px] text-muted-foreground/80">
-                {c.description}
-              </span>
+              {c.description && (
+                <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground/80">
+                  {c.description}
+                </span>
+              )}
             </button>
           ))}
         </div>
