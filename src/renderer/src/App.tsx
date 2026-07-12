@@ -39,6 +39,7 @@ export default function App(): React.JSX.Element {
     void init()
     const offEvents = window.api.onChatEvent(applyEvent)
     const offNewChat = window.api.onNewChat(() => void openChat(null))
+    const offOpenChat = window.api.onOpenChat((id) => void openChat(id))
     const offPreview = window.api.onPreviewEvent((ev) => {
       if (ev.type === 'state') useApp.getState().applyPreviewState(ev.state)
     })
@@ -127,6 +128,7 @@ export default function App(): React.JSX.Element {
     return () => {
       offEvents()
       offNewChat()
+      offOpenChat()
       offPreview()
       offPreviewCmd()
       window.removeEventListener('keydown', onKey)

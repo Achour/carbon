@@ -412,6 +412,8 @@ export interface Api {
   }): Promise<string | null>
   onChatEvent(cb: (ev: ChatEvent) => void): () => void
   onNewChat(cb: () => void): () => void
+  /** A notification was clicked — bring this chat to the foreground. */
+  onOpenChat(cb: (id: string) => void): () => void
   onTerminalEvent(cb: (ev: TerminalEvent) => void): () => void
   onPreviewEvent(cb: (ev: PreviewEvent) => void): () => void
   onPreviewCommand(cb: (cmd: PreviewCommand) => void): () => void

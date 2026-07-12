@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, shell } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { writeFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
@@ -35,6 +35,34 @@ let preview: PreviewManager
 
 function emit(ev: ChatEvent): void {
   win?.webContents.send('chat:event', ev)
+  if (ev.type === 'status') notifyOnStatus(ev.chatId, ev.status)
+}
+
+// Native "turn finished" / "needs approval" notifications, but only while the
+// app is in the background — if the user is watching, the UI already shows it.
+const lastStatus = new Map<string, string>()
+function notifyOnStatus(chatId: string, status: string): void {
+  const prev = lastStatus.get(chatId)
+  lastStatus.set(chatId, status)
+  if (!win || win.isFocused() || !Notification.isSupported()) return
+  const body =
+    prev && prev !== 'idle' && status === 'idle'
+      ? 'Finished responding'
+      : prev !== 'waiting-permission' && status === 'waiting-permission'
+        ? 'Waiting for your approval'
+        : null
+  if (!body) return
+  const title = store.getChat(chatId)?.title?.trim() || 'Karbun'
+  const n = new Notification({ title, body })
+  n.on('click', () => {
+    if (!win) return
+    suppressForegroundUntil = 0 // a click is a real request to come forward
+    if (win.isMinimized()) win.restore()
+    win.show()
+    win.focus()
+    win.webContents.send('ui:open-chat', chatId)
+  })
+  n.show()
 }
 
 function emitTerminal(ev: TerminalEvent): void {

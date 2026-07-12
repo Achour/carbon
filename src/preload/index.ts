@@ -90,6 +90,11 @@ const api: Api = {
     ipcRenderer.on('ui:new-chat', listener)
     return () => ipcRenderer.removeListener('ui:new-chat', listener)
   },
+  onOpenChat: (cb: (id: string) => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, id: string): void => cb(id)
+    ipcRenderer.on('ui:open-chat', listener)
+    return () => ipcRenderer.removeListener('ui:open-chat', listener)
+  },
   onTerminalEvent: (cb: (ev: TerminalEvent) => void) => {
     const listener = (_e: Electron.IpcRendererEvent, ev: TerminalEvent): void => cb(ev)
     ipcRenderer.on('terminal:event', listener)
