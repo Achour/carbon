@@ -40,6 +40,7 @@ import {
 } from '@/components/messages/Parts'
 import { PermissionCard } from '@/components/messages/PermissionCard'
 import { QuestionCard } from '@/components/messages/QuestionCard'
+import { BackgroundJobs } from '@/components/BackgroundJobs'
 
 const NO_PERMISSIONS: never[] = []
 const NO_QUEUED: never[] = []
@@ -153,6 +154,7 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
             {chat.title || 'New chat'}
           </div>
         </div>
+        <BackgroundJobs />
         <WithTooltip label={chat.cwd}>
           <div className="no-drag flex items-center gap-1.5 rounded-md border border-border bg-secondary/50 px-2 py-1 text-xs text-muted-foreground">
             <Folder className="size-3" />

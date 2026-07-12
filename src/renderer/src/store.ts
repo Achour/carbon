@@ -17,6 +17,7 @@ import type {
   ChatMessage,
   ChatMeta,
   ChatStatus,
+  BackgroundJob,
   EffortId,
   FileContent,
   FileEntry,
@@ -89,6 +90,8 @@ interface AppState {
   /** Messages of the active chat. */
   messages: ChatMessage[]
   statuses: Record<string, ChatStatus>
+  /** Live background tasks per chat (SDK reports the full set on each change). */
+  backgroundJobs: Record<string, BackgroundJob[]>
   /** Pending permission requests, keyed by chat id. */
   permissions: Record<string, PermissionRequestPayload[]>
   /** Messages typed while a turn was running, sent when the chat goes idle. */
@@ -222,6 +225,7 @@ interface AppState {
   sendMessage(text: string, attachments?: Attachment[]): Promise<void>
   removeQueued(chatId: string, id: string): void
   interrupt(): Promise<void>
+  stopBackgroundJob(taskId: string): void
   deleteChat(id: string): Promise<void>
   /** Deletes every chat in the project and drops it from recent folders. */
   removeProject(cwd: string): Promise<void>
@@ -292,6 +296,7 @@ export const useApp = create<AppState>((set, get) => ({
   selectedCwd: null,
   messages: [],
   statuses: {},
+  backgroundJobs: {},
   permissions: {},
   queued: {},
   planPanel: null,
@@ -904,6 +909,12 @@ export const useApp = create<AppState>((set, get) => ({
     await window.api.interrupt(id)
   },
 
+  stopBackgroundJob(taskId) {
+    const id = get().activeId
+    if (!id) return
+    void window.api.stopBackgroundJob(id, taskId)
+  },
+
   async deleteChat(id) {
     await window.api.deleteChat(id)
     set((s) => {
@@ -1064,6 +1075,13 @@ export const useApp = create<AppState>((set, get) => ({
           chats: st.chats
             .map((c) => (c.id === ev.chatId ? { ...c, ...ev.patch } : c))
             .sort((a, b) => b.updatedAt - a.updatedAt)
+        }))
+        break
+      }
+
+      case 'background-jobs': {
+        set((st) => ({
+          backgroundJobs: { ...st.backgroundJobs, [ev.chatId]: ev.jobs }
         }))
         break
       }

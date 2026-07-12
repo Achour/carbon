@@ -15,6 +15,7 @@ import type {
   AssistantMessage,
   AssistantPart,
   Attachment,
+  BackgroundJob,
   ChatData,
   ChatEvent,
   ChatStatus,
@@ -340,11 +341,24 @@ class ClaudeSession {
     this.setStatus('idle')
   }
 
+  private emitBackgroundJobs(jobs: BackgroundJob[]): void {
+    this.emit({ type: 'background-jobs', chatId: this.chat.id, jobs })
+  }
+
   async setModel(model?: string): Promise<void> {
     try {
       await this.q.setModel(model || undefined)
     } catch (err) {
       console.error('setModel failed:', err)
+    }
+  }
+
+  /** Stop a single background task; the SDK emits an updated set afterward. */
+  async stopBackgroundJob(taskId: string): Promise<void> {
+    try {
+      await this.q.stopTask(taskId)
+    } catch (err) {
+      console.error('stopTask failed:', err)
     }
   }
 
@@ -404,6 +418,8 @@ class ClaudeSession {
 
   dispose(): void {
     this.dead = true
+    // Background tasks are per-process; the next session starts with none.
+    this.emitBackgroundJobs([])
     this.flushDeltas()
     this.denyAllPending(true)
     this.input.end()
@@ -482,6 +498,8 @@ class ClaudeSession {
       }
     } finally {
       this.dead = true
+      // The process (and any background tasks it owned) is gone.
+      this.emitBackgroundJobs([])
       this.denyAllPending(false)
       this.setStatus('idle')
       this.store.saveChat(this.chat.id)
@@ -521,6 +539,18 @@ class ClaudeSession {
             text: 'Context compacted',
             ts: Date.now()
           })
+        } else if (msg.subtype === 'background_tasks_changed') {
+          // Full live set on every change (REPLACE semantics) — the renderer
+          // swaps its list wholesale.
+          const tasks = (msg as unknown as {
+            tasks: Array<{ task_id: string; task_type: string; description: string }>
+          }).tasks
+          const jobs: BackgroundJob[] = tasks.map((t) => ({
+            id: t.task_id,
+            type: t.task_type,
+            description: t.description
+          }))
+          this.emitBackgroundJobs(jobs)
         } else if (msg.subtype === 'status' && 'permissionMode' in msg && msg.permissionMode) {
           const mode = msg.permissionMode
           if (
@@ -1058,6 +1088,10 @@ export class ChatManager {
 
   async interrupt(chatId: string): Promise<void> {
     await this.sessionFor(chatId)?.interrupt()
+  }
+
+  async stopBackgroundJob(chatId: string, taskId: string): Promise<void> {
+    await this.sessionFor(chatId)?.stopBackgroundJob(taskId)
   }
 
   respondPermission(chatId: string, requestId: string, decision: PermissionDecision): void {

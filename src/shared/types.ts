@@ -163,6 +163,19 @@ export interface UserQuestion {
 
 // ---------- Events streamed from main to renderer ----------
 
+/**
+ * A background task the SDK is running for a chat (a backgrounded shell command,
+ * sub-agent, monitor, or workflow). The SDK reports the full live set on every
+ * change (REPLACE semantics); it is per-process, so it resets when a session's
+ * CLI process (re)starts.
+ */
+export interface BackgroundJob {
+  id: string
+  /** Friendly type: 'shell' | 'subagent' | 'monitor' | 'workflow' | … */
+  type: string
+  description: string
+}
+
 export type ChatEvent =
   | { type: 'message'; chatId: string; message: ChatMessage }
   | { type: 'part-delta'; chatId: string; messageId: string; partIndex: number; delta: string }
@@ -173,6 +186,7 @@ export type ChatEvent =
   | { type: 'permission-request'; chatId: string; request: PermissionRequestPayload }
   | { type: 'permission-resolved'; chatId: string; requestId: string }
   | { type: 'commands'; chatId: string; cwd: string; commands: SlashCommand[] }
+  | { type: 'background-jobs'; chatId: string; jobs: BackgroundJob[] }
 
 // ---------- Settings ----------
 
@@ -336,6 +350,8 @@ export interface Api {
   /** Absolute path of a dragged/picked File (empty string for in-memory files). */
   pathForFile(file: File): string
   interrupt(chatId: string): Promise<void>
+  /** Stop a single background task by its id. */
+  stopBackgroundJob(chatId: string, taskId: string): Promise<void>
   respondPermission(chatId: string, requestId: string, decision: PermissionDecision): Promise<void>
   setChatOptions(
     chatId: string,

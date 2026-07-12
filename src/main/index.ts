@@ -248,6 +248,10 @@ function registerIpc(): void {
 
   ipcMain.handle('chat:interrupt', (_e, chatId: string) => manager.interrupt(chatId))
 
+  ipcMain.handle('chat:stop-background-job', (_e, chatId: string, taskId: string) =>
+    manager.stopBackgroundJob(chatId, taskId)
+  )
+
   ipcMain.handle(
     'chat:respond-permission',
     (_e, chatId: string, requestId: string, decision: PermissionDecision) => {

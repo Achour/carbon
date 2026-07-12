@@ -37,6 +37,8 @@ const api: Api = {
     }
   },
   interrupt: (chatId: string) => ipcRenderer.invoke('chat:interrupt', chatId),
+  stopBackgroundJob: (chatId: string, taskId: string) =>
+    ipcRenderer.invoke('chat:stop-background-job', chatId, taskId),
   respondPermission: (chatId: string, requestId: string, decision: PermissionDecision) =>
     ipcRenderer.invoke('chat:respond-permission', chatId, requestId, decision),
   setChatOptions: (
