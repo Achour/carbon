@@ -143,6 +143,9 @@ interface AppState {
   /** When true the "search chats across projects" dialog is open (⌘K). */
   searchOpen: boolean
   setSearchOpen(open: boolean): void
+  /** When true the file quick-open dialog is open (⌘P). */
+  fileSearchOpen: boolean
+  setFileSearchOpen(open: boolean): void
 
   // ---- Settings ----
   /** When true the main area shows the settings page instead of a chat. */
@@ -479,6 +482,10 @@ export const useApp = create<AppState>((set, get) => ({
   searchOpen: false,
   setSearchOpen(open) {
     set({ searchOpen: open })
+  },
+  fileSearchOpen: false,
+  setFileSearchOpen(open) {
+    set({ fileSearchOpen: open })
   },
 
   // ---- Settings ----

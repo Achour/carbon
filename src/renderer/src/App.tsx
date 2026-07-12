@@ -5,6 +5,7 @@ import { Sidebar } from '@/components/Sidebar'
 import { ChatView } from '@/components/ChatView'
 import { NewChat } from '@/components/NewChat'
 import { RightPanel } from '@/components/RightPanel'
+import { FileSearchDialog } from '@/components/FileSearchDialog'
 import { Settings } from '@/components/Settings'
 import { useApp } from '@/store'
 import { previewForCwd } from '@/lib/previewRegistry'
@@ -98,6 +99,10 @@ export default function App(): React.JSX.Element {
         e.preventDefault()
         useApp.getState().setSearchOpen(true)
       }
+      if ((e.metaKey || e.ctrlKey) && e.key === 'p') {
+        e.preventDefault()
+        useApp.getState().setFileSearchOpen(true)
+      }
       if ((e.metaKey || e.ctrlKey) && e.key === 'j') {
         e.preventDefault()
         useApp.getState().toggleTerminal()
@@ -148,6 +153,7 @@ export default function App(): React.JSX.Element {
           {!settingsOpen && <RightPanel />}
         </ErrorBoundary>
       </div>
+      <FileSearchDialog />
     </TooltipProvider>
   )
 }
