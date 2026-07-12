@@ -1,12 +1,15 @@
 import * as React from 'react'
 import { Collapsible } from '@base-ui/react/collapsible'
 import { AlertTriangle, ChevronRight, FileText, MousePointerClick } from 'lucide-react'
-import type { AssistantMessage, EventMessage, UserMessage } from '@shared/types'
+import type { AssistantMessage, EventMessage, ToolPart, UserMessage } from '@shared/types'
 import { cn } from '@/lib/utils'
 import { formatCost, formatDuration } from '@/lib/format'
 import { Markdown } from '@/components/Markdown'
-import { ToolCard } from './ToolCard'
+import { GROUPABLE_TOOLS, ToolCard, ToolGroup } from './ToolCard'
 import { TodoCard } from './TodoCard'
+
+/** Group a run of this many consecutive read/search tools into one row. */
+const GROUP_MIN = 3
 
 export const UserBubble = React.memo(function UserBubble({
   message
@@ -98,12 +101,45 @@ export const AssistantBlock = React.memo(function AssistantBlock({
   /** toolUseId of the chat's most recent TodoWrite; that card stays expanded. */
   latestTodoId?: string | null
 }): React.JSX.Element {
+  const parts = message.parts
+  const lastIndex = parts.length - 1
+
+  // Coalesce consecutive read/search tools into groups so a long run of reads
+  // collapses to one row instead of flooding the transcript. Everything else
+  // (text, thinking, edits, todos, agents) renders individually as before.
+  const items: Array<
+    | { kind: 'group'; parts: ToolPart[]; key: string }
+    | { kind: 'single'; part: NonNullable<(typeof parts)[number]>; index: number }
+  > = []
+  let run: { part: ToolPart; index: number }[] = []
+  const flushRun = (): void => {
+    if (run.length >= GROUP_MIN) {
+      items.push({ kind: 'group', parts: run.map((r) => r.part), key: `grp-${run[0].index}` })
+    } else {
+      for (const r of run) items.push({ kind: 'single', part: r.part, index: r.index })
+    }
+    run = []
+  }
+  parts.forEach((part, i) => {
+    // Streamed arrays can be sparse; persisted ones turn holes into null.
+    if (!part) return
+    if (part.type === 'tool' && GROUPABLE_TOOLS.has(part.name)) {
+      run.push({ part, index: i })
+    } else {
+      flushRun()
+      items.push({ kind: 'single', part, index: i })
+    }
+  })
+  flushRun()
+
   return (
     <div className="space-y-2.5">
-      {message.parts.map((part, i) => {
-        // Streamed arrays can be sparse; persisted ones turn holes into null.
-        if (!part) return null
-        const isLast = i === message.parts.length - 1
+      {items.map((item) => {
+        if (item.kind === 'group') {
+          return <ToolGroup key={item.key} parts={item.parts} cwd={cwd} />
+        }
+        const { part, index: i } = item
+        const isLast = i === lastIndex
         if (part.type === 'text') {
           if (!part.text) return null
           return <Markdown key={i} text={part.text} cwd={cwd} />

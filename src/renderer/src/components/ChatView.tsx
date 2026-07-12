@@ -13,7 +13,7 @@ import {
   Trash2,
   X
 } from 'lucide-react'
-import type { ChatMeta } from '@shared/types'
+import type { AssistantMessage, ChatMessage, ChatMeta, ToolPart } from '@shared/types'
 import { cn } from '@/lib/utils'
 import { basename } from '@/lib/format'
 import { useApp } from '@/store'
@@ -40,12 +40,81 @@ import {
   StreamingIndicator,
   UserBubble
 } from '@/components/messages/Parts'
+import { GROUPABLE_TOOLS, ToolGroup } from '@/components/messages/ToolCard'
 import { PermissionCard } from '@/components/messages/PermissionCard'
 import { QuestionCard } from '@/components/messages/QuestionCard'
 import { BackgroundJobs } from '@/components/BackgroundJobs'
 
 const NO_PERMISSIONS: never[] = []
 const NO_QUEUED: never[] = []
+
+/** Coalesce a run of this many consecutive read/search-only messages into one row. */
+const GROUP_MIN = 3
+
+/** True when a message is nothing but read/search tool calls — each such call
+ *  arrives as its own assistant message, so these are what pile up. */
+function isGroupableMsg(m: ChatMessage): boolean {
+  return (
+    m.role === 'assistant' &&
+    m.parts.length > 0 &&
+    m.parts.every((p) => !!p && p.type === 'tool' && GROUPABLE_TOOLS.has(p.name))
+  )
+}
+
+interface RenderCtx {
+  cwd: string
+  busy: boolean
+  lastAssistantId?: string
+  onOpenPlan?: (plan: string) => void
+  latestTodoId?: string | null
+}
+
+/**
+ * Renders the message list, collapsing runs of consecutive read/search-only
+ * assistant messages into a single ToolGroup ("Read 12 files"). Since every tool
+ * call is its own assistant message, a task that reads many files would otherwise
+ * bury the conversation under a wall of identical cards.
+ */
+function renderMessages(messages: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
+  const out: React.ReactNode[] = []
+  let run: AssistantMessage[] = []
+
+  const renderAssistant = (m: AssistantMessage): React.ReactNode => (
+    <AssistantBlock
+      key={m.id}
+      message={m}
+      cwd={ctx.cwd}
+      streaming={ctx.busy && m.id === ctx.lastAssistantId}
+      onOpenPlan={ctx.onOpenPlan}
+      latestTodoId={ctx.latestTodoId}
+    />
+  )
+
+  const flush = (): void => {
+    if (run.length >= GROUP_MIN) {
+      const parts = run.flatMap((m) =>
+        m.parts.filter((p): p is ToolPart => !!p && p.type === 'tool')
+      )
+      out.push(<ToolGroup key={`grp-${run[0].id}`} parts={parts} cwd={ctx.cwd} />)
+    } else {
+      for (const m of run) out.push(renderAssistant(m))
+    }
+    run = []
+  }
+
+  for (const m of messages) {
+    if (m.role === 'assistant' && isGroupableMsg(m)) {
+      run.push(m)
+      continue
+    }
+    flush()
+    if (m.role === 'user') out.push(<UserBubble key={m.id} message={m} />)
+    else if (m.role === 'assistant') out.push(renderAssistant(m))
+    else out.push(<EventRow key={m.id} message={m} />)
+  }
+  flush()
+  return out
+}
 
 export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
   const messages = useApp((s) => s.messages)
@@ -217,20 +286,12 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
       {/* Messages */}
       <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto flex max-w-3xl flex-col gap-4 px-6 py-6">
-          {messages.map((m) => {
-            if (m.role === 'user') return <UserBubble key={m.id} message={m} />
-            if (m.role === 'assistant')
-              return (
-                <AssistantBlock
-                  key={m.id}
-                  message={m}
-                  cwd={chat.cwd}
-                  streaming={busy && m.id === lastAssistant?.id}
-                  onOpenPlan={openPlan}
-                  latestTodoId={latestTodoId}
-                />
-              )
-            return <EventRow key={m.id} message={m} />
+          {renderMessages(messages, {
+            cwd: chat.cwd,
+            busy,
+            lastAssistantId: lastAssistant?.id,
+            onOpenPlan: openPlan,
+            latestTodoId
           })}
           {permissions.map((request) => {
             if (request.toolName === 'AskUserQuestion')

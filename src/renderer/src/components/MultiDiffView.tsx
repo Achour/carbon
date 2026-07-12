@@ -1,5 +1,14 @@
 import * as React from 'react'
-import { Check, ChevronRight, ChevronsDownUp, ChevronsUpDown, Minus, Plus } from 'lucide-react'
+import {
+  Check,
+  ChevronRight,
+  ChevronsDownUp,
+  ChevronsUpDown,
+  Minus,
+  PanelRightClose,
+  PanelRightOpen,
+  Plus
+} from 'lucide-react'
 import type { GitFileChange } from '@shared/types'
 import { cn } from '@/lib/utils'
 import { useApp } from '@/store'
@@ -34,6 +43,8 @@ export function MultiDiffView({ cwd }: { cwd: string }): React.JSX.Element {
   const unstagePaths = useApp((s) => s.unstagePaths)
   const openDiff = useApp((s) => s.openDiff)
   const scroll = useApp((s) => s.changesScroll)
+  const explorerOpen = useApp((s) => s.explorerOpen)
+  const toggleExplorer = useApp((s) => s.toggleExplorer)
 
   const [texts, setTexts] = React.useState<Record<string, string | undefined>>({})
   const [collapsed, setCollapsed] = React.useState<Record<string, boolean>>({})
@@ -103,6 +114,24 @@ export function MultiDiffView({ cwd }: { cwd: string }): React.JSX.Element {
               <ChevronsDownUp className="size-3" />
             )}
             {allCollapsed ? 'Expand all' : 'Collapse all'}
+          </button>
+        </WithTooltip>
+        <WithTooltip label={explorerOpen ? 'Hide file tree' : 'Show file tree'}>
+          <button
+            type="button"
+            onClick={toggleExplorer}
+            aria-label={explorerOpen ? 'Hide file tree' : 'Show file tree'}
+            aria-pressed={explorerOpen}
+            className={cn(
+              'flex items-center rounded p-1 transition-colors hover:bg-accent hover:text-foreground',
+              explorerOpen && 'text-foreground'
+            )}
+          >
+            {explorerOpen ? (
+              <PanelRightClose className="size-3.5" />
+            ) : (
+              <PanelRightOpen className="size-3.5" />
+            )}
           </button>
         </WithTooltip>
       </div>

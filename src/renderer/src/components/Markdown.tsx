@@ -1,9 +1,10 @@
 import * as React from 'react'
+import { createPortal } from 'react-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import mermaid from 'mermaid'
-import { Check, Code2, Copy } from 'lucide-react'
+import { Check, Code2, Copy, Maximize2, RotateCcw, X, ZoomIn, ZoomOut } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useApp } from '@/store'
 import { THEMES } from '@/lib/themes'
@@ -33,6 +34,102 @@ function initMermaid(dark: boolean): void {
   })
 }
 
+const clampScale = (s: number): number => Math.min(6, Math.max(0.2, s))
+
+function LightboxButton({
+  onClick,
+  label,
+  children
+}: {
+  onClick: () => void
+  label: string
+  children: React.ReactNode
+}): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation()
+        onClick()
+      }}
+      aria-label={label}
+      title={label}
+      className="rounded-md border border-border bg-popover/90 p-1.5 text-muted-foreground shadow-sm backdrop-blur transition-colors hover:text-foreground"
+    >
+      {children}
+    </button>
+  )
+}
+
+/** Full-screen, zoom + pan viewer for a rendered diagram, Cursor-style. */
+function DiagramLightbox({ svg, onClose }: { svg: string; onClose: () => void }): React.JSX.Element {
+  const [scale, setScale] = React.useState(1)
+  const [pos, setPos] = React.useState({ x: 0, y: 0 })
+  const drag = React.useRef<{ x: number; y: number } | null>(null)
+  const [dragging, setDragging] = React.useState(false)
+
+  React.useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  const reset = (): void => {
+    setScale(1)
+    setPos({ x: 0, y: 0 })
+  }
+
+  return createPortal(
+    <div
+      className="animate-enter fixed inset-0 z-[100] flex items-center justify-center bg-background/85 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div className="absolute top-4 right-4 z-10 flex gap-1" onClick={(e) => e.stopPropagation()}>
+        <LightboxButton onClick={() => setScale((s) => clampScale(s + 0.25))} label="Zoom in">
+          <ZoomIn className="size-4" />
+        </LightboxButton>
+        <LightboxButton onClick={() => setScale((s) => clampScale(s - 0.25))} label="Zoom out">
+          <ZoomOut className="size-4" />
+        </LightboxButton>
+        <LightboxButton onClick={reset} label="Reset view">
+          <RotateCcw className="size-4" />
+        </LightboxButton>
+        <LightboxButton onClick={onClose} label="Close  (Esc)">
+          <X className="size-4" />
+        </LightboxButton>
+      </div>
+      <div
+        className={cn(
+          'h-fit w-fit [&>svg]:!block [&>svg]:!h-auto [&>svg]:!max-h-[85vh] [&>svg]:!w-auto [&>svg]:!max-w-[90vw]',
+          dragging ? 'cursor-grabbing' : 'cursor-grab'
+        )}
+        style={{
+          transform: `translate(${pos.x}px, ${pos.y}px) scale(${scale})`,
+          transition: dragging ? 'none' : 'transform 0.12s ease-out'
+        }}
+        onClick={(e) => e.stopPropagation()}
+        onWheel={(e) => setScale((s) => clampScale(s - e.deltaY * 0.0015))}
+        onPointerDown={(e) => {
+          drag.current = { x: e.clientX - pos.x, y: e.clientY - pos.y }
+          setDragging(true)
+          e.currentTarget.setPointerCapture(e.pointerId)
+        }}
+        onPointerMove={(e) => {
+          if (drag.current) setPos({ x: e.clientX - drag.current.x, y: e.clientY - drag.current.y })
+        }}
+        onPointerUp={() => {
+          drag.current = null
+          setDragging(false)
+        }}
+        dangerouslySetInnerHTML={{ __html: svg }}
+      />
+    </div>,
+    document.body
+  )
+}
+
 /**
  * Renders a ```mermaid fence as an SVG diagram. While the message is still
  * streaming the source is incomplete and won't parse, so we keep showing the
@@ -50,6 +147,7 @@ function MermaidBlock({ code }: { code: string }): React.JSX.Element {
   const [svg, setSvg] = React.useState<string | null>(null)
   const [showSource, setShowSource] = React.useState(false)
   const [copied, setCopied] = React.useState(false)
+  const [expanded, setExpanded] = React.useState(false)
 
   React.useEffect(() => {
     const trimmed = code.trim()
@@ -92,11 +190,25 @@ function MermaidBlock({ code }: { code: string }): React.JSX.Element {
         </pre>
       ) : (
         <div
-          className="flex justify-center overflow-auto rounded-lg border border-border bg-card/40 p-3"
+          className="flex cursor-zoom-in justify-center overflow-auto rounded-lg border border-border bg-card/40 p-3"
+          onClick={() => setExpanded(true)}
+          title="Click to enlarge"
           dangerouslySetInnerHTML={{ __html: svg }}
         />
       )}
+      {svg && expanded && <DiagramLightbox svg={svg} onClose={() => setExpanded(false)} />}
       <div className="absolute top-2 right-2 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+        {svg && !showSource && (
+          <button
+            type="button"
+            onClick={() => setExpanded(true)}
+            className="rounded-md border border-border bg-popover/90 p-1.5 text-muted-foreground backdrop-blur transition-colors hover:text-foreground"
+            aria-label="Enlarge diagram"
+            title="Enlarge diagram"
+          >
+            <Maximize2 className="size-3.5" />
+          </button>
+        )}
         {svg && (
           <button
             type="button"

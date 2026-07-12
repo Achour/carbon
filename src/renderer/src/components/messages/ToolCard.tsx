@@ -8,6 +8,7 @@ import {
   FilePenLine,
   FileText,
   Globe,
+  Layers,
   ListChecks,
   Loader2,
   MessageCircleQuestion,
@@ -219,11 +220,14 @@ function ToolDetails({ part }: { part: ToolPart }): React.JSX.Element {
 export const ToolCard = React.memo(function ToolCard({
   part,
   cwd,
-  onOpenPlan
+  onOpenPlan,
+  dense = false
 }: {
   part: ToolPart
   cwd: string
   onOpenPlan?: (plan: string) => void
+  /** Row style used inside a ToolGroup: no card chrome, just a thin divider. */
+  dense?: boolean
 }): React.JSX.Element {
   const meta = toolMeta(part, cwd)
   const Icon = meta.icon
@@ -256,9 +260,21 @@ export const ToolCard = React.memo(function ToolCard({
   }
 
   return (
-    <Collapsible.Root className="animate-enter">
-      <div className="overflow-hidden rounded-xl border border-border bg-card/60">
-        <Collapsible.Trigger className="group flex w-full items-center gap-2.5 px-3 py-2 text-left outline-none transition-colors hover:bg-accent/50 focus-visible:bg-accent/50">
+    <Collapsible.Root className={cn(!dense && 'animate-enter')}>
+      <div
+        className={cn(
+          'overflow-hidden',
+          dense
+            ? 'border-b border-border/40 last:border-b-0'
+            : 'rounded-xl border border-border bg-card/60'
+        )}
+      >
+        <Collapsible.Trigger
+          className={cn(
+            'group flex w-full items-center gap-2.5 px-3 text-left outline-none transition-colors hover:bg-accent/50 focus-visible:bg-accent/50',
+            dense ? 'py-1.5' : 'py-2'
+          )}
+        >
           <ChevronRight className="size-3.5 shrink-0 text-muted-foreground/60 transition-transform duration-200 group-data-[panel-open]:rotate-90" />
           <Icon className="size-4 shrink-0 text-muted-foreground" />
           <span className="shrink-0 text-[13px] font-medium">{meta.label}</span>
@@ -274,6 +290,88 @@ export const ToolCard = React.memo(function ToolCard({
         </Collapsible.Trigger>
         <Collapsible.Panel className="h-[var(--collapsible-panel-height)] overflow-hidden transition-[height] duration-200 ease-out data-[ending-style]:h-0 data-[starting-style]:h-0">
           <ToolDetails part={part} />
+        </Collapsible.Panel>
+      </div>
+    </Collapsible.Root>
+  )
+})
+
+/** Tools whose runs get coalesced into a single compact group — read-only,
+ *  high-volume calls that otherwise flood the transcript. */
+export const GROUPABLE_TOOLS = new Set([
+  'Read',
+  'Grep',
+  'Glob',
+  'NotebookRead',
+  'WebFetch',
+  'WebSearch'
+])
+
+const GROUP_NOUN: Record<string, string> = {
+  Read: 'files',
+  Grep: 'searches',
+  Glob: 'searches',
+  WebFetch: 'pages',
+  WebSearch: 'searches'
+}
+
+/**
+ * A run of consecutive read/search tools shown as one collapsible row
+ * ("Read 12 files") so hundreds of reads don't bury the conversation. Expand to
+ * see each call as a thin, still-expandable row.
+ */
+export const ToolGroup = React.memo(function ToolGroup({
+  parts,
+  cwd
+}: {
+  parts: ToolPart[]
+  cwd: string
+}): React.JSX.Element {
+  const metas = parts.map((p) => toolMeta(p, cwd))
+  const labels = new Set(metas.map((m) => m.label))
+  const uniform = labels.size === 1 ? metas[0] : null
+  const running = parts.some((p) => !p.denied && (p.status === 'running' || p.status === 'pending'))
+  const errored = parts.some((p) => p.status === 'error')
+  const n = parts.length
+
+  const label = uniform?.label
+  const title = uniform
+    ? `${label} ${n} ${GROUP_NOUN[label!] ?? (n === 1 ? 'call' : 'calls')}`
+    : `${n} steps`
+  const Icon = uniform?.icon ?? Layers
+  // While running, surface the file/target of the last call for a sense of motion.
+  const trailing = running ? metas[metas.length - 1]?.summary : undefined
+
+  return (
+    <Collapsible.Root className="animate-enter">
+      <div className="overflow-hidden rounded-xl border border-border bg-card/60">
+        <Collapsible.Trigger className="group flex w-full items-center gap-2.5 px-3 py-2 text-left outline-none transition-colors hover:bg-accent/50 focus-visible:bg-accent/50">
+          <ChevronRight className="size-3.5 shrink-0 text-muted-foreground/60 transition-transform duration-200 group-data-[panel-open]:rotate-90" />
+          <Icon className="size-4 shrink-0 text-muted-foreground" />
+          <span className="shrink-0 text-[13px] font-medium">{title}</span>
+          {trailing ? (
+            <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
+              {trailing}
+            </span>
+          ) : (
+            <span className="flex-1" />
+          )}
+          <span className="shrink-0">
+            {running ? (
+              <Loader2 className="size-3.5 animate-spin text-warning" />
+            ) : errored ? (
+              <X className="size-3.5 text-destructive" />
+            ) : (
+              <Check className="size-3.5 text-success" />
+            )}
+          </span>
+        </Collapsible.Trigger>
+        <Collapsible.Panel className="h-[var(--collapsible-panel-height)] overflow-hidden transition-[height] duration-200 ease-out data-[ending-style]:h-0 data-[starting-style]:h-0">
+          <div className="border-t border-border">
+            {parts.map((p) => (
+              <ToolCard key={p.toolUseId} part={p} cwd={cwd} dense />
+            ))}
+          </div>
         </Collapsible.Panel>
       </div>
     </Collapsible.Root>
