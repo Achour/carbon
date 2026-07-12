@@ -5,6 +5,7 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App'
 import { useApp } from './store'
+import { previewForCwd } from './lib/previewRegistry'
 import {
   applyCodeFontSize,
   applyTheme,
@@ -18,8 +19,9 @@ applyTheme(storedTheme())
 applyCodeFontSize(storedCodeFontSize())
 
 if (import.meta.env.DEV) {
-  // Expose the store for the AIGUI_E2E dev hook.
+  // Expose the store (and preview registry) for the AIGUI_E2E dev hook.
   ;(window as unknown as Record<string, unknown>).__app = useApp
+  ;(window as unknown as Record<string, unknown>).__previewForCwd = previewForCwd
   window.addEventListener('error', (e) => console.error('[window error]', e.message))
   window.addEventListener('unhandledrejection', (e) =>
     console.error('[unhandled rejection]', e.reason?.message ?? String(e.reason))

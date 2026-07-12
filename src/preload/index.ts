@@ -78,6 +78,8 @@ const api: Api = {
   previewCommandResult: (result: PreviewCommandResult) => {
     void ipcRenderer.invoke('preview:command-result', result)
   },
+  previewCaptureWindow: (rect: { x: number; y: number; width: number; height: number }) =>
+    ipcRenderer.invoke('preview:capture-window', rect),
   onChatEvent: (cb: (ev: ChatEvent) => void) => {
     const listener = (_e: Electron.IpcRendererEvent, ev: ChatEvent): void => cb(ev)
     ipcRenderer.on('chat:event', listener)

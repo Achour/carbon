@@ -15,6 +15,16 @@ export interface PreviewHandle {
 
 const registry = new Map<string, PreviewHandle>()
 
+/**
+ * Canonicalize a project path for matching. The agent's folder (`chat.cwd`) and
+ * a pane's `cwd` originate from the same value, but a stray trailing slash or
+ * duplicate separator would make an exact `===` miss and the command silently
+ * no-op ("No preview open"). Strip both so matching is robust.
+ */
+function normalizeCwd(cwd: string): string {
+  return cwd.replace(/\/{2,}/g, '/').replace(/\/+$/, '')
+}
+
 export function registerPreview(id: string, handle: PreviewHandle): void {
   registry.set(id, handle)
 }
@@ -24,8 +34,9 @@ export function unregisterPreview(id: string): void {
 }
 
 export function previewForCwd(cwd: string): { id: string; handle: PreviewHandle } | null {
+  const target = normalizeCwd(cwd)
   for (const [id, handle] of registry) {
-    if (handle.cwd === cwd) return { id, handle }
+    if (normalizeCwd(handle.cwd) === target) return { id, handle }
   }
   return null
 }

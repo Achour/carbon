@@ -393,6 +393,16 @@ export interface Api {
   previewReportConsole(cwd: string, line: string): void
   /** Renderer's reply to a PreviewCommand (screenshot/navigate). */
   previewCommandResult(result: PreviewCommandResult): void
+  /**
+   * Fallback screenshot: crop the app window's capture to a pane rect (in CSS
+   * px). Used when a <webview>'s own capturePage() fails. Base64 PNG, or null.
+   */
+  previewCaptureWindow(rect: {
+    x: number
+    y: number
+    width: number
+    height: number
+  }): Promise<string | null>
   onChatEvent(cb: (ev: ChatEvent) => void): () => void
   onNewChat(cb: () => void): () => void
   onTerminalEvent(cb: (ev: TerminalEvent) => void): () => void

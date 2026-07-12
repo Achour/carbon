@@ -11,6 +11,20 @@ import { previewForCwd } from '@/lib/previewRegistry'
 
 const tick = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
+/** Poll the registry until a preview pane for `cwd` has mounted, or time out. */
+async function waitForPreview(
+  cwd: string,
+  ms: number
+): Promise<ReturnType<typeof previewForCwd>> {
+  const deadline = Date.now() + ms
+  let p = previewForCwd(cwd)
+  while (!p && Date.now() < deadline) {
+    await tick(100)
+    p = previewForCwd(cwd)
+  }
+  return p
+}
+
 export default function App(): React.JSX.Element {
   const init = useApp((s) => s.init)
   const applyEvent = useApp((s) => s.applyEvent)
@@ -34,26 +48,29 @@ export default function App(): React.JSX.Element {
           let p = previewForCwd(cmd.cwd)
           if (!p) {
             useApp.getState().openPreview(cmd.url, cmd.cwd)
-            await tick(400)
-            p = previewForCwd(cmd.cwd)
+            p = await waitForPreview(cmd.cwd, 2500)
           }
           p?.handle.loadURL(cmd.url)
-          window.api.previewCommandResult({ id: cmd.id, ok: !!p })
+          window.api.previewCommandResult({
+            id: cmd.id,
+            ok: !!p,
+            error: p ? undefined : 'No preview open'
+          })
           return
         }
         if (cmd.kind === 'screenshot') {
           let p = previewForCwd(cmd.cwd)
           if (!p && cmd.url) {
             useApp.getState().openPreview(cmd.url, cmd.cwd)
-            await tick(1200)
-            p = previewForCwd(cmd.cwd)
+            p = await waitForPreview(cmd.cwd, 2500)
           }
           if (!p) {
             window.api.previewCommandResult({ id: cmd.id, ok: false, error: 'No preview open' })
             return
           }
+          // Bring the pane to the front, then capture — capture() waits for the
+          // guest to be ready and painted and retries blank frames on its own.
           p.handle.activate()
-          await tick(300)
           const data = await p.handle.capture()
           window.api.previewCommandResult({
             id: cmd.id,

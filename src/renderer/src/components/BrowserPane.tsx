@@ -32,6 +32,7 @@ interface WV extends HTMLElement {
   executeJavaScript(code: string): Promise<unknown>
   capturePage(rect?: { x: number; y: number; width: number; height: number }): Promise<{
     toDataURL(): string
+    isEmpty(): boolean
   }>
 }
 
@@ -248,6 +249,9 @@ export function BrowserPane({
   const hostRef = React.useRef<HTMLDivElement>(null)
   const wvRef = React.useRef<WV | null>(null)
   const readyRef = React.useRef(false)
+  // Mirrors `loading` for the imperative capture() closure (which can't read
+  // React state directly).
+  const loadingRef = React.useRef(true)
   const inspectRef = React.useRef(false)
   const manualNavRef = React.useRef(false)
   const autoUrlRef = React.useRef<string | null>(null)
@@ -387,8 +391,12 @@ export function BrowserPane({
       setError(null)
       syncNav()
     }
-    const onStart = (): void => setLoading(true)
+    const onStart = (): void => {
+      loadingRef.current = true
+      setLoading(true)
+    }
     const onStop = (): void => {
+      loadingRef.current = false
       setLoading(false)
       syncNav()
     }
@@ -452,14 +460,49 @@ export function BrowserPane({
         loadOrSrc(url)
       },
       capture: async () => {
-        if (!readyRef.current) return null
-        try {
-          const img = await wv.capturePage()
-          const url = img.toDataURL()
-          return url && url.length > 100 ? url.replace(/^data:[^;]*;base64,/, '') : null
-        } catch {
-          return null
+        // The pane may have just been mounted/activated for this very capture,
+        // so wait for the guest to attach (dom-ready) and for the page to stop
+        // loading before shooting — capturing mid-navigation is what makes the
+        // guest-view compositor throw UnknownVizError.
+        const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+        const deadline = Date.now() + 8000
+        while ((!readyRef.current || loadingRef.current) && Date.now() < deadline) {
+          await sleep(120)
         }
+        if (!readyRef.current) return null
+
+        // Preferred path: the webview's own capture. capturePage() can *hang*
+        // (the main-process guest-view handler throws and never replies) or
+        // return an empty frame, so bound each attempt and retry a few times.
+        for (let i = 0; i < 3 && Date.now() < deadline; i++) {
+          const img = await Promise.race([
+            wv.capturePage().catch(() => null),
+            sleep(1500).then(() => null)
+          ])
+          if (img && !img.isEmpty()) {
+            const url = img.toDataURL()
+            // A real screenshot is a sizeable data URI; a blank frame is tiny.
+            if (url && url.length > 1024) return url.replace(/^data:[^;]*;base64,/, '')
+          }
+          await sleep(200)
+        }
+
+        // Fallback: the guest is composited into the app window, so crop the
+        // window's capture to this pane's on-screen rect. Reliable even when the
+        // webview's own capturePage is wedged.
+        const host = hostRef.current
+        if (host) {
+          const r = host.getBoundingClientRect()
+          if (r.width > 2 && r.height > 2) {
+            return window.api.previewCaptureWindow({
+              x: r.x,
+              y: r.y,
+              width: r.width,
+              height: r.height
+            })
+          }
+        }
+        return null
       },
       activate: () => {
         const s = useApp.getState()

@@ -58,7 +58,7 @@ function sendPreviewCommand(cmd: Omit<PreviewCommand, 'id'>): Promise<PreviewCom
     }
     const timer = setTimeout(() => {
       if (previewPending.delete(id)) resolve({ id, ok: false, error: 'Preview command timed out' })
-    }, 15_000)
+    }, 25_000)
     previewPending.set(id, (r) => {
       clearTimeout(timer)
       resolve(r)
@@ -101,6 +101,17 @@ function createWindow(): void {
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('http:') || url.startsWith('https:')) void shell.openExternal(url)
     return { action: 'deny' }
+  })
+
+  // The <webview> preview is a browser, not the app shell: a target=_blank link
+  // or window.open() inside it should navigate the preview in place, not spawn a
+  // new window (or get kicked to the system browser). Without this, clicking an
+  // in-app link in the preview appears to "do nothing" / opens externally.
+  win.webContents.on('did-attach-webview', (_e, webviewContents) => {
+    webviewContents.setWindowOpenHandler(({ url }) => {
+      if (url.startsWith('http:') || url.startsWith('https:')) void webviewContents.loadURL(url)
+      return { action: 'deny' }
+    })
   })
 
   if (process.env.ELECTRON_RENDERER_URL) {
@@ -312,6 +323,28 @@ function registerIpc(): void {
   ipcMain.handle('preview:logs', (_e, cwd: string) => preview.logs(cwd))
   ipcMain.handle('preview:report-console', (_e, cwd: string, line: string) =>
     preview.reportConsole(cwd, line)
+  )
+  // Fallback screenshot: a <webview>'s own capturePage() is flaky (it can hang
+  // or throw UnknownVizError), but the guest is composited into the app window,
+  // so cropping the window's capture to the pane's rect is a reliable backstop.
+  ipcMain.handle(
+    'preview:capture-window',
+    async (_e, rect: { x: number; y: number; width: number; height: number }) => {
+      if (!win) return null
+      try {
+        const img = await win.webContents.capturePage({
+          x: Math.round(rect.x),
+          y: Math.round(rect.y),
+          width: Math.round(rect.width),
+          height: Math.round(rect.height)
+        })
+        if (img.isEmpty()) return null
+        const url = img.toDataURL()
+        return url && url.length > 1024 ? url.replace(/^data:[^;]*;base64,/, '') : null
+      } catch {
+        return null
+      }
+    }
   )
   ipcMain.handle('preview:command-result', (_e, result: PreviewCommandResult) => {
     previewPending.get(result.id)?.(result)
