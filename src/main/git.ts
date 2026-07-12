@@ -115,7 +115,17 @@ async function untrackedLineCounts(cwd: string, paths: string[]): Promise<Map<st
 export async function gitStatus(cwd: string): Promise<GitStatus> {
   let out: string
   try {
-    out = await git(cwd, ['-c', 'core.quotepath=false', 'status', '--porcelain=v2', '--branch'])
+    // --untracked-files=all lists new files individually instead of collapsing a
+    // new directory to a single "web/" entry (which renders as a blank tree row
+    // and has no meaningful diff). .gitignore is still respected.
+    out = await git(cwd, [
+      '-c',
+      'core.quotepath=false',
+      'status',
+      '--porcelain=v2',
+      '--branch',
+      '--untracked-files=all'
+    ])
   } catch {
     return EMPTY_STATUS
   }
@@ -151,7 +161,10 @@ export async function gitStatus(cwd: string): Promise<GitStatus> {
       const parts = line.split(' ')
       changes.push({ path: parts.slice(10).join(' '), status: 'U', staged: false })
     } else if (line.startsWith('? ')) {
-      changes.push({ path: line.slice(2), status: '?', staged: false })
+      const path = line.slice(2)
+      // A trailing slash means git still reported a whole (empty) untracked dir;
+      // it has no file to diff and would render nameless, so skip it.
+      if (!path.endsWith('/')) changes.push({ path, status: '?', staged: false })
     }
   }
 

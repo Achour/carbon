@@ -176,41 +176,6 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
           </div>
         </div>
         <BackgroundJobs />
-        <WithTooltip label={chat.cwd}>
-          <div className="no-drag flex items-center gap-1.5 rounded-md border border-border bg-secondary/50 px-2 py-1 text-xs text-muted-foreground">
-            <Folder className="size-3" />
-            <span className="max-w-44 truncate">{basename(chat.cwd)}</span>
-            {git?.isRepo && git.branch && (
-              <>
-                <span className="text-border">/</span>
-                <GitBranch className="size-3" />
-                <span className="max-w-32 truncate">{git.branch}</span>
-              </>
-            )}
-          </div>
-        </WithTooltip>
-        {git?.isRepo && git.changes.length > 0 && (
-          <WithTooltip
-            label={`Review changes — ${git.changes.length} file${git.changes.length === 1 ? '' : 's'}`}
-          >
-            <button
-              type="button"
-              onClick={() => void reviewChanges()}
-              aria-label="Review changes"
-              className="no-drag flex items-center gap-1.5 rounded-md border border-border bg-secondary/50 px-2 py-1 text-xs tabular-nums transition-colors hover:bg-accent hover:text-foreground"
-            >
-              <FileDiff className="size-3 text-muted-foreground" />
-              {git.additions === 0 && git.deletions === 0 ? (
-                <span className="text-muted-foreground">{git.changes.length}</span>
-              ) : (
-                <>
-                  <span className="text-success">+{git.additions}</span>
-                  <span className="text-destructive">−{git.deletions}</span>
-                </>
-              )}
-            </button>
-          </WithTooltip>
-        )}
         {/* When the panel is open its own header hosts the collapse button. */}
         {!panelOpen && (
           <WithTooltip label="Show files">
@@ -315,6 +280,46 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
       {/* Composer */}
       <div className="shrink-0 px-6 pb-5">
         <div className="mx-auto max-w-3xl">
+          {/* Repo · branch · working-tree changes — context for what you're about
+              to send, sitting with the composer instead of the crowded top bar. */}
+          <div className="mb-2 flex items-center gap-2">
+            <WithTooltip label={chat.cwd}>
+              <div className="flex min-w-0 items-center gap-1.5 rounded-md border border-border/70 bg-secondary/40 px-2 py-1 text-xs text-muted-foreground">
+                <Folder className="size-3 shrink-0" />
+                <span className="max-w-44 truncate">{basename(chat.cwd)}</span>
+                {git?.isRepo && git.branch && (
+                  <>
+                    <span className="text-border">/</span>
+                    <GitBranch className="size-3 shrink-0" />
+                    <span className="max-w-32 truncate">{git.branch}</span>
+                  </>
+                )}
+              </div>
+            </WithTooltip>
+            {git?.isRepo && git.changes.length > 0 && (
+              <WithTooltip
+                label={`Review changes — ${git.changes.length} file${git.changes.length === 1 ? '' : 's'}`}
+              >
+                <button
+                  type="button"
+                  onClick={() => void reviewChanges()}
+                  aria-label="Review changes"
+                  className="flex items-center gap-1.5 rounded-md border border-border/70 bg-secondary/40 px-2 py-1 text-xs tabular-nums transition-colors hover:bg-accent hover:text-foreground"
+                >
+                  <FileDiff className="size-3 text-muted-foreground" />
+                  {git.additions === 0 && git.deletions === 0 ? (
+                    <span className="text-muted-foreground">{git.changes.length}</span>
+                  ) : (
+                    <>
+                      <span className="text-success">+{git.additions}</span>
+                      <span className="text-destructive">−{git.deletions}</span>
+                    </>
+                  )}
+                </button>
+              </WithTooltip>
+            )}
+            <div className="flex-1" />
+          </div>
           {queued.length > 0 && (
             <div className="mb-2 space-y-1.5">
               {queued.map((q) => (

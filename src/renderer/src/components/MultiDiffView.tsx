@@ -146,7 +146,7 @@ export function MultiDiffView({ cwd }: { cwd: string }): React.JSX.Element {
                   </span>
                   <span className="shrink-0 truncate text-[12.5px] font-medium">{name}</span>
                   {dir && (
-                    <span className="min-w-0 truncate text-[10.5px] text-muted-foreground/55">
+                    <span className="min-w-0 truncate text-[11px] text-muted-foreground/80">
                       {dir}
                     </span>
                   )}
