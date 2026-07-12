@@ -1,11 +1,12 @@
 import * as React from 'react'
 import { Collapsible } from '@base-ui/react/collapsible'
-import { AlertTriangle, ChevronRight } from 'lucide-react'
+import { AlertTriangle, ChevronRight, FileText } from 'lucide-react'
 import type { AssistantMessage, EventMessage, UserMessage } from '@shared/types'
 import { cn } from '@/lib/utils'
 import { formatCost, formatDuration } from '@/lib/format'
 import { Markdown } from '@/components/Markdown'
 import { ToolCard } from './ToolCard'
+import { TodoCard } from './TodoCard'
 
 export const UserBubble = React.memo(function UserBubble({
   message
@@ -13,10 +14,36 @@ export const UserBubble = React.memo(function UserBubble({
   message: UserMessage
 }): React.JSX.Element {
   return (
-    <div className="flex animate-enter justify-end">
-      <div className="max-w-[85%] select-text rounded-2xl rounded-br-md bg-secondary px-4 py-2.5 text-[14px] leading-relaxed whitespace-pre-wrap">
-        {message.text}
-      </div>
+    <div className="flex animate-enter flex-col items-end gap-1.5">
+      {message.attachments && message.attachments.length > 0 && (
+        <div className="flex max-w-[85%] flex-wrap justify-end gap-1.5">
+          {message.attachments.map((att) =>
+            att.kind === 'image' ? (
+              <img
+                key={att.id}
+                src={`data:${att.mediaType};base64,${att.data}`}
+                alt={att.name}
+                title={att.name}
+                className="max-h-40 max-w-56 rounded-xl border border-border object-cover"
+              />
+            ) : (
+              <div
+                key={att.id}
+                title={att.path}
+                className="flex h-8 max-w-56 items-center gap-1.5 rounded-lg border border-border bg-secondary/60 px-2.5"
+              >
+                <FileText className="size-3.5 shrink-0 text-muted-foreground" />
+                <span className="truncate text-xs">{att.name}</span>
+              </div>
+            )
+          )}
+        </div>
+      )}
+      {message.text && (
+        <div className="max-w-[85%] select-text rounded-2xl rounded-br-md bg-secondary px-4 py-2.5 text-[14px] leading-relaxed whitespace-pre-wrap">
+          {message.text}
+        </div>
+      )}
     </div>
   )
 })
@@ -52,12 +79,15 @@ export const AssistantBlock = React.memo(function AssistantBlock({
   message,
   cwd,
   streaming,
-  onOpenPlan
+  onOpenPlan,
+  latestTodoId
 }: {
   message: AssistantMessage
   cwd: string
   streaming: boolean
   onOpenPlan?: (plan: string) => void
+  /** toolUseId of the chat's most recent TodoWrite; that card stays expanded. */
+  latestTodoId?: string | null
 }): React.JSX.Element {
   return (
     <div className="space-y-2.5">
@@ -70,6 +100,9 @@ export const AssistantBlock = React.memo(function AssistantBlock({
         if (part.type === 'thinking') {
           if (!part.text) return null
           return <ThinkingBlock key={i} text={part.text} active={streaming && isLast} />
+        }
+        if (part.name === 'TodoWrite') {
+          return <TodoCard key={part.toolUseId} part={part} live={part.toolUseId === latestTodoId} />
         }
         return <ToolCard key={part.toolUseId} part={part} cwd={cwd} onOpenPlan={onOpenPlan} />
       })}

@@ -5,6 +5,7 @@ import { Sidebar } from '@/components/Sidebar'
 import { ChatView } from '@/components/ChatView'
 import { NewChat } from '@/components/NewChat'
 import { RightPanel } from '@/components/RightPanel'
+import { Settings } from '@/components/Settings'
 import { useApp } from '@/store'
 
 export default function App(): React.JSX.Element {
@@ -28,23 +29,39 @@ export default function App(): React.JSX.Element {
         e.preventDefault()
         useApp.getState().toggleSidebar()
       }
+      if ((e.metaKey || e.ctrlKey) && e.key === ',') {
+        e.preventDefault()
+        const s = useApp.getState()
+        if (s.settingsOpen) s.closeSettings()
+        else s.openSettings()
+      }
     }
     window.addEventListener('keydown', onKey)
+    // Files dropped outside the composer must not navigate the window.
+    const preventNav = (e: DragEvent): void => e.preventDefault()
+    window.addEventListener('dragover', preventNav)
+    window.addEventListener('drop', preventNav)
     return () => {
       offEvents()
       offNewChat()
       window.removeEventListener('keydown', onKey)
+      window.removeEventListener('dragover', preventNav)
+      window.removeEventListener('drop', preventNav)
     }
   }, [init, applyEvent, openChat])
 
   const activeChat = chats.find((c) => c.id === activeId) ?? null
+  const settingsOpen = useApp((s) => s.settingsOpen)
+  const panelFullscreen = useApp((s) => s.panelOpen && s.panelMaximized)
 
   return (
     <TooltipProvider delay={500}>
       <div className="flex h-full">
         <Sidebar />
         <ErrorBoundary>
-          {loading ? (
+          {settingsOpen ? (
+            <Settings />
+          ) : panelFullscreen ? null : loading ? (
             <div className="flex flex-1 items-center justify-center">
               <span className="shimmer-text text-sm font-medium">Loading…</span>
             </div>
@@ -53,7 +70,7 @@ export default function App(): React.JSX.Element {
           ) : (
             <NewChat />
           )}
-          <RightPanel />
+          {!settingsOpen && <RightPanel />}
         </ErrorBoundary>
       </div>
     </TooltipProvider>

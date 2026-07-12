@@ -64,11 +64,23 @@ export interface ToolPart {
 
 export type AssistantPart = TextPart | ThinkingPart | ToolPart
 
+export interface Attachment {
+  id: string
+  kind: 'image' | 'file'
+  name: string
+  /** Images: IANA media type + raw base64 payload (no data: prefix). */
+  mediaType?: string
+  data?: string
+  /** Files: absolute path on disk, passed to Claude as a reference to read. */
+  path?: string
+}
+
 export interface UserMessage {
   id: string
   role: 'user'
   text: string
   ts: number
+  attachments?: Attachment[]
 }
 
 export interface AssistantMessage {
@@ -236,7 +248,9 @@ export interface Api {
   }): Promise<ChatMeta>
   deleteChat(id: string): Promise<void>
   renameChat(id: string, title: string): Promise<void>
-  send(chatId: string, text: string): Promise<void>
+  send(chatId: string, text: string, attachments?: Attachment[]): Promise<void>
+  /** Absolute path of a dragged/picked File (empty string for in-memory files). */
+  pathForFile(file: File): string
   interrupt(chatId: string): Promise<void>
   respondPermission(chatId: string, requestId: string, decision: PermissionDecision): Promise<void>
   setChatOptions(
@@ -247,6 +261,7 @@ export interface Api {
   listDir(dir: string): Promise<FileEntry[]>
   readFile(path: string): Promise<FileContent>
   statPath(path: string): Promise<'file' | 'dir' | null>
+  searchFiles(cwd: string, query: string): Promise<{ rel: string; path: string }[]>
   gitStatus(cwd: string): Promise<GitStatus>
   gitDiff(cwd: string, target: GitDiffTarget): Promise<string>
   gitStage(cwd: string, paths: string[]): Promise<GitResult>

@@ -1,7 +1,19 @@
 import * as React from 'react'
-import { ClipboardList, FileDiff, FileText, Files, GitBranch, X } from 'lucide-react'
+import {
+  ClipboardList,
+  FileDiff,
+  FileText,
+  Files,
+  GitBranch,
+  Maximize2,
+  Minimize2,
+  PanelLeft,
+  PanelRight,
+  X
+} from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useApp, type OpenTab } from '@/store'
+import { Button } from '@/components/ui/button'
 import { WithTooltip } from '@/components/ui/tooltip'
 import { PlanContent } from '@/components/PlanPanel'
 import { FileViewer } from '@/components/FileViewer'
@@ -108,6 +120,11 @@ export function RightPanel(): React.JSX.Element | null {
   const selectedCwd = useApp((s) => s.selectedCwd)
   const changeCount = useApp((s) => s.git?.changes.length ?? 0)
   const diffContents = useApp((s) => s.diffContents)
+  const panelMaximized = useApp((s) => s.panelMaximized)
+  const togglePanelMaximized = useApp((s) => s.togglePanelMaximized)
+  const sidebarOpen = useApp((s) => s.sidebarOpen)
+  const toggleSidebar = useApp((s) => s.toggleSidebar)
+  const togglePanel = useApp((s) => s.togglePanel)
   const hasSuggestions = useApp((s) => {
     if (!s.planPanel?.requestId) return false
     return (s.permissions[s.planPanel.chatId] ?? []).some(
@@ -168,21 +185,48 @@ export function RightPanel(): React.JSX.Element | null {
 
   return (
     <aside
-      style={{ width: width ? `min(${width}px, calc(100vw - ${CHAT_RESERVED_PX}px))` : '52%' }}
-      className="relative flex h-full min-w-[28rem] shrink-0 flex-col border-l border-border bg-card/30"
+      style={
+        panelMaximized
+          ? undefined
+          : { width: width ? `min(${width}px, calc(100vw - ${CHAT_RESERVED_PX}px))` : '52%' }
+      }
+      className={cn(
+        'relative flex h-full min-w-[28rem] flex-col border-l border-border bg-card/30',
+        panelMaximized ? 'min-w-0 flex-1' : 'shrink-0'
+      )}
     >
       {/* Resize handle — drag to resize, double-click to reset */}
-      <div
-        data-resize-handle
-        onPointerDown={onHandlePointerDown}
-        onPointerMove={onHandlePointerMove}
-        onPointerUp={onHandlePointerUp}
-        onLostPointerCapture={onHandlePointerUp}
-        onDoubleClick={resetWidth}
-        className="no-drag absolute inset-y-0 -left-[3px] z-20 w-1.5 cursor-col-resize transition-colors hover:bg-primary/40 active:bg-primary/60"
-      />
+      {!panelMaximized && (
+        <div
+          data-resize-handle
+          onPointerDown={onHandlePointerDown}
+          onPointerMove={onHandlePointerMove}
+          onPointerUp={onHandlePointerUp}
+          onLostPointerCapture={onHandlePointerUp}
+          onDoubleClick={resetWidth}
+          className="no-drag absolute inset-y-0 -left-[3px] z-20 w-1.5 cursor-col-resize transition-colors hover:bg-primary/40 active:bg-primary/60"
+        />
+      )}
       {/* Tab strip */}
-      <header className="drag flex h-[52px] shrink-0 items-center border-b border-border px-2.5">
+      <header
+        className={cn(
+          'drag flex h-[52px] shrink-0 items-center gap-1 border-b border-border px-2.5',
+          panelMaximized && !sidebarOpen && 'pl-[84px]'
+        )}
+      >
+        {panelMaximized && !sidebarOpen && (
+          <WithTooltip label="Show sidebar  ⌘B">
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              className="no-drag shrink-0"
+              aria-label="Show sidebar"
+              onClick={toggleSidebar}
+            >
+              <PanelLeft />
+            </Button>
+          </WithTooltip>
+        )}
         <div
           className="no-drag flex min-w-0 flex-1 items-center gap-1 overflow-x-auto"
           role="tablist"
@@ -216,6 +260,28 @@ export function RightPanel(): React.JSX.Element | null {
             />
           ))}
         </div>
+        <WithTooltip label={panelMaximized ? 'Restore panel' : 'Maximize panel'}>
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            className="no-drag shrink-0"
+            aria-label={panelMaximized ? 'Restore panel' : 'Maximize panel'}
+            onClick={togglePanelMaximized}
+          >
+            {panelMaximized ? <Minimize2 /> : <Maximize2 />}
+          </Button>
+        </WithTooltip>
+        <WithTooltip label="Hide panel">
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            className="no-drag shrink-0"
+            aria-label="Hide panel"
+            onClick={togglePanel}
+          >
+            <PanelRight />
+          </Button>
+        </WithTooltip>
       </header>
 
       {/* Viewer + file tree / source control docked on the right, Cursor-style */}

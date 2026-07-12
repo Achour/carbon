@@ -152,7 +152,7 @@
     user-select: none;
   }
   ::selection {
-    background: oklch(0.66 0.125 40 / 30%);
+    background: oklch(from var(--color-primary) l c h / 30%);
   }
 }
 
@@ -262,7 +262,7 @@
 .markdown a {
   color: var(--color-primary);
   text-decoration: underline;
-  text-decoration-color: oklch(0.66 0.125 40 / 35%);
+  text-decoration-color: oklch(from var(--color-primary) l c h / 35%);
   text-underline-offset: 2px;
 }
 .markdown a:hover {

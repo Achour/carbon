@@ -103,6 +103,19 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
 
   const pendingPlanRequest = permissions.find((r) => r.toolName === 'ExitPlanMode')
 
+  // The most recent TodoWrite is the live task list; earlier ones collapse.
+  const latestTodoId = React.useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i]
+      if (m.role !== 'assistant') continue
+      for (let j = m.parts.length - 1; j >= 0; j--) {
+        const p = m.parts[j]
+        if (p.type === 'tool' && p.name === 'TodoWrite') return p.toolUseId
+      }
+    }
+    return null
+  }, [messages])
+
   const openPlan = React.useCallback(
     (plan: string) => {
       openPlanPanel({ chatId: chat.id, plan, requestId: pendingPlanRequest?.id ?? null })
@@ -137,17 +150,19 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
             <span className="max-w-44 truncate">{basename(chat.cwd)}</span>
           </div>
         </WithTooltip>
-        <WithTooltip label={panelOpen ? 'Hide files' : 'Show files'}>
-          <Button
-            size="icon-sm"
-            variant="ghost"
-            onClick={togglePanel}
-            aria-label="Toggle file panel"
-            className={cn(panelOpen && 'bg-accent text-foreground')}
-          >
-            <PanelRight />
-          </Button>
-        </WithTooltip>
+        {/* When the panel is open its own header hosts the collapse button. */}
+        {!panelOpen && (
+          <WithTooltip label="Show files">
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              onClick={togglePanel}
+              aria-label="Show file panel"
+            >
+              <PanelRight />
+            </Button>
+          </WithTooltip>
+        )}
         <DropdownMenu>
           <DropdownMenuTrigger
             render={
@@ -186,6 +201,7 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
                   cwd={chat.cwd}
                   streaming={busy && m.id === lastAssistant?.id}
                   onOpenPlan={openPlan}
+                  latestTodoId={latestTodoId}
                 />
               )
             return <EventRow key={m.id} message={m} />
@@ -239,7 +255,7 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
       <div className="shrink-0 px-6 pb-5">
         <div className="mx-auto max-w-3xl">
           <Composer
-            onSend={(text) => void sendMessage(text)}
+            onSend={(text, attachments) => void sendMessage(text, attachments)}
             streaming={busy}
             onStop={() => void interrupt()}
             model={chat.model ?? ''}
@@ -250,6 +266,7 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
             onPermissionModeChange={(permissionMode) => void setChatOptions({ permissionMode })}
             contextTokens={chat.contextTokens}
             contextWindow={chat.contextWindow}
+            cwd={chat.cwd}
           />
         </div>
       </div>

@@ -4,6 +4,7 @@ import { writeFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type {
+  Attachment,
   ChatData,
   ChatEvent,
   EffortId,
@@ -13,7 +14,7 @@ import type {
   Provider
 } from '@shared/types'
 import { ChatManager } from './claude'
-import { listDir, readFileContent, statPath } from './files'
+import { listDir, readFileContent, searchFiles, statPath } from './files'
 import * as gitOps from './git'
 import { Store } from './store'
 
@@ -200,8 +201,8 @@ function registerIpc(): void {
     emit({ type: 'meta', chatId: id, patch: { title } })
   })
 
-  ipcMain.handle('chat:send', (_e, chatId: string, text: string) => {
-    manager.send(chatId, text)
+  ipcMain.handle('chat:send', (_e, chatId: string, text: string, attachments?: Attachment[]) => {
+    manager.send(chatId, text, attachments)
   })
 
   ipcMain.handle('chat:interrupt', (_e, chatId: string) => manager.interrupt(chatId))
@@ -240,6 +241,8 @@ function registerIpc(): void {
   ipcMain.handle('fs:read', (_e, path: string) => readFileContent(path))
 
   ipcMain.handle('fs:stat', (_e, path: string) => statPath(path))
+
+  ipcMain.handle('fs:search', (_e, cwd: string, query: string) => searchFiles(cwd, query))
 
   ipcMain.handle('git:status', (_e, cwd: string) => gitOps.gitStatus(cwd))
   ipcMain.handle('git:diff', (_e, cwd: string, target: GitDiffTarget) => gitOps.gitDiff(cwd, target))

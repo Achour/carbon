@@ -11,6 +11,7 @@ import {
 import type {
   AssistantMessage,
   AssistantPart,
+  Attachment,
   ChatData,
   ChatEvent,
   ChatStatus,
@@ -139,19 +140,45 @@ class ClaudeSession {
     this.store.saveChatSoon(this.chat.id)
   }
 
-  send(text: string): void {
+  send(text: string, attachments: Attachment[] = []): void {
     if (!this.chat.title) {
-      this.chat.title = text.replace(/\s+/g, ' ').trim().slice(0, 64)
+      const title = text || attachments.map((a) => a.name).join(', ')
+      this.chat.title = title.replace(/\s+/g, ' ').trim().slice(0, 64)
       this.emit({ type: 'meta', chatId: this.chat.id, patch: { title: this.chat.title } })
     }
-    this.pushMessage({ id: randomUUID(), role: 'user', text, ts: Date.now() })
+    this.pushMessage({
+      id: randomUUID(),
+      role: 'user',
+      text,
+      ts: Date.now(),
+      ...(attachments.length ? { attachments } : {})
+    })
     this.emit({ type: 'meta', chatId: this.chat.id, patch: { updatedAt: this.chat.updatedAt } })
     this.setStatus(this.chat.sessionId ? 'streaming' : 'starting')
+
+    // Images go to the model as base64 blocks; other files are referenced by
+    // path so Claude can Read them itself.
+    const content: Array<Record<string, unknown>> = []
+    for (const a of attachments) {
+      if (a.kind === 'image' && a.data && a.mediaType) {
+        content.push({
+          type: 'image',
+          source: { type: 'base64', media_type: a.mediaType, data: a.data }
+        })
+      }
+    }
+    const filePaths = attachments.filter((a) => a.kind === 'file' && a.path).map((a) => a.path!)
+    let prompt = text
+    if (filePaths.length) {
+      const list = filePaths.map((p) => `- ${p}`).join('\n')
+      prompt = `${text ? `${text}\n\n` : ''}Attached files:\n${list}`
+    }
+    if (prompt || content.length === 0) content.push({ type: 'text', text: prompt })
     this.input.push({
       type: 'user',
-      message: { role: 'user', content: [{ type: 'text', text }] },
+      message: { role: 'user', content },
       parent_tool_use_id: null
-    } as SDKUserMessage)
+    } as unknown as SDKUserMessage)
   }
 
   async interrupt(): Promise<void> {
@@ -653,7 +680,7 @@ export class ChatManager {
     return null
   }
 
-  send(chatId: string, text: string): void {
+  send(chatId: string, text: string, attachments?: Attachment[]): void {
     const chat = this.store.getChat(chatId)
     if (!chat) return
     let session = this.sessionFor(chatId)
@@ -663,7 +690,7 @@ export class ChatManager {
       })
       this.sessions.set(chatId, session)
     }
-    session.send(text)
+    session.send(text, attachments)
   }
 
   async interrupt(chatId: string): Promise<void> {

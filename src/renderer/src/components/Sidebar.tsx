@@ -4,13 +4,12 @@ import {
   Folder,
   FolderOpen,
   MessageSquarePlus,
-  Moon,
   MoreHorizontal,
   PanelLeft,
   Pencil,
   Plus,
   Search,
-  Sun,
+  Settings,
   Trash2
 } from 'lucide-react'
 import type { ChatMeta } from '@shared/types'
@@ -34,19 +33,6 @@ import {
 import { Input } from '@/components/ui/input'
 import { WithTooltip } from '@/components/ui/tooltip'
 
-function useTheme(): [string, () => void] {
-  const [theme, setTheme] = React.useState(
-    () => localStorage.getItem('theme') ?? 'dark'
-  )
-  const toggle = (): void => {
-    const next = theme === 'dark' ? 'light' : 'dark'
-    setTheme(next)
-    localStorage.setItem('theme', next)
-    document.documentElement.classList.toggle('dark', next === 'dark')
-  }
-  return [theme, toggle]
-}
-
 function ChatItem({
   chat,
   active,
@@ -66,30 +52,33 @@ function ChatItem({
   return (
     <div
       className={cn(
-        'group relative rounded-lg transition-colors',
+        'group relative rounded-md transition-colors',
         active ? 'bg-sidebar-accent' : 'hover:bg-sidebar-accent/60'
       )}
     >
       <button
         type="button"
         onClick={onOpen}
-        className="block w-full min-w-0 px-2.5 py-2 text-left outline-none"
+        className="flex w-full min-w-0 items-center gap-1.5 px-2 py-[7px] text-left outline-none"
       >
-        <div className="flex items-center gap-1.5">
-          {streaming && (
-            <span className="size-1.5 shrink-0 animate-pulse-soft rounded-full bg-primary" />
+        {streaming && (
+          <span className="size-1.5 shrink-0 animate-pulse-soft rounded-full bg-primary" />
+        )}
+        <span className="min-w-0 flex-1 truncate text-[13px] text-sidebar-foreground">
+          {chat.title || 'New chat'}
+        </span>
+        <span
+          className={cn(
+            'shrink-0 text-[11px] text-muted-foreground/80 transition-opacity group-hover:opacity-0',
+            menuOpen && 'opacity-0'
           )}
-          <span className="truncate text-[13px] font-medium text-sidebar-foreground">
-            {chat.title || 'New chat'}
-          </span>
-        </div>
-        <div className="mt-0.5 text-[11px] text-muted-foreground">
+        >
           {relativeTime(chat.updatedAt)}
-        </div>
+        </span>
       </button>
       <div
         className={cn(
-          'absolute top-1.5 right-1.5 opacity-0 transition-opacity group-hover:opacity-100',
+          'absolute top-1/2 right-1 -translate-y-1/2 opacity-0 transition-opacity group-hover:opacity-100',
           menuOpen && 'opacity-100'
         )}
       >
@@ -116,6 +105,11 @@ function ChatItem({
   )
 }
 
+// Drag bounds for the sidebar width.
+const SIDEBAR_DEFAULT = 264
+const SIDEBAR_MIN = 200
+const SIDEBAR_MAX = 420
+
 export function Sidebar(): React.JSX.Element {
   const chats = useApp((s) => s.chats)
   const activeId = useApp((s) => s.activeId)
@@ -140,7 +134,7 @@ export function Sidebar(): React.JSX.Element {
     }
   }
 
-  const [theme, toggleTheme] = useTheme()
+  const openSettings = useApp((s) => s.openSettings)
   const [filter, setFilter] = React.useState('')
   const [searchOpen, setSearchOpen] = React.useState(false)
   const [renaming, setRenaming] = React.useState<ChatMeta | null>(null)
@@ -170,6 +164,49 @@ export function Sidebar(): React.JSX.Element {
     })
   }
 
+  const [width, setWidth] = React.useState<number>(() => {
+    const saved = Number(localStorage.getItem('sidebarWidth'))
+    return Number.isFinite(saved) && saved >= SIDEBAR_MIN && saved <= SIDEBAR_MAX
+      ? saved
+      : SIDEBAR_DEFAULT
+  })
+  // State (not just a ref) because the width transition is disabled while dragging.
+  const [dragging, setDragging] = React.useState(false)
+  const draggingRef = React.useRef(false)
+
+  const onHandlePointerDown = (e: React.PointerEvent<HTMLDivElement>): void => {
+    e.preventDefault()
+    draggingRef.current = true
+    setDragging(true)
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId)
+    } catch {
+      // synthetic events have no active pointer to capture
+    }
+  }
+
+  const onHandlePointerMove = (e: React.PointerEvent<HTMLDivElement>): void => {
+    if (!draggingRef.current) return
+    setWidth(Math.max(SIDEBAR_MIN, Math.min(Math.round(e.clientX), SIDEBAR_MAX)))
+  }
+
+  const onHandlePointerUp = (): void => {
+    if (!draggingRef.current) return
+    draggingRef.current = false
+    setDragging(false)
+    setWidth((w) => {
+      localStorage.setItem('sidebarWidth', String(w))
+      return w
+    })
+  }
+
+  const resetWidth = (): void => {
+    draggingRef.current = false
+    setDragging(false)
+    setWidth(SIDEBAR_DEFAULT)
+    localStorage.removeItem('sidebarWidth')
+  }
+
   const filtered = filter
     ? chats.filter((c) => (c.title || 'New chat').toLowerCase().includes(filter.toLowerCase()))
     : chats
@@ -185,41 +222,35 @@ export function Sidebar(): React.JSX.Element {
 
   return (
     <aside
+      style={{ width: sidebarOpen ? width : 0 }}
       className={cn(
-        'flex h-full shrink-0 flex-col overflow-hidden border-r border-sidebar-border bg-sidebar transition-[width] duration-200 ease-out',
-        sidebarOpen ? 'w-[264px]' : 'w-0 border-r-0'
+        'relative flex h-full shrink-0 flex-col overflow-hidden border-r border-sidebar-border bg-sidebar',
+        !dragging && 'transition-[width] duration-200 ease-out',
+        !sidebarOpen && 'border-r-0'
       )}
     >
-      <div className="flex h-full w-[264px] flex-col">
-      {/* Traffic-light strip */}
-      <div className="drag h-[52px] shrink-0" />
-
-      {/* Brand + search */}
-      <div className="drag flex shrink-0 items-center justify-between pr-2.5 pb-1.5 pl-4">
-        <span className="text-[17px] font-semibold tracking-tight text-sidebar-foreground">
-          AI GUI
-        </span>
-        <div className="flex items-center gap-0.5">
-          <Button
-            size="icon-sm"
-            variant="ghost"
-            aria-label="Search chats"
-            onClick={() => {
-              setSearchOpen((open) => {
-                if (open) setFilter('')
-                return !open
-              })
-            }}
-            className={cn(searchOpen && 'bg-sidebar-accent text-foreground')}
-          >
-            <Search />
+      <div className="flex h-full flex-col" style={{ width }}>
+      {/* Traffic-light strip; window controls live on its right, Cursor-style */}
+      <div className="drag flex h-[52px] shrink-0 items-center justify-end gap-0.5 px-2.5">
+        <Button
+          size="icon-sm"
+          variant="ghost"
+          aria-label="Search chats"
+          onClick={() => {
+            setSearchOpen((open) => {
+              if (open) setFilter('')
+              return !open
+            })
+          }}
+          className={cn(searchOpen && 'bg-sidebar-accent text-foreground')}
+        >
+          <Search />
+        </Button>
+        <WithTooltip label="Hide sidebar  ⌘B">
+          <Button size="icon-sm" variant="ghost" aria-label="Hide sidebar" onClick={toggleSidebar}>
+            <PanelLeft />
           </Button>
-          <WithTooltip label="Hide sidebar  ⌘B">
-            <Button size="icon-sm" variant="ghost" aria-label="Hide sidebar" onClick={toggleSidebar}>
-              <PanelLeft />
-            </Button>
-          </WithTooltip>
-        </div>
+        </WithTooltip>
       </div>
 
       <div className="flex flex-col gap-2 px-3 pb-2">
@@ -277,26 +308,29 @@ export function Sidebar(): React.JSX.Element {
           const hasStreaming = group.chats.some((c) => (statuses[c.id] ?? 'idle') !== 'idle')
           return (
             <div key={group.cwd} className="mb-1.5">
-              <div className="group/project flex items-center gap-0.5 px-1 pt-2.5 pb-1">
+              <div className="group/project flex items-center gap-0.5 pt-2 pb-0.5">
                 <WithTooltip label={group.cwd}>
                   <button
                     type="button"
                     onClick={() => toggleProject(group.cwd)}
-                    className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1.5 py-0.5 text-left transition-colors hover:bg-sidebar-accent/60"
+                    className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 py-1.5 text-left transition-colors hover:bg-sidebar-accent/60"
                     aria-expanded={!isCollapsed}
                   >
-                    <ChevronRight
-                      className={cn(
-                        'size-3 shrink-0 text-muted-foreground/70 transition-transform duration-150',
-                        !isCollapsed && 'rotate-90'
-                      )}
-                    />
-                    <Folder className="size-3 shrink-0 text-muted-foreground/70" />
-                    <span className="truncate text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+                    {/* One icon slot: folder at rest, chevron on row hover (Cursor-style). */}
+                    <span className="relative size-3.5 shrink-0">
+                      <Folder className="absolute inset-0 size-3.5 text-muted-foreground/80 transition-all duration-150 group-hover/project:scale-75 group-hover/project:opacity-0" />
+                      <ChevronRight
+                        className={cn(
+                          'absolute inset-0 size-3.5 scale-75 text-muted-foreground/80 opacity-0 transition-all duration-150 group-hover/project:scale-100 group-hover/project:opacity-100',
+                          !isCollapsed && 'rotate-90'
+                        )}
+                      />
+                    </span>
+                    <span className="truncate text-[13px] font-medium text-sidebar-foreground">
                       {basename(group.cwd)}
                     </span>
                     {isCollapsed && (
-                      <span className="shrink-0 text-[10px] text-muted-foreground/60">
+                      <span className="shrink-0 text-[11px] text-muted-foreground/70">
                         {group.chats.length}
                       </span>
                     )}
@@ -331,7 +365,7 @@ export function Sidebar(): React.JSX.Element {
                 </WithTooltip>
               </div>
               {!isCollapsed && (
-                <div className="space-y-0.5">
+                <div className="ml-[22px] space-y-px">
                   {group.chats.map((chat) => (
                     <ChatItem
                       key={chat.id}
@@ -355,9 +389,9 @@ export function Sidebar(): React.JSX.Element {
 
       {/* Footer */}
       <div className="flex shrink-0 items-center justify-end border-t border-sidebar-border px-3 py-2">
-        <WithTooltip label={theme === 'dark' ? 'Switch to light' : 'Switch to dark'}>
-          <Button size="icon-sm" variant="ghost" onClick={toggleTheme} aria-label="Toggle theme">
-            {theme === 'dark' ? <Sun /> : <Moon />}
+        <WithTooltip label="Settings  ⌘,">
+          <Button size="icon-sm" variant="ghost" onClick={openSettings} aria-label="Open settings">
+            <Settings />
           </Button>
         </WithTooltip>
       </div>
@@ -447,6 +481,18 @@ export function Sidebar(): React.JSX.Element {
         </DialogContent>
       </Dialog>
       </div>
+      {/* Resize handle — drag to resize, double-click to reset */}
+      {sidebarOpen && (
+        <div
+          data-sidebar-resize
+          onPointerDown={onHandlePointerDown}
+          onPointerMove={onHandlePointerMove}
+          onPointerUp={onHandlePointerUp}
+          onLostPointerCapture={onHandlePointerUp}
+          onDoubleClick={resetWidth}
+          className="no-drag absolute inset-y-0 right-0 z-20 w-1.5 cursor-col-resize transition-colors hover:bg-primary/40 active:bg-primary/60"
+        />
+      )}
     </aside>
   )
 }

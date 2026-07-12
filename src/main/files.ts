@@ -108,3 +108,83 @@ export async function statPath(path: string): Promise<'file' | 'dir' | null> {
     return null
   }
 }
+
+// ---- Project file search (@-mentions) ----
+
+const WALK_IGNORE = new Set([
+  'node_modules',
+  '.git',
+  'dist',
+  'out',
+  'build',
+  '.next',
+  '.nuxt',
+  '.output',
+  '.turbo',
+  '.cache',
+  'coverage',
+  '.venv',
+  'venv',
+  '__pycache__',
+  'target',
+  'Pods',
+  'DerivedData'
+])
+const WALK_MAX_FILES = 20_000
+const WALK_MAX_DEPTH = 10
+const WALK_TTL_MS = 15_000
+
+const walkCache = new Map<string, { ts: number; rels: string[] }>()
+
+async function walkProject(root: string): Promise<string[]> {
+  const cached = walkCache.get(root)
+  if (cached && Date.now() - cached.ts < WALK_TTL_MS) return cached.rels
+  const rels: string[] = []
+  const queue: Array<{ dir: string; depth: number }> = [{ dir: root, depth: 0 }]
+  while (queue.length > 0 && rels.length < WALK_MAX_FILES) {
+    const { dir, depth } = queue.shift()!
+    let entries
+    try {
+      entries = await readdir(dir, { withFileTypes: true })
+    } catch {
+      continue
+    }
+    for (const e of entries) {
+      if (e.isDirectory()) {
+        if (depth < WALK_MAX_DEPTH && !WALK_IGNORE.has(e.name) && !e.name.startsWith('.')) {
+          queue.push({ dir: join(dir, e.name), depth: depth + 1 })
+        }
+      } else if (e.isFile()) {
+        const abs = join(dir, e.name)
+        rels.push(abs.slice(root.length + 1))
+        if (rels.length >= WALK_MAX_FILES) break
+      }
+    }
+  }
+  walkCache.set(root, { ts: Date.now(), rels })
+  return rels
+}
+
+/** Ranked fuzzy match of project files for composer @-mentions. */
+export async function searchFiles(
+  root: string,
+  query: string,
+  limit = 20
+): Promise<{ rel: string; path: string }[]> {
+  const rels = await walkProject(root)
+  const q = query.toLowerCase()
+  const scored: Array<{ rel: string; score: number }> = []
+  for (const rel of rels) {
+    const relLower = rel.toLowerCase()
+    const base = relLower.slice(relLower.lastIndexOf('/') + 1)
+    let score: number
+    if (!q) score = 3
+    else if (base.startsWith(q)) score = 0
+    else if (base.includes(q)) score = 1
+    else if (relLower.includes(q)) score = 2
+    else continue
+    scored.push({ rel, score })
+  }
+  scored.sort((a, b) => a.score - b.score || a.rel.length - b.rel.length)
+  return scored.slice(0, limit).map(({ rel }) => ({ rel, path: join(root, rel) }))
+}

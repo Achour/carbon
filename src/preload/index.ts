@@ -1,6 +1,7 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type {
   Api,
+  Attachment,
   ChatEvent,
   EffortId,
   GitDiffTarget,
@@ -21,7 +22,15 @@ const api: Api = {
   }) => ipcRenderer.invoke('chats:create', opts),
   deleteChat: (id: string) => ipcRenderer.invoke('chats:delete', id),
   renameChat: (id: string, title: string) => ipcRenderer.invoke('chats:rename', id, title),
-  send: (chatId: string, text: string) => ipcRenderer.invoke('chat:send', chatId, text),
+  send: (chatId: string, text: string, attachments?: Attachment[]) =>
+    ipcRenderer.invoke('chat:send', chatId, text, attachments),
+  pathForFile: (file: File) => {
+    try {
+      return webUtils.getPathForFile(file)
+    } catch {
+      return ''
+    }
+  },
   interrupt: (chatId: string) => ipcRenderer.invoke('chat:interrupt', chatId),
   respondPermission: (chatId: string, requestId: string, decision: PermissionDecision) =>
     ipcRenderer.invoke('chat:respond-permission', chatId, requestId, decision),
@@ -33,6 +42,7 @@ const api: Api = {
   listDir: (dir: string) => ipcRenderer.invoke('fs:list', dir),
   readFile: (path: string) => ipcRenderer.invoke('fs:read', path),
   statPath: (path: string) => ipcRenderer.invoke('fs:stat', path),
+  searchFiles: (cwd: string, query: string) => ipcRenderer.invoke('fs:search', cwd, query),
   gitStatus: (cwd: string) => ipcRenderer.invoke('git:status', cwd),
   gitDiff: (cwd: string, target: GitDiffTarget) => ipcRenderer.invoke('git:diff', cwd, target),
   gitStage: (cwd: string, paths: string[]) => ipcRenderer.invoke('git:stage', cwd, paths),

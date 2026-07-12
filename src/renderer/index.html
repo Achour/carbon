@@ -5,8 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>AI GUI</title>
     <script>
-      const theme = localStorage.getItem('theme') ?? 'dark'
-      if (theme === 'dark') document.documentElement.classList.add('dark')
+      // Themes are applied in the renderer; only the dark/light class must be
+      // set before first paint. Falls back to the pre-registry 'theme' key.
+      const appearance =
+        localStorage.getItem('themeAppearance') ??
+        (localStorage.getItem('theme') === 'light' ? 'light' : 'dark')
+      if (appearance === 'dark') document.documentElement.classList.add('dark')
     </script>
   </head>
   <body>

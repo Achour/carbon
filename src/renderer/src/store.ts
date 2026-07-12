@@ -1,7 +1,9 @@
 import { create } from 'zustand'
+import { applyTheme, storedTheme } from '@/lib/themes'
 import type {
   AppDefaults,
   AssistantMessage,
+  Attachment,
   ChatEvent,
   ChatMessage,
   ChatMeta,
@@ -55,9 +57,20 @@ interface AppState {
   sidebarOpen: boolean
   toggleSidebar(): void
 
+  // ---- Settings ----
+  /** When true the main area shows the settings page instead of a chat. */
+  settingsOpen: boolean
+  theme: string
+  openSettings(): void
+  closeSettings(): void
+  setTheme(id: string): void
+
   // ---- Files ----
   /** Whether the right-side workspace panel (tabs + file tree) is open. */
   panelOpen: boolean
+  /** Panel expanded over the chat column to fill the window. */
+  panelMaximized: boolean
+  togglePanelMaximized(): void
   /** Directory listing cache, keyed by absolute dir path. */
   filesByDir: Record<string, FileEntry[]>
   expandedDirs: Record<string, boolean>
@@ -107,9 +120,14 @@ interface AppState {
   newChat(
     cwd: string,
     firstMessage: string,
-    opts?: { model?: string; effort?: EffortId; permissionMode?: ChatMeta['permissionMode'] }
+    opts?: {
+      model?: string
+      effort?: EffortId
+      permissionMode?: ChatMeta['permissionMode']
+      attachments?: Attachment[]
+    }
   ): Promise<void>
-  sendMessage(text: string): Promise<void>
+  sendMessage(text: string, attachments?: Attachment[]): Promise<void>
   interrupt(): Promise<void>
   deleteChat(id: string): Promise<void>
   /** Deletes every chat in the project and drops it from recent folders. */
@@ -195,6 +213,24 @@ export const useApp = create<AppState>((set, get) => ({
     })
   },
 
+  // ---- Settings ----
+
+  settingsOpen: false,
+  theme: storedTheme(),
+
+  openSettings() {
+    set({ settingsOpen: true })
+  },
+
+  closeSettings() {
+    set({ settingsOpen: false })
+  },
+
+  setTheme(id) {
+    applyTheme(id)
+    set({ theme: id })
+  },
+
   async init() {
     const [chats, defaults] = await Promise.all([window.api.listChats(), window.api.getDefaults()])
     set({
@@ -227,6 +263,7 @@ export const useApp = create<AppState>((set, get) => ({
   // ---- Files ----
 
   panelOpen: false,
+  panelMaximized: false,
   filesByDir: {},
   expandedDirs: {},
   openFiles: [],
@@ -244,9 +281,13 @@ export const useApp = create<AppState>((set, get) => ({
     }
   })(),
 
+  togglePanelMaximized() {
+    set((s) => ({ panelMaximized: !s.panelMaximized }))
+  },
+
   togglePanel() {
     const opening = !get().panelOpen
-    set((s) => panelPatch(s, opening))
+    set((s) => ({ ...panelPatch(s, opening), ...(opening ? {} : { panelMaximized: false }) }))
     if (opening) {
       const cwd = get().selectedCwd
       if (cwd && !get().filesByDir[cwd]) void get().loadDir(cwd)
@@ -466,13 +507,21 @@ export const useApp = create<AppState>((set, get) => ({
 
   async openChat(id) {
     if (id === null) {
-      set({ activeId: null, messages: [], planPanel: null })
+      set({
+        activeId: null,
+        messages: [],
+        planPanel: null,
+        settingsOpen: false,
+        panelMaximized: false
+      })
       return
     }
     set((s) => ({
       activeId: id,
       messages: [],
       planPanel: null,
+      settingsOpen: false,
+      panelMaximized: false,
       // Panel visibility is per chat; unvisited chats start closed.
       panelOpen: s.panelOpenByChat[id] ?? false
     }))
@@ -489,13 +538,16 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   async newChat(cwd, firstMessage, opts) {
-    const meta = await window.api.createChat({ cwd, ...opts })
+    const { attachments, ...createOpts } = opts ?? {}
+    const meta = await window.api.createChat({ cwd, ...createOpts })
     set((s) => ({
       ...projectSwitchPatch(s, cwd),
       chats: [meta, ...s.chats],
       activeId: meta.id,
       messages: [],
       planPanel: null,
+      settingsOpen: false,
+      panelMaximized: false,
       defaults: s.defaults
         ? {
             ...s.defaults,
@@ -512,13 +564,13 @@ export const useApp = create<AppState>((set, get) => ({
       void get().refreshGit()
       if (!get().filesByDir[cwd]) void get().loadDir(cwd)
     }
-    await window.api.send(meta.id, firstMessage)
+    await window.api.send(meta.id, firstMessage, attachments)
   },
 
-  async sendMessage(text) {
+  async sendMessage(text, attachments) {
     const id = get().activeId
     if (!id) return
-    await window.api.send(id, text)
+    await window.api.send(id, text, attachments)
   },
 
   async interrupt() {

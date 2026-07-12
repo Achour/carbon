@@ -1,7 +1,7 @@
 import * as React from 'react'
 import { Folder, FolderOpen, PanelLeft, PanelRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import type { EffortId, PermissionModeId } from '@shared/types'
+import type { Attachment, EffortId, PermissionModeId } from '@shared/types'
 import { basename, greeting } from '@/lib/format'
 import { useApp } from '@/store'
 import { Button } from '@/components/ui/button'
@@ -29,12 +29,13 @@ export function NewChat(): React.JSX.Element {
     if (dir) setSelectedCwd(dir)
   }
 
-  const start = async (text: string): Promise<void> => {
+  const start = async (text: string, attachments: Attachment[]): Promise<void> => {
     if (!cwd) return
     await newChat(cwd, text, {
       model: model || undefined,
       effort: effort || undefined,
-      permissionMode
+      permissionMode,
+      attachments: attachments.length ? attachments : undefined
     })
   }
 
@@ -62,14 +63,14 @@ export function NewChat(): React.JSX.Element {
             </div>
           </WithTooltip>
         )}
-        {cwd && (
-          <WithTooltip label={panelOpen ? 'Hide files' : 'Show files'}>
+        {/* When the panel is open its own header hosts the collapse button. */}
+        {cwd && !panelOpen && (
+          <WithTooltip label="Show files">
             <Button
               size="icon-sm"
               variant="ghost"
               onClick={togglePanel}
-              aria-label="Toggle file panel"
-              className={cn(panelOpen && 'bg-accent text-foreground')}
+              aria-label="Show file panel"
             >
               <PanelRight />
             </Button>
@@ -87,13 +88,14 @@ export function NewChat(): React.JSX.Element {
 
           {cwd ? (
             <Composer
-              onSend={(text) => void start(text)}
+              onSend={(text, attachments) => void start(text, attachments)}
               model={model}
               onModelChange={setModel}
               effort={effort}
               onEffortChange={setEffort}
               permissionMode={permissionMode}
               onPermissionModeChange={setPermissionMode}
+              cwd={cwd}
               placeholder={`Start working in ${basename(cwd)}…`}
             />
           ) : (
