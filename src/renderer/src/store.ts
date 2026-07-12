@@ -153,6 +153,12 @@ interface AppState {
   /** How many recent chats each project shows in the sidebar before search. */
   chatsPerProject: number
   setChatsPerProject(n: number): void
+  /**
+   * Projects the user hid from the sidebar (keyed by cwd). Their chats are kept;
+   * re-selecting the folder un-hides it (see `setSelectedCwd`). Persisted.
+   */
+  hiddenProjects: Record<string, boolean>
+  setProjectHidden(cwd: string, hidden: boolean): void
 
   // ---- Files ----
   /** Whether the right-side workspace panel (tabs + file tree) is open. */
@@ -507,6 +513,24 @@ export const useApp = create<AppState>((set, get) => ({
     set({ chatsPerProject: v })
   },
 
+  hiddenProjects: (() => {
+    try {
+      return JSON.parse(localStorage.getItem('hiddenProjects') ?? '{}') as Record<string, boolean>
+    } catch {
+      return {}
+    }
+  })(),
+
+  setProjectHidden(cwd, hidden) {
+    set((s) => {
+      const hiddenProjects = { ...s.hiddenProjects }
+      if (hidden) hiddenProjects[cwd] = true
+      else delete hiddenProjects[cwd]
+      localStorage.setItem('hiddenProjects', JSON.stringify(hiddenProjects))
+      return { hiddenProjects }
+    })
+  },
+
   async init() {
     const [chats, defaults] = await Promise.all([window.api.listChats(), window.api.getDefaults()])
     set({
@@ -521,7 +545,17 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   setSelectedCwd(cwd) {
-    set((s) => projectSwitchPatch(s, cwd))
+    set((s) => {
+      const patch = projectSwitchPatch(s, cwd)
+      // Explicitly picking a folder brings a hidden project back into the sidebar.
+      if (cwd && s.hiddenProjects[cwd]) {
+        const hiddenProjects = { ...s.hiddenProjects }
+        delete hiddenProjects[cwd]
+        localStorage.setItem('hiddenProjects', JSON.stringify(hiddenProjects))
+        return { ...patch, hiddenProjects }
+      }
+      return patch
+    })
     get().loadCommands(cwd)
     if (cwd) {
       void get().refreshGit()
@@ -859,6 +893,8 @@ export const useApp = create<AppState>((set, get) => ({
   async newChat(cwd, firstMessage, opts) {
     const { attachments, ...createOpts } = opts ?? {}
     const meta = await window.api.createChat({ cwd, ...createOpts })
+    // Starting a chat in a hidden project brings it back into the sidebar.
+    if (get().hiddenProjects[cwd]) get().setProjectHidden(cwd, false)
     set((s) => ({
       ...projectSwitchPatch(s, cwd),
       chats: [meta, ...s.chats],
@@ -945,9 +981,17 @@ export const useApp = create<AppState>((set, get) => ({
           ? projectSwitchPatch(s, chats[0]?.cwd ?? recentDirs[0] ?? null)
           : {}
       delete patch.workspaces?.[cwd]
+      // Drop any stale hidden flag so re-adding the folder later isn't hidden.
+      let hiddenProjects = s.hiddenProjects
+      if (hiddenProjects[cwd]) {
+        hiddenProjects = { ...hiddenProjects }
+        delete hiddenProjects[cwd]
+        localStorage.setItem('hiddenProjects', JSON.stringify(hiddenProjects))
+      }
       return {
         ...patch,
         chats,
+        hiddenProjects,
         activeId: wasActive ? null : s.activeId,
         messages: wasActive ? [] : s.messages,
         planPanel: wasActive ? null : s.planPanel,
