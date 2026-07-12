@@ -31,6 +31,7 @@ import { FileTree } from '@/components/FileTree'
 import { GitPanel } from '@/components/GitPanel'
 import { DiffView } from '@/components/DiffView'
 import { MultiDiffView } from '@/components/MultiDiffView'
+import { languageForPath } from '@/lib/highlight'
 import { TerminalPane } from '@/components/TerminalPanel'
 import { BrowserPane } from '@/components/BrowserPane'
 
@@ -690,7 +691,10 @@ export function RightPanel(): React.JSX.Element | null {
             ) : currentIsChanges && selectedCwd ? (
               <MultiDiffView cwd={selectedCwd} />
             ) : activeEntry?.diff ? (
-              <DiffView text={diffContents[current!]} />
+              <DiffView
+                text={diffContents[current!]}
+                language={languageForPath(activeEntry.diff.file)}
+              />
             ) : activeEntry ? (
               <FileViewer
                 content={fileContents[current!]}

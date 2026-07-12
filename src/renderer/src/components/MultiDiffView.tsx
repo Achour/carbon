@@ -14,6 +14,7 @@ import { useApp } from '@/store'
 import { Button } from '@/components/ui/button'
 import { WithTooltip } from '@/components/ui/tooltip'
 import { DiffTable } from '@/components/DiffView'
+import { languageForPath } from '@/lib/highlight'
 
 const STATUS_COLORS: Record<string, string> = {
   M: 'text-amber-500',
@@ -196,7 +197,7 @@ export function MultiDiffView({ cwd }: { cwd: string }): React.JSX.Element {
                     <span className="shimmer-text">Loading diff…</span>
                   </div>
                 ) : (
-                  <DiffTable text={text} />
+                  <DiffTable text={text} language={languageForPath(c.path)} />
                 ))}
             </div>
           )

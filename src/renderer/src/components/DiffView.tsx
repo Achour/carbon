@@ -1,4 +1,5 @@
 import * as React from 'react'
+import { highlightLine } from '@/lib/highlight'
 
 const MAX_ROWS = 5000
 
@@ -67,11 +68,26 @@ function parseDiff(diff: string): Row[] {
 /** The bare diff table (no scroll wrapper) — used standalone and stacked in the
  *  multi-file changes view. */
 export const DiffTable = React.memo(function DiffTable({
-  text
+  text,
+  language
 }: {
   text: string
+  /** highlight.js language id; when set, code lines are syntax-highlighted. */
+  language?: string
 }): React.JSX.Element {
   const rows = React.useMemo(() => parseDiff(text), [text])
+  // Per-line hljs HTML for code rows (null when no language is known).
+  const html = React.useMemo(
+    () =>
+      language
+        ? rows.map((r) =>
+            r.kind === 'add' || r.kind === 'del' || r.kind === 'ctx'
+              ? highlightLine(r.text, language)
+              : ''
+          )
+        : null,
+    [rows, language]
+  )
 
   if (rows.length === 0) {
     return <div className="px-3 py-2.5 text-xs text-muted-foreground/70">No textual changes.</div>
@@ -112,10 +128,23 @@ export const DiffTable = React.memo(function DiffTable({
               {row.kind === 'add' ? '+' : row.kind === 'del' ? '−' : ''}
             </td>
             <td className="px-1.5 align-top break-all whitespace-pre-wrap">
-              {row.kind === 'hunk' || row.kind === 'note' ? (
+              {row.kind === 'hunk' ? (
+                // Drop the raw "@@ -a,b +c,d @@" markers; keep the context that
+                // follows (the enclosing function/line), Cursor-style.
+                <span className="text-muted-foreground/60">
+                  {(() => {
+                    const ctx = row.text.replace(/^@@[^@]*@@\s?/, '').trim()
+                    return ctx ? `⋯  ${ctx}` : '⋯'
+                  })()}
+                </span>
+              ) : row.kind === 'note' ? (
                 <span className="text-muted-foreground">{row.text}</span>
+              ) : !row.text ? (
+                ' '
+              ) : html ? (
+                <span dangerouslySetInnerHTML={{ __html: html[i] }} />
               ) : (
-                row.text || ' '
+                row.text
               )}
             </td>
           </tr>
@@ -126,9 +155,11 @@ export const DiffTable = React.memo(function DiffTable({
 })
 
 export const DiffView = React.memo(function DiffView({
-  text
+  text,
+  language
 }: {
   text: string | undefined
+  language?: string
 }): React.JSX.Element {
   if (text === undefined) {
     return (
@@ -139,7 +170,7 @@ export const DiffView = React.memo(function DiffView({
   }
   return (
     <div className="h-full overflow-auto">
-      <DiffTable text={text} />
+      <DiffTable text={text} language={language} />
     </div>
   )
 })
