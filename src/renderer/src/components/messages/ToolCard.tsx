@@ -296,23 +296,52 @@ export const ToolCard = React.memo(function ToolCard({
   )
 })
 
-/** Tools whose runs get coalesced into a single compact group — read-only,
- *  high-volume calls that otherwise flood the transcript. */
+/** Tools whose runs get coalesced into a single compact group — high-volume
+ *  calls (reads, searches, spawned agents) that otherwise flood the transcript. */
 export const GROUPABLE_TOOLS = new Set([
   'Read',
   'Grep',
   'Glob',
   'NotebookRead',
   'WebFetch',
-  'WebSearch'
+  'WebSearch',
+  'Task',
+  'Agent'
 ])
 
-const GROUP_NOUN: Record<string, string> = {
-  Read: 'files',
-  Grep: 'searches',
-  Glob: 'searches',
-  WebFetch: 'pages',
-  WebSearch: 'searches'
+/** The group header title for a uniform run (all the same tool). */
+function groupTitle(label: string | undefined, n: number): string {
+  const plural = (one: string, many: string): string => `${n} ${n === 1 ? one : many}`
+  switch (label) {
+    case 'Read':
+      return `Read ${plural('file', 'files')}`
+    case 'Grep':
+    case 'Glob':
+      return plural('search', 'searches')
+    case 'Agent':
+      return plural('agent', 'agents')
+    case 'Fetch':
+      return `Fetched ${plural('page', 'pages')}`
+    case 'Search':
+      return `${n} web ${n === 1 ? 'search' : 'searches'}`
+    default:
+      return label ? `${label} ×${n}` : `${n} steps`
+  }
+}
+
+/** True while any call in the run — or, for agents, any of their children — is
+ *  still working, so a mixed done/running group shows the spinner. */
+function groupRunning(parts: ToolPart[]): boolean {
+  return parts.some((p) => {
+    if (p.denied) return false
+    if (p.status === 'running' || p.status === 'pending') return true
+    if (p.name === 'Task' || p.name === 'Agent') {
+      return (p.children ?? []).some(
+        (c) => c && c.type === 'tool' && (c.status === 'running' || c.status === 'pending')
+      )
+    }
+    return false
+  })
 }
 
 /**
@@ -330,14 +359,11 @@ export const ToolGroup = React.memo(function ToolGroup({
   const metas = parts.map((p) => toolMeta(p, cwd))
   const labels = new Set(metas.map((m) => m.label))
   const uniform = labels.size === 1 ? metas[0] : null
-  const running = parts.some((p) => !p.denied && (p.status === 'running' || p.status === 'pending'))
+  const running = groupRunning(parts)
   const errored = parts.some((p) => p.status === 'error')
   const n = parts.length
 
-  const label = uniform?.label
-  const title = uniform
-    ? `${label} ${n} ${GROUP_NOUN[label!] ?? (n === 1 ? 'call' : 'calls')}`
-    : `${n} steps`
+  const title = uniform ? groupTitle(uniform.label, n) : `${n} steps`
   const Icon = uniform?.icon ?? Layers
   // While running, surface the file/target of the last call for a sense of motion.
   const trailing = running ? metas[metas.length - 1]?.summary : undefined
