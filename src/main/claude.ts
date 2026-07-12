@@ -812,6 +812,8 @@ export class ChatManager {
   // Slash commands are the same for every chat in a folder, so cache them by cwd
   // — new chats in a known project can show the menu before their first turn.
   private commandsByCwd = new Map<string, SlashCommand[]>()
+  // In-flight warmups, deduped per cwd.
+  private warmups = new Map<string, Promise<SlashCommand[]>>()
 
   constructor(
     private store: Store,
@@ -824,8 +826,63 @@ export class ChatManager {
     return null
   }
 
-  getCommands(cwd: string): SlashCommand[] {
-    return this.commandsByCwd.get(cwd) ?? []
+  /** Cached commands for a folder, warming a one-shot session on a cache miss. */
+  async getCommands(cwd: string): Promise<SlashCommand[]> {
+    if (!cwd) return []
+    const cached = this.commandsByCwd.get(cwd)
+    if (cached) return cached
+    return this.warmCommands(cwd)
+  }
+
+  /**
+   * Fetches the slash-command list for a folder without a chat: it starts the
+   * agent, reads the commands at init, and closes — no user message is sent, so
+   * there's no model turn or token cost. Result is cached and pushed to the UI.
+   */
+  private warmCommands(cwd: string): Promise<SlashCommand[]> {
+    const inflight = this.warmups.get(cwd)
+    if (inflight) return inflight
+    const run = (async (): Promise<SlashCommand[]> => {
+      const input = createInputQueue()
+      const q = query({
+        prompt: input.iterate(),
+        options: {
+          cwd,
+          permissionMode: 'default',
+          settingSources: ['user', 'project', 'local'],
+          systemPrompt: { type: 'preset', preset: 'claude_code' }
+        }
+      })
+      try {
+        for await (const msg of q) {
+          if (msg.type === 'system' && msg.subtype === 'init') {
+            const raw = await q.supportedCommands()
+            const commands: SlashCommand[] = raw.map((c) => ({
+              name: c.name,
+              description: c.description,
+              argumentHint: c.argumentHint || undefined,
+              aliases: c.aliases
+            }))
+            this.commandsByCwd.set(cwd, commands)
+            this.emit({ type: 'commands', chatId: '', cwd, commands })
+            return commands
+          }
+        }
+        return []
+      } catch {
+        return []
+      } finally {
+        input.end()
+        try {
+          q.close()
+        } catch {
+          // already closed
+        }
+      }
+    })()
+    this.warmups.set(cwd, run)
+    void run.finally(() => this.warmups.delete(cwd))
+    return run
   }
 
   send(chatId: string, text: string, attachments?: Attachment[]): void {
