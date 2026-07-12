@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { Folder, FolderOpen, PanelLeft, PanelRight } from 'lucide-react'
+import { Folder, FolderOpen, GitBranch, PanelLeft, PanelRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { Attachment, EffortId, PermissionModeId } from '@shared/types'
 import { basename, greeting } from '@/lib/format'
@@ -17,6 +17,7 @@ export function NewChat(): React.JSX.Element {
   const panelOpen = useApp((s) => s.panelOpen)
   const sidebarOpen = useApp((s) => s.sidebarOpen)
   const toggleSidebar = useApp((s) => s.toggleSidebar)
+  const git = useApp((s) => s.git)
 
   const [model, setModel] = React.useState(defaults?.model ?? '')
   const [effort, setEffort] = React.useState<EffortId | ''>(defaults?.effort ?? '')
@@ -40,7 +41,7 @@ export function NewChat(): React.JSX.Element {
   }
 
   return (
-    <div className="relative flex h-full min-w-0 flex-1 flex-col">
+    <div className="relative flex h-full min-w-[420px] flex-1 flex-col">
       <header
         className={cn(
           'drag flex h-[52px] shrink-0 items-center gap-2 px-4',
@@ -60,6 +61,13 @@ export function NewChat(): React.JSX.Element {
             <div className="no-drag flex items-center gap-1.5 rounded-md border border-border bg-secondary/50 px-2 py-1 text-xs text-muted-foreground">
               <Folder className="size-3" />
               <span className="max-w-44 truncate">{basename(cwd)}</span>
+              {git?.isRepo && git.branch && (
+                <>
+                  <span className="text-border">/</span>
+                  <GitBranch className="size-3" />
+                  <span className="max-w-32 truncate">{git.branch}</span>
+                </>
+              )}
             </div>
           </WithTooltip>
         )}

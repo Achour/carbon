@@ -1,5 +1,14 @@
 import { create } from 'zustand'
-import { applyTheme, storedTheme } from '@/lib/themes'
+import {
+  applyCodeFontSize,
+  applyTheme,
+  CODE_FONT_MAX,
+  CODE_FONT_MIN,
+  storedCodeFontSize,
+  storedTheme
+} from '@/lib/themes'
+import { loadNotifyPrefs, notify, playChime, saveNotifyPrefs, type NotifyPrefs } from '@/lib/notify'
+import { formatCost, formatDuration } from '@/lib/format'
 import type {
   AppDefaults,
   AssistantMessage,
@@ -16,6 +25,12 @@ import type {
   PermissionDecision,
   PermissionRequestPayload
 } from '@shared/types'
+
+export interface QueuedMessage {
+  id: string
+  text: string
+  attachments?: Attachment[]
+}
 
 export interface PlanPanelState {
   chatId: string
@@ -51,6 +66,8 @@ interface AppState {
   statuses: Record<string, ChatStatus>
   /** Pending permission requests, keyed by chat id. */
   permissions: Record<string, PermissionRequestPayload[]>
+  /** Messages typed while a turn was running, sent when the chat goes idle. */
+  queued: Record<string, QueuedMessage[]>
   planPanel: PlanPanelState | null
   defaults: AppDefaults | null
   loading: boolean
@@ -61,9 +78,13 @@ interface AppState {
   /** When true the main area shows the settings page instead of a chat. */
   settingsOpen: boolean
   theme: string
+  codeFontSize: number
+  notifyPrefs: NotifyPrefs
   openSettings(): void
   closeSettings(): void
   setTheme(id: string): void
+  setCodeFontSize(px: number): void
+  setNotifyPrefs(patch: Partial<NotifyPrefs>): void
 
   // ---- Files ----
   /** Whether the right-side workspace panel (tabs + file tree) is open. */
@@ -128,6 +149,7 @@ interface AppState {
     }
   ): Promise<void>
   sendMessage(text: string, attachments?: Attachment[]): Promise<void>
+  removeQueued(chatId: string, id: string): void
   interrupt(): Promise<void>
   deleteChat(id: string): Promise<void>
   /** Deletes every chat in the project and drops it from recent folders. */
@@ -200,6 +222,7 @@ export const useApp = create<AppState>((set, get) => ({
   messages: [],
   statuses: {},
   permissions: {},
+  queued: {},
   planPanel: null,
   defaults: null,
   loading: true,
@@ -231,6 +254,24 @@ export const useApp = create<AppState>((set, get) => ({
     set({ theme: id })
   },
 
+  codeFontSize: storedCodeFontSize(),
+
+  setCodeFontSize(px) {
+    const size = Math.min(CODE_FONT_MAX, Math.max(CODE_FONT_MIN, Math.round(px)))
+    applyCodeFontSize(size)
+    set({ codeFontSize: size })
+  },
+
+  notifyPrefs: loadNotifyPrefs(),
+
+  setNotifyPrefs(patch) {
+    set((s) => {
+      const notifyPrefs = { ...s.notifyPrefs, ...patch }
+      saveNotifyPrefs(notifyPrefs)
+      return { notifyPrefs }
+    })
+  },
+
   async init() {
     const [chats, defaults] = await Promise.all([window.api.listChats(), window.api.getDefaults()])
     set({
@@ -239,13 +280,14 @@ export const useApp = create<AppState>((set, get) => ({
       loading: false,
       selectedCwd: chats[0]?.cwd ?? defaults.recentDirs[0] ?? null
     })
+    if (get().selectedCwd) void get().refreshGit()
   },
 
   setSelectedCwd(cwd) {
     set((s) => projectSwitchPatch(s, cwd))
-    if (cwd && get().panelOpen) {
+    if (cwd) {
       void get().refreshGit()
-      if (!get().filesByDir[cwd]) void get().loadDir(cwd)
+      if (get().panelOpen && !get().filesByDir[cwd]) void get().loadDir(cwd)
     }
   },
 
@@ -448,8 +490,8 @@ export const useApp = create<AppState>((set, get) => ({
     const scope = hasStaged
       ? 'Commit the currently staged changes (leave everything else unstaged).'
       : 'Stage all current changes and commit them.'
-    const prompt = `${scope} Review the diff first and write a clear, well-formed commit message.`
     set({ gitError: null })
+    const prompt = `${scope} Commit directly with a clear one-line message — do not review diffs, run tests, or verify anything. At most glance at the changed file names for the message.`
     if (get().activeId) await get().sendMessage(prompt)
     else await get().newChat(cwd, prompt)
   },
@@ -530,9 +572,15 @@ export const useApp = create<AppState>((set, get) => ({
     if (get().activeId === id && chat) {
       const cwdChanged = get().selectedCwd !== chat.cwd
       set((s) => ({ messages: chat.messages, ...projectSwitchPatch(s, chat.cwd) }))
-      if (cwdChanged && get().panelOpen) {
-        void get().refreshGit()
-        if (!get().filesByDir[chat.cwd]) void get().loadDir(chat.cwd)
+      if (cwdChanged || !get().git) void get().refreshGit()
+      if (cwdChanged && get().panelOpen && !get().filesByDir[chat.cwd]) {
+        void get().loadDir(chat.cwd)
+      }
+      // A plan still waiting for review comes straight back up.
+      const pendingPlan = get().permissions[id]?.find((r) => r.toolName === 'ExitPlanMode')
+      const plan = (pendingPlan?.input as { plan?: string } | null)?.plan
+      if (pendingPlan && typeof plan === 'string' && plan) {
+        get().openPlanPanel({ chatId: id, plan, requestId: pendingPlan.id })
       }
     }
   },
@@ -560,17 +608,27 @@ export const useApp = create<AppState>((set, get) => ({
     }))
     // The new chat keeps whatever panel state was showing when it was created.
     set((s) => panelPatch(s, s.panelOpen))
-    if (get().panelOpen) {
-      void get().refreshGit()
-      if (!get().filesByDir[cwd]) void get().loadDir(cwd)
-    }
+    void get().refreshGit()
+    if (get().panelOpen && !get().filesByDir[cwd]) void get().loadDir(cwd)
     await window.api.send(meta.id, firstMessage, attachments)
   },
 
   async sendMessage(text, attachments) {
     const id = get().activeId
     if (!id) return
+    // Mid-turn sends wait in a queue until the chat goes idle, like Cursor.
+    if ((get().statuses[id] ?? 'idle') !== 'idle') {
+      const item: QueuedMessage = { id: crypto.randomUUID(), text, attachments }
+      set((s) => ({ queued: { ...s.queued, [id]: [...(s.queued[id] ?? []), item] } }))
+      return
+    }
     await window.api.send(id, text, attachments)
+  },
+
+  removeQueued(chatId, id) {
+    set((s) => ({
+      queued: { ...s.queued, [chatId]: (s.queued[chatId] ?? []).filter((q) => q.id !== id) }
+    }))
   },
 
   async interrupt() {
@@ -581,12 +639,17 @@ export const useApp = create<AppState>((set, get) => ({
 
   async deleteChat(id) {
     await window.api.deleteChat(id)
-    set((s) => ({
-      chats: s.chats.filter((c) => c.id !== id),
-      activeId: s.activeId === id ? null : s.activeId,
-      messages: s.activeId === id ? [] : s.messages,
-      panelOpenByChat: prunePanelState(s, [id])
-    }))
+    set((s) => {
+      const queued = { ...s.queued }
+      delete queued[id]
+      return {
+        chats: s.chats.filter((c) => c.id !== id),
+        activeId: s.activeId === id ? null : s.activeId,
+        messages: s.activeId === id ? [] : s.messages,
+        queued,
+        panelOpenByChat: prunePanelState(s, [id])
+      }
+    })
   },
 
   async removeProject(cwd) {
@@ -657,6 +720,30 @@ export const useApp = create<AppState>((set, get) => ({
             .map((c) => (c.id === ev.chatId ? { ...c, updatedAt: Date.now() } : c))
             .sort((a, b) => b.updatedAt - a.updatedAt)
         }))
+        // Turn finished: chime + background notification.
+        if (ev.message.role === 'event' && (ev.message.kind === 'turn' || ev.message.kind === 'error')) {
+          const prefs = s.notifyPrefs
+          const failed = ev.message.kind === 'error'
+          if (prefs.sound && !failed) playChime()
+          if (prefs.finish && !document.hasFocus()) {
+            const title = s.chats.find((c) => c.id === ev.chatId)?.title || 'Claude'
+            const stats = ev.message.stats
+            notify(
+              title,
+              failed
+                ? 'The turn failed'
+                : stats
+                  ? `Finished in ${formatDuration(stats.durationMs)} · ${formatCost(stats.costUsd)}`
+                  : 'Finished',
+              {
+                onClick: () => {
+                  void window.api.focusWindow()
+                  void get().openChat(ev.chatId)
+                }
+              }
+            )
+          }
+        }
         break
       }
 
@@ -696,7 +783,8 @@ export const useApp = create<AppState>((set, get) => ({
             if (m.id !== ev.messageId || m.role !== 'assistant') return m
             const am = m as AssistantMessage
             const parts = am.parts.map((p) =>
-              p.type === 'tool' && p.toolUseId === ev.toolUseId ? { ...p, ...ev.patch } : p
+              // Streamed parts arrays can be sparse — guard the holes.
+              p && p.type === 'tool' && p.toolUseId === ev.toolUseId ? { ...p, ...ev.patch } : p
             )
             return { ...am, parts }
           })
@@ -715,12 +803,20 @@ export const useApp = create<AppState>((set, get) => ({
 
       case 'status': {
         set((st) => ({ statuses: { ...st.statuses, [ev.chatId]: ev.status } }))
-        // Refresh the tree, open files and git status after a turn so
-        // Claude's edits show up.
-        if (ev.status === 'idle' && ev.chatId === s.activeId) {
-          if (s.panelOpen || s.openFiles.length > 0) {
-            void get().refreshFiles()
+        if (ev.status === 'idle') {
+          // A queued message goes out as soon as the chat is free again.
+          const next = get().queued[ev.chatId]?.[0]
+          if (next) {
+            set((st) => ({
+              queued: { ...st.queued, [ev.chatId]: st.queued[ev.chatId].slice(1) }
+            }))
+            void window.api.send(ev.chatId, next.text, next.attachments)
+          }
+          // Refresh the tree, open files and git status after a turn so
+          // Claude's edits show up.
+          if (ev.chatId === s.activeId) {
             void get().refreshGit()
+            if (s.panelOpen || s.openFiles.length > 0) void get().refreshFiles()
           }
         }
         break
@@ -733,11 +829,27 @@ export const useApp = create<AppState>((set, get) => ({
             [ev.chatId]: [...(st.permissions[ev.chatId] ?? []), ev.request]
           }
         }))
+        // Waiting on the user: always chime, and notify if the app is in the
+        // background (the notification stays silent — the chime is the sound).
+        if (s.notifyPrefs.sound) playChime()
+        if (s.notifyPrefs.permission && !document.hasFocus()) {
+          const title = s.chats.find((c) => c.id === ev.chatId)?.title || 'Claude'
+          const what =
+            ev.request.toolName === 'ExitPlanMode'
+              ? 'has a plan ready for review'
+              : `wants to use ${ev.request.displayName ?? ev.request.toolName}`
+          notify(title, `Claude ${what}`, {
+            onClick: () => {
+              void window.api.focusWindow()
+              void get().openChat(ev.chatId)
+            }
+          })
+        }
         // A plan approval request opens the plan side panel automatically.
         if (ev.request.toolName === 'ExitPlanMode' && ev.chatId === s.activeId) {
           const plan = (ev.request.input as { plan?: string } | null)?.plan
           if (typeof plan === 'string' && plan) {
-            set({ planPanel: { chatId: ev.chatId, plan, requestId: ev.request.id } })
+            get().openPlanPanel({ chatId: ev.chatId, plan, requestId: ev.request.id })
           }
         }
         break

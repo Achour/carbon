@@ -1,12 +1,15 @@
 import * as React from 'react'
 import {
   ArrowDown,
+  Clock,
   Folder,
+  GitBranch,
   MoreHorizontal,
   PanelLeft,
   PanelRight,
   Pencil,
-  Trash2
+  Trash2,
+  X
 } from 'lucide-react'
 import type { ChatMeta } from '@shared/types'
 import { cn } from '@/lib/utils'
@@ -39,6 +42,7 @@ import { PermissionCard } from '@/components/messages/PermissionCard'
 import { QuestionCard } from '@/components/messages/QuestionCard'
 
 const NO_PERMISSIONS: never[] = []
+const NO_QUEUED: never[] = []
 
 export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
   const messages = useApp((s) => s.messages)
@@ -46,6 +50,9 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
   // Fall back to a stable constant — a fresh `[]` per render makes zustand's
   // snapshot comparison always fail and loops React into a crash.
   const permissions = useApp((s) => s.permissions[chat.id] ?? NO_PERMISSIONS)
+  const queued = useApp((s) => s.queued[chat.id] ?? NO_QUEUED)
+  const removeQueued = useApp((s) => s.removeQueued)
+  const git = useApp((s) => s.git)
   const openPlanPanel = useApp((s) => s.openPlanPanel)
   const togglePanel = useApp((s) => s.togglePanel)
   const panelOpen = useApp((s) => s.panelOpen)
@@ -95,7 +102,7 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
   // Keep the indicator up until something is actually visible — empty parts
   // (a thinking block whose first token hasn't arrived) don't count.
   const lastAssistantVisible =
-    lastAssistant?.parts.some((p) => p.type === 'tool' || p.text.length > 0) ?? false
+    lastAssistant?.parts.some((p) => p && (p.type === 'tool' || p.text.length > 0)) ?? false
   const waitingForFirstToken =
     busy &&
     permissions.length === 0 &&
@@ -109,8 +116,9 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
       const m = messages[i]
       if (m.role !== 'assistant') continue
       for (let j = m.parts.length - 1; j >= 0; j--) {
+        // Streamed part arrays can be sparse — indexes may arrive out of order.
         const p = m.parts[j]
-        if (p.type === 'tool' && p.name === 'TodoWrite') return p.toolUseId
+        if (p?.type === 'tool' && p.name === 'TodoWrite') return p.toolUseId
       }
     }
     return null
@@ -124,7 +132,7 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
   )
 
   return (
-    <div className="relative flex h-full min-w-0 flex-1 flex-col">
+    <div className="relative flex h-full min-w-[420px] flex-1 flex-col">
       {/* Header */}
       <header
         className={cn(
@@ -148,6 +156,13 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
           <div className="no-drag flex items-center gap-1.5 rounded-md border border-border bg-secondary/50 px-2 py-1 text-xs text-muted-foreground">
             <Folder className="size-3" />
             <span className="max-w-44 truncate">{basename(chat.cwd)}</span>
+            {git?.isRepo && git.branch && (
+              <>
+                <span className="text-border">/</span>
+                <GitBranch className="size-3" />
+                <span className="max-w-32 truncate">{git.branch}</span>
+              </>
+            )}
           </div>
         </WithTooltip>
         {/* When the panel is open its own header hosts the collapse button. */}
@@ -254,6 +269,32 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
       {/* Composer */}
       <div className="shrink-0 px-6 pb-5">
         <div className="mx-auto max-w-3xl">
+          {queued.length > 0 && (
+            <div className="mb-2 space-y-1.5">
+              {queued.map((q) => (
+                <div
+                  key={q.id}
+                  className="flex animate-enter items-center gap-2 rounded-lg border border-border bg-secondary/40 px-3 py-1.5 text-xs text-muted-foreground"
+                >
+                  <Clock className="size-3 shrink-0" />
+                  <span className="min-w-0 flex-1 truncate">
+                    {q.text || q.attachments?.map((a) => a.name).join(', ')}
+                  </span>
+                  <span className="shrink-0 text-[10px] tracking-wide text-muted-foreground/60 uppercase">
+                    queued
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => removeQueued(chat.id, q.id)}
+                    aria-label="Remove queued message"
+                    className="shrink-0 rounded p-0.5 transition-colors hover:bg-accent hover:text-foreground"
+                  >
+                    <X className="size-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
           <Composer
             onSend={(text, attachments) => void sendMessage(text, attachments)}
             streaming={busy}

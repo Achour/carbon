@@ -92,6 +92,8 @@ export const AssistantBlock = React.memo(function AssistantBlock({
   return (
     <div className="space-y-2.5">
       {message.parts.map((part, i) => {
+        // Streamed arrays can be sparse; persisted ones turn holes into null.
+        if (!part) return null
         const isLast = i === message.parts.length - 1
         if (part.type === 'text') {
           if (!part.text) return null

@@ -17,7 +17,7 @@ import {
   Wrench,
   X
 } from 'lucide-react'
-import type { ToolPart } from '@shared/types'
+import type { AssistantPart, ToolPart } from '@shared/types'
 import { cn } from '@/lib/utils'
 import { Markdown } from '@/components/Markdown'
 
@@ -220,6 +220,11 @@ export const ToolCard = React.memo(function ToolCard({
   const meta = toolMeta(part, cwd)
   const Icon = meta.icon
 
+  // Task/Agent tools render their spawned sub-agent's live activity.
+  if (part.name === 'Task' || part.name === 'Agent') {
+    return <AgentCard part={part} cwd={cwd} />
+  }
+
   // Plans open in the side panel instead of expanding inline.
   const plan = (part.input as { plan?: string } | null)?.plan
   if (part.name === 'ExitPlanMode' && onOpenPlan && typeof plan === 'string' && plan) {
@@ -266,3 +271,119 @@ export const ToolCard = React.memo(function ToolCard({
     </Collapsible.Root>
   )
 })
+
+/** Renders a sub-agent's own stream: its text, thinking and nested tool calls. */
+function SubAgentStream({
+  parts,
+  cwd
+}: {
+  parts: AssistantPart[]
+  cwd: string
+}): React.JSX.Element {
+  return (
+    <div className="space-y-2">
+      {parts.map((p, i) => {
+        if (!p) return null
+        if (p.type === 'text') {
+          if (!p.text) return null
+          return (
+            <div key={i} className="text-[13px] leading-relaxed">
+              <Markdown text={p.text} cwd={cwd} />
+            </div>
+          )
+        }
+        if (p.type === 'thinking') {
+          if (!p.text) return null
+          return (
+            <div
+              key={i}
+              className="border-l-2 border-border pl-3 text-[12px] leading-relaxed text-muted-foreground/70 italic whitespace-pre-wrap"
+            >
+              {p.text}
+            </div>
+          )
+        }
+        return <ToolCard key={p.toolUseId} part={p} cwd={cwd} />
+      })}
+    </div>
+  )
+}
+
+/** A spawned sub-agent, with its live activity nested under the parent tool. */
+function AgentCard({ part, cwd }: { part: ToolPart; cwd: string }): React.JSX.Element {
+  const input = (part.input ?? {}) as Record<string, unknown>
+  const subType = str(input.subagent_type)
+  const description = str(input.description) ?? str(input.prompt)
+  const running = part.status === 'pending' || part.status === 'running'
+  const children = (part.children ?? []).filter(Boolean)
+  const steps = children.filter((c) => c.type === 'tool').length
+
+  // Collapsed by default — the header shows live status; expand to watch.
+  const [open, setOpen] = React.useState(false)
+
+  return (
+    <Collapsible.Root open={open} onOpenChange={setOpen} className="animate-enter">
+      <div
+        className={cn(
+          'overflow-hidden rounded-xl border transition-colors',
+          running ? 'border-warning/40 bg-warning/[0.04]' : 'border-primary/25 bg-primary/[0.03]'
+        )}
+      >
+        <Collapsible.Trigger className="group flex w-full items-center gap-2.5 px-3 py-2 text-left outline-none transition-colors hover:bg-primary/[0.06] focus-visible:bg-primary/[0.06]">
+          <ChevronRight className="size-3.5 shrink-0 text-muted-foreground/60 transition-transform duration-200 group-data-[panel-open]:rotate-90" />
+          <Bot className="size-4 shrink-0 text-primary" />
+          <span className="shrink-0 text-[13px] font-medium">Agent</span>
+          {subType && (
+            <span className="shrink-0 rounded bg-primary/10 px-1.5 py-px font-mono text-[10px] font-medium text-primary">
+              {subType}
+            </span>
+          )}
+          {description ? (
+            <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+              {description}
+            </span>
+          ) : (
+            <span className="flex-1" />
+          )}
+          {running ? (
+            <span className="shimmer-text shrink-0 text-[11px] font-medium">
+              {steps > 0 ? `Working · ${steps} ${steps === 1 ? 'step' : 'steps'}` : 'Working…'}
+            </span>
+          ) : (
+            steps > 0 && (
+              <span className="shrink-0 text-[11px] text-muted-foreground/70 tabular-nums">
+                {steps} {steps === 1 ? 'step' : 'steps'}
+              </span>
+            )
+          )}
+          <span className="shrink-0">
+            <StatusIcon part={part} />
+          </span>
+        </Collapsible.Trigger>
+        <Collapsible.Panel className="h-[var(--collapsible-panel-height)] overflow-hidden transition-[height] duration-200 ease-out data-[ending-style]:h-0 data-[starting-style]:h-0">
+          <div className="space-y-3 border-t border-primary/15 px-3 py-3">
+            {children.length > 0 ? (
+              <div className="border-l-2 border-primary/20 pl-3">
+                <SubAgentStream parts={children} cwd={cwd} />
+              </div>
+            ) : (
+              <div className="text-xs text-muted-foreground">
+                {running ? 'Starting…' : 'No activity recorded.'}
+              </div>
+            )}
+            {part.output != null && part.output !== '' && (
+              <div className="rounded-lg border border-border bg-code p-2.5">
+                <div className="mb-1 text-[10px] font-medium tracking-wider text-muted-foreground uppercase">
+                  Result
+                </div>
+                <div className="text-[13px] leading-relaxed">
+                  <Markdown text={part.output} cwd={cwd} />
+                </div>
+              </div>
+            )}
+          </div>
+        </Collapsible.Panel>
+      </div>
+    </Collapsible.Root>
+  )
+}

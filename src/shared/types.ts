@@ -24,6 +24,8 @@ export interface ChatMeta {
   /** Reasoning effort; undefined means the default (high). */
   effort?: EffortId
   permissionMode: PermissionModeId
+  /** Mode the chat was in before switching to plan; restored on plan approval. */
+  modeBeforePlan?: PermissionModeId
   /** Provider-side session id, used to resume conversations. */
   sessionId?: string
   /** Tokens currently in the model's context (from the last API call). */
@@ -60,6 +62,8 @@ export interface ToolPart {
   status: ToolStatus
   output?: string
   denied?: boolean
+  /** Sub-agent activity for Task/Agent tools: the spawned agent's own stream. */
+  children?: AssistantPart[]
 }
 
 export type AssistantPart = TextPart | ThinkingPart | ToolPart
@@ -271,6 +275,8 @@ export interface Api {
   gitInit(cwd: string): Promise<GitResult>
   getDefaults(): Promise<AppDefaults>
   forgetDir(dir: string): Promise<void>
+  /** Bring the app window to the foreground (notification clicks). */
+  focusWindow(): Promise<void>
   onChatEvent(cb: (ev: ChatEvent) => void): () => void
   onNewChat(cb: () => void): () => void
 }

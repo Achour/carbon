@@ -12,6 +12,7 @@ import {
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { CompactSelect } from '@/components/ui/select'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { WithTooltip } from '@/components/ui/tooltip'
 
 const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
@@ -100,17 +101,17 @@ function fmtTokens(n: number): string {
   return n >= 1000 ? `${Math.round(n / 1000)}k` : String(n)
 }
 
-function ContextRing({ used, window }: { used: number; window: number }): React.JSX.Element {
-  const pct = Math.min(1, used / window)
+function ContextRing({ used, window: win }: { used: number; window: number }): React.JSX.Element {
+  const pct = Math.min(1, used / win)
+  const left = Math.max(0, win - used)
   const r = 5
   const c = 2 * Math.PI * r
   return (
-    <WithTooltip
-      label={`Context: ${fmtTokens(used)} of ${fmtTokens(window)} tokens (${Math.round(pct * 100)}%)`}
-    >
-      <div
+    <Popover>
+      <PopoverTrigger
+        aria-label="Context window usage"
         className={cn(
-          'flex items-center gap-1 px-1',
+          'no-drag flex items-center gap-1 rounded-md px-1.5 py-0.5 outline-none transition-colors hover:bg-accent data-[popup-open]:bg-accent',
           pct > 0.9
             ? 'text-destructive'
             : pct > 0.7
@@ -132,8 +133,33 @@ function ContextRing({ used, window }: { used: number; window: number }): React.
           />
         </svg>
         <span className="text-[10px] tabular-nums">{Math.round(pct * 100)}%</span>
-      </div>
-    </WithTooltip>
+      </PopoverTrigger>
+      <PopoverContent side="top" align="end" className="w-64">
+        <div className="flex items-baseline justify-between">
+          <span className="text-[13px] font-medium">Context window</span>
+          <span className="text-xs text-muted-foreground tabular-nums">
+            {Math.round(pct * 100)}% used
+          </span>
+        </div>
+        <div className="mt-2.5 h-1.5 overflow-hidden rounded-full bg-secondary">
+          <div
+            className={cn(
+              'h-full rounded-full transition-all',
+              pct > 0.9 ? 'bg-destructive' : pct > 0.7 ? 'bg-amber-500' : 'bg-primary'
+            )}
+            style={{ width: `${Math.max(2, pct * 100)}%` }}
+          />
+        </div>
+        <div className="mt-1.5 flex justify-between text-[11px] text-muted-foreground tabular-nums">
+          <span>{fmtTokens(used)} used</span>
+          <span>{fmtTokens(left)} free of {fmtTokens(win)}</span>
+        </div>
+        <p className="mt-2.5 border-t border-border pt-2 text-[11px] leading-relaxed text-muted-foreground/80">
+          How much of the conversation Claude can hold at once. When it fills up, older
+          messages are compacted automatically so the chat can continue.
+        </p>
+      </PopoverContent>
+    </Popover>
   )
 }
 
@@ -382,7 +408,7 @@ export function Composer({
             void addFiles(e.clipboardData.files)
           }
         }}
-        placeholder={placeholder}
+        placeholder={streaming ? 'Queue a message for when this turn ends…' : placeholder}
         disabled={disabled}
         rows={1}
         className="no-drag block max-h-[220px] w-full resize-none bg-transparent px-4 pt-3.5 pb-1 text-[14px] leading-relaxed outline-none select-text placeholder:text-muted-foreground/60"
@@ -450,12 +476,12 @@ export function Composer({
           <WithTooltip label="Stop generating">
             <Button
               size="icon"
-              variant="secondary"
+              variant="destructive"
               onClick={onStop}
-              className="rounded-full border-destructive/30 text-destructive hover:bg-destructive/10"
+              className="shrink-0 rounded-full [&_svg]:size-3"
               aria-label="Stop generating"
             >
-              <Square className="size-3.5 fill-current" />
+              <Square className="fill-current" />
             </Button>
           </WithTooltip>
         ) : (
@@ -463,7 +489,7 @@ export function Composer({
             size="icon"
             onClick={submit}
             disabled={!canSend}
-            className="rounded-full"
+            className="shrink-0 rounded-full"
             aria-label="Send message"
           >
             <ArrowUp className="size-4" strokeWidth={2.5} />

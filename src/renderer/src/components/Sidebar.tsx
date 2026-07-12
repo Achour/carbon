@@ -1,8 +1,11 @@
 import * as React from 'react'
 import {
+  Archive,
+  ArchiveRestore,
   ChevronRight,
   Folder,
   FolderOpen,
+  Loader2,
   MessageSquarePlus,
   MoreHorizontal,
   PanelLeft,
@@ -30,6 +33,13 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger
+} from '@/components/ui/context-menu'
 import { Input } from '@/components/ui/input'
 import { WithTooltip } from '@/components/ui/tooltip'
 
@@ -50,30 +60,36 @@ function ChatItem({
 }): React.JSX.Element {
   const [menuOpen, setMenuOpen] = React.useState(false)
   return (
-    <div
-      className={cn(
-        'group relative rounded-md transition-colors',
-        active ? 'bg-sidebar-accent' : 'hover:bg-sidebar-accent/60'
-      )}
-    >
+    <ContextMenu>
+      <ContextMenuTrigger
+        render={
+          <div
+            className={cn(
+              'group relative rounded-md transition-colors',
+              active ? 'bg-sidebar-accent' : 'hover:bg-sidebar-accent/60'
+            )}
+          />
+        }
+      >
       <button
         type="button"
         onClick={onOpen}
         className="flex w-full min-w-0 items-center gap-1.5 px-2 py-[7px] text-left outline-none"
       >
-        {streaming && (
-          <span className="size-1.5 shrink-0 animate-pulse-soft rounded-full bg-primary" />
-        )}
         <span className="min-w-0 flex-1 truncate text-[13px] text-sidebar-foreground">
           {chat.title || 'New chat'}
         </span>
         <span
           className={cn(
-            'shrink-0 text-[11px] text-muted-foreground/80 transition-opacity group-hover:opacity-0',
+            'flex shrink-0 items-center text-[11px] text-muted-foreground/80 transition-opacity group-hover:opacity-0',
             menuOpen && 'opacity-0'
           )}
         >
-          {relativeTime(chat.updatedAt)}
+          {streaming ? (
+            <Loader2 className="size-3 animate-spin text-primary" />
+          ) : (
+            relativeTime(chat.updatedAt)
+          )}
         </span>
       </button>
       <div
@@ -101,7 +117,17 @@ function ChatItem({
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
-    </div>
+      </ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuItem onClick={onRename}>
+          <Pencil /> Rename
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem destructive onClick={onDelete}>
+          <Trash2 /> Delete
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   )
 }
 
@@ -156,10 +182,30 @@ export function Sidebar(): React.JSX.Element {
     }
   })
 
-  const toggleProject = (cwd: string): void => {
+  // Stored value: true = collapsed, false = expanded. Archived projects
+  // default to collapsed, active ones to expanded.
+  const toggleProject = (cwd: string, collapsed: boolean): void => {
     setCollapsedProjects((prev) => {
-      const next = { ...prev, [cwd]: !prev[cwd] }
+      const next = { ...prev, [cwd]: !collapsed }
       localStorage.setItem('collapsedProjects', JSON.stringify(next))
+      return next
+    })
+  }
+
+  const [archivedProjects, setArchivedProjects] = React.useState<Record<string, boolean>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem('archivedProjects') ?? '{}') as Record<string, boolean>
+    } catch {
+      return {}
+    }
+  })
+
+  const setArchived = (cwd: string, archived: boolean): void => {
+    setArchivedProjects((prev) => {
+      const next = { ...prev }
+      if (archived) next[cwd] = true
+      else delete next[cwd]
+      localStorage.setItem('archivedProjects', JSON.stringify(next))
       return next
     })
   }
@@ -219,6 +265,8 @@ export function Sidebar(): React.JSX.Element {
     if (group) group.chats.push(chat)
     else groups.push({ cwd: chat.cwd, chats: [chat] })
   }
+  const activeGroups = groups.filter((g) => !archivedProjects[g.cwd])
+  const archivedGroups = groups.filter((g) => archivedProjects[g.cwd])
 
   return (
     <aside
@@ -302,87 +350,121 @@ export function Sidebar(): React.JSX.Element {
             {filter ? 'No chats match your search.' : 'Open a project to get started.'}
           </div>
         )}
-        {groups.map((group) => {
+        {[
+          ...activeGroups.map((g) => ({ group: g, archived: false })),
+          ...archivedGroups.map((g) => ({ group: g, archived: true }))
+        ].map(({ group, archived }, i) => {
           // Search results always show, even in collapsed projects.
-          const isCollapsed = !filter && Boolean(collapsedProjects[group.cwd])
+          // Archived projects default to collapsed.
+          const isCollapsed =
+            !filter && (collapsedProjects[group.cwd] ?? archived)
           const hasStreaming = group.chats.some((c) => (statuses[c.id] ?? 'idle') !== 'idle')
+          const firstArchived = archived && i === activeGroups.length
           return (
-            <div key={group.cwd} className="mb-1.5">
-              <div className="group/project flex items-center gap-0.5 pt-2 pb-0.5">
-                <WithTooltip label={group.cwd}>
-                  <button
-                    type="button"
-                    onClick={() => toggleProject(group.cwd)}
-                    className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 py-1.5 text-left transition-colors hover:bg-sidebar-accent/60"
-                    aria-expanded={!isCollapsed}
-                  >
-                    {/* One icon slot: folder at rest, chevron on row hover (Cursor-style). */}
-                    <span className="relative size-3.5 shrink-0">
-                      <Folder className="absolute inset-0 size-3.5 text-muted-foreground/80 transition-all duration-150 group-hover/project:scale-75 group-hover/project:opacity-0" />
-                      <ChevronRight
-                        className={cn(
-                          'absolute inset-0 size-3.5 scale-75 text-muted-foreground/80 opacity-0 transition-all duration-150 group-hover/project:scale-100 group-hover/project:opacity-100',
-                          !isCollapsed && 'rotate-90'
-                        )}
-                      />
-                    </span>
-                    <span className="truncate text-[13px] font-medium text-sidebar-foreground">
-                      {basename(group.cwd)}
-                    </span>
-                    {isCollapsed && (
-                      <span className="shrink-0 text-[11px] text-muted-foreground/70">
-                        {group.chats.length}
-                      </span>
-                    )}
-                    {isCollapsed && hasStreaming && (
-                      <span className="size-1.5 shrink-0 animate-pulse-soft rounded-full bg-primary" />
-                    )}
-                  </button>
-                </WithTooltip>
-                <WithTooltip label={`New chat in ${basename(group.cwd)}`}>
-                  <Button
-                    size="icon-sm"
-                    variant="ghost"
-                    className="size-5 shrink-0 opacity-0 transition-opacity group-hover/project:opacity-100"
-                    onClick={() => newChatIn(group.cwd)}
-                    aria-label={`New chat in ${basename(group.cwd)}`}
-                  >
-                    <Plus />
-                  </Button>
-                </WithTooltip>
-                <WithTooltip label="Remove project and its chats">
-                  <Button
-                    size="icon-sm"
-                    variant="ghost"
-                    className="size-5 shrink-0 opacity-0 transition-opacity group-hover/project:opacity-100 hover:text-destructive"
-                    onClick={() =>
-                      setRemovingProject({ cwd: group.cwd, count: group.chats.length })
-                    }
-                    aria-label={`Remove ${basename(group.cwd)} from sidebar`}
-                  >
-                    <Trash2 />
-                  </Button>
-                </WithTooltip>
-              </div>
-              {!isCollapsed && (
-                <div className="ml-[22px] space-y-px">
-                  {group.chats.map((chat) => (
-                    <ChatItem
-                      key={chat.id}
-                      chat={chat}
-                      active={chat.id === activeId}
-                      streaming={(statuses[chat.id] ?? 'idle') !== 'idle'}
-                      onOpen={() => void openChat(chat.id)}
-                      onRename={() => {
-                        setRenameValue(chat.title)
-                        setRenaming(chat)
-                      }}
-                      onDelete={() => setDeleting(chat)}
-                    />
-                  ))}
+            <React.Fragment key={group.cwd}>
+              {firstArchived && (
+                <div className="flex items-center gap-2 px-1.5 pt-4 pb-0.5">
+                  <span className="text-[10px] font-semibold tracking-wider text-muted-foreground/60 uppercase">
+                    Archived
+                  </span>
+                  <div className="h-px flex-1 bg-sidebar-border" />
                 </div>
               )}
-            </div>
+              <div className={cn(archived && 'opacity-70')}>
+                <ContextMenu>
+                  <ContextMenuTrigger
+                    render={<div className="group/project flex items-center gap-0.5" />}
+                  >
+                    <WithTooltip label={group.cwd}>
+                      <button
+                        type="button"
+                        onClick={() => toggleProject(group.cwd, isCollapsed)}
+                        className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 py-1.5 text-left transition-colors hover:bg-sidebar-accent/60"
+                        aria-expanded={!isCollapsed}
+                      >
+                        {/* One icon slot: folder at rest, chevron on row hover (Cursor-style). */}
+                        <span className="relative size-3.5 shrink-0">
+                          <Folder className="absolute inset-0 size-3.5 text-muted-foreground/80 transition-all duration-150 group-hover/project:scale-75 group-hover/project:opacity-0" />
+                          <ChevronRight
+                            className={cn(
+                              'absolute inset-0 size-3.5 scale-75 text-muted-foreground/80 opacity-0 transition-all duration-150 group-hover/project:scale-100 group-hover/project:opacity-100',
+                              !isCollapsed && 'rotate-90'
+                            )}
+                          />
+                        </span>
+                        <span className="truncate text-[13px] font-medium text-sidebar-foreground">
+                          {basename(group.cwd)}
+                        </span>
+                        {isCollapsed && (
+                          <span className="shrink-0 text-[11px] text-muted-foreground/70">
+                            {group.chats.length}
+                          </span>
+                        )}
+                        {isCollapsed && hasStreaming && (
+                          <Loader2 className="size-3 shrink-0 animate-spin text-primary" />
+                        )}
+                      </button>
+                    </WithTooltip>
+                    {!archived && (
+                      <WithTooltip label={`New chat in ${basename(group.cwd)}`}>
+                        <Button
+                          size="icon-sm"
+                          variant="ghost"
+                          className="size-5 shrink-0 opacity-0 transition-opacity group-hover/project:opacity-100"
+                          onClick={() => newChatIn(group.cwd)}
+                          aria-label={`New chat in ${basename(group.cwd)}`}
+                        >
+                          <Plus />
+                        </Button>
+                      </WithTooltip>
+                    )}
+                  </ContextMenuTrigger>
+                  <ContextMenuContent>
+                    {!archived && (
+                      <>
+                        <ContextMenuItem onClick={() => newChatIn(group.cwd)}>
+                          <Plus /> New chat
+                        </ContextMenuItem>
+                        <ContextMenuSeparator />
+                      </>
+                    )}
+                    {archived ? (
+                      <ContextMenuItem onClick={() => setArchived(group.cwd, false)}>
+                        <ArchiveRestore /> Unarchive project
+                      </ContextMenuItem>
+                    ) : (
+                      <ContextMenuItem onClick={() => setArchived(group.cwd, true)}>
+                        <Archive /> Archive project
+                      </ContextMenuItem>
+                    )}
+                    <ContextMenuItem
+                      destructive
+                      onClick={() => setRemovingProject({ cwd: group.cwd, count: group.chats.length })}
+                    >
+                      <Trash2 /> Delete project…
+                    </ContextMenuItem>
+                  </ContextMenuContent>
+                </ContextMenu>
+                {!isCollapsed && (
+                  <div className="ml-[22px] space-y-px pb-1">
+                    {group.chats.map((chat) => (
+                      <ChatItem
+                        key={chat.id}
+                        chat={chat}
+                        active={chat.id === activeId}
+                        streaming={(statuses[chat.id] ?? 'idle') !== 'idle'}
+                        onOpen={() => void openChat(chat.id)}
+                        onRename={() => {
+                          setRenameValue(chat.title)
+                          setRenaming(chat)
+                        }}
+                        onDelete={() => setDeleting(chat)}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+            </React.Fragment>
           )
         })}
       </div>

@@ -4,6 +4,7 @@ import {
   FileDiff,
   FileText,
   Files,
+  FolderTree,
   GitBranch,
   Maximize2,
   Minimize2,
@@ -75,6 +76,12 @@ function Tab({
 const PANEL_MIN_PX = 448
 const CHAT_RESERVED_PX = 480
 
+// File-tree dock bounds: never below a readable tree, never so wide the
+// viewer disappears.
+const DOCK_DEFAULT_PX = 224
+const DOCK_MIN_PX = 170
+const VIEWER_RESERVED_PX = 260
+
 function PathBar({ entry, cwd }: { entry: OpenTab; cwd: string | null }): React.JSX.Element {
   const rel = entry.diff
     ? entry.diff.file
@@ -86,7 +93,7 @@ function PathBar({ entry, cwd }: { entry: OpenTab; cwd: string | null }): React.
   const dirs = segments.slice(0, -1)
   const fullPath = entry.diff ? `${entry.diff.cwd}/${entry.diff.file}` : entry.path
   return (
-    <div className="flex h-7 shrink-0 items-center border-b border-border/60 px-3 text-[11px]">
+    <div className="flex min-w-0 items-center text-[11px]">
       <WithTooltip label={fullPath}>
         <div className="flex min-w-0 items-center">
           {dirs.length > 0 && (
@@ -132,6 +139,61 @@ export function RightPanel(): React.JSX.Element | null {
     )
   })
 
+  // The Files/Source dock column starts collapsed, like Cursor's explorer.
+  const [dockOpen, setDockOpen] = React.useState(
+    () => localStorage.getItem('rightDockOpen') === 'true'
+  )
+  const toggleDock = (): void => {
+    const opening = !dockOpen
+    setDockOpen(opening)
+    localStorage.setItem('rightDockOpen', String(opening))
+    if (opening) {
+      const s = useApp.getState()
+      if (s.selectedCwd && !s.filesByDir[s.selectedCwd]) void s.loadDir(s.selectedCwd)
+      void s.refreshGit()
+    }
+  }
+
+  const [dockWidth, setDockWidth] = React.useState<number>(() => {
+    const saved = Number(localStorage.getItem('rightDockWidth'))
+    return Number.isFinite(saved) && saved >= DOCK_MIN_PX ? saved : DOCK_DEFAULT_PX
+  })
+  const dockDraggingRef = React.useRef(false)
+
+  const onDockPointerDown = (e: React.PointerEvent<HTMLDivElement>): void => {
+    e.preventDefault()
+    dockDraggingRef.current = true
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId)
+    } catch {
+      // synthetic events have no active pointer to capture
+    }
+  }
+
+  const onDockPointerMove = (e: React.PointerEvent<HTMLDivElement>): void => {
+    if (!dockDraggingRef.current) return
+    const aside = e.currentTarget.closest('aside')
+    if (!aside) return
+    const rect = aside.getBoundingClientRect()
+    const next = Math.round(rect.right - e.clientX)
+    setDockWidth(Math.max(DOCK_MIN_PX, Math.min(next, Math.round(rect.width) - VIEWER_RESERVED_PX)))
+  }
+
+  const onDockPointerUp = (): void => {
+    if (!dockDraggingRef.current) return
+    dockDraggingRef.current = false
+    setDockWidth((w) => {
+      localStorage.setItem('rightDockWidth', String(w))
+      return w
+    })
+  }
+
+  const resetDockWidth = (): void => {
+    dockDraggingRef.current = false
+    setDockWidth(DOCK_DEFAULT_PX)
+    localStorage.removeItem('rightDockWidth')
+  }
+
   // 0 = default width (52%); anything else is a user-dragged pixel width.
   const [width, setWidth] = React.useState<number>(() => {
     const saved = Number(localStorage.getItem('rightPanelWidth'))
@@ -151,8 +213,13 @@ export function RightPanel(): React.JSX.Element | null {
 
   const onHandlePointerMove = (e: React.PointerEvent<HTMLDivElement>): void => {
     if (!draggingRef.current) return
+    // Reserve space for the chat column measured from where it actually
+    // starts — the sidebar may be open to its left.
+    const chatLeft =
+      e.currentTarget.parentElement?.previousElementSibling?.getBoundingClientRect().left ?? 0
+    const maxW = Math.round(window.innerWidth - chatLeft - CHAT_RESERVED_PX)
     const next = Math.round(window.innerWidth - e.clientX)
-    setWidth(Math.max(PANEL_MIN_PX, Math.min(next, window.innerWidth - CHAT_RESERVED_PX)))
+    setWidth(Math.max(PANEL_MIN_PX, Math.min(next, maxW)))
   }
 
   const onHandlePointerUp = (): void => {
@@ -192,7 +259,9 @@ export function RightPanel(): React.JSX.Element | null {
       }
       className={cn(
         'relative flex h-full min-w-[28rem] flex-col border-l border-border bg-card/30',
-        panelMaximized ? 'min-w-0 flex-1' : 'shrink-0'
+        // Not shrink-0: when space runs out the panel yields before the chat
+        // column (which has its own min-width) gets crushed.
+        panelMaximized && 'min-w-0 flex-1'
       )}
     >
       {/* Resize handle — drag to resize, double-click to reset */}
@@ -284,10 +353,28 @@ export function RightPanel(): React.JSX.Element | null {
         </WithTooltip>
       </header>
 
+      {/* Breadcrumb row with the file-tree toggle at its right, Cursor-style */}
+      <div className="flex h-8 shrink-0 items-center gap-2 border-b border-border/60 pr-1.5 pl-3">
+        <div className="min-w-0 flex-1">
+          {activeEntry && <PathBar entry={activeEntry} cwd={selectedCwd} />}
+        </div>
+        <WithTooltip label={dockOpen ? 'Hide file tree' : 'Show file tree'}>
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            className={cn('no-drag shrink-0', dockOpen && 'bg-accent text-foreground')}
+            aria-label={dockOpen ? 'Hide file tree' : 'Show file tree'}
+            aria-pressed={dockOpen}
+            onClick={toggleDock}
+          >
+            <FolderTree />
+          </Button>
+        </WithTooltip>
+      </div>
+
       {/* Viewer + file tree / source control docked on the right, Cursor-style */}
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col">
-          {activeEntry && <PathBar entry={activeEntry} cwd={selectedCwd} />}
           <div className="min-h-0 flex-1">
             {current === 'plan' && planPanel ? (
               <PlanContent panel={planPanel} hasSuggestions={hasSuggestions} />
@@ -302,7 +389,22 @@ export function RightPanel(): React.JSX.Element | null {
             )}
           </div>
         </div>
-        <div className="flex w-56 shrink-0 flex-col border-l border-border bg-card/40">
+        {dockOpen && (
+        <div
+          data-right-dock
+          style={{ width: `min(${dockWidth}px, calc(100% - ${VIEWER_RESERVED_PX}px))` }}
+          className="relative flex shrink-0 flex-col border-l border-border bg-card/40"
+        >
+          {/* Resize handle — drag to resize, double-click to reset */}
+          <div
+            data-dock-resize
+            onPointerDown={onDockPointerDown}
+            onPointerMove={onDockPointerMove}
+            onPointerUp={onDockPointerUp}
+            onLostPointerCapture={onDockPointerUp}
+            onDoubleClick={resetDockWidth}
+            className="no-drag absolute inset-y-0 -left-[3px] z-10 w-1.5 cursor-col-resize transition-colors hover:bg-primary/40 active:bg-primary/60"
+          />
           {/* Files / Source control switcher */}
           <div className="mx-2 mt-1.5 mb-1 grid shrink-0 grid-cols-2 gap-0.5 rounded-lg bg-secondary/60 p-0.5">
             <button
@@ -337,6 +439,7 @@ export function RightPanel(): React.JSX.Element | null {
           </div>
           {rightView === 'git' ? <GitPanel /> : <FileTree />}
         </div>
+        )}
       </div>
     </aside>
   )

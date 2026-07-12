@@ -56,10 +56,13 @@ const LANGUAGE_BY_EXT: Record<string, string> = {
   '.dockerfile': 'dockerfile'
 }
 
+// Hidden from the file tree, matching Cursor/VS Code's default files.exclude.
+const TREE_HIDDEN = new Set(['.git', '.svn', '.hg', 'CVS', '.DS_Store', 'Thumbs.db'])
+
 export async function listDir(dir: string): Promise<FileEntry[]> {
   const entries = await readdir(dir, { withFileTypes: true })
   return entries
-    .filter((e) => e.isDirectory() || e.isFile())
+    .filter((e) => (e.isDirectory() || e.isFile()) && !TREE_HIDDEN.has(e.name))
     .map((e) => ({
       name: e.name,
       path: join(dir, e.name),

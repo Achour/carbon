@@ -60,6 +60,7 @@ interface PendingPermission {
   resolve: (result: PermissionResult) => void
   suggestions?: PermissionUpdate[]
   toolUseId: string
+  toolName: string
   input: Record<string, unknown>
 }
 
@@ -69,6 +70,9 @@ class ClaudeSession {
   private current: AssistantMessage | null = null
   private jsonAcc = new Map<number, string>()
   private toolLoc = new Map<string, { message: AssistantMessage; index: number }>()
+  // Sub-agent tool calls live inside a parent Task tool's `children`, not a
+  // message's parts — so they need their own location map for result matching.
+  private childToolLoc = new Map<string, { parent: ToolPart; index: number }>()
   private pending = new Map<string, PendingPermission>()
   private initModel?: string
   private deltaBuf = new Map<string, { messageId: string; partIndex: number; text: string }>()
@@ -219,6 +223,19 @@ class ClaudeSession {
         updatedPermissions:
           decision.always && pending.suggestions?.length ? pending.suggestions : undefined
       })
+      // Approving a plan returns to the mode the chat was in before plan
+      // mode — unless the user opted into auto-accepting edits, which the
+      // suggestions switch to acceptEdits themselves.
+      if (pending.toolName === 'ExitPlanMode') {
+        const restore = this.chat.modeBeforePlan
+        this.chat.modeBeforePlan = undefined
+        if (restore && restore !== 'plan' && !decision.always) {
+          this.chat.permissionMode = restore
+          this.emit({ type: 'meta', chatId: this.chat.id, patch: { permissionMode: restore } })
+          void this.setPermissionMode(restore)
+        }
+        this.store.saveChatSoon(this.chat.id)
+      }
       this.setStatus('streaming')
     } else {
       this.markToolDenied(pending.toolUseId)
@@ -272,6 +289,7 @@ class ClaudeSession {
         resolve,
         suggestions: opts.suggestions,
         toolUseId: opts.toolUseID,
+        toolName,
         input
       })
       this.emit({
@@ -374,12 +392,13 @@ class ClaudeSession {
       }
 
       case 'assistant':
-        if (msg.parent_tool_use_id) break
-        this.reconcileAssistant(msg)
+        if (msg.parent_tool_use_id) this.handleSubAgentAssistant(msg.parent_tool_use_id, msg)
+        else this.reconcileAssistant(msg)
         break
 
       case 'user':
-        this.handleToolResults(msg.message)
+        if (msg.parent_tool_use_id) this.handleSubAgentToolResults(msg.parent_tool_use_id, msg.message)
+        else this.handleToolResults(msg.message)
         break
 
       case 'result': {
@@ -596,7 +615,10 @@ class ClaudeSession {
             ? existing.status
             : 'running',
           output: existing?.output,
-          denied: existing?.denied
+          denied: existing?.denied,
+          // Keep sub-agent activity across the reconcile (same array ref, so
+          // childToolLoc indexes stay valid).
+          children: existing?.children
         })
       }
     }
@@ -644,6 +666,99 @@ class ClaudeSession {
       })
       this.store.saveChatSoon(this.chat.id)
     }
+  }
+
+  /** Locates the parent Task tool part a sub-agent's traffic belongs to. */
+  private parentToolPart(parentToolUseId: string): { messageId: string; part: ToolPart } | null {
+    const loc = this.toolLoc.get(parentToolUseId)
+    if (!loc) return null
+    const part = loc.message.parts[loc.index]
+    if (part?.type !== 'tool') return null
+    return { messageId: loc.message.id, part }
+  }
+
+  private emitChildUpdate(messageId: string, parent: ToolPart): void {
+    this.flushDeltas()
+    this.emit({
+      type: 'tool-update',
+      chatId: this.chat.id,
+      messageId,
+      toolUseId: parent.toolUseId,
+      // Fresh array so the renderer's shallow compare re-renders the card.
+      patch: { children: parent.children ? [...parent.children] : [] }
+    })
+    this.store.saveChatSoon(this.chat.id)
+  }
+
+  /**
+   * A sub-agent's assistant turn: its text, thinking and tool calls are folded
+   * into the parent Task tool's `children`. Sub-agents emit one assistant
+   * message per step, so parts accumulate across calls rather than replace.
+   */
+  private handleSubAgentAssistant(parentToolUseId: string, msg: SDKAssistantMessage): void {
+    const parent = this.parentToolPart(parentToolUseId)
+    if (!parent) return
+    const children = parent.part.children ?? (parent.part.children = [])
+    for (const block of msg.message.content as unknown as Array<Record<string, unknown>>) {
+      const type = block.type as string
+      if (type === 'text') {
+        const text = (block.text as string) ?? ''
+        if (text) children.push({ type: 'text', text })
+      } else if (type === 'thinking') {
+        const text = (block.thinking as string) ?? ''
+        if (text) children.push({ type: 'thinking', text })
+      } else if (type === 'tool_use' || type === 'server_tool_use') {
+        const toolUseId = block.id as string
+        const existing = this.childToolLoc.get(toolUseId)
+        const childPart: ToolPart = {
+          type: 'tool',
+          toolUseId,
+          name: (block.name as string) ?? 'Tool',
+          input: block.input,
+          status: 'running'
+        }
+        if (existing) {
+          children[existing.index] = { ...children[existing.index], ...childPart }
+        } else {
+          this.childToolLoc.set(toolUseId, { parent: parent.part, index: children.length })
+          children.push(childPart)
+        }
+      }
+    }
+    this.emitChildUpdate(parent.messageId, parent.part)
+  }
+
+  /** Matches a sub-agent tool result to its child tool part. */
+  private handleSubAgentToolResults(parentToolUseId: string, message: { content?: unknown }): void {
+    const parent = this.parentToolPart(parentToolUseId)
+    if (!parent) return
+    const content = message.content
+    if (!Array.isArray(content)) return
+    let changed = false
+    for (const block of content) {
+      if (block?.type !== 'tool_result') continue
+      const loc = this.childToolLoc.get(block.tool_use_id)
+      if (!loc?.parent.children) continue
+      const part = loc.parent.children[loc.index]
+      if (part?.type !== 'tool') continue
+      let output = ''
+      if (typeof block.content === 'string') {
+        output = block.content
+      } else if (Array.isArray(block.content)) {
+        output = block.content
+          .map((c: { type: string; text?: string }) => (c.type === 'text' ? (c.text ?? '') : ''))
+          .filter(Boolean)
+          .join('\n')
+      }
+      // New object reference so a memoized child card picks up the result.
+      loc.parent.children[loc.index] = {
+        ...part,
+        output: output.length > 40_000 ? `${output.slice(0, 40_000)}\n… (truncated)` : output,
+        status: block.is_error ? 'error' : 'success'
+      }
+      changed = true
+    }
+    if (changed) this.emitChildUpdate(parent.messageId, parent.part)
   }
 
   private markToolDenied(toolUseId: string): void {
@@ -713,6 +828,12 @@ export class ChatManager {
       await session?.setModel(chat.model)
     }
     if (patch.permissionMode) {
+      // Remember what to come back to when the plan is approved.
+      if (patch.permissionMode === 'plan' && chat.permissionMode !== 'plan') {
+        chat.modeBeforePlan = chat.permissionMode
+      } else if (patch.permissionMode !== 'plan') {
+        chat.modeBeforePlan = undefined
+      }
       chat.permissionMode = patch.permissionMode
       await session?.setPermissionMode(patch.permissionMode)
     }
