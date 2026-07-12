@@ -675,7 +675,10 @@ export function RightPanel(): React.JSX.Element | null {
       {/* Viewer + file tree / source control docked on the right, Cursor-style */}
       <div className="flex min-h-0 flex-1">
         <div className="relative flex min-w-0 flex-1 flex-col">
-          <div className={cn('min-h-0 flex-1', (currentIsTerminal || currentIsPreview) && 'hidden')}>
+          <div
+            id="editor-find-scope"
+            className={cn('min-h-0 flex-1', (currentIsTerminal || currentIsPreview) && 'hidden')}
+          >
             {current === 'plan' && planPanel ? (
               <PlanContent panel={planPanel} hasSuggestions={hasSuggestions} />
             ) : currentIsChanges && selectedCwd ? (

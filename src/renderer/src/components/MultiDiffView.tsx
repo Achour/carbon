@@ -6,6 +6,7 @@ import { useApp } from '@/store'
 import { Button } from '@/components/ui/button'
 import { WithTooltip } from '@/components/ui/tooltip'
 import { DiffTable } from '@/components/DiffView'
+import { LineDeltas } from '@/components/GitPanel'
 import { languageForPath } from '@/lib/highlight'
 
 const STATUS_COLORS: Record<string, string> = {
@@ -155,6 +156,7 @@ export function MultiDiffView({ cwd }: { cwd: string }): React.JSX.Element {
                     </span>
                   )}
                 </button>
+                <LineDeltas additions={c.additions} deletions={c.deletions} />
                 <WithTooltip label={c.staged ? 'Unstage' : 'Stage'}>
                   <Button
                     size="icon-sm"

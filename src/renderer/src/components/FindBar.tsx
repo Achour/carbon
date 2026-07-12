@@ -3,39 +3,133 @@ import { ArrowDown, ArrowUp, X } from 'lucide-react'
 import { useApp } from '@/store'
 import { Button } from '@/components/ui/button'
 
-/** A VS Code-style find widget (⌘F) driven by Electron's native findInPage. */
+// Names for the two Custom Highlights we register on the document: every match,
+// plus the currently-focused one on top.
+const ALL = 'kb-find'
+const ACTIVE = 'kb-find-active'
+const MAX_MATCHES = 2000
+
+// The CSS Custom Highlight API isn't in every TS lib.dom; reach it defensively.
+type HighlightRegistry = {
+  set(name: string, hl: object): void
+  delete(name: string): void
+}
+type HighlightCtor = new (...ranges: Range[]) => object
+const registry = (): HighlightRegistry | undefined =>
+  (CSS as unknown as { highlights?: HighlightRegistry }).highlights
+const Highlight = (globalThis as unknown as { Highlight?: HighlightCtor }).Highlight
+
+/** The editor content region (file/diff viewer) that ⌘F is scoped to. */
+const scopeEl = (): HTMLElement | null => document.getElementById('editor-find-scope')
+
+function collectRanges(root: HTMLElement, query: string): Range[] {
+  const ranges: Range[] = []
+  const q = query.toLowerCase()
+  if (!q) return ranges
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+  let node = walker.nextNode()
+  while (node && ranges.length < MAX_MATCHES) {
+    const hay = (node.nodeValue ?? '').toLowerCase()
+    let at = hay.indexOf(q)
+    while (at !== -1 && ranges.length < MAX_MATCHES) {
+      const r = document.createRange()
+      r.setStart(node, at)
+      r.setEnd(node, at + q.length)
+      ranges.push(r)
+      at = hay.indexOf(q, at + q.length)
+    }
+    node = walker.nextNode()
+  }
+  return ranges
+}
+
+function clearHighlights(): void {
+  const reg = registry()
+  reg?.delete(ALL)
+  reg?.delete(ACTIVE)
+}
+
+/** A VS Code-style find widget (⌘F), scoped to the file/diff viewer pane. */
 export function FindBar(): React.JSX.Element | null {
   const open = useApp((s) => s.findOpen)
   const setOpen = useApp((s) => s.setFindOpen)
   const [q, setQ] = React.useState('')
-  const [info, setInfo] = React.useState<{ active: number; matches: number }>({
-    active: 0,
-    matches: 0
-  })
+  const [info, setInfo] = React.useState<{ active: number; total: number }>({ active: 0, total: 0 })
   const inputRef = React.useRef<HTMLInputElement>(null)
+  const rangesRef = React.useRef<Range[]>([])
+  const activeRef = React.useRef(0)
 
-  React.useEffect(() => window.api.onFindResult((r) => setInfo({ active: r.activeMatchOrdinal, matches: r.matches })), [])
+  const focusMatch = React.useCallback((i: number): void => {
+    const ranges = rangesRef.current
+    if (ranges.length === 0) return
+    const idx = ((i % ranges.length) + ranges.length) % ranges.length
+    activeRef.current = idx
+    const reg = registry()
+    if (reg && Highlight) reg.set(ACTIVE, new Highlight(ranges[idx]))
+    const anchor = ranges[idx].startContainer.parentElement
+    anchor?.scrollIntoView({ block: 'nearest' })
+    setInfo({ active: idx + 1, total: ranges.length })
+  }, [])
 
+  const run = React.useCallback(
+    (query: string): void => {
+      const reg = registry()
+      const root = scopeEl()
+      if (!reg || !Highlight || !root || !query) {
+        rangesRef.current = []
+        clearHighlights()
+        setInfo({ active: 0, total: 0 })
+        return
+      }
+      const ranges = collectRanges(root, query)
+      rangesRef.current = ranges
+      if (ranges.length === 0) {
+        clearHighlights()
+        setInfo({ active: 0, total: 0 })
+        return
+      }
+      reg.set(ALL, new Highlight(...ranges))
+      // Keep the caret near where it was when the results shift under us.
+      focusMatch(Math.min(activeRef.current, ranges.length - 1))
+    },
+    [focusMatch]
+  )
+
+  // Focus the input when opened; clear everything when closed.
   React.useEffect(() => {
-    if (open) {
-      const t = setTimeout(() => {
-        inputRef.current?.focus()
-        inputRef.current?.select()
-      }, 20)
-      return () => clearTimeout(t)
+    if (!open) {
+      clearHighlights()
+      rangesRef.current = []
+      activeRef.current = 0
+      setInfo({ active: 0, total: 0 })
+      return
     }
-    setInfo({ active: 0, matches: 0 })
-    void window.api.stopFind()
-    return undefined
+    const t = setTimeout(() => {
+      inputRef.current?.focus()
+      inputRef.current?.select()
+    }, 20)
+    return () => clearTimeout(t)
   }, [open])
 
-  const search = (query: string, opts?: { forward?: boolean; findNext?: boolean }): void => {
-    if (query) void window.api.findInPage(query, opts)
-    else {
-      void window.api.stopFind()
-      setInfo({ active: 0, matches: 0 })
+  // Re-run as the viewer's content changes (diff loads, tab switches) so the
+  // highlights follow, since the ranges point at now-stale DOM.
+  React.useEffect(() => {
+    if (!open || !q) return
+    const root = scopeEl()
+    if (!root) return
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const obs = new MutationObserver(() => {
+      clearTimeout(timer)
+      timer = setTimeout(() => run(q), 150)
+    })
+    obs.observe(root, { childList: true, subtree: true, characterData: true })
+    return () => {
+      obs.disconnect()
+      clearTimeout(timer)
     }
-  }
+  }, [open, q, run])
+
+  React.useEffect(() => () => clearHighlights(), [])
 
   if (!open) return null
 
@@ -46,30 +140,31 @@ export function FindBar(): React.JSX.Element | null {
         value={q}
         onChange={(e) => {
           setQ(e.target.value)
-          search(e.target.value, { findNext: false })
+          activeRef.current = 0
+          run(e.target.value)
         }}
         onKeyDown={(e) => {
           if (e.key === 'Enter') {
             e.preventDefault()
-            search(q, { forward: !e.shiftKey, findNext: true })
+            focusMatch(activeRef.current + (e.shiftKey ? -1 : 1))
           } else if (e.key === 'Escape') {
             e.preventDefault()
             setOpen(false)
           }
         }}
-        placeholder="Find"
+        placeholder="Find in file"
         spellCheck={false}
         className="h-6 w-44 bg-transparent px-1.5 text-[13px] outline-none placeholder:text-muted-foreground/60"
       />
       <span className="min-w-[52px] shrink-0 text-center text-[11px] tabular-nums text-muted-foreground">
-        {q ? `${info.matches ? info.active : 0}/${info.matches}` : ''}
+        {q ? `${info.total ? info.active : 0}/${info.total}` : ''}
       </span>
       <Button
         size="icon-sm"
         variant="ghost"
         className="size-6"
         aria-label="Previous match"
-        onClick={() => search(q, { forward: false, findNext: true })}
+        onClick={() => focusMatch(activeRef.current - 1)}
       >
         <ArrowUp />
       </Button>
@@ -78,7 +173,7 @@ export function FindBar(): React.JSX.Element | null {
         variant="ghost"
         className="size-6"
         aria-label="Next match"
-        onClick={() => search(q, { forward: true, findNext: true })}
+        onClick={() => focusMatch(activeRef.current + 1)}
       >
         <ArrowDown />
       </Button>

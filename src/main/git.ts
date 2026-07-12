@@ -45,16 +45,44 @@ const EMPTY_STATUS: GitStatus = {
 const MAX_UNTRACKED_FILES = 300
 const MAX_COUNT_BYTES = 4 * 1024 * 1024
 
-/** Sums the added/removed columns of `git diff --numstat` output. */
-function numstatTotals(out: string): { additions: number; deletions: number } {
-  let additions = 0
-  let deletions = 0
+interface LineDelta {
+  additions: number
+  deletions: number
+}
+
+/**
+ * Resolves the numstat path field to the file's current path. Numstat renders
+ * renames as `old => new` or `pre{old => new}post`; the change's path is always
+ * the new one, so collapse to that.
+ */
+function resolveNumstatPath(raw: string): string {
+  if (!raw.includes(' => ')) return raw
+  const brace = /^(.*)\{(.*) => (.*)\}(.*)$/.exec(raw)
+  if (brace) return `${brace[1]}${brace[3]}${brace[4]}`.replace(/\/\//g, '/')
+  const arrow = raw.split(' => ')
+  return arrow[arrow.length - 1]
+}
+
+/** Parses `git diff --numstat` output into per-file add/remove counts. */
+function numstatMap(out: string): Map<string, LineDelta> {
+  const map = new Map<string, LineDelta>()
   for (const line of out.split('\n')) {
     if (!line) continue
-    const [a, d] = line.split('\t')
+    const [a, d, ...rest] = line.split('\t')
     // Binary files report "-" for both columns; Number('-') is NaN → 0.
-    additions += Number(a) || 0
-    deletions += Number(d) || 0
+    const additions = Number(a) || 0
+    const deletions = Number(d) || 0
+    map.set(resolveNumstatPath(rest.join('\t')), { additions, deletions })
+  }
+  return map
+}
+
+function sumDeltas(map: Map<string, LineDelta>): LineDelta {
+  let additions = 0
+  let deletions = 0
+  for (const d of map.values()) {
+    additions += d.additions
+    deletions += d.deletions
   }
   return { additions, deletions }
 }
@@ -64,8 +92,8 @@ function numstatTotals(out: string): { additions: number; deletions: number } {
  * directly — every line is an addition. Binaries (a NUL byte early on, git's
  * own heuristic) and oversized files are skipped.
  */
-async function untrackedAdditions(cwd: string, paths: string[]): Promise<number> {
-  let additions = 0
+async function untrackedLineCounts(cwd: string, paths: string[]): Promise<Map<string, number>> {
+  const counts = new Map<string, number>()
   for (const rel of paths.slice(0, MAX_UNTRACKED_FILES)) {
     try {
       const buf = await readFile(join(cwd, rel))
@@ -76,12 +104,12 @@ async function untrackedAdditions(cwd: string, paths: string[]): Promise<number>
       while ((idx = buf.indexOf(10, idx + 1)) !== -1) lines++
       // A final line with no trailing newline still counts.
       if (buf[buf.length - 1] !== 10) lines++
-      additions += lines
+      counts.set(rel, lines)
     } catch {
       // unreadable (perms, symlink, vanished) — skip
     }
   }
-  return additions
+  return counts
 }
 
 export async function gitStatus(cwd: string): Promise<GitStatus> {
@@ -134,22 +162,44 @@ export async function gitStatus(cwd: string): Promise<GitStatus> {
     // leave hasRemote false
   }
 
-  // Line totals for the "+adds −dels" badge. Working-tree and staged numstats
-  // cover disjoint ranges (index→worktree and HEAD→index), so summing them is
-  // the full change vs HEAD without double-counting; untracked files are added
-  // by hand since numstat never lists them.
+  // Line counts for the header badge and the per-file tree markers. Working-tree
+  // and staged numstats cover disjoint ranges (index→worktree and HEAD→index),
+  // so summing them is the full change vs HEAD without double-counting; untracked
+  // files are counted by hand since numstat never lists them.
   try {
     const [work, staged] = await Promise.all([
       git(cwd, ['diff', '--numstat']),
       git(cwd, ['diff', '--numstat', '--cached'])
     ])
-    const w = numstatTotals(work)
-    const s = numstatTotals(staged)
-    const untracked = await untrackedAdditions(
+    const workMap = numstatMap(work)
+    const stagedMap = numstatMap(staged)
+    const untracked = await untrackedLineCounts(
       cwd,
       changes.filter((c) => c.status === '?').map((c) => c.path)
     )
-    status.additions = w.additions + s.additions + untracked
+
+    // Tag each change row with its own add/remove counts.
+    for (const c of changes) {
+      if (c.status === '?') {
+        const n = untracked.get(c.path)
+        if (n !== undefined) {
+          c.additions = n
+          c.deletions = 0
+        }
+      } else {
+        const d = (c.staged ? stagedMap : workMap).get(c.path)
+        if (d) {
+          c.additions = d.additions
+          c.deletions = d.deletions
+        }
+      }
+    }
+
+    const w = sumDeltas(workMap)
+    const s = sumDeltas(stagedMap)
+    let untrackedAdds = 0
+    for (const n of untracked.values()) untrackedAdds += n
+    status.additions = w.additions + s.additions + untrackedAdds
     status.deletions = w.deletions + s.deletions
   } catch {
     // leave additions/deletions at 0

@@ -2,6 +2,7 @@ import * as React from 'react'
 import { ChevronRight, FileText, Folder, FolderOpen, RefreshCw, Search } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { basename } from '@/lib/format'
+import { handleTreeKeyDown } from '@/lib/treeKeyNav'
 import { useApp } from '@/store'
 import { Button } from '@/components/ui/button'
 import { WithTooltip } from '@/components/ui/tooltip'
@@ -37,6 +38,9 @@ function TreeNode({ dir, depth }: { dir: string; depth: number }): React.JSX.Ele
           <React.Fragment key={entry.path}>
             <button
               type="button"
+              data-tree-row
+              data-kind={entry.kind}
+              data-expanded={entry.kind === 'dir' ? Boolean(expanded) : undefined}
               onClick={() =>
                 entry.kind === 'dir'
                   ? toggleDir(entry.path)
@@ -46,7 +50,7 @@ function TreeNode({ dir, depth }: { dir: string; depth: number }): React.JSX.Ele
                 if (entry.kind === 'file') void openFile(entry.path)
               }}
               className={cn(
-                'flex w-full items-center gap-1.5 rounded-md py-[3px] pr-2 text-left text-[13px] transition-colors hover:bg-accent/60',
+                'flex w-full items-center gap-1.5 rounded-md py-[3px] pr-2 text-left text-[13px] transition-colors outline-none hover:bg-accent/60 focus-visible:bg-accent focus-visible:ring-1 focus-visible:ring-primary/50',
                 activeTab === entry.path && 'bg-accent',
                 dotfile && 'opacity-60'
               )}
@@ -135,7 +139,12 @@ export function FileTree(): React.JSX.Element {
           </Button>
         </WithTooltip>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+      <div
+        className="min-h-0 flex-1 overflow-y-auto px-2 pb-2 outline-none"
+        tabIndex={0}
+        role="tree"
+        onKeyDown={handleTreeKeyDown}
+      >
         <TreeNode dir={cwd} depth={0} />
       </div>
     </div>

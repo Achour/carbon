@@ -252,6 +252,10 @@ export interface GitFileChange {
   /** One-letter status: M, A, D, R, C, T, U (conflict) or ? (untracked). */
   status: string
   staged: boolean
+  /** Added lines for this file (undefined when unknown, e.g. binary). */
+  additions?: number
+  /** Removed lines for this file (undefined when unknown, e.g. binary). */
+  deletions?: number
 }
 
 export interface GitStatus {
@@ -376,10 +380,6 @@ export interface Api {
   forgetDir(dir: string): Promise<void>
   /** Bring the app window to the foreground (notification clicks). */
   focusWindow(): Promise<void>
-  // ---- Find in page (⌘F) ----
-  findInPage(text: string, options?: { forward?: boolean; findNext?: boolean }): Promise<void>
-  stopFind(): Promise<void>
-  onFindResult(cb: (r: { activeMatchOrdinal: number; matches: number }) => void): () => void
   // ---- Terminal ----
   terminalCreate(opts: TerminalCreateOpts): Promise<void>
   terminalWrite(id: string, data: string): Promise<void>

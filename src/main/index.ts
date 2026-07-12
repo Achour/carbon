@@ -114,13 +114,6 @@ function createWindow(): void {
       }
     })
   }
-  // Relay native find-in-page match counts (⌘F) back to the renderer's find bar.
-  win.webContents.on('found-in-page', (_e, result) => {
-    win?.webContents.send('find:result', {
-      activeMatchOrdinal: result.activeMatchOrdinal,
-      matches: result.matches
-    })
-  })
   win.on('close', () => {
     if (win) store.setWindowBounds(win.getBounds())
   })
@@ -329,21 +322,6 @@ function registerIpc(): void {
     if (win.isMinimized()) win.restore()
     win.show()
     win.focus()
-  })
-
-  ipcMain.handle(
-    'find:in-page',
-    (_e, text: string, options?: { forward?: boolean; findNext?: boolean }) => {
-      if (!win) return
-      if (!text) {
-        win.webContents.stopFindInPage('clearSelection')
-        return
-      }
-      win.webContents.findInPage(text, options)
-    }
-  )
-  ipcMain.handle('find:stop', () => {
-    win?.webContents.stopFindInPage('clearSelection')
   })
 
   ipcMain.handle('fs:list', (_e, dir: string) => listDir(dir))

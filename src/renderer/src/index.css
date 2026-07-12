@@ -158,6 +158,16 @@
   }
 }
 
+/* ⌘F find-in-file: every match dimmed, the focused one highlighted (Custom
+   Highlight API — no DOM mutation, so it works over syntax-highlighted code). */
+::highlight(kb-find) {
+  background: oklch(from var(--color-primary) l c h / 22%);
+}
+::highlight(kb-find-active) {
+  background: #f5b301;
+  color: #1a1a1a;
+}
+
 /* Window drag regions */
 .drag {
   -webkit-app-region: drag;

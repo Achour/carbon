@@ -60,17 +60,6 @@ const api: Api = {
   getDefaults: () => ipcRenderer.invoke('app:get-defaults'),
   forgetDir: (dir: string) => ipcRenderer.invoke('app:forget-dir', dir),
   focusWindow: () => ipcRenderer.invoke('app:focus-window'),
-  findInPage: (text: string, options?: { forward?: boolean; findNext?: boolean }) =>
-    ipcRenderer.invoke('find:in-page', text, options),
-  stopFind: () => ipcRenderer.invoke('find:stop'),
-  onFindResult: (cb: (r: { activeMatchOrdinal: number; matches: number }) => void) => {
-    const listener = (
-      _e: Electron.IpcRendererEvent,
-      r: { activeMatchOrdinal: number; matches: number }
-    ): void => cb(r)
-    ipcRenderer.on('find:result', listener)
-    return () => ipcRenderer.removeListener('find:result', listener)
-  },
   terminalCreate: (opts: TerminalCreateOpts) => ipcRenderer.invoke('terminal:create', opts),
   terminalWrite: (id: string, data: string) => ipcRenderer.invoke('terminal:write', id, data),
   terminalResize: (id: string, cols: number, rows: number) =>

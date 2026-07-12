@@ -14,6 +14,7 @@ import {
 } from 'lucide-react'
 import type { GitFileChange } from '@shared/types'
 import { cn } from '@/lib/utils'
+import { handleTreeKeyDown } from '@/lib/treeKeyNav'
 import { useApp } from '@/store'
 import { Button } from '@/components/ui/button'
 import { WithTooltip } from '@/components/ui/tooltip'
@@ -30,6 +31,25 @@ const STATUS_COLORS: Record<string, string> = {
 }
 
 const INDENT = 12
+
+/** Compact per-file line deltas (`+12 −3`), Cursor-style. */
+export function LineDeltas({
+  additions,
+  deletions,
+  className
+}: {
+  additions?: number
+  deletions?: number
+  className?: string
+}): React.JSX.Element | null {
+  if (!additions && !deletions) return null
+  return (
+    <span className={cn('flex shrink-0 items-center gap-1 text-[10.5px] tabular-nums', className)}>
+      {additions ? <span className="text-emerald-500">+{additions}</span> : null}
+      {deletions ? <span className="text-red-500">−{deletions}</span> : null}
+    </span>
+  )
+}
 
 function ChangeRow({
   change,
@@ -59,8 +79,10 @@ function ChangeRow({
     >
       <button
         type="button"
+        data-tree-row
+        data-kind="file"
         onClick={() => openChanges({ path: change.path, staged: change.staged })}
-        className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+        className="flex min-w-0 flex-1 items-center gap-1.5 rounded text-left outline-none focus-visible:ring-1 focus-visible:ring-primary/50"
         title={change.origPath ? `${change.origPath} → ${change.path}` : change.path}
       >
         <span
@@ -73,6 +95,11 @@ function ChangeRow({
         </span>
         <span className="truncate text-[12.5px]">{name}</span>
       </button>
+      <LineDeltas
+        additions={change.additions}
+        deletions={change.deletions}
+        className="group-hover:hidden"
+      />
       <WithTooltip label={change.staged ? 'Unstage' : 'Stage'}>
         <Button
           size="icon-sm"
@@ -163,8 +190,11 @@ function TreeLevel({
           <div key={dir.path}>
             <button
               type="button"
+              data-tree-row
+              data-kind="dir"
+              data-expanded={open}
               onClick={() => setCollapsed((p) => ({ ...p, [dir.path]: !p[dir.path] }))}
-              className="flex w-full items-center gap-1 rounded-md py-[3px] pr-1 text-left transition-colors hover:bg-accent/40"
+              className="flex w-full items-center gap-1 rounded-md py-[3px] pr-1 text-left outline-none transition-colors hover:bg-accent/40 focus-visible:bg-accent focus-visible:ring-1 focus-visible:ring-primary/50"
               style={{ paddingLeft: 6 + depth * INDENT }}
               title={dir.path}
             >
@@ -375,7 +405,12 @@ export function GitPanel(): React.JSX.Element {
       </div>
 
       {/* Changes */}
-      <div className="min-h-0 flex-1 overflow-y-auto border-t border-border/60 pb-2">
+      <div
+        className="min-h-0 flex-1 overflow-y-auto border-t border-border/60 pb-2 outline-none"
+        tabIndex={0}
+        role="tree"
+        onKeyDown={handleTreeKeyDown}
+      >
         {git.changes.length === 0 && (
           <div className="flex items-center justify-center gap-1.5 px-3 py-6 text-xs text-muted-foreground">
             <Check className="size-3.5 text-emerald-500" /> Working tree clean
