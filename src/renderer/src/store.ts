@@ -211,7 +211,8 @@ interface AppState {
   commitChanges(): Promise<void>
   pushChanges(): Promise<void>
   initRepo(): Promise<void>
-  openDiff(change: GitFileChange): Promise<void>
+  /** Open a file's diff. Single click previews (ephemeral); double click pins it. */
+  openDiff(change: GitFileChange, opts?: { preview?: boolean }): Promise<void>
   /** Open the right panel on the source-control view and show the first diff. */
   reviewChanges(): Promise<void>
 
@@ -824,27 +825,38 @@ export const useApp = create<AppState>((set, get) => ({
     await get().refreshGit()
   },
 
-  async openDiff(change) {
+  async openDiff(change, opts) {
     const cwd = get().selectedCwd
     if (!cwd) return
+    const preview = opts?.preview ?? false
     const id = `diff:${change.staged ? 's' : 'w'}:${cwd}:${change.path}`
     const name = change.path.split('/').pop() ?? change.path
+    const label = change.staged ? `${name} (staged)` : `${name} (diff)`
     const meta: DiffTabMeta = {
       cwd,
       file: change.path,
       staged: change.staged,
       untracked: change.status === '?'
     }
-    set((s) => ({
-      openFiles: s.openFiles.some((f) => f.path === id)
-        ? s.openFiles
-        : [
-            ...s.openFiles,
-            { path: id, name: change.staged ? `${name} (staged)` : `${name} (diff)`, diff: meta }
-          ],
-      activeTab: id,
-      ...panelPatch(s, true)
-    }))
+    set((s) => {
+      const existing = s.openFiles.find((f) => f.path === id)
+      let openFiles = s.openFiles
+      if (existing) {
+        // Re-opening a preview diff explicitly (double click) pins it.
+        if (!preview && existing.preview) {
+          openFiles = openFiles.map((f) => (f.path === id ? { ...f, preview: false } : f))
+        }
+      } else if (preview) {
+        // A single-clicked diff reuses the current preview slot, like a file.
+        const slot = openFiles.findIndex((f) => f.preview)
+        const tab: OpenTab = { path: id, name: label, diff: meta, preview: true }
+        openFiles =
+          slot === -1 ? [...openFiles, tab] : openFiles.map((f, i) => (i === slot ? tab : f))
+      } else {
+        openFiles = [...openFiles, { path: id, name: label, diff: meta }]
+      }
+      return { openFiles, activeTab: id, ...panelPatch(s, true) }
+    })
     const text = await window.api.gitDiff(cwd, {
       path: change.path,
       staged: change.staged,
@@ -858,9 +870,9 @@ export const useApp = create<AppState>((set, get) => ({
     // Open the panel with the source-control dock showing the change list.
     set((s) => ({ rightView: 'git', ...panelPatch(s, true) }))
     get().setExplorerOpen(true) // also refreshes git
-    // Open the first change's diff so there's an editor beside the list.
+    // Open the first change's diff (as a preview) so there's an editor beside the list.
     const first = get().git?.changes[0]
-    if (first) await get().openDiff(first)
+    if (first) await get().openDiff(first, { preview: true })
   },
 
   async openChat(id) {

@@ -184,7 +184,7 @@ function QuickOpen(): React.JSX.Element {
     const first: GitFileChange | undefined = useApp.getState().git?.changes[0]
     // Open the first change's diff so there's an editor tab to show the source
     // control dock against; with no changes there's nothing to review.
-    if (first) void openDiff(first)
+    if (first) void openDiff(first, { preview: true })
     setOpen(false)
   }
 
@@ -477,7 +477,7 @@ export function RightPanel(): React.JSX.Element | null {
       {/* Tab strip */}
       <header
         className={cn(
-          'drag flex h-[48px] shrink-0 items-center gap-1 border-b border-border px-2.5',
+          'drag flex h-[38px] shrink-0 items-center gap-1 border-b border-border px-2.5',
           panelMaximized && !sidebarOpen && 'pl-[84px]'
         )}
       >

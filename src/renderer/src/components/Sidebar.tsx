@@ -288,7 +288,7 @@ export function Sidebar(): React.JSX.Element {
     >
       <div className="flex h-full flex-col" style={{ width }}>
       {/* Traffic-light strip; window controls live on its right, Cursor-style */}
-      <div className="drag flex h-[48px] shrink-0 items-center justify-end gap-0.5 px-2.5">
+      <div className="drag flex h-[38px] shrink-0 items-center justify-end gap-0.5 px-2.5">
         <Button
           size="icon-sm"
           variant="ghost"

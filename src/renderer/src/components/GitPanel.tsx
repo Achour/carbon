@@ -60,7 +60,8 @@ function ChangeRow({
     >
       <button
         type="button"
-        onClick={() => void openDiff(change)}
+        onClick={() => void openDiff(change, { preview: true })}
+        onDoubleClick={() => void openDiff(change)}
         className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
         title={change.origPath ? `${change.origPath} → ${change.path}` : change.path}
       >

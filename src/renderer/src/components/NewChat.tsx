@@ -46,7 +46,7 @@ export function NewChat(): React.JSX.Element {
     <div className="relative flex h-full min-w-[420px] flex-1 flex-col">
       <header
         className={cn(
-          'drag flex h-[48px] shrink-0 items-center gap-2 px-4',
+          'drag flex h-[38px] shrink-0 items-center gap-2 px-4',
           !sidebarOpen && 'pl-[84px]'
         )}
       >

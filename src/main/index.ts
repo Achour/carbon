@@ -89,7 +89,7 @@ function createWindow(): void {
     minHeight: 600,
     show: false,
     titleBarStyle: 'hidden',
-    trafficLightPosition: { x: 18, y: 17 },
+    trafficLightPosition: { x: 13, y: 12 },
     backgroundColor: '#1c1c1c',
     title: 'Karbun',
     webPreferences: {

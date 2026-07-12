@@ -159,7 +159,7 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
       {/* Header */}
       <header
         className={cn(
-          'drag flex h-[48px] shrink-0 items-center gap-2 border-b border-border px-4',
+          'drag flex h-[38px] shrink-0 items-center gap-2 border-b border-border px-4',
           !sidebarOpen && 'pl-[84px]'
         )}
       >
