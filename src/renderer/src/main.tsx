@@ -5,10 +5,17 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App'
 import { useApp } from './store'
-import { applyTheme, installThemes, storedTheme } from './lib/themes'
+import {
+  applyCodeFontSize,
+  applyTheme,
+  installThemes,
+  storedCodeFontSize,
+  storedTheme
+} from './lib/themes'
 
 installThemes()
 applyTheme(storedTheme())
+applyCodeFontSize(storedCodeFontSize())
 
 if (import.meta.env.DEV) {
   // Expose the store for the AIGUI_E2E dev hook.

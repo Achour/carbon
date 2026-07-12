@@ -89,7 +89,7 @@ export const DiffView = React.memo(function DiffView({
 
   return (
     <div className="h-full overflow-auto">
-      <table className="w-full border-collapse font-mono text-xs leading-relaxed">
+      <table className="w-full border-collapse font-mono text-[length:var(--code-font-size)] leading-relaxed">
         <tbody>
           {rows.map((row, i) => (
             <tr

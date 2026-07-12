@@ -1,10 +1,52 @@
 import * as React from 'react'
-import { Check, Moon, Palette, Sun, X } from 'lucide-react'
+import { Bell, Check, Minus, Moon, Palette, Plus, Sun, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { THEMES, type ThemeDef } from '@/lib/themes'
+import { CODE_FONT_DEFAULT, CODE_FONT_MAX, CODE_FONT_MIN, THEMES, type ThemeDef } from '@/lib/themes'
+import { playChime } from '@/lib/notify'
 import { useApp } from '@/store'
 import { Button } from '@/components/ui/button'
 import { WithTooltip } from '@/components/ui/tooltip'
+
+function Toggle({
+  label,
+  description,
+  checked,
+  onChange
+}: {
+  label: string
+  description: string
+  checked: boolean
+  onChange: (checked: boolean) => void
+}): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      onClick={() => onChange(!checked)}
+      className="flex w-full items-center gap-4 rounded-lg px-2 py-2.5 text-left transition-colors hover:bg-accent/40"
+    >
+      <div className="min-w-0 flex-1">
+        <div className="text-[13px] font-medium">{label}</div>
+        <div className="mt-0.5 text-xs text-muted-foreground">{description}</div>
+      </div>
+      <span
+        className={cn(
+          'relative h-[18px] w-8 shrink-0 rounded-full transition-colors',
+          checked ? 'bg-primary' : 'bg-secondary'
+        )}
+      >
+        <span
+          className={cn(
+            'absolute top-[2px] left-[2px] size-3.5 rounded-full bg-background shadow-sm transition-transform',
+            checked && 'translate-x-[14px]'
+          )}
+        />
+      </span>
+    </button>
+  )
+}
 
 /** Miniature app mock rendered with the theme's own palette. */
 function ThemePreview({ theme }: { theme: ThemeDef }): React.JSX.Element {
@@ -116,6 +158,10 @@ export function Settings(): React.JSX.Element {
   const theme = useApp((s) => s.theme)
   const setTheme = useApp((s) => s.setTheme)
   const closeSettings = useApp((s) => s.closeSettings)
+  const notifyPrefs = useApp((s) => s.notifyPrefs)
+  const setNotifyPrefs = useApp((s) => s.setNotifyPrefs)
+  const codeFontSize = useApp((s) => s.codeFontSize)
+  const setCodeFontSize = useApp((s) => s.setCodeFontSize)
 
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
@@ -164,6 +210,81 @@ export function Settings(): React.JSX.Element {
                 themes={THEMES.filter((t) => t.appearance === 'light')}
                 current={theme}
                 onSelect={setTheme}
+              />
+            </div>
+
+            <div className="mt-6">
+              <div className="flex items-center gap-4 px-2 py-2.5">
+                <div className="min-w-0 flex-1">
+                  <div className="text-[13px] font-medium">Code font size</div>
+                  <div className="mt-0.5 text-xs text-muted-foreground">
+                    Code blocks, the file viewer and diffs
+                  </div>
+                </div>
+                <div className="flex items-center gap-1">
+                  <Button
+                    size="icon-sm"
+                    variant="outline"
+                    aria-label="Decrease code font size"
+                    disabled={codeFontSize <= CODE_FONT_MIN}
+                    onClick={() => setCodeFontSize(codeFontSize - 1)}
+                  >
+                    <Minus />
+                  </Button>
+                  <button
+                    type="button"
+                    onClick={() => setCodeFontSize(CODE_FONT_DEFAULT)}
+                    title="Reset to default"
+                    className="w-12 rounded-md py-1 text-center text-xs tabular-nums transition-colors hover:bg-accent"
+                  >
+                    {codeFontSize}px
+                  </button>
+                  <Button
+                    size="icon-sm"
+                    variant="outline"
+                    aria-label="Increase code font size"
+                    disabled={codeFontSize >= CODE_FONT_MAX}
+                    onClick={() => setCodeFontSize(codeFontSize + 1)}
+                  >
+                    <Plus />
+                  </Button>
+                </div>
+              </div>
+              <pre className="mx-2 overflow-x-auto rounded-lg border border-border bg-code px-3.5 py-2.5 font-mono leading-relaxed text-[length:var(--code-font-size)]">
+                {'const answer = compute(42)  // preview'}
+              </pre>
+            </div>
+          </section>
+
+          <section className="mt-10">
+            <div className="flex items-center gap-2">
+              <Bell className="size-4 text-primary" />
+              <h2 className="text-[15px] font-semibold">Notifications</h2>
+            </div>
+            <p className="mt-1 text-[13px] text-muted-foreground">
+              Stay on top of long-running turns while you work elsewhere.
+            </p>
+            <div className="mt-3 space-y-0.5">
+              <Toggle
+                label="Turn complete alerts"
+                description="Notify when Claude finishes while the app is in the background"
+                checked={notifyPrefs.finish}
+                onChange={(finish) => setNotifyPrefs({ finish })}
+              />
+              <Toggle
+                label="Approval alerts"
+                description="Notify when Claude is waiting for your permission or plan review"
+                checked={notifyPrefs.permission}
+                onChange={(permission) => setNotifyPrefs({ permission })}
+              />
+              <Toggle
+                label="Sound"
+                description="Play a soft chime when a turn finishes or Claude needs your input"
+                checked={notifyPrefs.sound}
+                onChange={(sound) => {
+                  setNotifyPrefs({ sound })
+                  if (sound) playChime()
+                }}
               />
             </div>
           </section>

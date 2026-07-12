@@ -40,8 +40,8 @@ function createWindow(): void {
     show: false,
     titleBarStyle: 'hidden',
     trafficLightPosition: { x: 18, y: 20 },
-    backgroundColor: '#131316',
-    title: 'AI GUI',
+    backgroundColor: '#1c1c1c',
+    title: 'Karbun',
     webPreferences: {
       preload: join(__dirname, '../preload/index.mjs'),
       contextIsolation: true,
@@ -236,6 +236,13 @@ function registerIpc(): void {
 
   ipcMain.handle('app:forget-dir', (_e, dir: string) => store.forgetDir(dir))
 
+  ipcMain.handle('app:focus-window', () => {
+    if (!win) return
+    if (win.isMinimized()) win.restore()
+    win.show()
+    win.focus()
+  })
+
   ipcMain.handle('fs:list', (_e, dir: string) => listDir(dir))
 
   ipcMain.handle('fs:read', (_e, path: string) => readFileContent(path))
@@ -254,8 +261,9 @@ function registerIpc(): void {
 }
 
 app.whenReady().then(() => {
-  app.setName('AI GUI')
-  // Pin userData so dev and packaged builds share the same history location.
+  app.setName('Karbun')
+  // Pin userData to the original folder so existing chat history carries over
+  // after the rename (dev and packaged builds share this location).
   app.setPath('userData', join(app.getPath('appData'), 'ai-gui'))
   store = new Store()
   manager = new ChatManager(store, emit)

@@ -5,6 +5,8 @@
 @custom-variant dark (&:is(.dark *));
 
 :root {
+  /* User-adjustable in Settings → Appearance; JS overrides this inline. */
+  --code-font-size: 12px;
   --background: oklch(0.984 0.003 90);
   --foreground: oklch(0.27 0.012 60);
   --card: oklch(1 0 0);
@@ -298,7 +300,7 @@
   padding: 0.85em 1em;
   margin: 0.7em 0;
   overflow-x: auto;
-  font-size: 0.86em;
+  font-size: var(--code-font-size);
   line-height: 1.6;
 }
 .markdown pre code {

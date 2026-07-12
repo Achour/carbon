@@ -213,9 +213,18 @@ export const THEMES: ThemeDef[] = [
   }
 ]
 
-export const DEFAULT_THEME = 'graphite'
+export const DEFAULT_THEME = 'carbon'
 
 export function storedTheme(): string {
+  // One-time: move installs still on the previous default ('graphite') to the
+  // new default. A deliberate choice of any other theme is left untouched.
+  if (!localStorage.getItem('themeDefaultV2')) {
+    localStorage.setItem('themeDefaultV2', '1')
+    if ((localStorage.getItem('theme') ?? 'graphite') === 'graphite') {
+      localStorage.removeItem('theme')
+      localStorage.removeItem('themeAppearance')
+    }
+  }
   const raw = localStorage.getItem('theme') ?? DEFAULT_THEME
   // Builds before the theme registry stored just 'dark' / 'light'.
   const id = raw === 'dark' ? 'graphite' : raw === 'light' ? 'paper' : raw
@@ -229,6 +238,21 @@ export function applyTheme(id: string): void {
   localStorage.setItem('theme', theme.id)
   // index.html reads this before first paint to set the `dark` class early.
   localStorage.setItem('themeAppearance', theme.appearance)
+}
+
+// Code font size (code blocks, file viewer, diffs) via --code-font-size.
+export const CODE_FONT_MIN = 10
+export const CODE_FONT_MAX = 20
+export const CODE_FONT_DEFAULT = 12
+
+export function storedCodeFontSize(): number {
+  const n = Number(localStorage.getItem('codeFontSize'))
+  return Number.isFinite(n) ? Math.min(CODE_FONT_MAX, Math.max(CODE_FONT_MIN, n)) : CODE_FONT_DEFAULT
+}
+
+export function applyCodeFontSize(px: number): void {
+  document.documentElement.style.setProperty('--code-font-size', `${px}px`)
+  localStorage.setItem('codeFontSize', String(px))
 }
 
 /** Injects a stylesheet with one `:root[data-theme='…']` block per theme. */

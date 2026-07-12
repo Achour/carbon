@@ -1,0 +1,17 @@
+appId: com.achour.karbun
+productName: Karbun
+directories:
+  output: dist
+  buildResources: build
+files:
+  - out/**
+  - package.json
+# The Claude Agent SDK spawns a CLI subprocess; running unpacked avoids asar
+# path issues for a personal install.
+asar: false
+mac:
+  category: public.app-category.developer-tools
+  icon: build/icon.icns
+  target:
+    - dir
+  identity: null
