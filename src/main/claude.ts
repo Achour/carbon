@@ -180,6 +180,8 @@ class ClaudeSession {
   private childToolLoc = new Map<string, { parent: ToolPart; index: number }>()
   private pending = new Map<string, PendingPermission>()
   private initModel?: string
+  /** Exact model name of the most recent assistant turn; keys into modelUsage. */
+  private lastTurnModel?: string
   private deltaBuf = new Map<string, { messageId: string; partIndex: number; text: string }>()
   private flushTimer: NodeJS.Timeout | null = null
   dead = false
@@ -556,10 +558,22 @@ class ClaudeSession {
 
       case 'result': {
         if ('modelUsage' in msg && msg.modelUsage) {
+          // modelUsage is cumulative across the (resumed) session and keyed by
+          // model name, so after switching models it holds an entry per model
+          // used. Take the window of the model that produced this turn — not the
+          // max, which would stick to the largest window ever seen (e.g. 1M)
+          // after switching down to a smaller model like Sonnet.
+          const current =
+            this.lastTurnModel && msg.modelUsage[this.lastTurnModel]?.contextWindow
           const windows = Object.values(msg.modelUsage)
             .map((m) => m.contextWindow)
             .filter((w): w is number => typeof w === 'number' && w > 0)
-          const window = windows.length ? Math.max(...windows) : undefined
+          const window =
+            typeof current === 'number' && current > 0
+              ? current
+              : windows.length
+                ? Math.max(...windows)
+                : undefined
           if (window && window !== this.chat.contextWindow) {
             this.chat.contextWindow = window
             this.emit({ type: 'meta', chatId: this.chat.id, patch: { contextWindow: window } })
@@ -743,6 +757,8 @@ class ClaudeSession {
   }
 
   private reconcileAssistant(msg: SDKAssistantMessage): void {
+    const model = (msg.message as { model?: string }).model
+    if (typeof model === 'string' && model) this.lastTurnModel = model
     this.updateContext((msg.message as { usage?: unknown }).usage)
     const message = this.ensureCurrent()
     const parts: AssistantPart[] = []

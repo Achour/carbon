@@ -817,7 +817,9 @@ export const useApp = create<AppState>((set, get) => ({
         messages: [],
         planPanel: null,
         settingsOpen: false,
-        panelMaximized: false
+        panelMaximized: false,
+        // The right panel is per chat; a fresh/draft chat starts collapsed.
+        panelOpen: false
       })
       return
     }
