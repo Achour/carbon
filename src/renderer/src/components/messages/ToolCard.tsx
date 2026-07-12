@@ -322,9 +322,16 @@ function AgentCard({ part, cwd }: { part: ToolPart; cwd: string }): React.JSX.El
   const input = (part.input ?? {}) as Record<string, unknown>
   const subType = str(input.subagent_type)
   const description = str(input.description) ?? str(input.prompt)
-  const running = part.status === 'pending' || part.status === 'running'
   const children = (part.children ?? []).filter(Boolean)
   const steps = children.filter((c) => c.type === 'tool').length
+  // The parent Task tool_result can land (status → success) while the sub-agent
+  // is still mid-step — and for background agents it lands right at spawn. Treat
+  // the agent as running until its own child steps have all settled, so the card
+  // never shows a checkmark while the sub-agent is visibly still working.
+  const childRunning = children.some(
+    (c) => c.type === 'tool' && (c.status === 'running' || c.status === 'pending')
+  )
+  const running = part.status === 'pending' || part.status === 'running' || childRunning
 
   // Collapsed by default — the header shows live status; expand to watch.
   const [open, setOpen] = React.useState(false)
@@ -365,7 +372,11 @@ function AgentCard({ part, cwd }: { part: ToolPart; cwd: string }): React.JSX.El
             )
           )}
           <span className="shrink-0">
-            <StatusIcon part={part} />
+            {running ? (
+              <Loader2 className="size-3.5 animate-spin text-warning" />
+            ) : (
+              <StatusIcon part={part} />
+            )}
           </span>
         </Collapsible.Trigger>
         <Collapsible.Panel className="h-[var(--collapsible-panel-height)] overflow-hidden transition-[height] duration-200 ease-out data-[ending-style]:h-0 data-[starting-style]:h-0">

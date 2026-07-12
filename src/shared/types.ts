@@ -197,8 +197,7 @@ export const MODEL_OPTIONS: ModelOption[] = [
   { id: 'claude-opus-4-8', label: 'Opus 4.8', description: 'Powerful all-rounder', provider: 'claude' },
   { id: 'claude-sonnet-5', label: 'Sonnet 5', description: 'Fast and capable', provider: 'claude' },
   { id: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5', description: 'Fastest', provider: 'claude' },
-  { id: 'codex:gpt-5.1-codex', label: 'GPT-5.1 Codex', description: 'Coming soon', provider: 'codex', disabled: true },
-  { id: 'codex:gpt-5.1-codex-mini', label: 'GPT-5.1 Codex Mini', description: 'Coming soon', provider: 'codex', disabled: true }
+  { id: 'codex:coming-soon', label: 'Coming soon', provider: 'codex', disabled: true }
 ]
 
 export const PROVIDER_LABELS: Record<Provider, string> = {
