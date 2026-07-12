@@ -28,6 +28,11 @@ import type {
   SlashCommand
 } from '@shared/types'
 
+/** Bounds for the sidebar "recent chats per project" setting. */
+export const CHATS_PER_PROJECT_MIN = 3
+export const CHATS_PER_PROJECT_MAX = 20
+export const CHATS_PER_PROJECT_DEFAULT = 6
+
 export interface QueuedMessage {
   id: string
   text: string
@@ -142,6 +147,9 @@ interface AppState {
   setTheme(id: string): void
   setCodeFontSize(px: number): void
   setNotifyPrefs(patch: Partial<NotifyPrefs>): void
+  /** How many recent chats each project shows in the sidebar before search. */
+  chatsPerProject: number
+  setChatsPerProject(n: number): void
 
   // ---- Files ----
   /** Whether the right-side workspace panel (tabs + file tree) is open. */
@@ -182,6 +190,12 @@ interface AppState {
   diffContents: Record<string, string>
 
   setRightView(view: 'files' | 'git'): void
+  /** The file-tree / source-control dock on the right edge of the panel. */
+  explorerOpen: boolean
+  setExplorerOpen(open: boolean): void
+  toggleExplorer(): void
+  /** Reveal the in-app file explorer in a file context (Cursor-style). */
+  browseFiles(): void
   refreshGit(): Promise<void>
   stagePaths(paths: string[]): Promise<void>
   unstagePaths(paths: string[]): Promise<void>
@@ -475,6 +489,19 @@ export const useApp = create<AppState>((set, get) => ({
     })
   },
 
+  chatsPerProject: (() => {
+    const v = Number(localStorage.getItem('chatsPerProject'))
+    return Number.isFinite(v) && v >= CHATS_PER_PROJECT_MIN && v <= CHATS_PER_PROJECT_MAX
+      ? v
+      : CHATS_PER_PROJECT_DEFAULT
+  })(),
+
+  setChatsPerProject(n) {
+    const v = Math.min(CHATS_PER_PROJECT_MAX, Math.max(CHATS_PER_PROJECT_MIN, Math.round(n)))
+    localStorage.setItem('chatsPerProject', String(v))
+    set({ chatsPerProject: v })
+  },
+
   async init() {
     const [chats, defaults] = await Promise.all([window.api.listChats(), window.api.getDefaults()])
     set({
@@ -629,6 +656,7 @@ export const useApp = create<AppState>((set, get) => ({
   // ---- Git ----
 
   rightView: 'files',
+  explorerOpen: localStorage.getItem('rightDockOpen') === 'true',
   git: null,
   gitBusy: false,
   gitError: null,
@@ -637,6 +665,35 @@ export const useApp = create<AppState>((set, get) => ({
   setRightView(view) {
     set({ rightView: view })
     if (view === 'git') void get().refreshGit()
+  },
+
+  setExplorerOpen(open) {
+    localStorage.setItem('rightDockOpen', String(open))
+    set({ explorerOpen: open })
+    if (open) {
+      const s = get()
+      if (s.selectedCwd && !s.filesByDir[s.selectedCwd]) void s.loadDir(s.selectedCwd)
+      void s.refreshGit()
+    }
+  },
+
+  toggleExplorer() {
+    get().setExplorerOpen(!get().explorerOpen)
+  },
+
+  browseFiles() {
+    const s = get()
+    // The dock only shows over the file/editor area, not the browser/terminal.
+    // If we're on one of those (or nothing), switch to an editor tab — the last
+    // open file if any, else an empty files view — so the tree is visible.
+    const onEditor =
+      s.activeTab != null &&
+      s.activeTab !== 'files' &&
+      !s.previews.some((p) => p.id === s.activeTab) &&
+      !s.terminals.some((t) => t.id === s.activeTab)
+    const activeTab = onEditor ? s.activeTab : (s.openFiles[s.openFiles.length - 1]?.path ?? 'files')
+    set((st) => ({ rightView: 'files', activeTab, ...panelPatch(st, true) }))
+    s.setExplorerOpen(true)
   },
 
   async refreshGit() {

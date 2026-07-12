@@ -134,6 +134,7 @@ function QuickOpen(): React.JSX.Element {
   const openTerminal = useApp((s) => s.openTerminal)
   const setRightView = useApp((s) => s.setRightView)
   const openDiff = useApp((s) => s.openDiff)
+  const browseFiles = useApp((s) => s.browseFiles)
 
   const [open, setOpen] = React.useState(false)
   const [query, setQuery] = React.useState('')
@@ -188,6 +189,14 @@ function QuickOpen(): React.JSX.Element {
   }
 
   const actions = [
+    {
+      icon: <FolderTree className="size-4" />,
+      label: 'Browse files',
+      run: () => {
+        browseFiles()
+        setOpen(false)
+      }
+    },
     {
       icon: <Globe className="size-4" />,
       label: 'Browser preview',
@@ -307,6 +316,8 @@ export function RightPanel(): React.JSX.Element | null {
   const closePlanPanel = useApp((s) => s.closePlanPanel)
   const rightView = useApp((s) => s.rightView)
   const setRightView = useApp((s) => s.setRightView)
+  const dockOpen = useApp((s) => s.explorerOpen)
+  const toggleDock = useApp((s) => s.toggleExplorer)
   const terminals = useApp((s) => s.terminals)
   const closeTerminal = useApp((s) => s.closeTerminal)
   const previews = useApp((s) => s.previews)
@@ -328,21 +339,6 @@ export function RightPanel(): React.JSX.Element | null {
 
   // Markdown preview vs source; the choice sticks across files.
   const [mdMode, setMdMode] = React.useState<'preview' | 'source'>('preview')
-
-  // The Files/Source dock column starts collapsed, like Cursor's explorer.
-  const [dockOpen, setDockOpen] = React.useState(
-    () => localStorage.getItem('rightDockOpen') === 'true'
-  )
-  const toggleDock = (): void => {
-    const opening = !dockOpen
-    setDockOpen(opening)
-    localStorage.setItem('rightDockOpen', String(opening))
-    if (opening) {
-      const s = useApp.getState()
-      if (s.selectedCwd && !s.filesByDir[s.selectedCwd]) void s.loadDir(s.selectedCwd)
-      void s.refreshGit()
-    }
-  }
 
   const [dockWidth, setDockWidth] = React.useState<number>(() => {
     const saved = Number(localStorage.getItem('rightDockWidth'))
@@ -431,7 +427,9 @@ export function RightPanel(): React.JSX.Element | null {
 
   const showPlan = planPanel !== null && planPanel.chatId === activeId
   const current =
-    terminals.some((t) => t.id === activeTab)
+    activeTab === 'files'
+      ? 'files'
+      : terminals.some((t) => t.id === activeTab)
       ? activeTab!
       : previews.some((p) => p.id === activeTab)
         ? activeTab!
