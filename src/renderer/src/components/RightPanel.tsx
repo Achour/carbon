@@ -5,7 +5,6 @@ import {
   Eye,
   FileDiff,
   FileText,
-  Files,
   FolderTree,
   GitBranch,
   GitCompare,
@@ -19,7 +18,6 @@ import {
   SquareTerminal,
   X
 } from 'lucide-react'
-import type { GitFileChange } from '@shared/types'
 import { cn } from '@/lib/utils'
 import { useApp, type OpenTab } from '@/store'
 import { Button } from '@/components/ui/button'
@@ -135,8 +133,7 @@ function QuickOpen(): React.JSX.Element {
   const openFile = useApp((s) => s.openFile)
   const openPreview = useApp((s) => s.openPreview)
   const openTerminal = useApp((s) => s.openTerminal)
-  const setRightView = useApp((s) => s.setRightView)
-  const openDiff = useApp((s) => s.openDiff)
+  const reviewChangesAction = useApp((s) => s.reviewChanges)
   const browseFiles = useApp((s) => s.browseFiles)
 
   const [open, setOpen] = React.useState(false)
@@ -183,11 +180,7 @@ function QuickOpen(): React.JSX.Element {
   }
 
   const reviewChanges = (): void => {
-    setRightView('git')
-    const first: GitFileChange | undefined = useApp.getState().git?.changes[0]
-    // Open the first change's diff so there's an editor tab to show the source
-    // control dock against; with no changes there's nothing to review.
-    if (first) void openDiff(first, { preview: true })
+    void reviewChangesAction()
     setOpen(false)
   }
 
@@ -381,8 +374,6 @@ export function RightPanel(): React.JSX.Element | null {
   const closeFile = useApp((s) => s.closeFile)
   const promoteTab = useApp((s) => s.promoteTab)
   const closePlanPanel = useApp((s) => s.closePlanPanel)
-  const rightView = useApp((s) => s.rightView)
-  const setRightView = useApp((s) => s.setRightView)
   const dockOpen = useApp((s) => s.explorerOpen)
   const toggleDock = useApp((s) => s.toggleExplorer)
   const terminals = useApp((s) => s.terminals)
@@ -390,7 +381,6 @@ export function RightPanel(): React.JSX.Element | null {
   const previews = useApp((s) => s.previews)
   const closePreview = useApp((s) => s.closePreview)
   const selectedCwd = useApp((s) => s.selectedCwd)
-  const changeCount = useApp((s) => s.git?.changes.length ?? 0)
   const diffContents = useApp((s) => s.diffContents)
   const panelMaximized = useApp((s) => s.panelMaximized)
   const togglePanelMaximized = useApp((s) => s.togglePanelMaximized)
@@ -750,39 +740,9 @@ export function RightPanel(): React.JSX.Element | null {
             onDoubleClick={resetDockWidth}
             className="no-drag absolute inset-y-0 -left-[3px] z-10 w-1.5 cursor-col-resize transition-colors hover:bg-primary/40 active:bg-primary/60"
           />
-          {/* Files (project tree) / Changes (source control) switcher */}
-          <div className="mx-2 mt-1.5 mb-1 grid shrink-0 grid-cols-2 gap-0.5 rounded-lg bg-secondary/60 p-0.5">
-            <button
-              type="button"
-              onClick={() => setRightView('files')}
-              className={cn(
-                'flex h-6 items-center justify-center gap-1.5 rounded-md text-[11px] font-medium transition-colors',
-                rightView === 'files'
-                  ? 'bg-background text-foreground shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground'
-              )}
-            >
-              <Files className="size-3" /> Files
-            </button>
-            <button
-              type="button"
-              onClick={() => setRightView('git')}
-              className={cn(
-                'flex h-6 items-center justify-center gap-1.5 rounded-md text-[11px] font-medium transition-colors',
-                rightView === 'git'
-                  ? 'bg-background text-foreground shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground'
-              )}
-            >
-              <GitBranch className="size-3" /> Changes
-              {changeCount > 0 && (
-                <span className="rounded-full bg-primary/15 px-1 text-[9px] font-semibold text-primary">
-                  {changeCount}
-                </span>
-              )}
-            </button>
-          </div>
-          {rightView === 'git' ? <GitPanel /> : <FileTree />}
+          {/* The dock follows the active tab, Cursor-style: the changes tree
+              while reviewing the Working Tree, the project file tree otherwise. */}
+          {currentIsChanges ? <GitPanel /> : <FileTree />}
         </div>
         )}
       </div>

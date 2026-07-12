@@ -194,8 +194,6 @@ interface AppState {
   refreshFiles(): Promise<void>
 
   // ---- Git ----
-  /** Which view the right-panel dock column shows. */
-  rightView: 'files' | 'git'
   git: GitStatus | null
   /** True while a push is in flight. */
   gitBusy: boolean
@@ -203,7 +201,6 @@ interface AppState {
   /** Diff text per diff tab id. */
   diffContents: Record<string, string>
 
-  setRightView(view: 'files' | 'git'): void
   /** The file-tree / source-control dock on the right edge of the panel. */
   explorerOpen: boolean
   setExplorerOpen(open: boolean): void
@@ -715,17 +712,11 @@ export const useApp = create<AppState>((set, get) => ({
 
   // ---- Git ----
 
-  rightView: 'files',
   explorerOpen: localStorage.getItem('rightDockOpen') === 'true',
   git: null,
   gitBusy: false,
   gitError: null,
   diffContents: {},
-
-  setRightView(view) {
-    set({ rightView: view })
-    if (view === 'git') void get().refreshGit()
-  },
 
   setExplorerOpen(open) {
     localStorage.setItem('rightDockOpen', String(open))
@@ -743,16 +734,19 @@ export const useApp = create<AppState>((set, get) => ({
 
   browseFiles() {
     const s = get()
-    // The dock only shows over the file/editor area, not the browser/terminal.
-    // If we're on one of those (or nothing), switch to an editor tab — the last
-    // open file if any, else an empty files view — so the tree is visible.
-    const onEditor =
-      s.activeTab != null &&
+    // The file tree shows when the active tab is a file editor — not the Working
+    // Tree (changes) view, a browser or a terminal. If it isn't, switch to a file
+    // tab (the last open file, else an empty files view) so the tree is visible.
+    const onFileEditor =
+      typeof s.activeTab === 'string' &&
       s.activeTab !== 'files' &&
+      !s.activeTab.startsWith('changes:') &&
       !s.previews.some((p) => p.id === s.activeTab) &&
-      !s.terminals.some((t) => t.id === s.activeTab)
-    const activeTab = onEditor ? s.activeTab : (s.openFiles[s.openFiles.length - 1]?.path ?? 'files')
-    set((st) => ({ rightView: 'files', activeTab, ...panelPatch(st, true) }))
+      !s.terminals.some((t) => t.id === s.activeTab) &&
+      s.openFiles.some((f) => f.path === s.activeTab)
+    const lastFile = [...s.openFiles].reverse().find((f) => !f.path.startsWith('changes:'))
+    const activeTab = onFileEditor ? s.activeTab : (lastFile?.path ?? 'files')
+    set((st) => ({ activeTab, ...panelPatch(st, true) }))
     s.setExplorerOpen(true)
   },
 
@@ -902,9 +896,8 @@ export const useApp = create<AppState>((set, get) => ({
 
   async reviewChanges() {
     if (!get().selectedCwd) return
-    // Open the panel with the source-control dock showing the change tree, and
-    // the stacked all-files diff beside it.
-    set((s) => ({ rightView: 'git', ...panelPatch(s, true) }))
+    // Open the Working Tree tab (all diffs stacked); the dock follows it and
+    // shows the changes tree. setExplorerOpen ensures that dock is visible.
     get().setExplorerOpen(true) // also refreshes git
     get().openChanges()
   },
