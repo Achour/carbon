@@ -242,17 +242,25 @@ export function applyTheme(id: string): void {
 
 // Code font size (code blocks, file viewer, diffs) via --code-font-size.
 export const CODE_FONT_MIN = 10
-export const CODE_FONT_MAX = 20
-export const CODE_FONT_DEFAULT = 12
+export const CODE_FONT_MAX = 24
+export const CODE_FONT_DEFAULT = 14
 
 export function storedCodeFontSize(): number {
-  const n = Number(localStorage.getItem('codeFontSize'))
+  // One-time: an earlier build read an unset value as 0 and clamped it to the
+  // minimum (10), then persisted that — clear it so the real default applies.
+  if (!localStorage.getItem('codeFontV2')) {
+    localStorage.setItem('codeFontV2', '1')
+    localStorage.removeItem('codeFontSize')
+  }
+  const raw = localStorage.getItem('codeFontSize')
+  const n = raw === null ? NaN : Number(raw)
   return Number.isFinite(n) ? Math.min(CODE_FONT_MAX, Math.max(CODE_FONT_MIN, n)) : CODE_FONT_DEFAULT
 }
 
+// Applies the CSS var only; persistence is the caller's job (setCodeFontSize),
+// so a future default change isn't shadowed by an auto-persisted value.
 export function applyCodeFontSize(px: number): void {
   document.documentElement.style.setProperty('--code-font-size', `${px}px`)
-  localStorage.setItem('codeFontSize', String(px))
 }
 
 /** Injects a stylesheet with one `:root[data-theme='…']` block per theme. */

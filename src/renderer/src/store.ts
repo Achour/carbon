@@ -345,6 +345,7 @@ export const useApp = create<AppState>((set, get) => ({
   setCodeFontSize(px) {
     const size = Math.min(CODE_FONT_MAX, Math.max(CODE_FONT_MIN, Math.round(px)))
     applyCodeFontSize(size)
+    localStorage.setItem('codeFontSize', String(size))
     set({ codeFontSize: size })
   },
 
