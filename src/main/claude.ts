@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import {
+  createSdkMcpServer,
   query,
+  tool,
   type PermissionResult,
   type PermissionUpdate,
   type Query,
@@ -8,6 +10,7 @@ import {
   type SDKMessage,
   type SDKUserMessage
 } from '@anthropic-ai/claude-agent-sdk'
+import { z } from 'zod'
 import type {
   AssistantMessage,
   AssistantPart,
@@ -16,14 +19,92 @@ import type {
   ChatEvent,
   ChatStatus,
   EffortId,
+  ElementRef,
   PermissionDecision,
   PermissionModeId,
   SlashCommand,
   ToolPart
 } from '@shared/types'
 import type { Store } from './store'
+import type { PreviewManager } from './preview'
 
 type Emit = (ev: ChatEvent) => void
+
+/**
+ * An in-process MCP server giving the agent control of the live preview for the
+ * chat's project: start/stop the dev server, navigate, screenshot the running
+ * page, and read its console — so it can verify its own edits end-to-end.
+ */
+function buildPreviewServer(
+  cwd: string,
+  preview: PreviewManager
+): ReturnType<typeof createSdkMcpServer> {
+  const text = (t: string): { content: Array<{ type: 'text'; text: string }> } => ({
+    content: [{ type: 'text', text: t }]
+  })
+  return createSdkMcpServer({
+    name: 'preview',
+    version: '1.0.0',
+    tools: [
+      tool(
+        'status',
+        'Get the dev-server preview status for this project: whether it is running and its local URL.',
+        {},
+        async () => text(JSON.stringify(preview.state(cwd)))
+      ),
+      tool(
+        'start',
+        'Start this project\'s dev server (command auto-detected from package.json). Waits until the local URL is ready and opens the in-app preview. Use before screenshotting.',
+        {},
+        async () => text(JSON.stringify(await preview.startAndWait(cwd)))
+      ),
+      tool('stop', 'Stop this project\'s dev server.', {}, async () =>
+        text(JSON.stringify(preview.stop(cwd)))
+      ),
+      tool(
+        'navigate',
+        'Point the in-app preview browser at a URL (e.g. a specific route of the running app).',
+        { url: z.string().describe('The URL to load in the preview.') },
+        async ({ url }) => {
+          const res = await preview.navigate(cwd, url)
+          return text(res.ok ? `Navigated to ${url}` : `Failed to navigate: ${res.error ?? 'unknown'}`)
+        }
+      ),
+      tool(
+        'screenshot',
+        'Capture a screenshot of the current preview page to see the running app as the user sees it. Start the dev server first if it is not running.',
+        {},
+        async () => {
+          const data = await preview.screenshot(cwd)
+          if (!data) {
+            return text('No preview is open to screenshot. Start the dev server (preview.start) or navigate first.')
+          }
+          return { content: [{ type: 'image' as const, data, mimeType: 'image/png' }] }
+        }
+      ),
+      tool(
+        'console',
+        'Read recent console output and errors from the running preview app (browser console + dev-server errors).',
+        {},
+        async () => text(preview.recentConsole(cwd) || 'No console output captured yet.')
+      )
+    ]
+  })
+}
+
+/** Renders a picked UI element as a text block the agent can act on. */
+function describeElement(el: ElementRef): string {
+  const lines = [`Selected UI element from the running app (${el.url}):`]
+  if (el.source?.file) {
+    const col = el.source.column != null ? `:${el.source.column}` : ''
+    const loc = el.source.line != null ? `${el.source.file}:${el.source.line}${col}` : el.source.file
+    lines.push(`- Source: ${loc}`)
+  }
+  if (el.label) lines.push(`- Text: ${JSON.stringify(el.label)}`)
+  if (el.selector) lines.push(`- Selector: ${el.selector}`)
+  if (el.html) lines.push(`- HTML: ${el.html}`)
+  return lines.join('\n')
+}
 
 interface InputQueue {
   push(msg: SDKUserMessage): void
@@ -85,7 +166,8 @@ class ClaudeSession {
     private emit: Emit,
     private store: Store,
     private onDead: () => void,
-    private onCommands: (commands: SlashCommand[]) => void
+    private onCommands: (commands: SlashCommand[]) => void,
+    private preview: PreviewManager
   ) {
     this.q = query({
       prompt: this.input.iterate(),
@@ -99,7 +181,23 @@ class ClaudeSession {
         includePartialMessages: true,
         systemPrompt: { type: 'preset', preset: 'claude_code' },
         settingSources: ['user', 'project', 'local'],
+        mcpServers: { preview: buildPreviewServer(chat.cwd, preview) },
         canUseTool: async (toolName, input, opts) => {
+          // The preview tools are safe, local, and app-mediated — never prompt.
+          // Exception: starting/stopping the dev server is a side effect, so it's
+          // blocked in plan mode (read-only) until the plan is approved.
+          if (toolName.startsWith('mcp__preview__')) {
+            const sideEffecting =
+              toolName === 'mcp__preview__start' || toolName === 'mcp__preview__stop'
+            if (sideEffecting && this.chat.permissionMode === 'plan') {
+              return {
+                behavior: 'deny',
+                message:
+                  'Starting or stopping the dev server is a side effect and is not allowed in plan mode. Note it in the plan — it can run once the plan is approved.'
+              }
+            }
+            return { behavior: 'allow', updatedInput: input }
+          }
           return this.requestPermission(toolName, input, opts)
         },
         stderr: (data) => {
@@ -177,21 +275,27 @@ class ClaudeSession {
     this.setStatus(this.chat.sessionId ? 'streaming' : 'starting')
 
     // Images go to the model as base64 blocks; other files are referenced by
-    // path so Claude can Read them itself.
+    // path so Claude can Read them itself. Picked UI elements contribute a
+    // screenshot (if captured) plus a text description of where they live.
     const content: Array<Record<string, unknown>> = []
+    const elementBlocks: string[] = []
     for (const a of attachments) {
-      if (a.kind === 'image' && a.data && a.mediaType) {
+      if ((a.kind === 'image' || a.kind === 'element') && a.data && a.mediaType) {
         content.push({
           type: 'image',
           source: { type: 'base64', media_type: a.mediaType, data: a.data }
         })
       }
+      if (a.kind === 'element' && a.element) elementBlocks.push(describeElement(a.element))
     }
     const filePaths = attachments.filter((a) => a.kind === 'file' && a.path).map((a) => a.path!)
     let prompt = text
     if (filePaths.length) {
       const list = filePaths.map((p) => `- ${p}`).join('\n')
-      prompt = `${text ? `${text}\n\n` : ''}Attached files:\n${list}`
+      prompt = `${prompt ? `${prompt}\n\n` : ''}Attached files:\n${list}`
+    }
+    if (elementBlocks.length) {
+      prompt = `${prompt ? `${prompt}\n\n` : ''}${elementBlocks.join('\n\n')}`
     }
     if (prompt || content.length === 0) content.push({ type: 'text', text: prompt })
     this.input.push({
@@ -817,7 +921,8 @@ export class ChatManager {
 
   constructor(
     private store: Store,
-    private emit: Emit
+    private emit: Emit,
+    private preview: PreviewManager
   ) {}
 
   private sessionFor(chatId: string): ClaudeSession | null {
@@ -897,7 +1002,8 @@ export class ChatManager {
         () => {
           if (this.sessions.get(chatId)?.dead) this.sessions.delete(chatId)
         },
-        (commands) => this.commandsByCwd.set(chat.cwd, commands)
+        (commands) => this.commandsByCwd.set(chat.cwd, commands),
+        this.preview
       )
       this.sessions.set(chatId, session)
     }

@@ -8,31 +8,29 @@ import {
   Files,
   FolderTree,
   GitBranch,
+  Globe,
   Maximize2,
   Minimize2,
   PanelLeft,
   PanelRight,
   Plus,
+  Search,
   SquareTerminal,
   X
 } from 'lucide-react'
+import type { GitFileChange } from '@shared/types'
 import { cn } from '@/lib/utils'
 import { useApp, type OpenTab } from '@/store'
 import { Button } from '@/components/ui/button'
 import { WithTooltip } from '@/components/ui/tooltip'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger
-} from '@/components/ui/dropdown-menu'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { PlanContent } from '@/components/PlanPanel'
 import { FileViewer, MARKDOWN_RE } from '@/components/FileViewer'
 import { FileTree } from '@/components/FileTree'
 import { GitPanel } from '@/components/GitPanel'
 import { DiffView } from '@/components/DiffView'
 import { TerminalPane } from '@/components/TerminalPanel'
+import { BrowserPane } from '@/components/BrowserPane'
 
 function Tab({
   icon,
@@ -123,6 +121,179 @@ function PathBar({ entry, cwd }: { entry: OpenTab; cwd: string | null }): React.
   )
 }
 
+/**
+ * The "+" button: a Cursor-style quick-open. Type to fuzzy-search files (opens
+ * one as a tab), or pick an action — Browser preview, Terminal, Review changes.
+ * This is how you open files regardless of which tab is active, so the file tree
+ * never needs to sit beside the browser.
+ */
+function QuickOpen(): React.JSX.Element {
+  const cwd = useApp((s) => s.selectedCwd)
+  const openFile = useApp((s) => s.openFile)
+  const openPreview = useApp((s) => s.openPreview)
+  const openTerminal = useApp((s) => s.openTerminal)
+  const setRightView = useApp((s) => s.setRightView)
+  const openDiff = useApp((s) => s.openDiff)
+
+  const [open, setOpen] = React.useState(false)
+  const [query, setQuery] = React.useState('')
+  const [results, setResults] = React.useState<{ rel: string; path: string }[]>([])
+  const [idx, setIdx] = React.useState(0)
+  const inputRef = React.useRef<HTMLInputElement>(null)
+
+  React.useEffect(() => {
+    if (!open) {
+      setQuery('')
+      setResults([])
+      setIdx(0)
+      return
+    }
+    // Base UI moves focus into the popup; nudge it to the input.
+    const t = setTimeout(() => inputRef.current?.focus(), 30)
+    return () => clearTimeout(t)
+  }, [open])
+
+  React.useEffect(() => {
+    if (!open || !cwd || !query.trim()) {
+      setResults([])
+      return
+    }
+    let alive = true
+    const t = setTimeout(() => {
+      void window.api.searchFiles(cwd, query.trim()).then((res) => {
+        if (alive) {
+          setResults(res)
+          setIdx(0)
+        }
+      })
+    }, 80)
+    return () => {
+      alive = false
+      clearTimeout(t)
+    }
+  }, [query, open, cwd])
+
+  const pickFile = (r: { rel: string; path: string }): void => {
+    void openFile(r.path)
+    setOpen(false)
+  }
+
+  const reviewChanges = (): void => {
+    setRightView('git')
+    const first: GitFileChange | undefined = useApp.getState().git?.changes[0]
+    // Open the first change's diff so there's an editor tab to show the source
+    // control dock against; with no changes there's nothing to review.
+    if (first) void openDiff(first)
+    setOpen(false)
+  }
+
+  const actions = [
+    {
+      icon: <Globe className="size-4" />,
+      label: 'Browser preview',
+      run: () => {
+        openPreview()
+        setOpen(false)
+      }
+    },
+    {
+      icon: <SquareTerminal className="size-4" />,
+      label: 'Terminal',
+      run: () => {
+        openTerminal()
+        setOpen(false)
+      }
+    },
+    { icon: <GitBranch className="size-4" />, label: 'Review changes', run: reviewChanges }
+  ]
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger
+        render={
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            className="no-drag shrink-0"
+            aria-label="Open a file or tab"
+          >
+            <Plus />
+          </Button>
+        }
+      />
+      <PopoverContent align="end" className="w-80 overflow-hidden p-0">
+        <div className="flex items-center gap-2 border-b border-border px-3 py-2">
+          <Search className="size-3.5 shrink-0 text-muted-foreground" />
+          <input
+            ref={inputRef}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (results.length) {
+                if (e.key === 'ArrowDown') {
+                  e.preventDefault()
+                  setIdx((i) => (i + 1) % results.length)
+                } else if (e.key === 'ArrowUp') {
+                  e.preventDefault()
+                  setIdx((i) => (i - 1 + results.length) % results.length)
+                } else if (e.key === 'Enter') {
+                  e.preventDefault()
+                  pickFile(results[idx])
+                }
+              }
+            }}
+            placeholder="Open a file…"
+            spellCheck={false}
+            className="w-full bg-transparent text-[13px] outline-none placeholder:text-muted-foreground/60"
+          />
+        </div>
+        <div className="max-h-72 overflow-y-auto p-1">
+          {results.length > 0 ? (
+            results.map((r, i) => {
+              const name = r.rel.split('/').pop() ?? r.rel
+              const dir = r.rel.slice(0, r.rel.length - name.length).replace(/\/$/, '')
+              return (
+                <button
+                  key={r.path}
+                  type="button"
+                  onMouseEnter={() => setIdx(i)}
+                  onClick={() => pickFile(r)}
+                  className={cn(
+                    'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors',
+                    i === idx && 'bg-accent'
+                  )}
+                >
+                  <FileText className="size-3.5 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0 truncate text-xs">
+                    <span className="text-foreground">{name}</span>
+                    {dir && <span className="ml-1.5 text-muted-foreground/60">{dir}</span>}
+                  </span>
+                </button>
+              )
+            })
+          ) : query.trim() ? (
+            <div className="px-2 py-4 text-center text-xs text-muted-foreground/60">
+              No files match “{query}”.
+            </div>
+          ) : (
+            actions.map((a) => (
+              <button
+                key={a.label}
+                type="button"
+                onClick={a.run}
+                className="flex w-full items-center gap-2.5 rounded-md px-2 py-2 text-left text-[13px] transition-colors hover:bg-accent"
+              >
+                <span className="text-muted-foreground">{a.icon}</span>
+                {a.label}
+              </button>
+            ))
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
 export function RightPanel(): React.JSX.Element | null {
   const panelOpen = useApp((s) => s.panelOpen)
   const planPanel = useApp((s) => s.planPanel)
@@ -137,8 +308,9 @@ export function RightPanel(): React.JSX.Element | null {
   const rightView = useApp((s) => s.rightView)
   const setRightView = useApp((s) => s.setRightView)
   const terminals = useApp((s) => s.terminals)
-  const openTerminal = useApp((s) => s.openTerminal)
   const closeTerminal = useApp((s) => s.closeTerminal)
+  const previews = useApp((s) => s.previews)
+  const closePreview = useApp((s) => s.closePreview)
   const selectedCwd = useApp((s) => s.selectedCwd)
   const changeCount = useApp((s) => s.git?.changes.length ?? 0)
   const diffContents = useApp((s) => s.diffContents)
@@ -170,19 +342,6 @@ export function RightPanel(): React.JSX.Element | null {
       if (s.selectedCwd && !s.filesByDir[s.selectedCwd]) void s.loadDir(s.selectedCwd)
       void s.refreshGit()
     }
-  }
-
-  // "+" menu: reveal the file-tree dock on the requested view (opening it if
-  // needed), so Files / Review jump straight to browsing or source control.
-  const revealDock = (view: 'files' | 'git'): void => {
-    if (!dockOpen) {
-      setDockOpen(true)
-      localStorage.setItem('rightDockOpen', 'true')
-      const s = useApp.getState()
-      if (s.selectedCwd && !s.filesByDir[s.selectedCwd]) void s.loadDir(s.selectedCwd)
-      void s.refreshGit()
-    }
-    setRightView(view)
   }
 
   const [dockWidth, setDockWidth] = React.useState<number>(() => {
@@ -274,14 +433,20 @@ export function RightPanel(): React.JSX.Element | null {
   const current =
     terminals.some((t) => t.id === activeTab)
       ? activeTab!
-      : activeTab === 'plan' && showPlan
-        ? 'plan'
-        : openFiles.some((f) => f.path === activeTab)
-          ? activeTab!
-          : showPlan
-            ? 'plan'
-            : (openFiles[openFiles.length - 1]?.path ?? terminals[terminals.length - 1]?.id ?? null)
+      : previews.some((p) => p.id === activeTab)
+        ? activeTab!
+        : activeTab === 'plan' && showPlan
+          ? 'plan'
+          : openFiles.some((f) => f.path === activeTab)
+            ? activeTab!
+            : showPlan
+              ? 'plan'
+              : (openFiles[openFiles.length - 1]?.path ??
+                previews[previews.length - 1]?.id ??
+                terminals[terminals.length - 1]?.id ??
+                null)
   const currentIsTerminal = terminals.some((t) => t.id === current)
+  const currentIsPreview = previews.some((p) => p.id === current)
   const activeEntry = openFiles.find((f) => f.path === current)
   const activeIsMarkdown = !!activeEntry && !activeEntry.diff && MARKDOWN_RE.test(activeEntry.name)
 
@@ -373,33 +538,18 @@ export function RightPanel(): React.JSX.Element | null {
               onClose={() => closeTerminal(t.id)}
             />
           ))}
+          {previews.map((p) => (
+            <Tab
+              key={p.id}
+              icon={<Globe className="size-3.5" />}
+              label={`Preview ${p.n}`}
+              active={current === p.id}
+              onSelect={() => setActiveTab(p.id)}
+              onClose={() => closePreview(p.id)}
+            />
+          ))}
         </div>
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            render={
-              <Button
-                size="icon-sm"
-                variant="ghost"
-                className="no-drag shrink-0"
-                aria-label="Open a tab"
-              >
-                <Plus />
-              </Button>
-            }
-          />
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem onClick={() => revealDock('files')}>
-              <Files /> Files
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => revealDock('git')}>
-              <GitBranch /> Review changes
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={openTerminal}>
-              <SquareTerminal /> Terminal
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <QuickOpen />
         <WithTooltip label={panelMaximized ? 'Restore panel' : 'Maximize panel'}>
           <Button
             size="icon-sm"
@@ -425,8 +575,8 @@ export function RightPanel(): React.JSX.Element | null {
       </header>
 
       {/* Breadcrumb row with the file-tree toggle at its right, Cursor-style.
-          Hidden for terminal tabs, which carry their own toolbar. */}
-      {!currentIsTerminal && (
+          Hidden for terminal and preview tabs, which carry their own toolbar. */}
+      {!currentIsTerminal && !currentIsPreview && (
         <div className="flex h-8 shrink-0 items-center gap-2 border-b border-border/60 pr-1.5 pl-3">
           <div className="min-w-0 flex-1">
             {activeEntry && <PathBar entry={activeEntry} cwd={selectedCwd} />}
@@ -469,7 +619,7 @@ export function RightPanel(): React.JSX.Element | null {
       {/* Viewer + file tree / source control docked on the right, Cursor-style */}
       <div className="flex min-h-0 flex-1">
         <div className="relative flex min-w-0 flex-1 flex-col">
-          <div className={cn('min-h-0 flex-1', currentIsTerminal && 'hidden')}>
+          <div className={cn('min-h-0 flex-1', (currentIsTerminal || currentIsPreview) && 'hidden')}>
             {current === 'plan' && planPanel ? (
               <PlanContent panel={planPanel} hasSuggestions={hasSuggestions} />
             ) : activeEntry?.diff ? (
@@ -500,8 +650,20 @@ export function RightPanel(): React.JSX.Element | null {
               <TerminalPane id={t.id} active={current === t.id} />
             </div>
           ))}
+          {/* Preview panes stay mounted so page state survives tab switches. */}
+          {previews.map((p) => (
+            <div
+              key={p.id}
+              className={cn(
+                'absolute inset-0',
+                current !== p.id && 'invisible pointer-events-none'
+              )}
+            >
+              <BrowserPane id={p.id} active={current === p.id} cwd={p.cwd} />
+            </div>
+          ))}
         </div>
-        {dockOpen && (
+        {dockOpen && !currentIsTerminal && !currentIsPreview && (
         <div
           data-right-dock
           style={{ width: `min(${dockWidth}px, calc(100% - ${VIEWER_RESERVED_PX}px))` }}

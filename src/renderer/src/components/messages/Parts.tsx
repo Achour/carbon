@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { Collapsible } from '@base-ui/react/collapsible'
-import { AlertTriangle, ChevronRight, FileText } from 'lucide-react'
+import { AlertTriangle, ChevronRight, FileText, MousePointerClick } from 'lucide-react'
 import type { AssistantMessage, EventMessage, UserMessage } from '@shared/types'
 import { cn } from '@/lib/utils'
 import { formatCost, formatDuration } from '@/lib/format'
@@ -18,7 +18,7 @@ export const UserBubble = React.memo(function UserBubble({
       {message.attachments && message.attachments.length > 0 && (
         <div className="flex max-w-[85%] flex-wrap justify-end gap-1.5">
           {message.attachments.map((att) =>
-            att.kind === 'image' ? (
+            att.kind === 'image' || (att.kind === 'element' && att.data) ? (
               <img
                 key={att.id}
                 src={`data:${att.mediaType};base64,${att.data}`}
@@ -26,6 +26,15 @@ export const UserBubble = React.memo(function UserBubble({
                 title={att.name}
                 className="max-h-40 max-w-56 rounded-xl border border-border object-cover"
               />
+            ) : att.kind === 'element' ? (
+              <div
+                key={att.id}
+                title={att.element?.selector}
+                className="flex h-8 max-w-56 items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/10 px-2.5"
+              >
+                <MousePointerClick className="size-3.5 shrink-0 text-primary" />
+                <span className="truncate font-mono text-[11px]">{att.name}</span>
+              </div>
             ) : (
               <div
                 key={att.id}

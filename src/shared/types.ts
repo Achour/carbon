@@ -68,15 +68,33 @@ export interface ToolPart {
 
 export type AssistantPart = TextPart | ThinkingPart | ToolPart
 
+/** A UI element picked from a live page in the browser-preview panel. */
+export interface ElementRef {
+  /** Page URL the element was picked from. */
+  url: string
+  /** Lowercase tag name, e.g. "button". */
+  tag: string
+  /** CSS selector locating the element on the page. */
+  selector: string
+  /** Trimmed visible text, if any. */
+  label?: string
+  /** Truncated outerHTML of the element. */
+  html?: string
+  /** Source file:line resolved from the React fiber (dev builds only). */
+  source?: { file: string; line?: number; column?: number }
+}
+
 export interface Attachment {
   id: string
-  kind: 'image' | 'file'
+  kind: 'image' | 'file' | 'element'
   name: string
-  /** Images: IANA media type + raw base64 payload (no data: prefix). */
+  /** Images (and element screenshots): IANA media type + raw base64 (no data: prefix). */
   mediaType?: string
   data?: string
   /** Files: absolute path on disk, passed to Claude as a reference to read. */
   path?: string
+  /** Elements: the picked element's location, markup, and source mapping. */
+  element?: ElementRef
 }
 
 export interface UserMessage {
@@ -252,6 +270,41 @@ export type TerminalEvent =
   | { type: 'data'; id: string; data: string }
   | { type: 'exit'; id: string; exitCode: number }
 
+// ---------- Browser preview / dev server ----------
+
+export type PreviewStatus = 'stopped' | 'starting' | 'running' | 'error'
+
+export interface PreviewState {
+  cwd: string
+  status: PreviewStatus
+  /** The command being run, e.g. "npm run dev". */
+  command?: string
+  /** Detected local URL once the dev server prints it. */
+  url?: string
+  /** Short summary when status is 'error' (spawn failure or early exit). */
+  error?: string
+}
+
+/** main → renderer dev-server lifecycle updates. */
+export type PreviewEvent = { type: 'state'; state: PreviewState }
+
+/** main → renderer request to act on a live preview (agent read-back / navigation). */
+export interface PreviewCommand {
+  id: string
+  cwd: string
+  kind: 'screenshot' | 'navigate'
+  /** navigate: target URL. screenshot: URL to open one at if none exists yet. */
+  url?: string
+}
+
+export interface PreviewCommandResult {
+  id: string
+  ok: boolean
+  /** screenshot: base64 PNG, no data: prefix. */
+  data?: string
+  error?: string
+}
+
 // ---------- Slash commands ----------
 
 /** A slash command available in a session (custom command, skill, or built-in). */
@@ -310,7 +363,22 @@ export interface Api {
   terminalKill(id: string): Promise<void>
   /** Slash commands cached for a project folder (empty until a session inits). */
   getCommands(cwd: string): Promise<SlashCommand[]>
+  // ---- Browser preview / dev server ----
+  /** Detected dev command for a project, or null if none found. */
+  previewDetect(cwd: string): Promise<string | null>
+  previewState(cwd: string): Promise<PreviewState>
+  /** Starts the dev server (auto-detected command unless one is given). */
+  previewStart(cwd: string, command?: string): Promise<PreviewState>
+  previewStop(cwd: string): Promise<PreviewState>
+  /** Buffered dev-server output (ANSI-stripped). */
+  previewLogs(cwd: string): Promise<string>
+  /** Renderer forwards guest console lines so agent read-back can surface them. */
+  previewReportConsole(cwd: string, line: string): void
+  /** Renderer's reply to a PreviewCommand (screenshot/navigate). */
+  previewCommandResult(result: PreviewCommandResult): void
   onChatEvent(cb: (ev: ChatEvent) => void): () => void
   onNewChat(cb: () => void): () => void
   onTerminalEvent(cb: (ev: TerminalEvent) => void): () => void
+  onPreviewEvent(cb: (ev: PreviewEvent) => void): () => void
+  onPreviewCommand(cb: (cmd: PreviewCommand) => void): () => void
 }

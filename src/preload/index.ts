@@ -7,6 +7,9 @@ import type {
   GitDiffTarget,
   PermissionDecision,
   PermissionModeId,
+  PreviewCommand,
+  PreviewCommandResult,
+  PreviewEvent,
   Provider,
   TerminalCreateOpts,
   TerminalEvent
@@ -61,6 +64,18 @@ const api: Api = {
     ipcRenderer.invoke('terminal:resize', id, cols, rows),
   terminalKill: (id: string) => ipcRenderer.invoke('terminal:kill', id),
   getCommands: (cwd: string) => ipcRenderer.invoke('commands:get', cwd),
+  previewDetect: (cwd: string) => ipcRenderer.invoke('preview:detect', cwd),
+  previewState: (cwd: string) => ipcRenderer.invoke('preview:state', cwd),
+  previewStart: (cwd: string, command?: string) =>
+    ipcRenderer.invoke('preview:start', cwd, command),
+  previewStop: (cwd: string) => ipcRenderer.invoke('preview:stop', cwd),
+  previewLogs: (cwd: string) => ipcRenderer.invoke('preview:logs', cwd),
+  previewReportConsole: (cwd: string, line: string) => {
+    void ipcRenderer.invoke('preview:report-console', cwd, line)
+  },
+  previewCommandResult: (result: PreviewCommandResult) => {
+    void ipcRenderer.invoke('preview:command-result', result)
+  },
   onChatEvent: (cb: (ev: ChatEvent) => void) => {
     const listener = (_e: Electron.IpcRendererEvent, ev: ChatEvent): void => cb(ev)
     ipcRenderer.on('chat:event', listener)
@@ -75,6 +90,16 @@ const api: Api = {
     const listener = (_e: Electron.IpcRendererEvent, ev: TerminalEvent): void => cb(ev)
     ipcRenderer.on('terminal:event', listener)
     return () => ipcRenderer.removeListener('terminal:event', listener)
+  },
+  onPreviewEvent: (cb: (ev: PreviewEvent) => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, ev: PreviewEvent): void => cb(ev)
+    ipcRenderer.on('preview:event', listener)
+    return () => ipcRenderer.removeListener('preview:event', listener)
+  },
+  onPreviewCommand: (cb: (cmd: PreviewCommand) => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, cmd: PreviewCommand): void => cb(cmd)
+    ipcRenderer.on('preview:command', listener)
+    return () => ipcRenderer.removeListener('preview:command', listener)
   }
 }
 

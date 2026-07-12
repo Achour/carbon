@@ -1,5 +1,15 @@
 import * as React from 'react'
-import { ArrowUp, Brain, FileText, Paperclip, Shield, Sparkles, Square, X } from 'lucide-react'
+import {
+  ArrowUp,
+  Brain,
+  FileText,
+  MousePointerClick,
+  Paperclip,
+  Shield,
+  Sparkles,
+  Square,
+  X
+} from 'lucide-react'
 import {
   EFFORT_OPTIONS,
   MODEL_OPTIONS,
@@ -11,6 +21,7 @@ import {
   type SlashCommand
 } from '@shared/types'
 import { cn } from '@/lib/utils'
+import { useApp } from '@/store'
 import { Button } from '@/components/ui/button'
 import { CompactSelect } from '@/components/ui/select'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -68,6 +79,10 @@ function AttachmentChip({
   att: Attachment
   onRemove: () => void
 }): React.JSX.Element {
+  const elementTitle =
+    att.kind === 'element' && att.element
+      ? [att.element.source?.file, att.element.selector].filter(Boolean).join('\n')
+      : undefined
   return (
     <div className="group/att relative shrink-0">
       {att.kind === 'image' ? (
@@ -77,6 +92,22 @@ function AttachmentChip({
           title={att.name}
           className="h-14 w-14 rounded-lg border border-border object-cover"
         />
+      ) : att.kind === 'element' ? (
+        <div
+          title={elementTitle}
+          className="flex h-8 max-w-52 items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/10 px-2.5"
+        >
+          {att.data ? (
+            <img
+              src={`data:${att.mediaType};base64,${att.data}`}
+              alt=""
+              className="-ml-1 h-6 w-6 rounded border border-border object-cover"
+            />
+          ) : (
+            <MousePointerClick className="size-3.5 shrink-0 text-primary" />
+          )}
+          <span className="truncate font-mono text-[11px]">{att.name}</span>
+        </div>
       ) : (
         <div
           title={att.path}
@@ -204,6 +235,19 @@ export function Composer({
   const [text, setText] = React.useState('')
   const [attachments, setAttachments] = React.useState<Attachment[]>([])
   const [attachError, setAttachError] = React.useState<string | null>(null)
+
+  // Attachments handed in from elsewhere (e.g. an element picked in the browser
+  // preview) land in a store inbox; pull them into the composer and clear it.
+  const inbox = useApp((s) => s.attachmentInbox)
+  React.useEffect(() => {
+    if (inbox.length === 0) return
+    setAttachments((prev) => {
+      const seen = new Set(prev.map((a) => a.id))
+      return [...prev, ...inbox.filter((a) => !seen.has(a.id))]
+    })
+    useApp.getState().clearAttachmentInbox()
+    ref.current?.focus()
+  }, [inbox])
   const [dragOver, setDragOver] = React.useState(false)
   const dragDepth = React.useRef(0)
   const ref = React.useRef<HTMLTextAreaElement>(null)

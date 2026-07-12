@@ -7,6 +7,9 @@ import { NewChat } from '@/components/NewChat'
 import { RightPanel } from '@/components/RightPanel'
 import { Settings } from '@/components/Settings'
 import { useApp } from '@/store'
+import { previewForCwd } from '@/lib/previewRegistry'
+
+const tick = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
 export default function App(): React.JSX.Element {
   const init = useApp((s) => s.init)
@@ -20,6 +23,51 @@ export default function App(): React.JSX.Element {
     void init()
     const offEvents = window.api.onChatEvent(applyEvent)
     const offNewChat = window.api.onNewChat(() => void openChat(null))
+    const offPreview = window.api.onPreviewEvent((ev) => {
+      if (ev.type === 'state') useApp.getState().applyPreviewState(ev.state)
+    })
+    // The agent (via main) asks the renderer to drive the live <webview>:
+    // navigate it, or capture a screenshot to see what it built.
+    const offPreviewCmd = window.api.onPreviewCommand(async (cmd) => {
+      try {
+        if (cmd.kind === 'navigate' && cmd.url) {
+          let p = previewForCwd(cmd.cwd)
+          if (!p) {
+            useApp.getState().openPreview(cmd.url, cmd.cwd)
+            await tick(400)
+            p = previewForCwd(cmd.cwd)
+          }
+          p?.handle.loadURL(cmd.url)
+          window.api.previewCommandResult({ id: cmd.id, ok: !!p })
+          return
+        }
+        if (cmd.kind === 'screenshot') {
+          let p = previewForCwd(cmd.cwd)
+          if (!p && cmd.url) {
+            useApp.getState().openPreview(cmd.url, cmd.cwd)
+            await tick(1200)
+            p = previewForCwd(cmd.cwd)
+          }
+          if (!p) {
+            window.api.previewCommandResult({ id: cmd.id, ok: false, error: 'No preview open' })
+            return
+          }
+          p.handle.activate()
+          await tick(300)
+          const data = await p.handle.capture()
+          window.api.previewCommandResult({
+            id: cmd.id,
+            ok: !!data,
+            data: data ?? undefined,
+            error: data ? undefined : 'Capture failed'
+          })
+          return
+        }
+        window.api.previewCommandResult({ id: cmd.id, ok: false, error: 'Unknown command' })
+      } catch (err) {
+        window.api.previewCommandResult({ id: cmd.id, ok: false, error: String(err) })
+      }
+    })
     const onKey = (e: KeyboardEvent): void => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'n') {
         e.preventDefault()
@@ -48,6 +96,8 @@ export default function App(): React.JSX.Element {
     return () => {
       offEvents()
       offNewChat()
+      offPreview()
+      offPreviewCmd()
       window.removeEventListener('keydown', onKey)
       window.removeEventListener('dragover', preventNav)
       window.removeEventListener('drop', preventNav)

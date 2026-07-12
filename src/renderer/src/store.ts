@@ -24,6 +24,7 @@ import type {
   GitStatus,
   PermissionDecision,
   PermissionRequestPayload,
+  PreviewState,
   SlashCommand
 } from '@shared/types'
 
@@ -38,6 +39,17 @@ export interface TerminalTab {
   id: string
   /** Stable ordinal for the "Terminal N" label. */
   n: number
+}
+
+export interface PreviewTab {
+  /** Tab id, e.g. `preview:2`. */
+  id: string
+  /** Stable ordinal for the "Preview N" label. */
+  n: number
+  /** Currently loaded URL. */
+  url: string
+  /** Project folder this preview belongs to (drives dev-server + agent tools). */
+  cwd: string
 }
 
 export interface PlanPanelState {
@@ -91,6 +103,28 @@ interface AppState {
   openTerminal(): void
   closeTerminal(id: string): void
   toggleTerminal(): void
+
+  // ---- Browser preview ----
+  /** Open browser-preview tabs in the right panel. */
+  previews: PreviewTab[]
+  /** Monotonic counter for stable "Preview N" labels. */
+  previewSeq: number
+  /** Opens a new browser-preview tab (optionally at a URL/project) and focuses it. */
+  openPreview(url?: string, cwd?: string): void
+  closePreview(id: string): void
+  /** Records the URL a preview navigated to, so it restores on tab switch. */
+  setPreviewUrl(id: string, url: string): void
+  /** Dev-server state per project folder, keyed by cwd. */
+  previewStates: Record<string, PreviewState>
+  applyPreviewState(state: PreviewState): void
+  startPreview(cwd?: string): Promise<void>
+  stopPreview(cwd?: string): Promise<void>
+
+  // ---- Composer inbox ----
+  /** Attachments handed to the composer from elsewhere (e.g. picked elements). */
+  attachmentInbox: Attachment[]
+  addAttachment(att: Attachment): void
+  clearAttachmentInbox(): void
 
   // ---- Slash commands ----
   /** Slash commands for the active project, powering the composer's / menu. */
@@ -305,6 +339,88 @@ export const useApp = create<AppState>((set, get) => ({
     // Showing the most recent terminal already → hide the panel; else focus it.
     if (s.activeTab === last && s.panelOpen) set(panelPatch(s, false))
     else set({ activeTab: last, ...panelPatch(s, true) })
+  },
+
+  // ---- Browser preview ----
+
+  // Not persisted across launches (like terminals); the last URL is remembered
+  // in localStorage so a new preview reopens where the last one was pointed.
+  previews: [],
+  previewSeq: 0,
+
+  openPreview(url, cwd) {
+    set((s) => {
+      const n = s.previewSeq + 1
+      const id = `preview:${n}`
+      const target = url || localStorage.getItem('previewUrl') || 'http://localhost:3000'
+      const folder = cwd ?? s.selectedCwd ?? ''
+      return {
+        previews: [...s.previews, { id, n, url: target, cwd: folder }],
+        previewSeq: n,
+        activeTab: id,
+        ...panelPatch(s, true)
+      }
+    })
+  },
+
+  previewStates: {},
+
+  applyPreviewState(state) {
+    set((s) => ({ previewStates: { ...s.previewStates, [state.cwd]: state } }))
+    // When the dev server comes up in the active project, surface a preview
+    // pointed at it (reuse an existing one, else open one).
+    if (state.status === 'running' && state.url && get().selectedCwd === state.cwd) {
+      const existing = get().previews.find((p) => p.cwd === state.cwd)
+      if (!existing) get().openPreview(state.url, state.cwd)
+    }
+  },
+
+  async startPreview(cwd) {
+    const folder = cwd ?? get().selectedCwd
+    if (!folder) return
+    const state = await window.api.previewStart(folder)
+    get().applyPreviewState(state)
+  },
+
+  async stopPreview(cwd) {
+    const folder = cwd ?? get().selectedCwd
+    if (!folder) return
+    const state = await window.api.previewStop(folder)
+    get().applyPreviewState(state)
+  },
+
+  closePreview(id) {
+    set((s) => {
+      const previews = s.previews.filter((p) => p.id !== id)
+      let activeTab = s.activeTab
+      if (activeTab === id) {
+        activeTab =
+          previews[previews.length - 1]?.id ??
+          s.openFiles[s.openFiles.length - 1]?.path ??
+          s.terminals[s.terminals.length - 1]?.id ??
+          (s.planPanel ? 'plan' : null)
+      }
+      return { previews, activeTab }
+    })
+  },
+
+  setPreviewUrl(id, url) {
+    localStorage.setItem('previewUrl', url)
+    set((s) => ({
+      previews: s.previews.map((p) => (p.id === id ? { ...p, url } : p))
+    }))
+  },
+
+  // ---- Composer inbox ----
+
+  attachmentInbox: [],
+
+  addAttachment(att) {
+    set((s) => ({ attachmentInbox: [...s.attachmentInbox, att] }))
+  },
+
+  clearAttachmentInbox() {
+    set({ attachmentInbox: [] })
   },
 
   // ---- Slash commands ----

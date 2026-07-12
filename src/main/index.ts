@@ -11,6 +11,9 @@ import type {
   GitDiffTarget,
   PermissionDecision,
   PermissionModeId,
+  PreviewCommand,
+  PreviewCommandResult,
+  PreviewEvent,
   Provider,
   TerminalCreateOpts,
   TerminalEvent
@@ -18,6 +21,7 @@ import type {
 import { ChatManager } from './claude'
 import { listDir, readFileContent, searchFiles, statPath } from './files'
 import * as gitOps from './git'
+import { PreviewManager } from './preview'
 import { Store } from './store'
 import { TerminalManager } from './terminal'
 
@@ -27,6 +31,7 @@ let win: BrowserWindow | null = null
 let store: Store
 let manager: ChatManager
 let terminals: TerminalManager
+let preview: PreviewManager
 
 function emit(ev: ChatEvent): void {
   win?.webContents.send('chat:event', ev)
@@ -34,6 +39,32 @@ function emit(ev: ChatEvent): void {
 
 function emitTerminal(ev: TerminalEvent): void {
   win?.webContents.send('terminal:event', ev)
+}
+
+function emitPreview(ev: PreviewEvent): void {
+  win?.webContents.send('preview:event', ev)
+}
+
+// Preview screenshot/navigate live in the renderer (the <webview>), so main asks
+// for them over a request/response channel keyed by a generated id.
+const previewPending = new Map<string, (r: PreviewCommandResult) => void>()
+
+function sendPreviewCommand(cmd: Omit<PreviewCommand, 'id'>): Promise<PreviewCommandResult> {
+  const id = randomUUID()
+  return new Promise<PreviewCommandResult>((resolve) => {
+    if (!win) {
+      resolve({ id, ok: false, error: 'No window' })
+      return
+    }
+    const timer = setTimeout(() => {
+      if (previewPending.delete(id)) resolve({ id, ok: false, error: 'Preview command timed out' })
+    }, 15_000)
+    previewPending.set(id, (r) => {
+      clearTimeout(timer)
+      resolve(r)
+    })
+    win.webContents.send('preview:command', { id, ...cmd })
+  })
 }
 
 function createWindow(): void {
@@ -53,7 +84,9 @@ function createWindow(): void {
     webPreferences: {
       preload: join(__dirname, '../preload/index.mjs'),
       contextIsolation: true,
-      sandbox: false
+      sandbox: false,
+      // Enables the <webview> tag used by the browser-preview panel.
+      webviewTag: true
     }
   })
 
@@ -268,6 +301,19 @@ function registerIpc(): void {
 
   ipcMain.handle('commands:get', (_e, cwd: string) => manager.getCommands(cwd))
 
+  ipcMain.handle('preview:detect', (_e, cwd: string) => preview.detect(cwd))
+  ipcMain.handle('preview:state', (_e, cwd: string) => preview.state(cwd))
+  ipcMain.handle('preview:start', (_e, cwd: string, command?: string) => preview.start(cwd, command))
+  ipcMain.handle('preview:stop', (_e, cwd: string) => preview.stop(cwd))
+  ipcMain.handle('preview:logs', (_e, cwd: string) => preview.logs(cwd))
+  ipcMain.handle('preview:report-console', (_e, cwd: string, line: string) =>
+    preview.reportConsole(cwd, line)
+  )
+  ipcMain.handle('preview:command-result', (_e, result: PreviewCommandResult) => {
+    previewPending.get(result.id)?.(result)
+    previewPending.delete(result.id)
+  })
+
   ipcMain.handle('git:status', (_e, cwd: string) => gitOps.gitStatus(cwd))
   ipcMain.handle('git:diff', (_e, cwd: string, target: GitDiffTarget) => gitOps.gitDiff(cwd, target))
   ipcMain.handle('git:stage', (_e, cwd: string, paths: string[]) => gitOps.gitStage(cwd, paths))
@@ -285,7 +331,8 @@ app.whenReady().then(() => {
   // colliding with an installed build's store.
   app.setPath('userData', process.env.AIGUI_USERDATA || join(app.getPath('appData'), 'ai-gui'))
   store = new Store()
-  manager = new ChatManager(store, emit)
+  preview = new PreviewManager(emitPreview, sendPreviewCommand)
+  manager = new ChatManager(store, emit, preview)
   terminals = new TerminalManager(emitTerminal)
   registerIpc()
   buildMenu()
@@ -303,5 +350,6 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   manager.disposeAll()
   terminals.disposeAll()
+  preview.disposeAll()
   store.flushAll()
 })
