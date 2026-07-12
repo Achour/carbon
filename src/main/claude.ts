@@ -31,6 +31,13 @@ import type { PreviewManager } from './preview'
 type Emit = (ev: ChatEvent) => void
 
 /**
+ * Appended to the claude_code preset. The GUI renders ```mermaid fenced blocks
+ * as diagrams (in chat replies and in plan documents), so we nudge the agent to
+ * reach for Mermaid instead of ASCII art when a picture would help.
+ */
+const GUI_SYSTEM_APPEND = `You are running inside a desktop GUI (not a terminal). The GUI renders any \`\`\`mermaid fenced code block as a real rendered diagram — this applies to your chat replies AND to plan documents you write for ExitPlanMode. When a diagram would make an explanation or a plan clearer (flows, sequences, architecture, state), draw it with a Mermaid fenced block (e.g. flowchart, sequenceDiagram) rather than ASCII art or box-drawing characters. Keep diagrams valid and reasonably small; label nodes clearly.`
+
+/**
  * An in-process MCP server giving the agent control of the live preview for the
  * chat's project: start/stop the dev server, navigate, screenshot the running
  * page, and read its console — so it can verify its own edits end-to-end.
@@ -179,7 +186,7 @@ class ClaudeSession {
         permissionMode: chat.permissionMode,
         allowDangerouslySkipPermissions: true,
         includePartialMessages: true,
-        systemPrompt: { type: 'preset', preset: 'claude_code' },
+        systemPrompt: { type: 'preset', preset: 'claude_code', append: GUI_SYSTEM_APPEND },
         settingSources: ['user', 'project', 'local'],
         mcpServers: { preview: buildPreviewServer(chat.cwd, preview) },
         canUseTool: async (toolName, input, opts) => {
