@@ -5,7 +5,7 @@ import {
   ChevronRight,
   EyeOff,
   Folder,
-  FolderOpen,
+  FolderPlus,
   Loader2,
   MessageSquarePlus,
   MoreHorizontal,
@@ -137,6 +137,106 @@ const SIDEBAR_DEFAULT = 264
 const SIDEBAR_MIN = 200
 const SIDEBAR_MAX = 420
 
+/** A command-palette-style modal to search chats across every project. */
+function SearchChatsDialog({
+  open,
+  onOpenChange,
+  chats,
+  onOpen
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  chats: ChatMeta[]
+  onOpen: (id: string) => void
+}): React.JSX.Element {
+  const [q, setQ] = React.useState('')
+  const [idx, setIdx] = React.useState(0)
+  const inputRef = React.useRef<HTMLInputElement>(null)
+
+  React.useEffect(() => {
+    if (!open) return
+    setQ('')
+    setIdx(0)
+    // Base UI moves focus into the popup; nudge it to the input.
+    const t = setTimeout(() => inputRef.current?.focus(), 30)
+    return () => clearTimeout(t)
+  }, [open])
+
+  const results = React.useMemo(() => {
+    const term = q.trim().toLowerCase()
+    const list = term
+      ? chats.filter((c) => (c.title || 'New chat').toLowerCase().includes(term))
+      : chats
+    return list.slice(0, 50)
+  }, [q, chats])
+
+  React.useEffect(() => setIdx(0), [q])
+
+  const choose = (c: ChatMeta): void => {
+    onOpen(c.id)
+    onOpenChange(false)
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="top-[14%] max-w-lg translate-y-0 overflow-hidden p-0">
+        <DialogTitle className="sr-only">Search chats</DialogTitle>
+        <div className="flex items-center gap-2 border-b border-border px-3.5 py-3">
+          <Search className="size-4 shrink-0 text-muted-foreground" />
+          <input
+            ref={inputRef}
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'ArrowDown') {
+                e.preventDefault()
+                setIdx((i) => Math.min(i + 1, results.length - 1))
+              } else if (e.key === 'ArrowUp') {
+                e.preventDefault()
+                setIdx((i) => Math.max(i - 1, 0))
+              } else if (e.key === 'Enter') {
+                e.preventDefault()
+                if (results[idx]) choose(results[idx])
+              }
+            }}
+            placeholder="Search chats across projects…"
+            spellCheck={false}
+            className="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground/60"
+          />
+        </div>
+        <div className="max-h-80 overflow-y-auto p-1.5">
+          {results.length === 0 ? (
+            <div className="px-2 py-8 text-center text-xs text-muted-foreground/70">
+              {q.trim() ? 'No chats match your search.' : 'No chats yet.'}
+            </div>
+          ) : (
+            results.map((c, i) => (
+              <button
+                key={c.id}
+                type="button"
+                onMouseEnter={() => setIdx(i)}
+                onClick={() => choose(c)}
+                className={cn(
+                  'flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left transition-colors',
+                  i === idx && 'bg-accent'
+                )}
+              >
+                <span className="min-w-0 flex-1 truncate text-[13px]">{c.title || 'New chat'}</span>
+                <span className="max-w-32 shrink-0 truncate text-[11px] text-muted-foreground/70">
+                  {basename(c.cwd)}
+                </span>
+                <span className="shrink-0 text-[11px] text-muted-foreground/50">
+                  {relativeTime(c.updatedAt)}
+                </span>
+              </button>
+            ))
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 export function Sidebar(): React.JSX.Element {
   const chats = useApp((s) => s.chats)
   const activeId = useApp((s) => s.activeId)
@@ -169,7 +269,6 @@ export function Sidebar(): React.JSX.Element {
   }
 
   const openSettings = useApp((s) => s.openSettings)
-  const [filter, setFilter] = React.useState('')
   const [searchOpen, setSearchOpen] = React.useState(false)
   const [renaming, setRenaming] = React.useState<ChatMeta | null>(null)
   const [deleting, setDeleting] = React.useState<ChatMeta | null>(null)
@@ -261,14 +360,10 @@ export function Sidebar(): React.JSX.Element {
     localStorage.removeItem('sidebarWidth')
   }
 
-  const filtered = filter
-    ? chats.filter((c) => (c.title || 'New chat').toLowerCase().includes(filter.toLowerCase()))
-    : chats
-
   // Group chats by project folder; groups ordered by most recent activity
   // (the chat list is already sorted by updatedAt descending).
   const groups: { cwd: string; chats: ChatMeta[] }[] = []
-  for (const chat of filtered) {
+  for (const chat of chats) {
     const group = groups.find((g) => g.cwd === chat.cwd)
     if (group) group.chats.push(chat)
     else groups.push({ cwd: chat.cwd, chats: [chat] })
@@ -289,20 +384,6 @@ export function Sidebar(): React.JSX.Element {
       <div className="flex h-full flex-col" style={{ width }}>
       {/* Traffic-light strip; window controls live on its right, Cursor-style */}
       <div className="drag flex h-[38px] shrink-0 items-center justify-end gap-0.5 px-2.5">
-        <Button
-          size="icon-sm"
-          variant="ghost"
-          aria-label="Search chats"
-          onClick={() => {
-            setSearchOpen((open) => {
-              if (open) setFilter('')
-              return !open
-            })
-          }}
-          className={cn(searchOpen && 'bg-sidebar-accent text-foreground')}
-        >
-          <Search />
-        </Button>
         <WithTooltip label="Hide sidebar  ⌘B">
           <Button size="icon-sm" variant="ghost" aria-label="Hide sidebar" onClick={toggleSidebar}>
             <PanelLeft />
@@ -310,69 +391,66 @@ export function Sidebar(): React.JSX.Element {
         </WithTooltip>
       </div>
 
-      <div className="flex flex-col gap-2 px-3 pb-2">
-        {searchOpen && (
-          <Input
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Escape') {
-                setFilter('')
-                setSearchOpen(false)
-              }
-            }}
-            autoFocus
-            placeholder="Search chats"
-            className="h-7.5 border-transparent bg-sidebar-accent/50 text-[13px] focus-visible:border-ring"
-          />
-        )}
-        <div className="flex gap-1.5">
-          <Button
-            variant="secondary"
-            className="flex-1 justify-start gap-2 border-sidebar-border bg-sidebar-accent/50 hover:bg-sidebar-accent"
-            onClick={() => newChatIn(null)}
+      {/* Primary actions, Cursor-style rows */}
+      <div className="flex flex-col gap-0.5 px-2 pb-1">
+        <button
+          type="button"
+          onClick={() => newChatIn(null)}
+          className="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] text-sidebar-foreground transition-colors hover:bg-sidebar-accent/60"
+        >
+          <MessageSquarePlus className="size-4 shrink-0 text-muted-foreground" />
+          New chat
+          <kbd className="ml-auto rounded border border-border bg-background/40 px-1 font-mono text-[10px] text-muted-foreground">
+            ⌘N
+          </kbd>
+        </button>
+        <button
+          type="button"
+          onClick={() => setSearchOpen(true)}
+          className="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] text-sidebar-foreground transition-colors hover:bg-sidebar-accent/60"
+        >
+          <Search className="size-4 shrink-0 text-muted-foreground" />
+          Search
+        </button>
+      </div>
+
+      {/* Projects section header with an add-project button */}
+      <div className="flex items-center gap-2 px-3.5 pt-3 pb-1">
+        <span className="text-[11px] font-medium tracking-wide text-muted-foreground/70">
+          Projects
+        </span>
+        <div className="flex-1" />
+        <WithTooltip label="Add a project folder">
+          <button
+            type="button"
+            onClick={() => void openProject()}
+            aria-label="Add project"
+            className="-mr-1 rounded p-1 text-muted-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-foreground"
           >
-            <MessageSquarePlus className="size-4 text-primary" />
-            New chat
-            <kbd className="ml-auto rounded border border-border bg-background/50 px-1 font-mono text-[10px] text-muted-foreground">
-              ⌘N
-            </kbd>
-          </Button>
-          <WithTooltip label="Open a project folder">
-            <Button
-              variant="secondary"
-              size="icon"
-              className="border-sidebar-border bg-sidebar-accent/50 hover:bg-sidebar-accent"
-              onClick={() => void openProject()}
-              aria-label="Open project"
-            >
-              <FolderOpen />
-            </Button>
-          </WithTooltip>
-        </div>
+            <FolderPlus className="size-3.5" />
+          </button>
+        </WithTooltip>
       </div>
 
       {/* Chats grouped by project */}
       <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-2">
         {activeGroups.length === 0 && archivedGroups.length === 0 && (
           <div className="px-2 py-8 text-center text-xs text-muted-foreground">
-            {filter ? 'No chats match your search.' : 'Open a project to get started.'}
+            Open a project to get started.
           </div>
         )}
         {[
           ...activeGroups.map((g) => ({ group: g, archived: false })),
           ...archivedGroups.map((g) => ({ group: g, archived: true }))
         ].map(({ group, archived }, i) => {
-          // Search results always show, even in collapsed projects.
           // Archived projects default to collapsed.
-          const isCollapsed =
-            !filter && (collapsedProjects[group.cwd] ?? archived)
+          const isCollapsed = collapsedProjects[group.cwd] ?? archived
           const hasStreaming = group.chats.some((c) => (statuses[c.id] ?? 'idle') !== 'idle')
           const firstArchived = archived && i === activeGroups.length
           // Cap to the most-recent chats (search shows all matches). Keep the
           // open chat visible even when it's older than the cap.
           const visibleChats =
-            filter || group.chats.length <= chatsPerProject
+            group.chats.length <= chatsPerProject
               ? group.chats
               : (() => {
                   const top = group.chats.slice(0, chatsPerProject)
@@ -502,6 +580,14 @@ export function Sidebar(): React.JSX.Element {
           </Button>
         </WithTooltip>
       </div>
+
+      {/* Search chats across projects */}
+      <SearchChatsDialog
+        open={searchOpen}
+        onOpenChange={setSearchOpen}
+        chats={chats}
+        onOpen={(id) => void openChat(id)}
+      />
 
       {/* Rename dialog */}
       <Dialog open={renaming !== null} onOpenChange={(open) => !open && setRenaming(null)}>
