@@ -41,6 +41,7 @@ import {
   ContextMenuTrigger
 } from '@/components/ui/context-menu'
 import { Input } from '@/components/ui/input'
+import { Kbd } from '@/components/ui/kbd'
 import { WithTooltip } from '@/components/ui/tooltip'
 
 function ChatItem({
@@ -74,7 +75,7 @@ function ChatItem({
       <button
         type="button"
         onClick={onOpen}
-        className="flex w-full min-w-0 items-center gap-1.5 px-2 py-[7px] text-left outline-none"
+        className="flex w-full min-w-0 items-center gap-1.5 px-2 py-[5px] text-left outline-none"
       >
         <span className="min-w-0 flex-1 truncate text-[13px] text-sidebar-foreground">
           {chat.title || 'New chat'}
@@ -396,24 +397,20 @@ export function Sidebar(): React.JSX.Element {
         <button
           type="button"
           onClick={() => newChatIn(null)}
-          className="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] text-sidebar-foreground transition-colors hover:bg-sidebar-accent/60"
+          className="group flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] text-sidebar-foreground transition-colors hover:bg-sidebar-accent/60"
         >
           <MessageSquarePlus className="size-4 shrink-0 text-muted-foreground" />
           New chat
-          <kbd className="ml-auto rounded border border-border bg-background/40 px-1 font-mono text-[10px] text-muted-foreground">
-            ⌘N
-          </kbd>
+          <Kbd className="ml-auto opacity-0 transition-opacity group-hover:opacity-100">⌘N</Kbd>
         </button>
         <button
           type="button"
           onClick={() => setSearchOpen(true)}
-          className="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] text-sidebar-foreground transition-colors hover:bg-sidebar-accent/60"
+          className="group flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] text-sidebar-foreground transition-colors hover:bg-sidebar-accent/60"
         >
           <Search className="size-4 shrink-0 text-muted-foreground" />
           Search
-          <kbd className="ml-auto rounded border border-border bg-background/40 px-1 font-mono text-[10px] text-muted-foreground">
-            ⌘K
-          </kbd>
+          <Kbd className="ml-auto opacity-0 transition-opacity group-hover:opacity-100">⌘K</Kbd>
         </button>
       </div>
 
