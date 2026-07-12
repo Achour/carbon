@@ -2,17 +2,137 @@ import * as React from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
-import { Check, Copy } from 'lucide-react'
+import mermaid from 'mermaid'
+import { Check, Code2, Copy } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useApp } from '@/store'
+import { THEMES } from '@/lib/themes'
 
 /** Project folder used to resolve relative file paths in inline code. */
 const MarkdownCwd = React.createContext<string | null>(null)
+
+/** Flattens a React node tree to its raw text (for fenced-block source). */
+function nodeText(node: React.ReactNode): string {
+  if (typeof node === 'string') return node
+  if (typeof node === 'number') return String(node)
+  if (Array.isArray(node)) return node.map(nodeText).join('')
+  if (React.isValidElement(node))
+    return nodeText((node.props as { children?: React.ReactNode }).children)
+  return ''
+}
+
+// ---- Mermaid diagrams ----
+
+function initMermaid(dark: boolean): void {
+  mermaid.initialize({
+    startOnLoad: false,
+    securityLevel: 'strict',
+    suppressErrorRendering: true,
+    theme: dark ? 'dark' : 'default',
+    fontFamily: 'inherit'
+  })
+}
+
+/**
+ * Renders a ```mermaid fence as an SVG diagram. While the message is still
+ * streaming the source is incomplete and won't parse, so we keep showing the
+ * raw code (the pre-existing behavior) until it renders cleanly — no flashing
+ * parse errors, and worst case is exactly what we showed before.
+ */
+function MermaidBlock({ code }: { code: string }): React.JSX.Element {
+  const theme = useApp((s) => s.theme)
+  const isDark = React.useMemo(
+    () => THEMES.find((t) => t.id === theme)?.appearance !== 'light',
+    [theme]
+  )
+  const rawId = React.useId()
+  const id = React.useMemo(() => 'mmd' + rawId.replace(/[^a-zA-Z0-9]/g, ''), [rawId])
+  const [svg, setSvg] = React.useState<string | null>(null)
+  const [showSource, setShowSource] = React.useState(false)
+  const [copied, setCopied] = React.useState(false)
+
+  React.useEffect(() => {
+    const trimmed = code.trim()
+    if (!trimmed) {
+      setSvg(null)
+      return undefined
+    }
+    let alive = true
+    // Debounce so streaming re-renders don't thrash the (async) mermaid parse.
+    const t = setTimeout(() => {
+      initMermaid(isDark)
+      mermaid
+        .render(`${id}-svg`, trimmed)
+        .then(({ svg }) => {
+          if (alive) setSvg(svg)
+        })
+        .catch(() => {
+          if (alive) setSvg(null)
+        })
+    }, 120)
+    return () => {
+      alive = false
+      clearTimeout(t)
+    }
+  }, [code, isDark, id])
+
+  const copy = (): void => {
+    void navigator.clipboard.writeText(code)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1500)
+  }
+
+  const viewingSource = showSource || !svg
+
+  return (
+    <div className="group relative my-2">
+      {viewingSource ? (
+        <pre>
+          <code className="language-mermaid">{code}</code>
+        </pre>
+      ) : (
+        <div
+          className="flex justify-center overflow-auto rounded-lg border border-border bg-card/40 p-3"
+          dangerouslySetInnerHTML={{ __html: svg }}
+        />
+      )}
+      <div className="absolute top-2 right-2 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+        {svg && (
+          <button
+            type="button"
+            onClick={() => setShowSource((v) => !v)}
+            className="rounded-md border border-border bg-popover/90 p-1.5 text-muted-foreground backdrop-blur transition-colors hover:text-foreground"
+            aria-label={showSource ? 'Show diagram' : 'Show source'}
+            title={showSource ? 'Show diagram' : 'Show source'}
+          >
+            <Code2 className="size-3.5" />
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={copy}
+          className="rounded-md border border-border bg-popover/90 p-1.5 text-muted-foreground backdrop-blur transition-colors hover:text-foreground"
+          aria-label="Copy diagram source"
+        >
+          {copied ? <Check className="size-3.5 text-success" /> : <Copy className="size-3.5" />}
+        </button>
+      </div>
+    </div>
+  )
+}
 
 function CodeBlock({
   children,
   ...props
 }: React.HTMLAttributes<HTMLPreElement>): React.JSX.Element {
+  const child = React.isValidElement(children)
+    ? (children as React.ReactElement<{ className?: string }>)
+    : null
+  const lang = child?.props.className?.match(/language-(\w+)/)?.[1]
+  if (lang === 'mermaid') {
+    return <MermaidBlock code={nodeText(children).replace(/\n+$/, '')} />
+  }
+
   const ref = React.useRef<HTMLPreElement>(null)
   const [copied, setCopied] = React.useState(false)
 
