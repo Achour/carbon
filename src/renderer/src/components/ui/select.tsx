@@ -87,10 +87,11 @@ export function CompactSelect({
           side={side}
           align="start"
           sideOffset={6}
+          collisionPadding={8}
           className="z-50 outline-none"
           alignItemWithTrigger={false}
         >
-          <Select.Popup className="min-w-52 rounded-lg border border-border bg-popover p-1 shadow-xl outline-none transition-all duration-150 data-[ending-style]:scale-95 data-[ending-style]:opacity-0 data-[starting-style]:scale-95 data-[starting-style]:opacity-0">
+          <Select.Popup className="min-w-52 max-h-[var(--available-height)] overflow-y-auto overscroll-contain rounded-lg border border-border bg-popover p-1 shadow-xl outline-none transition-all duration-150 data-[ending-style]:scale-95 data-[ending-style]:opacity-0 data-[starting-style]:scale-95 data-[starting-style]:opacity-0">
             {hasGroups
               ? groups.map((group, gi) => (
                   <Select.Group key={group.label ?? gi}>

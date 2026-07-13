@@ -290,6 +290,10 @@ export function GitPanel(): React.JSX.Element {
   const commitChanges = useApp((s) => s.commitChanges)
   const pushChanges = useApp((s) => s.pushChanges)
   const initRepo = useApp((s) => s.initRepo)
+  // Committing is delegated to the active chat's agent — name it accordingly.
+  const agentName = useApp((s) =>
+    s.chats.find((c) => c.id === s.activeId)?.provider === 'codex' ? 'Codex' : 'Claude'
+  )
   const [refreshing, setRefreshing] = React.useState(false)
 
   React.useEffect(() => {
@@ -367,10 +371,10 @@ export function GitPanel(): React.JSX.Element {
         </WithTooltip>
       </div>
 
-      {/* Actions — committing is delegated to Claude in the chat */}
+      {/* Actions — committing is delegated to the chat's agent */}
       <div className="flex flex-col gap-1.5 px-2.5 pb-2">
         <div className="flex gap-1.5">
-          <WithTooltip label="Asks Claude to commit in the chat">
+          <WithTooltip label={`Asks ${agentName} to commit in the chat`}>
             <Button
               size="sm"
               className="h-6.5 flex-1 text-xs"

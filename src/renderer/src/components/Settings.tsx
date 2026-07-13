@@ -390,19 +390,19 @@ export function Settings(): React.JSX.Element {
                 <div className="space-y-0.5">
                   <Toggle
                     label="Turn complete alerts"
-                    description="Notify when Claude finishes while the app is in the background"
+                    description="Notify when the agent finishes while the app is in the background"
                     checked={notifyPrefs.finish}
                     onChange={(finish) => setNotifyPrefs({ finish })}
                   />
                   <Toggle
                     label="Approval alerts"
-                    description="Notify when Claude is waiting for your permission or plan review"
+                    description="Notify when the agent is waiting for your permission or plan review"
                     checked={notifyPrefs.permission}
                     onChange={(permission) => setNotifyPrefs({ permission })}
                   />
                   <Toggle
                     label="Sound"
-                    description="Play a soft chime when a turn finishes or Claude needs your input"
+                    description="Play a soft chime when a turn finishes or the agent needs your input"
                     checked={notifyPrefs.sound}
                     onChange={(sound) => {
                       setNotifyPrefs({ sound })
@@ -422,8 +422,9 @@ export function Settings(): React.JSX.Element {
                 />
                 <div className="space-y-2 px-2 text-[13px] text-muted-foreground">
                   <p>
-                    Sessions run through your existing Claude Code login, in whatever project
-                    folder you pick.
+                    Sessions run through your existing Claude Code or Codex login, in whatever
+                    project folder you pick — each chat uses whichever agent you chose when you
+                    started it.
                   </p>
                   <p>
                     Chats are stored locally on your machine — nothing is uploaded beyond the

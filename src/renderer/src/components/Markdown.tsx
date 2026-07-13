@@ -8,6 +8,7 @@ import { Check, Code2, Copy, Maximize2, RotateCcw, X, ZoomIn, ZoomOut } from 'lu
 import { cn } from '@/lib/utils'
 import { useApp } from '@/store'
 import { THEMES } from '@/lib/themes'
+import { getImageEpoch, readImageOnce, subscribeImageEpoch } from '@/lib/imageCache'
 
 /** Project folder used to resolve relative file paths in inline code. */
 const MarkdownCwd = React.createContext<string | null>(null)
@@ -384,14 +385,120 @@ function InlineCode({
   )
 }
 
+// ---- Inline images from local file paths ----
+
+const IMAGE_EXT = /\.(png|jpe?g|gif|webp|bmp)$/i
+
+// The cache/epoch primitive lives in a dependency-free lib (unit-tested, and
+// importable by the store without a cycle). Here we bind it to the IPC reader.
+const readLocalImage = (abs: string): Promise<string | null> =>
+  readImageOnce(abs, (p) => window.api.readFile(p).then((c) => (c.kind === 'image' ? c.dataUri : null)))
+
+function resolveLocalPath(src: string, cwd: string | null): string | null {
+  let p = src.trim()
+  if (/^(https?:|data:)/i.test(p)) return null
+  if (p.startsWith('file://')) p = p.slice('file://'.length)
+  try {
+    p = decodeURIComponent(p)
+  } catch {
+    // keep the raw path
+  }
+  if (p.startsWith('/')) return p
+  return cwd ? `${cwd}/${p.replace(/^\.\//, '')}` : null
+}
+
+/**
+ * An image an agent referenced by a local file path in its markdown — e.g. one
+ * Codex's image-generation skill just saved (it reports `[name](/abs/path.png)`,
+ * the image never comes through the event stream as data). The renderer can't
+ * load a bare filesystem path, so resolve it to a data URI over IPC and show it
+ * inline; click to open it full-size. Falls back to the original link/text if it
+ * isn't a readable image.
+ */
+function LocalImage({
+  src,
+  alt,
+  fallback
+}: {
+  src: string
+  alt?: string
+  fallback: React.ReactNode
+}): React.JSX.Element {
+  const cwd = React.useContext(MarkdownCwd)
+  const abs = React.useMemo(() => resolveLocalPath(src, cwd), [src, cwd])
+  const epoch = React.useSyncExternalStore(subscribeImageEpoch, getImageEpoch)
+  const [uri, setUri] = React.useState<string | null>(null)
+
+  // Blank immediately when the *path* changes (show nothing for the new src until
+  // it loads). An epoch bump (a turn rewrote files) refreshes in place below
+  // without first blanking the current image, so there's no flash on every turn.
+  React.useEffect(() => {
+    setUri(null)
+  }, [abs])
+
+  React.useEffect(() => {
+    if (!abs) return undefined
+    let alive = true
+    void readLocalImage(abs).then((u) => {
+      if (alive) setUri(u)
+    })
+    return () => {
+      alive = false
+    }
+  }, [abs, epoch])
+
+  if (!uri) return <>{fallback}</>
+  return (
+    <img
+      src={uri}
+      alt={alt ?? ''}
+      title={abs ?? undefined}
+      onClick={() => abs && void useApp.getState().openFile(abs, { preview: true })}
+      className="my-2 max-h-96 cursor-zoom-in rounded-lg border border-border object-contain"
+    />
+  )
+}
+
 const components = {
   pre: CodeBlock,
   code: InlineCode,
-  a: ({ children, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => (
-    <a {...props} target="_blank" rel="noreferrer">
-      {children}
-    </a>
-  )
+  img: ({ src, alt }: React.ImgHTMLAttributes<HTMLImageElement>) => {
+    const s = typeof src === 'string' ? src : ''
+    const a = typeof alt === 'string' ? alt : ''
+    if (/^(https?:|data:)/i.test(s)) {
+      return (
+        <img
+          src={s}
+          alt={a}
+          className="my-2 max-h-96 rounded-lg border border-border object-contain"
+        />
+      )
+    }
+    return <LocalImage src={s} alt={a || undefined} fallback={a || null} />
+  },
+  a: ({ children, href, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => {
+    const h = href ?? ''
+    // A link whose target is a local image file (Codex writes `[file](path.png)`)
+    // renders as the image itself, with the link kept as the fallback.
+    if (h && !/^https?:\/\//i.test(h) && IMAGE_EXT.test(h.split(/[?#]/)[0])) {
+      return (
+        <LocalImage
+          src={h}
+          alt={nodeText(children)}
+          fallback={
+            <a {...props} href={h} target="_blank" rel="noreferrer">
+              {children}
+            </a>
+          }
+        />
+      )
+    }
+    return (
+      <a {...props} href={href} target="_blank" rel="noreferrer">
+        {children}
+      </a>
+    )
+  }
 }
 
 export const Markdown = React.memo(function Markdown({

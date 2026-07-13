@@ -4,6 +4,9 @@ import type { FileContent, FileEntry } from '@shared/types'
 
 const MAX_TEXT_BYTES = 512 * 1024
 const MAX_FILE_BYTES = 4 * 1024 * 1024
+// Images are inlined as data URIs and can legitimately be larger than a text
+// file (e.g. a generated PNG), so give them a higher ceiling.
+const MAX_IMAGE_BYTES = 24 * 1024 * 1024
 
 const IMAGE_MIME: Record<string, string> = {
   '.png': 'image/png',
@@ -80,7 +83,7 @@ export async function readFileContent(path: string): Promise<FileContent> {
     const ext = extname(path).toLowerCase()
 
     if (IMAGE_MIME[ext]) {
-      if (info.size > MAX_FILE_BYTES) return { kind: 'too-large', size: info.size }
+      if (info.size > MAX_IMAGE_BYTES) return { kind: 'too-large', size: info.size }
       const data = await readFile(path)
       return { kind: 'image', dataUri: `data:${IMAGE_MIME[ext]};base64,${data.toString('base64')}` }
     }

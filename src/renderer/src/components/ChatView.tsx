@@ -302,7 +302,9 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
                   key={request.id}
                   className="flex animate-enter items-center gap-2.5 rounded-xl border border-primary/30 bg-primary/5 px-3.5 py-2.5"
                 >
-                  <span className="text-[13px]">Claude prepared a plan for your review.</span>
+                  <span className="text-[13px]">
+                    {chat.provider === 'codex' ? 'Codex' : 'Claude'} prepared a plan for your review.
+                  </span>
                   <div className="flex-1" />
                   <Button
                     size="sm"
@@ -428,8 +430,11 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
             onPermissionModeChange={(permissionMode) => void setChatOptions({ permissionMode })}
             contextTokens={chat.contextTokens}
             contextWindow={chat.contextWindow}
+            provider={chat.provider}
+            lockProvider
             cwd={chat.cwd}
             commands={commands}
+            placeholder={chat.provider === 'codex' ? 'Ask Codex anything…' : undefined}
           />
         </div>
       </div>

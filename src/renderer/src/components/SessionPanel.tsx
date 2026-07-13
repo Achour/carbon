@@ -108,6 +108,11 @@ export function SessionPanel(): React.JSX.Element {
   const cwd = useApp((s) => s.selectedCwd)
   const rateLimit = useApp((s) => (s.activeId ? s.rateLimits[s.activeId] : undefined))
   const loadModels = useApp((s) => s.loadModels)
+  // Everything below except the model list is Claude-only (account/usage, MCP,
+  // subagents, and .claude permission rules). Codex exposes none of it — showing
+  // it (or letting it delete .claude rules) would misrepresent the session.
+  const provider = useApp((s) => s.chats.find((c) => c.id === s.activeId)?.provider) ?? 'claude'
+  const isCodex = provider === 'codex'
 
   const [open, setOpen] = React.useState(false)
   const [busy, setBusy] = React.useState(false)
@@ -131,8 +136,9 @@ export function SessionPanel(): React.JSX.Element {
   const load = React.useCallback(async () => {
     if (!chatId) return
     setBusy(true)
-    // Permission rules are read from settings files and don't need a session.
-    await refreshRules()
+    // Permission rules come from .claude settings files — a Claude-only concept;
+    // never read (or later delete) them for a Codex session.
+    if (!isCodex) await refreshRules()
     const isLive = await window.api.sessionLive(chatId)
     setLive(isLive)
     if (!isLive) {
@@ -151,7 +157,7 @@ export function SessionPanel(): React.JSX.Element {
     setServers(srv)
     setAgents(agt)
     setBusy(false)
-  }, [chatId, loadModels, refreshRules])
+  }, [chatId, loadModels, refreshRules, isCodex])
 
   React.useEffect(() => {
     if (open) void load()
@@ -210,12 +216,19 @@ export function SessionPanel(): React.JSX.Element {
         <div className="space-y-4 p-3">
           {live === false && (
             <div className="rounded-md border border-border bg-secondary/40 px-2.5 py-2 text-[11px] leading-relaxed text-muted-foreground">
-              The session isn’t running. Send a message to view live account, usage, MCP servers
-              and subagents. Saved permission rules are shown below.
+              {isCodex
+                ? 'This Codex session isn’t running. Send a message to start it.'
+                : 'The session isn’t running. Send a message to view live account, usage, MCP servers and subagents. Saved permission rules are shown below.'}
             </div>
           )}
-          {/* Account & usage */}
-          {live !== false && (
+          {isCodex && (
+            <div className="text-[11px] leading-relaxed text-muted-foreground/70">
+              Signed in via Codex. Live account, usage, MCP and subagent introspection aren’t
+              available for Codex sessions.
+            </div>
+          )}
+          {/* Account & usage — Claude-only; Codex shows the note above instead. */}
+          {live !== false && !isCodex && (
           <>
           <section>
             <SectionTitle icon={CircleUser}>Account &amp; usage</SectionTitle>
@@ -335,7 +348,8 @@ export function SessionPanel(): React.JSX.Element {
           </>
           )}
 
-          {/* Permission rules (read from settings files — no session needed) */}
+          {/* Permission rules — from .claude settings; Claude-only, hidden for Codex. */}
+          {!isCodex && (
           <section className={cn(live !== false && 'border-t border-border pt-3')}>
             <SectionTitle icon={Shield}>Permission rules</SectionTitle>
             {rules == null ? (
@@ -385,6 +399,7 @@ export function SessionPanel(): React.JSX.Element {
               </div>
             )}
           </section>
+          )}
         </div>
       </PopoverContent>
     </Popover>

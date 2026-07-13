@@ -304,7 +304,12 @@ export interface ModelOption {
    * explicit model id against the alias row that now covers it.
    */
   resolvedModel?: string
+  /** Context window in tokens, when known — feeds the composer's context ring. */
+  contextWindow?: number
 }
+
+/** Sentinel model id: use Codex without pinning a model (defer to ~/.codex config). */
+export const CODEX_DEFAULT_MODEL = 'codex-default'
 
 export const MODEL_OPTIONS: ModelOption[] = [
   { id: '', label: 'Default', description: 'Your Claude Code default', provider: 'claude' },
@@ -312,8 +317,21 @@ export const MODEL_OPTIONS: ModelOption[] = [
   { id: 'claude-opus-4-8', label: 'Opus 4.8', description: 'Powerful all-rounder', provider: 'claude' },
   { id: 'claude-sonnet-5', label: 'Sonnet 5', description: 'Fast and capable', provider: 'claude' },
   { id: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5', description: 'Fastest', provider: 'claude' },
-  { id: 'codex:coming-soon', label: 'Coming soon', provider: 'codex', disabled: true }
+  { id: 'codex-default', label: 'Codex (default)', description: 'Model from your Codex config', provider: 'codex', contextWindow: 1_050_000 },
+  { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', description: 'OpenAI Codex', provider: 'codex', contextWindow: 1_050_000 },
+  { id: 'gpt-5.6-terra', label: 'GPT-5.6 Terra', description: 'OpenAI Codex', provider: 'codex', contextWindow: 1_050_000 },
+  { id: 'gpt-5.6-luna', label: 'GPT-5.6 Luna', description: 'OpenAI Codex', provider: 'codex', contextWindow: 1_050_000 }
 ]
+
+/**
+ * Which provider a model id belongs to. Codex model ids are all listed in
+ * MODEL_OPTIONS; anything else (including the '' default and the SDK's dynamic
+ * Claude aliases, which aren't in this static list) is Claude. Used to set a new
+ * chat's provider from its picked model, and to detect a provider switch.
+ */
+export function providerForModel(id: string): Provider {
+  return MODEL_OPTIONS.find((m) => m.id === id)?.provider ?? 'claude'
+}
 
 export const PROVIDER_LABELS: Record<Provider, string> = {
   claude: 'Claude Code',

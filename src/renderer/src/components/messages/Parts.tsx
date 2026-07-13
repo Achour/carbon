@@ -26,6 +26,7 @@ import { TodoCard } from './TodoCard'
  */
 function RewindControl({ messageId }: { messageId: string }): React.JSX.Element {
   const rewindFiles = useApp((s) => s.rewindFiles)
+  const provider = useApp((s) => s.chats.find((c) => c.id === s.activeId)?.provider)
   const [open, setOpen] = React.useState(false)
   const [preview, setPreview] = React.useState<RewindResult | null>(null)
   const [busy, setBusy] = React.useState(false)
@@ -45,6 +46,9 @@ function RewindControl({ messageId }: { messageId: string }): React.JSX.Element 
       alive = false
     }
   }, [open, messageId, rewindFiles])
+
+  // Codex has no file checkpoints — rewind always fails, so don't offer it.
+  if (provider === 'codex') return <></>
 
   const noChanges = (preview?.filesChanged?.length ?? 0) === 0
   const apply = async (): Promise<void> => {
@@ -271,8 +275,14 @@ export const EventRow = React.memo(function EventRow({
       return (
         <div className="flex justify-end gap-1 pt-0.5 text-[11px] text-muted-foreground/70">
           <span>{formatDuration(s.durationMs)}</span>
-          <span>·</span>
-          <span>{formatCost(s.costUsd)}</span>
+          {/* Subscription turns (Codex on ChatGPT, Claude on a plan) report no
+              per-turn dollar cost — show duration only rather than "$0.0000". */}
+          {s.costUsd > 0 && (
+            <>
+              <span>·</span>
+              <span>{formatCost(s.costUsd)}</span>
+            </>
+          )}
         </div>
       )
     }

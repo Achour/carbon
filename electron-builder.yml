@@ -6,8 +6,24 @@ directories:
 files:
   - out/**
   - package.json
-# The Claude Agent SDK spawns a CLI subprocess; running unpacked avoids asar
-# path issues for a personal install.
+  # node-pty bundles prebuilt native binaries for every OS/arch; a macOS build
+  # only needs the host's (and loads build/Release/pty.node anyway), so drop the
+  # Windows/Linux/x64 prebuilds — ~58MB of dead weight wrongly shipped in the app.
+  - '!**/node-pty/prebuilds/win32-*/**'
+  - '!**/node-pty/prebuilds/linux-*/**'
+  - '!**/node-pty/prebuilds/darwin-x64/**'
+# Only the MAIN process's runtime packages are in package.json `dependencies`
+# (the two agent SDKs + node-pty); every renderer library is a devDependency
+# because vite inlines it into out/renderer at build time. electron-builder ships
+# only the production tree, so those renderer libs (mermaid, react, lucide,
+# base-ui, xterm, the markdown stack, fonts) no longer bloat the app — ~200MB cut.
+#
+# ASAR stays OFF on purpose: the two largest bundled runtimes — the Codex CLI
+# (@openai/codex-*, ~297MB) and the Claude Agent SDK (@anthropic-ai/
+# claude-agent-sdk-*, ~230MB) — are spawned as subprocesses and can't run from
+# inside an asar archive. They're the app's irreducible floor; asar doesn't
+# compress, so with those unpacked it would save almost nothing while risking
+# broken spawn paths.
 asar: false
 mac:
   category: public.app-category.developer-tools

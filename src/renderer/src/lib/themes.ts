@@ -151,6 +151,51 @@ export const THEMES: ThemeDef[] = [
       ...darkBase
     }
   },
+  // Carbon color variants — the exact Carbon neutral base, only the primary
+  // accent (and matching focus ring) is swapped for a vibrant hue.
+  ...(
+    [
+      { id: 'carbon-blue', name: 'Carbon Blue', primary: 'oklch(0.62 0.2 258)', onPrimary: 'oklch(0.98 0 0)' },
+      { id: 'carbon-violet', name: 'Carbon Violet', primary: 'oklch(0.58 0.22 292)', onPrimary: 'oklch(0.98 0 0)' },
+      { id: 'carbon-pink', name: 'Carbon Pink', primary: 'oklch(0.65 0.24 340)', onPrimary: 'oklch(0.98 0 0)' },
+      { id: 'carbon-rose', name: 'Carbon Rose', primary: 'oklch(0.64 0.22 18)', onPrimary: 'oklch(0.98 0 0)' },
+      { id: 'carbon-amber', name: 'Carbon Amber', primary: 'oklch(0.77 0.15 72)', onPrimary: 'oklch(0.2 0 0)' },
+      { id: 'carbon-lime', name: 'Carbon Lime', primary: 'oklch(0.82 0.19 128)', onPrimary: 'oklch(0.2 0 0)' },
+      { id: 'carbon-emerald', name: 'Carbon Emerald', primary: 'oklch(0.7 0.16 160)', onPrimary: 'oklch(0.2 0 0)' },
+      { id: 'carbon-cyan', name: 'Carbon Cyan', primary: 'oklch(0.74 0.13 205)', onPrimary: 'oklch(0.2 0 0)' }
+    ] as const
+  ).map(
+    (c): ThemeDef => ({
+      id: c.id,
+      name: c.name,
+      appearance: 'dark',
+      vars: {
+        background: 'oklch(0.2 0 0)',
+        foreground: 'oklch(0.93 0 0)',
+        card: 'oklch(0.23 0 0)',
+        'card-foreground': 'oklch(0.93 0 0)',
+        popover: 'oklch(0.245 0 0)',
+        'popover-foreground': 'oklch(0.93 0 0)',
+        primary: c.primary,
+        'primary-foreground': c.onPrimary,
+        secondary: 'oklch(0.27 0 0)',
+        'secondary-foreground': 'oklch(0.9 0 0)',
+        muted: 'oklch(0.255 0 0)',
+        'muted-foreground': 'oklch(0.62 0 0)',
+        accent: 'oklch(0.275 0 0)',
+        'accent-foreground': 'oklch(0.93 0 0)',
+        border: 'oklch(1 0 0 / 9%)',
+        input: 'oklch(1 0 0 / 12%)',
+        ring: c.primary.replace(')', ' / 45%)'),
+        sidebar: 'oklch(0.178 0 0)',
+        'sidebar-foreground': 'oklch(0.86 0 0)',
+        'sidebar-accent': 'oklch(0.246 0 0)',
+        'sidebar-border': 'oklch(1 0 0 / 7%)',
+        'code-bg': 'oklch(0.165 0 0)',
+        ...darkBase
+      }
+    })
+  ),
   {
     id: 'nord',
     name: 'Nord',

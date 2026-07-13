@@ -9,6 +9,8 @@ import {
 } from '@/lib/themes'
 import { loadNotifyPrefs, notify, playChime, saveNotifyPrefs, type NotifyPrefs } from '@/lib/notify'
 import { formatCost, formatDuration } from '@/lib/format'
+import { invalidateLocalImages } from '@/lib/imageCache'
+import { providerForModel } from '@shared/types'
 import type {
   AppDefaults,
   AssistantMessage,
@@ -27,6 +29,7 @@ import type {
   PermissionDecision,
   PermissionRequestPayload,
   PreviewState,
+  Provider,
   RateLimitState,
   RewindResult,
   SlashCommand
@@ -148,7 +151,13 @@ interface AppState {
   // ---- Slash commands ----
   /** Slash commands for the active project, powering the composer's / menu. */
   commands: SlashCommand[]
-  loadCommands(cwd: string | null): void
+  /**
+   * `${cwd}::${provider}` the current `commands` belong to. Guards async command
+   * results and pushed `commands` events so a slow Claude response can't repopulate
+   * the menu after the active provider/project changed (e.g. switched to Codex).
+   */
+  commandsKey: string | null
+  loadCommands(cwd: string | null, provider?: Provider): void
 
   // ---- Search ----
   /** When true the "search chats across projects" dialog is open (⌘K). */
@@ -248,6 +257,7 @@ interface AppState {
     cwd: string,
     firstMessage: string,
     opts?: {
+      provider?: Provider
       model?: string
       effort?: EffortId
       permissionMode?: ChatMeta['permissionMode']
@@ -488,15 +498,30 @@ export const useApp = create<AppState>((set, get) => ({
   // ---- Slash commands ----
 
   commands: [],
+  commandsKey: null,
 
-  loadCommands(cwd) {
-    if (!cwd) {
-      set({ commands: [] })
+  loadCommands(cwd, provider) {
+    // Slash commands come from a *Claude* session — don't warm one (or show
+    // Claude commands) for a Codex chat. The intended provider is passed
+    // explicitly by callers that know it (new-chat, chat switch, init); fall back
+    // to the active chat's provider, then the default model's, so the new-chat
+    // screen with a saved Codex default never initializes Claude.
+    const s = get()
+    const prov =
+      provider ??
+      s.chats.find((c) => c.id === s.activeId)?.provider ??
+      (s.defaults?.model ? providerForModel(s.defaults.model) : 'claude')
+    const key = cwd ? `${cwd}::${prov}` : null
+    // Already loaded (or loading) for this exact provider+project — nothing to do.
+    if (s.commandsKey === key) return
+    if (!cwd || prov === 'codex') {
+      set({ commands: [], commandsKey: key })
       return
     }
+    set({ commands: [], commandsKey: key })
     void window.api.getCommands(cwd).then((commands) => {
-      // Ignore a stale response if the project changed while awaiting.
-      if (get().selectedCwd === cwd) set({ commands })
+      // Ignore a stale response if the project or provider changed while awaiting.
+      if (get().commandsKey === key) set({ commands })
     })
   },
 
@@ -593,7 +618,9 @@ export const useApp = create<AppState>((set, get) => ({
     })
     const cwd = get().selectedCwd
     if (cwd) void get().refreshGit()
-    get().loadCommands(cwd)
+    // No active chat yet on boot — derive the provider from the saved default
+    // model so a Codex default never warms a Claude command session.
+    get().loadCommands(cwd, defaults?.model ? providerForModel(defaults.model) : 'claude')
   },
 
   setSelectedCwd(cwd) {
@@ -729,6 +756,10 @@ export const useApp = create<AppState>((set, get) => ({
 
   async refreshFiles() {
     const s = get()
+    // Files on disk are being re-synced (after a turn, a manual refresh, or a
+    // terminal/external edit) — a displayed local image may have changed, so drop
+    // the path-keyed image cache too.
+    invalidateLocalImages()
     const dirs = [
       ...(s.selectedCwd ? [s.selectedCwd] : []),
       ...Object.keys(s.expandedDirs).filter((d) => s.expandedDirs[d] && s.filesByDir[d])
@@ -958,6 +989,10 @@ export const useApp = create<AppState>((set, get) => ({
       // Panel visibility is per chat; unvisited chats start closed.
       panelOpen: s.panelOpenByChat[id] ?? false
     }))
+    // Drop cached local images so this chat's inline pictures re-read from disk —
+    // it may have been overwritten (by a background turn or externally) since it
+    // was last shown.
+    invalidateLocalImages()
     const chat = await window.api.getChat(id)
     // Guard against a chat switch happening while we awaited.
     if (get().activeId === id && chat) {
@@ -971,7 +1006,9 @@ export const useApp = create<AppState>((set, get) => ({
         const messages = s.messages.reduce(upsertMessage, chat.messages)
         return { messages, ...projectSwitchPatch(s, chat.cwd) }
       })
-      if (cwdChanged) get().loadCommands(chat.cwd)
+      // Keyed by provider too: switching Claude→Codex in the same folder must
+      // clear Claude's commands (and Codex→Claude must restore them).
+      get().loadCommands(chat.cwd, chat.provider)
       if (cwdChanged || !get().git) void get().refreshGit()
       if (cwdChanged && get().panelOpen && !get().filesByDir[chat.cwd]) {
         void get().loadDir(chat.cwd)
@@ -1010,7 +1047,7 @@ export const useApp = create<AppState>((set, get) => ({
     }))
     // The new chat keeps whatever panel state was showing when it was created.
     set((s) => panelPatch(s, s.panelOpen))
-    get().loadCommands(cwd)
+    get().loadCommands(cwd, meta.provider)
     void get().refreshGit()
     if (get().panelOpen && !get().filesByDir[cwd]) void get().loadDir(cwd)
     await window.api.send(meta.id, firstMessage, attachments)
@@ -1190,14 +1227,15 @@ export const useApp = create<AppState>((set, get) => ({
           const failed = ev.message.kind === 'error'
           if (prefs.sound && !failed) playChime()
           if (prefs.finish && !document.hasFocus()) {
-            const title = s.chats.find((c) => c.id === ev.chatId)?.title || 'Claude'
+            const chat = s.chats.find((c) => c.id === ev.chatId)
+            const title = chat?.title || (chat?.provider === 'codex' ? 'Codex' : 'Claude')
             const stats = ev.message.stats
             notify(
               title,
               failed
                 ? 'The turn failed'
                 : stats
-                  ? `Finished in ${formatDuration(stats.durationMs)} · ${formatCost(stats.costUsd)}`
+                  ? `Finished in ${formatDuration(stats.durationMs)}${stats.costUsd > 0 ? ` · ${formatCost(stats.costUsd)}` : ''}`
                   : 'Finished',
               {
                 onClick: () => {
@@ -1295,8 +1333,13 @@ export const useApp = create<AppState>((set, get) => ({
             }))
             void window.api.send(ev.chatId, next.text, next.attachments)
           }
-          // Refresh the tree, open files and git status after a turn so
-          // Claude's edits show up.
+          // Drop cached local images after ANY chat's turn — a background chat
+          // can overwrite an image (e.g. a regenerated logo) that a foreground or
+          // later-reopened chat renders. The cache is keyed only by path, so it
+          // must be global; re-reads are cheap and don't flash unchanged images.
+          invalidateLocalImages()
+          // Refresh the tree, open files and git status for the active chat so
+          // the agent's edits show up.
           if (ev.chatId === s.activeId) {
             void get().refreshGit()
             if (s.panelOpen || s.openFiles.length > 0) void get().refreshFiles()
@@ -1316,12 +1359,14 @@ export const useApp = create<AppState>((set, get) => ({
         // background (the notification stays silent — the chime is the sound).
         if (s.notifyPrefs.sound) playChime()
         if (s.notifyPrefs.permission && !document.hasFocus()) {
-          const title = s.chats.find((c) => c.id === ev.chatId)?.title || 'Claude'
+          const chat = s.chats.find((c) => c.id === ev.chatId)
+          const agent = chat?.provider === 'codex' ? 'Codex' : 'Claude'
+          const title = chat?.title || agent
           const what =
             ev.request.toolName === 'ExitPlanMode'
               ? 'has a plan ready for review'
               : `wants to use ${ev.request.displayName ?? ev.request.toolName}`
-          notify(title, `Claude ${what}`, {
+          notify(title, `${agent} ${what}`, {
             onClick: () => {
               void window.api.focusWindow()
               void get().openChat(ev.chatId)
@@ -1350,8 +1395,10 @@ export const useApp = create<AppState>((set, get) => ({
       }
 
       case 'commands': {
-        // Update the composer's command list if this is the active project.
-        if (ev.cwd === get().selectedCwd) set({ commands: ev.commands })
+        // Pushed by a Claude session's command watcher — only apply it if the
+        // active project is still on Claude (not switched to Codex in the same
+        // folder), so it can't repopulate the menu for a Codex chat.
+        if (get().commandsKey === `${ev.cwd}::claude`) set({ commands: ev.commands })
         break
       }
     }

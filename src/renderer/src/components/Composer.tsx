@@ -18,6 +18,7 @@ import {
   type Attachment,
   type EffortId,
   type PermissionModeId,
+  type Provider,
   type SlashCommand
 } from '@shared/types'
 import { cn } from '@/lib/utils'
@@ -30,6 +31,21 @@ import { SessionPanel } from '@/components/SessionPanel'
 
 const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024
+
+// Codex runs non-interactively (its SDK has no per-tool approval callback), so
+// most Codex permission choices are sandbox policies rather than Claude-style
+// approval modes. Plan combines a planning collaboration instruction with the
+// read-only sandbox; the other two map directly to Codex sandbox policies.
+const CODEX_PERMISSION_MODES: { id: PermissionModeId; label: string; description: string }[] = [
+  { id: 'plan', label: 'Plan mode', description: 'Investigates and plans without making changes' },
+  { id: 'default', label: 'Workspace write', description: 'Edits within the project — Codex won’t prompt' },
+  { id: 'bypassPermissions', label: 'Full access', description: 'No sandbox — use with care' }
+]
+
+/** Collapse Codex's equivalent modes (accept-edits / auto) onto 'workspace write'. */
+function codexPermissionValue(mode: PermissionModeId): PermissionModeId {
+  return mode === 'plan' || mode === 'bypassPermissions' ? mode : 'default'
+}
 
 function readAsBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -134,7 +150,16 @@ function fmtTokens(n: number): string {
   return n >= 1000 ? `${Math.round(n / 1000)}k` : String(n)
 }
 
-function ContextRing({ used, window: win }: { used: number; window: number }): React.JSX.Element {
+function ContextRing({
+  used,
+  window: win,
+  provider
+}: {
+  used: number
+  window: number
+  provider: Provider
+}): React.JSX.Element {
+  const name = provider === 'codex' ? 'Codex' : 'Claude'
   const pct = Math.min(1, used / win)
   const left = Math.max(0, win - used)
   const r = 5
@@ -188,7 +213,7 @@ function ContextRing({ used, window: win }: { used: number; window: number }): R
           <span>{fmtTokens(left)} free of {fmtTokens(win)}</span>
         </div>
         <p className="mt-2.5 border-t border-border pt-2 text-[11px] leading-relaxed text-muted-foreground/80">
-          How much of the conversation Claude can hold at once. When it fills up, older
+          How much of the conversation {name} can hold at once. When it fills up, older
           messages are compacted automatically so the chat can continue.
         </p>
       </PopoverContent>
@@ -208,6 +233,8 @@ export function Composer({
   onPermissionModeChange,
   contextTokens,
   contextWindow,
+  provider = 'claude',
+  lockProvider = false,
   cwd = null,
   commands = [],
   disabled = false,
@@ -225,6 +252,15 @@ export function Composer({
   onPermissionModeChange: (mode: PermissionModeId) => void
   contextTokens?: number
   contextWindow?: number
+  /** Which agent backs this chat; switches the pickers/labels to its reality. */
+  provider?: Provider
+  /**
+   * Lock the model picker to `provider`'s models (an existing chat). Provider is
+   * a create-time choice — switching it mid-chat would silently drop the
+   * conversation context, since the two backends don't share sessions. New-chat
+   * screens leave this false so either provider can be chosen up front.
+   */
+  lockProvider?: boolean
   /** Project folder used for @-file mentions; null disables them. */
   cwd?: string | null
   /** Slash commands available in this project, for the / autocomplete. */
@@ -244,10 +280,15 @@ export function Composer({
   // empty id in main), so use it as-is and just append the non-Claude (Codex)
   // placeholders the static list carries.
   const dynamicModels = useApp((s) => s.models)
-  const modelOptions =
+  const allModelOptions =
     dynamicModels.length > 0
       ? [...dynamicModels, ...MODEL_OPTIONS.filter((m) => m.provider !== 'claude')]
       : MODEL_OPTIONS
+  // An existing chat only offers its own provider's models — provider is fixed
+  // once the chat is created (see the lockProvider doc).
+  const modelOptions = lockProvider
+    ? allModelOptions.filter((m) => m.provider === provider)
+    : allModelOptions
 
   // A chat pinned to an older static id (e.g. 'claude-sonnet-5') won't equal the
   // SDK's alias value ('sonnet'), so resolve it to the covering row (matching on
@@ -263,6 +304,24 @@ export function Composer({
     )
     return match ? match.id : model
   }, [modelOptions, model])
+
+  // Codex's effort/permission surfaces differ from Claude's: it has no 'max'
+  // tier or per-tool approval modes. Plan is collaboration + read-only; the
+  // remaining choices select a sandbox policy.
+  const isCodex = provider === 'codex'
+  // Codex has no 'max' tier, and an unset effort defers to the ~/.codex config
+  // (not necessarily "High"), so label it "Default" rather than implying High.
+  const effortOptions = isCodex
+    ? EFFORT_OPTIONS.filter((e) => e.id !== 'max').map((e) =>
+        e.id === '' ? { ...e, label: 'Default', description: 'Uses your Codex config' } : e
+      )
+    : EFFORT_OPTIONS
+  // A Codex chat can inherit 'max' from a prior Claude chat; Codex has no such
+  // tier, so both the label and the transmitted value collapse to Default (the
+  // adapter maps 'max' → undefined, matching this "" display — see effortForCodex).
+  const effortValue = isCodex && effort === 'max' ? '' : effort
+  const permissionOptions = isCodex ? CODEX_PERMISSION_MODES : PERMISSION_MODES
+  const permissionValue = isCodex ? codexPermissionValue(permissionMode) : permissionMode
 
   const inbox = useApp((s) => s.attachmentInbox)
   React.useEffect(() => {
@@ -344,7 +403,8 @@ export function Composer({
   }
 
   const slashResults = React.useMemo(() => {
-    if (slashQuery === null) return []
+    // Slash commands come from the Claude session; Codex chats don't have them.
+    if (slashQuery === null || isCodex) return []
     const q = slashQuery.toLowerCase()
     const matches = (c: SlashCommand): boolean =>
       c.name.toLowerCase().includes(q) || (c.aliases ?? []).some((a) => a.toLowerCase().includes(q))
@@ -356,7 +416,7 @@ export function Composer({
         return ap - bp || a.name.localeCompare(b.name)
       })
       .slice(0, 50)
-  }, [slashQuery, commands])
+  }, [slashQuery, commands, isCodex])
 
   React.useEffect(() => setSlashIdx(0), [slashQuery])
 
@@ -645,9 +705,9 @@ export function Composer({
             className="min-w-0"
           />
           <CompactSelect
-            value={effort}
+            value={effortValue}
             onValueChange={(v) => onEffortChange(v as EffortId | '')}
-            options={EFFORT_OPTIONS.map((e) => ({
+            options={effortOptions.map((e) => ({
               value: e.id,
               label: e.label,
               description: e.description
@@ -656,9 +716,9 @@ export function Composer({
             className="min-w-0"
           />
           <CompactSelect
-            value={permissionMode}
+            value={permissionValue}
             onValueChange={(v) => onPermissionModeChange(v as PermissionModeId)}
-            options={PERMISSION_MODES.map((m) => ({
+            options={permissionOptions.map((m) => ({
               value: m.id,
               label: m.label,
               description: m.description
@@ -669,7 +729,7 @@ export function Composer({
         </div>
         <SessionPanel />
         {contextTokens != null && contextTokens > 0 && (
-          <ContextRing used={contextTokens} window={contextWindow ?? 200_000} />
+          <ContextRing used={contextTokens} window={contextWindow ?? 200_000} provider={provider} />
         )}
         {streaming && onStop ? (
           <WithTooltip label="Stop generating">

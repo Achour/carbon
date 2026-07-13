@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
 
 ## What this is
 
@@ -12,14 +12,10 @@ An Electron desktop GUI for coding agents. Claude sessions run through `@anthrop
 npm run dev        # run the app in dev mode (electron-vite, hot reload)
 npm run build      # production build to out/
 npm run typecheck  # tsc over both projects: tsconfig.node.json (main+preload) and tsconfig.web.json (renderer)
-npm test           # node --test over test/*.test.ts (Node strips the TS types natively)
+npm test           # node --test over test/*.test.ts
 ```
 
-`npm run typecheck` is the primary verification gate. There is no linter. Tests are
-minimal and cover only pure, tricky logic worth pinning (e.g. `test/imageScan.test.ts`
-for Codex generated-image discovery) — most code is verified by typecheck + running the app.
-When you extract such logic, keep it dependency-free (import only `node:*`) so `node --test`
-can run the `.ts` directly without a bundler.
+There is no linter. `npm run typecheck` is the primary verification gate; focused tests cover provider-independent tricky logic such as generated-image discovery, image caching, Codex plan parsing, and stale-session recovery.
 
 Dev utilities (env vars for `npm run dev`, used for UI iteration without a human clicking):
 - `AIGUI_CAPTURE=/tmp/shot.png` — saves a window screenshot after load. `AIGUI_CAPTURE_DELAY=2000,8000` takes a comma list of delays and saves `shot-1.png`, `shot-2.png`, …
@@ -31,7 +27,7 @@ Dev utilities (env vars for `npm run dev`, used for UI iteration without a human
 Three Electron layers with one shared contract:
 
 - `src/shared/types.ts` — **the contract between all three layers.** The `Api` interface (preload bridge), the `ChatEvent` union (main → renderer streaming), message/part types, `MODEL_OPTIONS`, `PERMISSION_MODES`. Most features start here.
-- `src/main/` — Electron main process. `index.ts` registers all `ipcMain.handle` channels and emits `ChatEvent`s to the renderer over the single `chat:event` channel. `claude.ts` owns agent sessions. `store.ts` persists chats/settings. `git.ts` / `files.ts` are thin helpers behind the `git:*` / `fs:*` IPC channels.
+- `src/main/` — Electron main process. `index.ts` registers IPC channels. `claude.ts` contains the provider-neutral `ChatManager` plus `ClaudeSession`; `codex.ts` contains `CodexSession`; `session.ts` is their shared interface. `store.ts` persists chats/settings.
 - `src/preload/` — typed `window.api` bridge (contextIsolation on); a mechanical 1:1 mapping of `Api` methods to `ipcRenderer.invoke` calls.
 - `src/renderer/src/` — React app. One zustand store (`store.ts`) holds all UI state; `applyEvent` is the reducer for incoming `ChatEvent`s. Components in `components/`, shadcn-style primitives built on Base UI in `components/ui/`, message renderers in `components/messages/`.
 
@@ -39,7 +35,7 @@ Three Electron layers with one shared contract:
 
 Path aliases: `@` → `src/renderer/src`, `@shared` → `src/shared` (renderer and main both get `@shared`).
 
-### Session flow (`src/main/claude.ts`)
+### Session flow (`src/main/claude.ts`, `src/main/codex.ts`)
 
 `ChatManager` holds one provider-specific session per active chat. Claude uses one long-lived Agent SDK `query()` input stream. Codex uses SDK `Thread.runStreamed()` turns and resumes the same thread id across turns and app restarts. Both normalize provider events into the shared `ChatEvent` contract.
 

@@ -19,7 +19,6 @@ import type {
   Attachment,
   BackgroundJob,
   ChatData,
-  ChatEvent,
   ChatStatus,
   EffortId,
   ElementRef,
@@ -33,10 +32,11 @@ import type {
   ToolPart,
   UsageInfo
 } from '@shared/types'
+import { providerForModel } from '@shared/types'
 import type { Store } from './store'
 import type { PreviewManager } from './preview'
-
-type Emit = (ev: ChatEvent) => void
+import { CodexSession } from './codex'
+import type { AgentSession, Emit } from './session'
 
 /**
  * Appended to the claude_code preset. The GUI renders ```mermaid fenced blocks
@@ -184,7 +184,7 @@ interface PendingPermission {
  */
 const isBenignTurnError = (text: string): boolean => text.includes('[ede_diagnostic]')
 
-class ClaudeSession {
+class ClaudeSession implements AgentSession {
   private q: Query
   private input = createInputQueue()
   private current: AssistantMessage | null = null
@@ -1272,7 +1272,7 @@ class ClaudeSession {
 // ---------- Manager ----------
 
 export class ChatManager {
-  private sessions = new Map<string, ClaudeSession>()
+  private sessions = new Map<string, AgentSession>()
   // Slash commands are the same for every chat in a folder, so cache them by cwd
   // — new chats in a known project can show the menu before their first turn.
   private commandsByCwd = new Map<string, SlashCommand[]>()
@@ -1285,7 +1285,7 @@ export class ChatManager {
     private preview: PreviewManager
   ) {}
 
-  private sessionFor(chatId: string): ClaudeSession | null {
+  private sessionFor(chatId: string): AgentSession | null {
     const session = this.sessions.get(chatId)
     if (session && !session.dead) return session
     return null
@@ -1350,17 +1350,21 @@ export class ChatManager {
     return run
   }
 
-  private createSession(chat: ChatData): ClaudeSession {
-    const session = new ClaudeSession(
-      chat,
-      this.emit,
-      this.store,
-      () => {
-        if (this.sessions.get(chat.id)?.dead) this.sessions.delete(chat.id)
-      },
-      (commands) => this.commandsByCwd.set(chat.cwd, commands),
-      this.preview
-    )
+  private createSession(chat: ChatData): AgentSession {
+    const onDead = (): void => {
+      if (this.sessions.get(chat.id)?.dead) this.sessions.delete(chat.id)
+    }
+    const session: AgentSession =
+      chat.provider === 'codex'
+        ? new CodexSession(chat, this.emit, this.store, onDead)
+        : new ClaudeSession(
+            chat,
+            this.emit,
+            this.store,
+            onDead,
+            (commands) => this.commandsByCwd.set(chat.cwd, commands),
+            this.preview
+          )
     this.sessions.set(chat.id, session)
     return session
   }
@@ -1368,8 +1372,39 @@ export class ChatManager {
   send(chatId: string, text: string, attachments?: Attachment[]): void {
     const chat = this.store.getChat(chatId)
     if (!chat) return
-    const session = this.sessionFor(chatId) ?? this.createSession(chat)
-    session.send(text, attachments)
+    try {
+      const session = this.sessionFor(chatId) ?? this.createSession(chat)
+      session.send(text, attachments)
+    } catch (err) {
+      // Session construction failed before the turn started (e.g. a missing or
+      // non-executable Codex binary). Persist the prompt, surface the error, and
+      // return to idle so the message isn't lost and the chat isn't stuck.
+      const now = Date.now()
+      const last = chat.messages[chat.messages.length - 1]
+      if (!(last?.role === 'user' && last.text === text)) {
+        const userMsg = {
+          id: randomUUID(),
+          role: 'user' as const,
+          text,
+          ts: now,
+          ...(attachments?.length ? { attachments } : {})
+        }
+        chat.messages.push(userMsg)
+        this.emit({ type: 'message', chatId, message: userMsg })
+      }
+      const errMsg = {
+        id: randomUUID(),
+        role: 'event' as const,
+        kind: 'error' as const,
+        text: err instanceof Error ? err.message : String(err),
+        ts: now
+      }
+      chat.messages.push(errMsg)
+      chat.updatedAt = now
+      this.emit({ type: 'message', chatId, message: errMsg })
+      this.emit({ type: 'status', chatId, status: 'idle' })
+      this.store.saveChat(chatId)
+    }
   }
 
   /**
@@ -1445,8 +1480,22 @@ export class ChatManager {
     if (!chat) return
     const session = this.sessionFor(chatId)
     if (patch.model !== undefined) {
+      const nextProvider = providerForModel(patch.model)
       chat.model = patch.model || undefined
-      await session?.setModel(chat.model)
+      if (nextProvider !== chat.provider) {
+        // Switching provider mid-chat: session ids aren't portable across
+        // backends, so drop the live session and clear the resume id — the next
+        // send starts the right backend fresh (the transcript is kept as-is).
+        chat.provider = nextProvider
+        chat.sessionId = undefined
+        this.disposeChat(chatId)
+        this.emit({ type: 'meta', chatId, patch: { provider: nextProvider, sessionId: undefined } })
+        // A disposed session emits no final status; release the renderer so a
+        // switch during a live turn doesn't leave the chat stuck 'streaming'.
+        this.emit({ type: 'status', chatId, status: 'idle' })
+      } else {
+        await session?.setModel(chat.model)
+      }
     }
     if (patch.permissionMode) {
       // Remember what to come back to when the plan is approved.
@@ -1462,7 +1511,12 @@ export class ChatManager {
       chat.effort = patch.effort || undefined
       // Effort has no live setter — drop the session; the next send resumes
       // the conversation in a fresh process with the new effort applied.
-      if (session) this.disposeChat(chatId)
+      if (session) {
+        this.disposeChat(chatId)
+        // Same as the provider switch: the disposed session won't emit a final
+        // status, so release the renderer in case the change landed mid-turn.
+        this.emit({ type: 'status', chatId, status: 'idle' })
+      }
     }
     this.store.saveChat(chatId)
     // Explicit user choices become the defaults for future chats.
