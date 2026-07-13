@@ -11,6 +11,7 @@ import type {
   GitDiffTarget,
   PermissionDecision,
   PermissionModeId,
+  PermissionRule,
   PreviewCommand,
   PreviewCommandResult,
   PreviewEvent,
@@ -21,6 +22,7 @@ import type {
 import { ChatManager } from './claude'
 import { listDir, readFileContent, searchFiles, statPath } from './files'
 import * as gitOps from './git'
+import { getPermissionRules, removePermissionRule } from './permissions'
 import { PreviewManager } from './preview'
 import { Store } from './store'
 import { TerminalManager } from './terminal'
@@ -329,6 +331,29 @@ function registerIpc(): void {
       chatId: string,
       patch: { model?: string; effort?: EffortId | ''; permissionMode?: PermissionModeId }
     ) => manager.setOptions(chatId, patch)
+  )
+
+  ipcMain.handle('chat:rewind-files', (_e, chatId: string, userMessageId: string, dryRun: boolean) =>
+    manager.rewindFiles(chatId, userMessageId, dryRun)
+  )
+
+  ipcMain.handle('session:live', (_e, chatId: string) => manager.sessionLive(chatId))
+  ipcMain.handle('mcp:status', (_e, chatId: string) => manager.mcpStatus(chatId))
+  ipcMain.handle('mcp:reconnect', (_e, chatId: string, name: string) =>
+    manager.mcpReconnect(chatId, name)
+  )
+  ipcMain.handle('mcp:toggle', (_e, chatId: string, name: string, enabled: boolean) =>
+    manager.mcpToggle(chatId, name, enabled)
+  )
+
+  ipcMain.handle('session:models', (_e, chatId: string) => manager.listModels(chatId))
+  ipcMain.handle('session:agents', (_e, chatId: string) => manager.listAgents(chatId))
+  ipcMain.handle('session:account', (_e, chatId: string) => manager.accountInfo(chatId))
+  ipcMain.handle('session:usage', (_e, chatId: string) => manager.usageInfo(chatId))
+
+  ipcMain.handle('permissions:list', (_e, cwd: string) => getPermissionRules(cwd))
+  ipcMain.handle('permissions:remove', (_e, cwd: string, rule: PermissionRule) =>
+    removePermissionRule(cwd, rule)
   )
 
   ipcMain.handle('dialog:pick-directory', async () => {

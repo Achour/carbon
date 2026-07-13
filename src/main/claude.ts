@@ -12,6 +12,8 @@ import {
 } from '@anthropic-ai/claude-agent-sdk'
 import { z } from 'zod'
 import type {
+  AccountInfo,
+  AgentInfo,
   AssistantMessage,
   AssistantPart,
   Attachment,
@@ -21,10 +23,15 @@ import type {
   ChatStatus,
   EffortId,
   ElementRef,
+  McpServerInfo,
+  ModelOption,
+  OpResult,
   PermissionDecision,
   PermissionModeId,
+  RewindResult,
   SlashCommand,
-  ToolPart
+  ToolPart,
+  UsageInfo
 } from '@shared/types'
 import type { Store } from './store'
 import type { PreviewManager } from './preview'
@@ -192,6 +199,11 @@ class ClaudeSession {
   private lastTurnModel?: string
   private deltaBuf = new Map<string, { messageId: string; partIndex: number; text: string }>()
   private flushTimer: NodeJS.Timeout | null = null
+  // Resolves once the SDK `init` message arrives (or the session dies), so
+  // control requests (mcp status, models, account, usage) issued right after a
+  // lazily-started session wait for the CLI to be ready instead of racing it.
+  private readonly ready: Promise<void>
+  private resolveReady!: () => void
   dead = false
   // Set the instant `dispose()` is called (session superseded / chat deleted).
   // `dead` is also set when the pump ends naturally, so it can't distinguish the
@@ -216,6 +228,9 @@ class ClaudeSession {
     private onCommands: (commands: SlashCommand[]) => void,
     private preview: PreviewManager
   ) {
+    this.ready = new Promise<void>((resolve) => {
+      this.resolveReady = resolve
+    })
     this.q = query({
       prompt: this.input.iterate(),
       options: {
@@ -226,6 +241,10 @@ class ClaudeSession {
         permissionMode: chat.permissionMode,
         allowDangerouslySkipPermissions: true,
         includePartialMessages: true,
+        // Track file changes per user message so the UI can rewind the working
+        // tree back to any prompt (see rewindFiles). Checkpoints live in the CLI
+        // process, so they only cover messages sent since this session started.
+        enableFileCheckpointing: true,
         systemPrompt: { type: 'preset', preset: 'claude_code', append: GUI_SYSTEM_APPEND },
         settingSources: ['user', 'project', 'local'],
         mcpServers: { preview: buildPreviewServer(chat.cwd, preview) },
@@ -317,8 +336,11 @@ class ClaudeSession {
       this.chat.title = title.replace(/\s+/g, ' ').trim().slice(0, 64)
       this.emit({ type: 'meta', chatId: this.chat.id, patch: { title: this.chat.title } })
     }
+    // The GUI message id doubles as the SDK message uuid (stamped on the input
+    // below), so file checkpoints are keyed by it and rewindFiles can target it.
+    const messageId = randomUUID()
     this.pushMessage({
-      id: randomUUID(),
+      id: messageId,
       role: 'user',
       text,
       ts: Date.now(),
@@ -354,7 +376,8 @@ class ClaudeSession {
     this.input.push({
       type: 'user',
       message: { role: 'user', content },
-      parent_tool_use_id: null
+      parent_tool_use_id: null,
+      uuid: messageId
     } as unknown as SDKUserMessage)
   }
 
@@ -398,17 +421,192 @@ class ClaudeSession {
     }
   }
 
+  /**
+   * Runs an SDK control request bounded by two timeouts: one waiting for the
+   * session to initialize, one on the request itself. A control request against
+   * a session that never finished init (or a wedged CLI) otherwise hangs
+   * forever and stalls the IPC call; here it degrades to the fallback value.
+   */
+  private async control<T>(fn: () => Promise<T>, fallback: T, label: string): Promise<T> {
+    try {
+      await Promise.race([this.ready, new Promise<void>((r) => setTimeout(r, 6000))])
+      if (this.dead) return fallback
+      return await Promise.race([
+        fn(),
+        new Promise<T>((r) => setTimeout(() => r(fallback), 8000))
+      ])
+    } catch (err) {
+      console.error(`${label} failed:`, err)
+      return fallback
+    }
+  }
+
+  /** Revert the working tree to its checkpoint at a user message (or preview it). */
+  async rewindFiles(userMessageId: string, dryRun: boolean): Promise<RewindResult> {
+    return this.control<RewindResult>(
+      async () => {
+        const res = await this.q.rewindFiles(userMessageId, { dryRun })
+        return {
+          canRewind: res.canRewind,
+          error: res.error,
+          filesChanged: res.filesChanged,
+          insertions: res.insertions,
+          deletions: res.deletions
+        }
+      },
+      { canRewind: false, error: 'Rewind timed out.' },
+      'rewindFiles'
+    )
+  }
+
+  async mcpStatus(): Promise<McpServerInfo[]> {
+    return this.control(
+      async () => {
+        const servers = await this.q.mcpServerStatus()
+        return servers.map((s) => ({
+          name: s.name,
+          status: s.status,
+          scope: s.scope,
+          error: s.error,
+          tools: s.tools?.map((t) => ({
+            name: t.name,
+            description: t.description,
+            readOnly: t.annotations?.readOnly
+          }))
+        }))
+      },
+      [],
+      'mcpServerStatus'
+    )
+  }
+
+  async mcpReconnect(name: string): Promise<OpResult> {
+    return this.control(
+      async () => {
+        await this.q.reconnectMcpServer(name)
+        return { ok: true } as OpResult
+      },
+      { ok: false, error: 'Reconnect timed out.' },
+      'reconnectMcpServer'
+    )
+  }
+
+  async mcpToggle(name: string, enabled: boolean): Promise<OpResult> {
+    return this.control(
+      async () => {
+        await this.q.toggleMcpServer(name, enabled)
+        return { ok: true } as OpResult
+      },
+      { ok: false, error: 'Toggle timed out.' },
+      'toggleMcpServer'
+    )
+  }
+
+  async listModels(): Promise<ModelOption[]> {
+    return this.control(
+      async () => {
+        const models = await this.q.supportedModels()
+        // The SDK's default row is `value: 'default'`; the app uses '' to mean
+        // "no model override", so normalize it — otherwise the picker shows two
+        // Defaults (this one plus the app's own '' entry) and a chat left on the
+        // app default ('') wouldn't match this row. `resolvedModel` (e.g. 'sonnet'
+        // → 'claude-sonnet-5') lets the picker match chats pinned to the older
+        // static model ids against the alias row that now covers them.
+        return models.map((m) => ({
+          id: m.value === 'default' ? '' : m.value,
+          resolvedModel: m.resolvedModel,
+          label: m.displayName,
+          description: m.description,
+          provider: 'claude' as const
+        }))
+      },
+      [],
+      'supportedModels'
+    )
+  }
+
+  async listAgents(): Promise<AgentInfo[]> {
+    return this.control(
+      async () => {
+        const agents = await this.q.supportedAgents()
+        return agents.map((a) => ({ name: a.name, description: a.description, model: a.model }))
+      },
+      [],
+      'supportedAgents'
+    )
+  }
+
+  async accountInfo(): Promise<AccountInfo | null> {
+    return this.control(
+      async () => {
+        const info = await this.q.accountInfo()
+        return {
+          email: info.email,
+          organization: info.organization,
+          subscriptionType: info.subscriptionType,
+          apiProvider: info.apiProvider
+        }
+      },
+      null,
+      'accountInfo'
+    )
+  }
+
+  async usageInfo(): Promise<UsageInfo | null> {
+    return this.control(
+      async () => {
+        const u = await this.q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET()
+        const windows: UsageInfo['windows'] = []
+        const push = (
+          label: string,
+          w?: { utilization: number | null; resets_at: string | null } | null
+        ): void => {
+          if (w) windows.push({ label, utilization: w.utilization, resetsAt: w.resets_at })
+        }
+        const rl = u.rate_limits
+        if (rl) {
+          push('5-hour', rl.five_hour)
+          push('7-day', rl.seven_day)
+          push('7-day (Opus)', rl.seven_day_opus)
+          push('7-day (Sonnet)', rl.seven_day_sonnet)
+        }
+        return {
+          costUsd: u.session.total_cost_usd,
+          linesAdded: u.session.total_lines_added,
+          linesRemoved: u.session.total_lines_removed,
+          subscriptionType: u.subscription_type,
+          rateLimitsAvailable: u.rate_limits_available,
+          windows
+        }
+      },
+      null,
+      'usage'
+    )
+  }
+
   respondPermission(requestId: string, decision: PermissionDecision): void {
     const pending = this.pending.get(requestId)
     if (!pending) return
     this.pending.delete(requestId)
     this.emit({ type: 'permission-resolved', chatId: this.chat.id, requestId })
     if (decision.behavior === 'allow') {
+      // "Always allow" persists the rule: rewrite each suggestion's destination
+      // from the SDK's default ('session') to 'localSettings' so the CLI writes
+      // it to .claude/settings.local.json. Since sessions load settingSources
+      // ['user','project','local'], the rule then survives restarts and applies
+      // to future chats in this project. Mode/directory updates keep their scope.
+      const persisted =
+        decision.always && pending.suggestions?.length
+          ? pending.suggestions.map((s) =>
+              s.type === 'addRules' || s.type === 'replaceRules' || s.type === 'removeRules'
+                ? { ...s, destination: 'localSettings' as const }
+                : s
+            )
+          : undefined
       pending.resolve({
         behavior: 'allow',
         updatedInput: decision.updatedInput ?? pending.input,
-        updatedPermissions:
-          decision.always && pending.suggestions?.length ? pending.suggestions : undefined
+        updatedPermissions: persisted
       })
       // Approving a plan returns to the mode the chat was in before plan
       // mode — unless the user opted into auto-accepting edits, which the
@@ -450,6 +648,7 @@ class ClaudeSession {
   dispose(): void {
     this.disposed = true
     this.dead = true
+    this.resolveReady()
     // Background tasks are per-process; the next session starts with none.
     this.emitBackgroundJobs([])
     this.flushDeltas()
@@ -531,6 +730,8 @@ class ClaudeSession {
       }
     } finally {
       this.dead = true
+      // Unblock any introspection waiting on init if the session died first.
+      this.resolveReady()
       // If a newer session already owns this chat id (dispose superseded us),
       // stay silent — emitting idle / empty jobs here would clobber it.
       if (!this.disposed) {
@@ -552,6 +753,7 @@ class ClaudeSession {
       case 'system':
         if (msg.subtype === 'init') {
           this.initModel = msg.model
+          this.resolveReady()
           if (msg.session_id && msg.session_id !== this.chat.sessionId) {
             this.chat.sessionId = msg.session_id
             this.emit({
@@ -610,6 +812,28 @@ class ClaudeSession {
         }
         break
 
+      case 'rate_limit_event': {
+        const info = (msg as unknown as { rate_limit_info?: {
+          status: 'allowed' | 'allowed_warning' | 'rejected'
+          rateLimitType?: string
+          utilization?: number
+          resetsAt?: number
+        } }).rate_limit_info
+        if (info) {
+          this.emit({
+            type: 'rate-limit',
+            chatId: this.chat.id,
+            state: {
+              status: info.status,
+              rateLimitType: info.rateLimitType,
+              utilization: info.utilization,
+              resetsAt: info.resetsAt
+            }
+          })
+        }
+        break
+      }
+
       case 'stream_event': {
         if (msg.parent_tool_use_id) break
         this.handleStreamEvent(msg.event)
@@ -633,8 +857,18 @@ class ClaudeSession {
           // used. Take the window of the model that produced this turn — not the
           // max, which would stick to the largest window ever seen (e.g. 1M)
           // after switching down to a smaller model like Sonnet.
-          const current =
-            this.lastTurnModel && msg.modelUsage[this.lastTurnModel]?.contextWindow
+          // Match the turn's model to its usage entry tolerating a '[1m]' suffix:
+          // lastTurnModel comes back as 'claude-opus-4-8' while modelUsage keys it
+          // as 'claude-opus-4-8[1m]', which would otherwise miss and fall back to
+          // Math.max (sticking to the largest window ever seen this session).
+          const canon = (s: string): string => s.replace(/\[1m\]$/i, '')
+          const turnEntry = this.lastTurnModel
+            ? (msg.modelUsage[this.lastTurnModel] ??
+                Object.entries(msg.modelUsage).find(
+                  ([k]) => canon(k) === canon(this.lastTurnModel!)
+                )?.[1])
+            : undefined
+          const current = turnEntry?.contextWindow
           const windows = Object.values(msg.modelUsage)
             .map((m) => m.contextWindow)
             .filter((w): w is number => typeof w === 'number' && w > 0)
@@ -1116,24 +1350,79 @@ export class ChatManager {
     return run
   }
 
+  private createSession(chat: ChatData): ClaudeSession {
+    const session = new ClaudeSession(
+      chat,
+      this.emit,
+      this.store,
+      () => {
+        if (this.sessions.get(chat.id)?.dead) this.sessions.delete(chat.id)
+      },
+      (commands) => this.commandsByCwd.set(chat.cwd, commands),
+      this.preview
+    )
+    this.sessions.set(chat.id, session)
+    return session
+  }
+
   send(chatId: string, text: string, attachments?: Attachment[]): void {
     const chat = this.store.getChat(chatId)
     if (!chat) return
-    let session = this.sessionFor(chatId)
-    if (!session) {
-      session = new ClaudeSession(
-        chat,
-        this.emit,
-        this.store,
-        () => {
-          if (this.sessions.get(chatId)?.dead) this.sessions.delete(chatId)
-        },
-        (commands) => this.commandsByCwd.set(chat.cwd, commands),
-        this.preview
-      )
-      this.sessions.set(chatId, session)
-    }
+    const session = this.sessionFor(chatId) ?? this.createSession(chat)
     session.send(text, attachments)
+  }
+
+  /**
+   * Whether a chat has a live CLI session. Introspection (MCP/models/agents/
+   * account/usage) and rewind need one; a resumed session only emits `init`
+   * after its first message, so we don't lazily start one just to read state —
+   * the UI shows a "send a message" hint instead.
+   */
+  sessionLive(chatId: string): boolean {
+    return this.sessionFor(chatId) !== null
+  }
+
+  async rewindFiles(chatId: string, userMessageId: string, dryRun: boolean): Promise<RewindResult> {
+    // Checkpoints live in the CLI process, so rewind needs the same live session
+    // that made the edits.
+    const session = this.sessionFor(chatId)
+    if (!session) {
+      return {
+        canRewind: false,
+        error: 'Rewind is only available during a running session. Send a message to start one.'
+      }
+    }
+    return session.rewindFiles(userMessageId, dryRun)
+  }
+
+  async mcpStatus(chatId: string): Promise<McpServerInfo[]> {
+    return (await this.sessionFor(chatId)?.mcpStatus()) ?? []
+  }
+
+  async mcpReconnect(chatId: string, name: string): Promise<OpResult> {
+    const session = this.sessionFor(chatId)
+    return session ? session.mcpReconnect(name) : { ok: false, error: 'No running session.' }
+  }
+
+  async mcpToggle(chatId: string, name: string, enabled: boolean): Promise<OpResult> {
+    const session = this.sessionFor(chatId)
+    return session ? session.mcpToggle(name, enabled) : { ok: false, error: 'No running session.' }
+  }
+
+  async listModels(chatId: string): Promise<ModelOption[]> {
+    return (await this.sessionFor(chatId)?.listModels()) ?? []
+  }
+
+  async listAgents(chatId: string): Promise<AgentInfo[]> {
+    return (await this.sessionFor(chatId)?.listAgents()) ?? []
+  }
+
+  async accountInfo(chatId: string): Promise<AccountInfo | null> {
+    return (await this.sessionFor(chatId)?.accountInfo()) ?? null
+  }
+
+  async usageInfo(chatId: string): Promise<UsageInfo | null> {
+    return (await this.sessionFor(chatId)?.usageInfo()) ?? null
   }
 
   async interrupt(chatId: string): Promise<void> {

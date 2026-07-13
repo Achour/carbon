@@ -26,6 +26,7 @@ import { Button } from '@/components/ui/button'
 import { CompactSelect } from '@/components/ui/select'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { WithTooltip } from '@/components/ui/tooltip'
+import { SessionPanel } from '@/components/SessionPanel'
 
 const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024
@@ -238,6 +239,31 @@ export function Composer({
 
   // Attachments handed in from elsewhere (e.g. an element picked in the browser
   // preview) land in a store inbox; pull them into the composer and clear it.
+  // Models reported by the live session, when loaded; otherwise the static list.
+  // The dynamic list already includes its own "Default" row (normalized to the
+  // empty id in main), so use it as-is and just append the non-Claude (Codex)
+  // placeholders the static list carries.
+  const dynamicModels = useApp((s) => s.models)
+  const modelOptions =
+    dynamicModels.length > 0
+      ? [...dynamicModels, ...MODEL_OPTIONS.filter((m) => m.provider !== 'claude')]
+      : MODEL_OPTIONS
+
+  // A chat pinned to an older static id (e.g. 'claude-sonnet-5') won't equal the
+  // SDK's alias value ('sonnet'), so resolve it to the covering row (matching on
+  // `resolvedModel`, ignoring the '[1m]' suffix) to keep the picker highlighted.
+  const canonModel = (s?: string): string => (s ?? '').replace(/\[1m\]$/i, '')
+  const selectedModel = React.useMemo(() => {
+    if (modelOptions.some((o) => o.id === model)) return model
+    const match = modelOptions.find(
+      (o) =>
+        o.id !== '' &&
+        (canonModel(o.id) === canonModel(model) ||
+          canonModel(o.resolvedModel) === canonModel(model))
+    )
+    return match ? match.id : model
+  }, [modelOptions, model])
+
   const inbox = useApp((s) => s.attachmentInbox)
   React.useEffect(() => {
     if (inbox.length === 0) return
@@ -606,9 +632,9 @@ export function Composer({
             send button never get pushed out of the box on a narrow column. */}
         <div className="flex min-w-0 flex-1 items-center gap-1">
           <CompactSelect
-            value={model}
+            value={selectedModel}
             onValueChange={onModelChange}
-            options={MODEL_OPTIONS.map((m) => ({
+            options={modelOptions.map((m) => ({
               value: m.id,
               label: m.label,
               description: m.description,
@@ -641,6 +667,7 @@ export function Composer({
             className="min-w-0"
           />
         </div>
+        <SessionPanel />
         {contextTokens != null && contextTokens > 0 && (
           <ContextRing used={contextTokens} window={contextWindow ?? 200_000} />
         )}

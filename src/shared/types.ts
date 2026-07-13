@@ -154,6 +154,25 @@ export type PermissionDecision =
   | { behavior: 'allow'; always?: boolean; updatedInput?: Record<string, unknown> }
   | { behavior: 'deny'; message?: string }
 
+/** Result of a file-checkpoint rewind (`rewindFiles`). */
+export interface RewindResult {
+  canRewind: boolean
+  error?: string
+  /** Repo-relative paths that would change / did change. */
+  filesChanged?: string[]
+  insertions?: number
+  deletions?: number
+}
+
+/** A single persisted permission rule from a settings file. */
+export interface PermissionRule {
+  /** e.g. "Bash(git push:*)" or "Read". */
+  value: string
+  behavior: 'allow' | 'deny' | 'ask'
+  /** Which settings file it lives in. */
+  source: 'user' | 'project' | 'local'
+}
+
 export interface UserQuestion {
   question: string
   header: string
@@ -176,6 +195,81 @@ export interface BackgroundJob {
   description: string
 }
 
+/** Generic ok/error result for main-process operations that can fail. */
+export type OpResult = { ok: true } | { ok: false; error: string }
+
+// ---------- Session introspection (MCP, models, agents, usage) ----------
+
+/** A tool exposed by an MCP server, from `mcpServerStatus()`. */
+export interface McpToolInfo {
+  name: string
+  description?: string
+  readOnly?: boolean
+}
+
+/** Live status of one configured MCP server for a session. */
+export interface McpServerInfo {
+  name: string
+  status: 'connected' | 'failed' | 'needs-auth' | 'pending' | 'disabled'
+  /** Config scope: project | user | local | claudeai | managed. */
+  scope?: string
+  /** Present when status is 'failed'. */
+  error?: string
+  tools?: McpToolInfo[]
+}
+
+/** A subagent available in the session, from `supportedAgents()`. */
+export interface AgentInfo {
+  name: string
+  description: string
+  /** Model alias the agent uses, or undefined when it inherits the parent's. */
+  model?: string
+}
+
+/** Authenticated account, from `accountInfo()`. */
+export interface AccountInfo {
+  email?: string
+  organization?: string
+  subscriptionType?: string
+  /** Backend the CLI is authenticated against (firstParty, bedrock, vertex, …). */
+  apiProvider?: string
+}
+
+/** One plan rate-limit utilization window (5-hour, 7-day, per-model). */
+export interface RateLimitWindow {
+  /** Human label, e.g. "5-hour", "7-day", "7-day (Opus)". */
+  label: string
+  /** Percent of the window used, 0–100, or null when unknown. */
+  utilization: number | null
+  /** ISO 8601 timestamp when the window resets, or null. */
+  resetsAt?: string | null
+}
+
+/** Structured `/usage` data: session cost + plan rate-limit windows. */
+export interface UsageInfo {
+  costUsd: number
+  linesAdded: number
+  linesRemoved: number
+  subscriptionType?: string | null
+  /** False for API-key / Bedrock / Vertex sessions where plan limits don't apply. */
+  rateLimitsAvailable: boolean
+  windows: RateLimitWindow[]
+}
+
+/**
+ * Live rate-limit signal pushed from a `rate_limit_event` mid-session. Surfaced
+ * as a warning when approaching or hitting a claude.ai plan limit.
+ */
+export interface RateLimitState {
+  status: 'allowed' | 'allowed_warning' | 'rejected'
+  /** Which window: five_hour | seven_day | seven_day_opus | … */
+  rateLimitType?: string
+  /** Percent used, 0–100. */
+  utilization?: number
+  /** Epoch ms when the limiting window resets. */
+  resetsAt?: number
+}
+
 export type ChatEvent =
   | { type: 'message'; chatId: string; message: ChatMessage }
   | { type: 'part-delta'; chatId: string; messageId: string; partIndex: number; delta: string }
@@ -187,6 +281,7 @@ export type ChatEvent =
   | { type: 'permission-resolved'; chatId: string; requestId: string }
   | { type: 'commands'; chatId: string; cwd: string; commands: SlashCommand[] }
   | { type: 'background-jobs'; chatId: string; jobs: BackgroundJob[] }
+  | { type: 'rate-limit'; chatId: string; state: RateLimitState }
 
 // ---------- Settings ----------
 
@@ -203,6 +298,12 @@ export interface ModelOption {
   description?: string
   provider: Provider
   disabled?: boolean
+  /**
+   * Canonical wire model id this option resolves to (from the SDK, e.g. 'sonnet'
+   * → 'claude-sonnet-5'). Lets the picker highlight a chat pinned to an older
+   * explicit model id against the alias row that now covers it.
+   */
+  resolvedModel?: string
 }
 
 export const MODEL_OPTIONS: ModelOption[] = [
@@ -364,6 +465,25 @@ export interface Api {
     chatId: string,
     patch: { model?: string; effort?: EffortId | ''; permissionMode?: PermissionModeId }
   ): Promise<void>
+  // ---- Checkpoint / rewind ----
+  /** Revert the working tree to its state at a user message. dryRun previews only. */
+  rewindFiles(chatId: string, userMessageId: string, dryRun: boolean): Promise<RewindResult>
+  // ---- Session introspection ----
+  /** Whether the chat has a running CLI session (introspection needs one). */
+  sessionLive(chatId: string): Promise<boolean>
+  /** Live MCP server status for a chat; empty when no session is running. */
+  mcpStatus(chatId: string): Promise<McpServerInfo[]>
+  mcpReconnect(chatId: string, name: string): Promise<OpResult>
+  mcpToggle(chatId: string, name: string, enabled: boolean): Promise<OpResult>
+  /** Models the session reports; empty if unavailable (renderer falls back to the static list). */
+  listModels(chatId: string): Promise<ModelOption[]>
+  listAgents(chatId: string): Promise<AgentInfo[]>
+  accountInfo(chatId: string): Promise<AccountInfo | null>
+  usageInfo(chatId: string): Promise<UsageInfo | null>
+  // ---- Persisted permission rules ----
+  getPermissionRules(cwd: string): Promise<PermissionRule[]>
+  /** Remove a rule from a project settings file (local or project scope only). */
+  removePermissionRule(cwd: string, rule: PermissionRule): Promise<OpResult>
   pickDirectory(): Promise<string | null>
   listDir(dir: string): Promise<FileEntry[]>
   readFile(path: string): Promise<FileContent>

@@ -7,6 +7,7 @@ import type {
   GitDiffTarget,
   PermissionDecision,
   PermissionModeId,
+  PermissionRule,
   PreviewCommand,
   PreviewCommandResult,
   PreviewEvent,
@@ -45,6 +46,20 @@ const api: Api = {
     chatId: string,
     patch: { model?: string; effort?: EffortId | ''; permissionMode?: PermissionModeId }
   ) => ipcRenderer.invoke('chat:set-options', chatId, patch),
+  rewindFiles: (chatId: string, userMessageId: string, dryRun: boolean) =>
+    ipcRenderer.invoke('chat:rewind-files', chatId, userMessageId, dryRun),
+  sessionLive: (chatId: string) => ipcRenderer.invoke('session:live', chatId),
+  mcpStatus: (chatId: string) => ipcRenderer.invoke('mcp:status', chatId),
+  mcpReconnect: (chatId: string, name: string) => ipcRenderer.invoke('mcp:reconnect', chatId, name),
+  mcpToggle: (chatId: string, name: string, enabled: boolean) =>
+    ipcRenderer.invoke('mcp:toggle', chatId, name, enabled),
+  listModels: (chatId: string) => ipcRenderer.invoke('session:models', chatId),
+  listAgents: (chatId: string) => ipcRenderer.invoke('session:agents', chatId),
+  accountInfo: (chatId: string) => ipcRenderer.invoke('session:account', chatId),
+  usageInfo: (chatId: string) => ipcRenderer.invoke('session:usage', chatId),
+  getPermissionRules: (cwd: string) => ipcRenderer.invoke('permissions:list', cwd),
+  removePermissionRule: (cwd: string, rule: PermissionRule) =>
+    ipcRenderer.invoke('permissions:remove', cwd, rule),
   pickDirectory: () => ipcRenderer.invoke('dialog:pick-directory'),
   listDir: (dir: string) => ipcRenderer.invoke('fs:list', dir),
   readFile: (path: string) => ipcRenderer.invoke('fs:read', path),

@@ -23,9 +23,12 @@ import type {
   FileEntry,
   GitFileChange,
   GitStatus,
+  ModelOption,
   PermissionDecision,
   PermissionRequestPayload,
   PreviewState,
+  RateLimitState,
+  RewindResult,
   SlashCommand
 } from '@shared/types'
 
@@ -92,6 +95,14 @@ interface AppState {
   statuses: Record<string, ChatStatus>
   /** Live background tasks per chat (SDK reports the full set on each change). */
   backgroundJobs: Record<string, BackgroundJob[]>
+  /** Latest plan rate-limit signal per chat (from `rate_limit_event`). */
+  rateLimits: Record<string, RateLimitState>
+  /** Models reported by the live session; empty until loaded (falls back to the static list). */
+  models: ModelOption[]
+  /** Fetches the session's model list once and caches it (feeds the composer picker). */
+  loadModels(chatId?: string): Promise<void>
+  /** Revert the working tree to a user message's checkpoint (dryRun previews only). */
+  rewindFiles(userMessageId: string, dryRun: boolean): Promise<RewindResult>
   /** Pending permission requests, keyed by chat id. */
   permissions: Record<string, PermissionRequestPayload[]>
   /** Messages typed while a turn was running, sent when the chat goes idle. */
@@ -327,6 +338,8 @@ export const useApp = create<AppState>((set, get) => ({
   messages: [],
   statuses: {},
   backgroundJobs: {},
+  rateLimits: {},
+  models: [],
   permissions: {},
   queued: {},
   planPanel: null,
@@ -1055,6 +1068,26 @@ export const useApp = create<AppState>((set, get) => ({
     void window.api.stopBackgroundJob(id, taskId)
   },
 
+  async loadModels(chatId) {
+    if (get().models.length) return // the list is stable per app run (account-level)
+    const id = chatId ?? get().activeId
+    if (!id) return
+    const models = await window.api.listModels(id)
+    if (models.length) set({ models })
+  },
+
+  async rewindFiles(userMessageId, dryRun) {
+    const id = get().activeId
+    if (!id) return { canRewind: false, error: 'No active chat.' }
+    const res = await window.api.rewindFiles(id, userMessageId, dryRun)
+    // A real rewind changes files on disk — refresh the tree, open files and git.
+    if (!dryRun && res.canRewind) {
+      void get().refreshGit()
+      if (get().panelOpen || get().openFiles.length > 0) void get().refreshFiles()
+    }
+    return res
+  },
+
   async deleteChat(id) {
     await window.api.deleteChat(id)
     set((s) => ({
@@ -1065,6 +1098,7 @@ export const useApp = create<AppState>((set, get) => ({
       statuses: omit(s.statuses, [id]),
       permissions: omit(s.permissions, [id]),
       backgroundJobs: omit(s.backgroundJobs, [id]),
+      rateLimits: omit(s.rateLimits, [id]),
       panelOpenByChat: prunePanelState(s, [id])
     }))
   },
@@ -1102,6 +1136,7 @@ export const useApp = create<AppState>((set, get) => ({
         statuses: omit(s.statuses, ids),
         permissions: omit(s.permissions, ids),
         backgroundJobs: omit(s.backgroundJobs, ids),
+        rateLimits: omit(s.rateLimits, ids),
         panelOpenByChat: prunePanelState(s, ids),
         defaults: s.defaults ? { ...s.defaults, recentDirs } : s.defaults
       }
@@ -1237,8 +1272,18 @@ export const useApp = create<AppState>((set, get) => ({
         break
       }
 
+      case 'rate-limit': {
+        set((st) => ({ rateLimits: { ...st.rateLimits, [ev.chatId]: ev.state } }))
+        break
+      }
+
       case 'status': {
         set((st) => ({ statuses: { ...st.statuses, [ev.chatId]: ev.status } }))
+        // Any non-idle status means a live session (a new chat's first turn is
+        // 'starting', not 'streaming') — load the SDK model list (once, cached)
+        // so the picker shows the real "1M context" descriptions rather than the
+        // static fallback. loadModels waits for init internally.
+        if (ev.status !== 'idle') void get().loadModels(ev.chatId)
         // main dedups consecutive statuses, so an `idle` here is a real
         // transition (the interrupt()+result double-`idle` is collapsed there).
         if (ev.status === 'idle') {

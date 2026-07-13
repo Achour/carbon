@@ -1,12 +1,111 @@
 import * as React from 'react'
 import { Collapsible } from '@base-ui/react/collapsible'
-import { AlertTriangle, ChevronRight, FileText, MousePointerClick } from 'lucide-react'
-import type { AssistantMessage, EventMessage, ToolPart, UserMessage } from '@shared/types'
+import {
+  AlertTriangle,
+  ChevronRight,
+  FileText,
+  Loader2,
+  MousePointerClick,
+  RotateCcw
+} from 'lucide-react'
+import type { AssistantMessage, EventMessage, RewindResult, ToolPart, UserMessage } from '@shared/types'
 import { cn } from '@/lib/utils'
 import { formatCost, formatDuration } from '@/lib/format'
 import { Markdown } from '@/components/Markdown'
+import { Button } from '@/components/ui/button'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { WithTooltip } from '@/components/ui/tooltip'
+import { useApp } from '@/store'
 import { GROUPABLE_TOOLS, ToolCard, ToolGroup } from './ToolCard'
 import { TodoCard } from './TodoCard'
+
+/**
+ * Rewind affordance on a user message: reverts the working tree to the file
+ * checkpoint taken when that message was sent (files only — the conversation is
+ * untouched). Opens a popover that previews the impact (dry run) before applying.
+ */
+function RewindControl({ messageId }: { messageId: string }): React.JSX.Element {
+  const rewindFiles = useApp((s) => s.rewindFiles)
+  const [open, setOpen] = React.useState(false)
+  const [preview, setPreview] = React.useState<RewindResult | null>(null)
+  const [busy, setBusy] = React.useState(false)
+  const [done, setDone] = React.useState<RewindResult | null>(null)
+
+  React.useEffect(() => {
+    if (!open) {
+      setPreview(null)
+      setDone(null)
+      return
+    }
+    let alive = true
+    void rewindFiles(messageId, true).then((r) => {
+      if (alive) setPreview(r)
+    })
+    return () => {
+      alive = false
+    }
+  }, [open, messageId, rewindFiles])
+
+  const noChanges = (preview?.filesChanged?.length ?? 0) === 0
+  const apply = async (): Promise<void> => {
+    setBusy(true)
+    const r = await rewindFiles(messageId, false)
+    setBusy(false)
+    setDone(r)
+    if (r.canRewind) setTimeout(() => setOpen(false), 1400)
+  }
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <WithTooltip label="Rewind files to here">
+        <PopoverTrigger
+          aria-label="Rewind files to this message"
+          className="no-drag mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 outline-none transition-opacity group-hover:opacity-100 hover:bg-accent hover:text-foreground data-[popup-open]:opacity-100"
+        >
+          <RotateCcw className="size-3.5" />
+        </PopoverTrigger>
+      </WithTooltip>
+      <PopoverContent side="left" align="start" className="w-64">
+        <div className="text-[13px] font-medium">Rewind files</div>
+        {done ? (
+          <p className={cn('mt-1.5 text-xs', done.canRewind ? 'text-muted-foreground' : 'text-destructive')}>
+            {done.canRewind
+              ? `Reverted ${done.filesChanged?.length ?? 0} file${(done.filesChanged?.length ?? 0) === 1 ? '' : 's'}.`
+              : (done.error ?? 'Rewind failed.')}
+          </p>
+        ) : !preview ? (
+          <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+            <Loader2 className="size-3.5 animate-spin" /> Checking…
+          </div>
+        ) : preview.canRewind ? (
+          <>
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+              Restore the project files to their state when you sent this message. Later chat
+              messages stay.
+            </p>
+            <div className="mt-2 rounded-md border border-border bg-secondary/40 px-2 py-1.5 text-[11px] tabular-nums text-muted-foreground">
+              {noChanges
+                ? 'No file changes to undo.'
+                : `${preview.filesChanged!.length} file${preview.filesChanged!.length === 1 ? '' : 's'} · +${preview.insertions ?? 0} −${preview.deletions ?? 0}`}
+            </div>
+            <div className="mt-2.5 flex justify-end gap-2">
+              <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>
+                Cancel
+              </Button>
+              <Button size="sm" disabled={busy || noChanges} onClick={() => void apply()}>
+                {busy ? <Loader2 className="size-3.5 animate-spin" /> : 'Rewind'}
+              </Button>
+            </div>
+          </>
+        ) : (
+          <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+            {preview.error ?? 'Can’t rewind to this message.'}
+          </p>
+        )}
+      </PopoverContent>
+    </Popover>
+  )
+}
 
 /** Group a run of this many consecutive read/search tools into one row. */
 const GROUP_MIN = 3
@@ -17,7 +116,7 @@ export const UserBubble = React.memo(function UserBubble({
   message: UserMessage
 }): React.JSX.Element {
   return (
-    <div className="flex animate-enter flex-col items-end gap-1.5">
+    <div className="group flex animate-enter flex-col items-end gap-1.5">
       {message.attachments && message.attachments.length > 0 && (
         <div className="flex max-w-[85%] flex-wrap justify-end gap-1.5">
           {message.attachments.map((att) =>
@@ -51,11 +150,14 @@ export const UserBubble = React.memo(function UserBubble({
           )}
         </div>
       )}
-      {message.text && (
-        <div className="max-w-[85%] select-text rounded-2xl rounded-br-md bg-secondary px-4 py-2.5 text-[14px] leading-relaxed whitespace-pre-wrap">
-          {message.text}
-        </div>
-      )}
+      <div className="flex max-w-full items-start justify-end gap-1">
+        <RewindControl messageId={message.id} />
+        {message.text && (
+          <div className="max-w-[85%] select-text rounded-2xl rounded-br-md bg-secondary px-4 py-2.5 text-[14px] leading-relaxed whitespace-pre-wrap">
+            {message.text}
+          </div>
+        )}
+      </div>
     </div>
   )
 })
