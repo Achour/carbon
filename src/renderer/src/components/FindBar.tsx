@@ -23,22 +23,45 @@ const Highlight = (globalThis as unknown as { Highlight?: HighlightCtor }).Highl
 const scopeEl = (): HTMLElement | null => document.getElementById('editor-find-scope')
 
 function collectRanges(root: HTMLElement, query: string): Range[] {
-  const ranges: Range[] = []
   const q = query.toLowerCase()
-  if (!q) return ranges
+  if (!q) return []
+  // Flatten every text node into one string so a match can span adjacent nodes.
+  // Syntax highlighting splits code into many <span>s, so a query crossing a
+  // token boundary (e.g. "functionFoo") lives in two sibling text nodes and a
+  // per-node indexOf would never find it.
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
-  let node = walker.nextNode()
-  while (node && ranges.length < MAX_MATCHES) {
-    const hay = (node.nodeValue ?? '').toLowerCase()
-    let at = hay.indexOf(q)
-    while (at !== -1 && ranges.length < MAX_MATCHES) {
-      const r = document.createRange()
-      r.setStart(node, at)
-      r.setEnd(node, at + q.length)
-      ranges.push(r)
-      at = hay.indexOf(q, at + q.length)
+  const nodes: Text[] = []
+  const starts: number[] = [] // global offset where each node's text begins
+  let full = ''
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    const v = n.nodeValue ?? ''
+    if (!v) continue
+    starts.push(full.length)
+    nodes.push(n as Text)
+    full += v
+  }
+  const hay = full.toLowerCase()
+  // Map a global offset to [node, localOffset]: the last node whose start ≤ off.
+  const locate = (off: number): [Text, number] => {
+    let lo = 0
+    let hi = nodes.length - 1
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1
+      if (starts[mid] <= off) lo = mid
+      else hi = mid - 1
     }
-    node = walker.nextNode()
+    return [nodes[lo], off - starts[lo]]
+  }
+  const ranges: Range[] = []
+  let at = hay.indexOf(q)
+  while (at !== -1 && ranges.length < MAX_MATCHES) {
+    const [sNode, sOff] = locate(at)
+    const [eNode, eOff] = locate(at + q.length)
+    const r = document.createRange()
+    r.setStart(sNode, sOff)
+    r.setEnd(eNode, eOff)
+    ranges.push(r)
+    at = hay.indexOf(q, at + q.length)
   }
   return ranges
 }

@@ -180,9 +180,11 @@ export async function gitStatus(cwd: string): Promise<GitStatus> {
   // so summing them is the full change vs HEAD without double-counting; untracked
   // files are counted by hand since numstat never lists them.
   try {
+    // core.quotepath=false matches the porcelain status parse above, so numstat
+    // reports non-ASCII paths unquoted and the per-file lookups below hit.
     const [work, staged] = await Promise.all([
-      git(cwd, ['diff', '--numstat']),
-      git(cwd, ['diff', '--numstat', '--cached'])
+      git(cwd, ['-c', 'core.quotepath=false', 'diff', '--numstat']),
+      git(cwd, ['-c', 'core.quotepath=false', 'diff', '--numstat', '--cached'])
     ])
     const workMap = numstatMap(work)
     const stagedMap = numstatMap(staged)

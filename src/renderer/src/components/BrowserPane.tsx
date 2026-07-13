@@ -255,9 +255,15 @@ export function BrowserPane({
   const inspectRef = React.useRef(false)
   const manualNavRef = React.useRef(false)
   const autoUrlRef = React.useRef<string | null>(null)
+  // Mirrors `editing` for the mount-once nav handlers (they can't read state).
+  const editingRef = React.useRef(false)
 
   const [address, setAddress] = React.useState(initialUrl.current)
-  const [editing, setEditing] = React.useState(false)
+  const [editing, setEditingState] = React.useState(false)
+  const setEditing = (v: boolean): void => {
+    editingRef.current = v
+    setEditingState(v)
+  }
   const [loading, setLoading] = React.useState(true)
   const [nav, setNav] = React.useState({ back: false, forward: false })
   const [inspect, setInspectState] = React.useState(false)
@@ -342,6 +348,9 @@ export function BrowserPane({
       ...(data && mediaType ? { data, mediaType } : {})
     }
     useApp.getState().addAttachment(att)
+    // The guest picker disarms itself after a pick; sync the host so the toolbar
+    // button doesn't stay lit (and unresponsive) until the next toggle.
+    setInspect(false)
     setPicked(true)
     clearTimeout(pickedTimer.current)
     pickedTimer.current = setTimeout(() => setPicked(false), 1100)
@@ -385,7 +394,10 @@ export function BrowserPane({
     const onNavigate = (e: Event): void => {
       const url = (e as unknown as { url?: string }).url
       if (url) {
-        setAddress(url)
+        // Don't overwrite the address bar (and caret) while the user is typing a
+        // URL — a guest-side route/redirect can fire mid-edit. Still record the
+        // real navigated URL for tab restore.
+        if (!editingRef.current) setAddress(url)
         setPreviewUrl(id, url)
       }
       setError(null)
@@ -410,6 +422,9 @@ export function BrowserPane({
       if (ev.isMainFrame && ev.errorCode !== -3) {
         setError(ev.errorDescription || 'Failed to load')
         setLoading(false)
+        // A failed load may not be followed by did-stop-loading; clear the ref
+        // too or an agent screenshot stalls the full 8s waiting on it.
+        loadingRef.current = false
       }
     }
     const onConsole = (e: Event): void => {

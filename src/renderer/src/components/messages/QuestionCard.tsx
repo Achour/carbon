@@ -94,12 +94,14 @@ export function QuestionCard({
     return Array.isArray(input?.questions) ? input.questions : []
   }, [request.input])
 
-  const [selected, setSelected] = React.useState<Record<string, Set<string>>>({})
-  const [otherText, setOtherText] = React.useState<Record<string, string>>({})
+  // Keyed by question *index*, not text — two questions can share the same
+  // `question` string, which would otherwise collide their selection state.
+  const [selected, setSelected] = React.useState<Record<number, Set<string>>>({})
+  const [otherText, setOtherText] = React.useState<Record<number, string>>({})
 
-  const toggle = (q: UserQuestion, label: string): void => {
+  const toggle = (i: number, q: UserQuestion, label: string): void => {
     setSelected((prev) => {
-      const current = new Set(prev[q.question] ?? [])
+      const current = new Set(prev[i] ?? [])
       if (q.multiSelect) {
         if (current.has(label)) current.delete(label)
         else current.add(label)
@@ -107,25 +109,25 @@ export function QuestionCard({
         current.clear()
         current.add(label)
       }
-      return { ...prev, [q.question]: current }
+      return { ...prev, [i]: current }
     })
   }
 
-  const answerFor = (q: UserQuestion): string | null => {
-    const picks = selected[q.question]
+  const answerFor = (i: number): string | null => {
+    const picks = selected[i]
     if (!picks || picks.size === 0) return null
-    const labels = [...picks].map((l) =>
-      l === OTHER ? (otherText[q.question] ?? '').trim() : l
-    )
+    const labels = [...picks].map((l) => (l === OTHER ? (otherText[i] ?? '').trim() : l))
     if (labels.some((l) => !l)) return null
     return labels.join(', ')
   }
 
-  const complete = questions.length > 0 && questions.every((q) => answerFor(q) !== null)
+  const complete = questions.length > 0 && questions.every((_q, i) => answerFor(i) !== null)
 
   const submit = (): void => {
     const answers: Record<string, string> = {}
-    for (const q of questions) answers[q.question] = answerFor(q)!
+    questions.forEach((q, i) => {
+      answers[q.question] = answerFor(i)!
+    })
     setBusy(true)
     void respondPermission(request.id, {
       behavior: 'allow',
@@ -140,14 +142,14 @@ export function QuestionCard({
         <span className="text-[13px] font-semibold">Claude has a question</span>
       </div>
       <div className="space-y-4 px-3.5 py-3">
-        {questions.map((q) => (
+        {questions.map((q, i) => (
           <QuestionBlock
-            key={q.question}
+            key={i}
             question={q}
-            selected={selected[q.question] ?? new Set()}
-            otherText={otherText[q.question] ?? ''}
-            onToggle={(label) => toggle(q, label)}
-            onOtherText={(text) => setOtherText((prev) => ({ ...prev, [q.question]: text }))}
+            selected={selected[i] ?? new Set()}
+            otherText={otherText[i] ?? ''}
+            onToggle={(label) => toggle(i, q, label)}
+            onOtherText={(text) => setOtherText((prev) => ({ ...prev, [i]: text }))}
           />
         ))}
       </div>

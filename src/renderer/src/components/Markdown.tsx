@@ -233,18 +233,11 @@ function MermaidBlock({ code }: { code: string }): React.JSX.Element {
   )
 }
 
-function CodeBlock({
+/** A fenced code block with a hover copy button (the non-mermaid path). */
+function PreBlock({
   children,
   ...props
 }: React.HTMLAttributes<HTMLPreElement>): React.JSX.Element {
-  const child = React.isValidElement(children)
-    ? (children as React.ReactElement<{ className?: string }>)
-    : null
-  const lang = child?.props.className?.match(/language-(\w+)/)?.[1]
-  if (lang === 'mermaid') {
-    return <MermaidBlock code={nodeText(children).replace(/\n+$/, '')} />
-  }
-
   const ref = React.useRef<HTMLPreElement>(null)
   const [copied, setCopied] = React.useState(false)
 
@@ -270,6 +263,26 @@ function CodeBlock({
       </button>
     </div>
   )
+}
+
+// A `<pre>`'s language flips from non-mermaid to "mermaid" as the info string
+// streams in char-by-char, so mermaid vs. non-mermaid MUST be two distinct
+// component types (React remounts on type change) — calling hooks after an
+// early `return` here would change the hook count mid-stream and crash the
+// whole message ("rendered fewer hooks than expected"). Keep CodeBlock
+// hook-free: it only picks which child component renders.
+function CodeBlock({
+  children,
+  ...props
+}: React.HTMLAttributes<HTMLPreElement>): React.JSX.Element {
+  const child = React.isValidElement(children)
+    ? (children as React.ReactElement<{ className?: string }>)
+    : null
+  const lang = child?.props.className?.match(/language-(\w+)/)?.[1]
+  if (lang === 'mermaid') {
+    return <MermaidBlock code={nodeText(children).replace(/\n+$/, '')} />
+  }
+  return <PreBlock {...props}>{children}</PreBlock>
 }
 
 // ---- Clickable file paths in inline code ----

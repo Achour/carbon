@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import type { IPty } from 'node-pty'
 import type { TerminalCreateOpts, TerminalEvent } from '@shared/types'
+import { killTree } from './pty'
 
 // node-pty is a native CommonJS module; load it via require so the externalized
 // build resolves the Electron-rebuilt binary at runtime (see `npm run rebuild`).
@@ -39,7 +40,13 @@ export class TerminalManager {
   }
 
   write(id: string, data: string): void {
-    this.sessions.get(id)?.write(data)
+    const s = this.sessions.get(id)
+    if (!s) return
+    try {
+      s.write(data)
+    } catch {
+      // pty exited between its onExit and this write — drop the input
+    }
   }
 
   resize(id: string, cols: number, rows: number): void {
@@ -56,21 +63,11 @@ export class TerminalManager {
     const s = this.sessions.get(id)
     if (!s) return
     this.sessions.delete(id)
-    try {
-      s.kill()
-    } catch {
-      // already gone
-    }
+    killTree(s)
   }
 
   disposeAll(): void {
-    for (const s of this.sessions.values()) {
-      try {
-        s.kill()
-      } catch {
-        // ignore
-      }
-    }
+    for (const s of this.sessions.values()) killTree(s)
     this.sessions.clear()
   }
 }

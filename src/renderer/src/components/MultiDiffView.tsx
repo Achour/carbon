@@ -51,6 +51,14 @@ export function MultiDiffView({ cwd }: { cwd: string }): React.JSX.Element {
   const sectionRefs = React.useRef<Record<string, HTMLDivElement | null>>({})
   const handledScroll = React.useRef(0)
 
+  // `changes` is a fresh array on every refreshGit() (many of them unrelated to
+  // the diffs), so key the fetch on a stable signature: refetch only when the
+  // set of files or their line counts actually shift, not on every refresh.
+  const sig = React.useMemo(
+    () => changes.map((c) => `${keyOf(c)}:${c.status}:${c.additions}:${c.deletions}`).join('|'),
+    [changes]
+  )
+
   // Fetch every file's diff (in parallel) whenever the change set shifts.
   React.useEffect(() => {
     let alive = true
@@ -69,7 +77,9 @@ export function MultiDiffView({ cwd }: { cwd: string }): React.JSX.Element {
     return () => {
       alive = false
     }
-  }, [cwd, changes])
+    // `changes` is intentionally read through the stable `sig` signature.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cwd, sig])
 
   // Scroll to the file the tree asked for — retry across renders until its
   // section has mounted, then mark this request handled.

@@ -12,28 +12,16 @@ interface Row {
   hidden?: number
 }
 
-const SKIP_PREFIXES = [
-  'diff --git',
-  'index ',
-  '--- ',
-  '+++ ',
-  'new file mode',
-  'deleted file mode',
-  'old mode',
-  'new mode',
-  'similarity index',
-  'dissimilarity index',
-  'rename from',
-  'rename to',
-  'copy from',
-  'copy to'
-]
-
 function parseDiff(diff: string): Row[] {
   const rows: Row[] = []
   let oldN = 0
   let newN = 0
   let lastNew = 0 // highest new-file line number emitted so far
+  // Track whether we're inside a hunk. Content lines only appear inside one, and
+  // the `--- `/`+++ ` file headers only appear in a file's preamble — so a body
+  // line like `-- comment` (diff line `--- comment`) must NOT be mistaken for a
+  // header (which would drop it and desync every following line number).
+  let inHunk = false
   const lines = diff.split('\n')
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
@@ -42,7 +30,10 @@ function parseDiff(diff: string): Row[] {
       rows.push({ kind: 'note', old: null, new: null, text: '… diff truncated' })
       break
     }
-    if (line.startsWith('@@')) {
+    if (line.startsWith('diff --git')) {
+      // Start of a(nother) file: back into preamble.
+      inHunk = false
+    } else if (line.startsWith('@@')) {
       const m = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line)
       let hidden = 0
       if (m) {
@@ -51,11 +42,13 @@ function parseDiff(diff: string): Row[] {
         // Unchanged lines git elided between the last shown line and this hunk.
         hidden = Math.max(0, newN - 1 - lastNew)
       }
+      inHunk = true
       rows.push({ kind: 'hunk', old: null, new: null, text: line, hidden })
-    } else if (SKIP_PREFIXES.some((p) => line.startsWith(p))) {
-      // file-level headers add noise for a single-file diff
-    } else if (line.startsWith('Binary files')) {
-      rows.push({ kind: 'note', old: null, new: null, text: line })
+    } else if (!inHunk) {
+      // Preamble: keep a binary-file notice; skip all other header noise.
+      if (line.startsWith('Binary files')) {
+        rows.push({ kind: 'note', old: null, new: null, text: line })
+      }
     } else if (line.startsWith('+')) {
       const n = newN++
       lastNew = n

@@ -1,7 +1,26 @@
 import { app } from 'electron'
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync
+} from 'node:fs'
 import { join } from 'node:path'
 import type { AppDefaults, ChatData, ChatMeta, EffortId, PermissionModeId } from '@shared/types'
+
+/**
+ * Write via a temp file + atomic rename so a crash or force-quit mid-write can't
+ * leave a half-written (and thus unparseable) JSON file — a bare writeFileSync
+ * truncates first, and streaming updates hammer these paths constantly.
+ */
+function writeFileAtomic(path: string, data: string): void {
+  const tmp = `${path}.tmp`
+  writeFileSync(tmp, data)
+  renameSync(tmp, path)
+}
 
 interface SettingsFile {
   defaults: AppDefaults
@@ -46,7 +65,7 @@ export class Store {
 
   private writeSettings(): void {
     try {
-      writeFileSync(this.settingsPath, JSON.stringify(this.settings, null, 2))
+      writeFileAtomic(this.settingsPath, JSON.stringify(this.settings, null, 2))
     } catch (err) {
       console.error('Failed to write settings:', err)
     }
@@ -95,7 +114,7 @@ export class Store {
     const chat = this.chats.get(id)
     if (!chat) return
     try {
-      writeFileSync(join(this.chatsDir, `${id}.json`), JSON.stringify(chat))
+      writeFileAtomic(join(this.chatsDir, `${id}.json`), JSON.stringify(chat))
     } catch (err) {
       console.error('Failed to save chat:', err)
     }

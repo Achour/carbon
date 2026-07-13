@@ -333,6 +333,9 @@ function TabScroller({ children }: { children: React.ReactNode }): React.JSX.Ele
     return () => ro.disconnect()
   }, [update, children])
 
+  // The scroll hide-timer can outlive the strip (panel closes mid-fade).
+  React.useEffect(() => () => clearTimeout(hideTimer.current), [])
+
   const onScroll = (): void => {
     update()
     setActive(true)

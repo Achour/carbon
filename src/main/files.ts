@@ -1,5 +1,5 @@
 import { readdir, readFile, stat } from 'node:fs/promises'
-import { extname, join } from 'node:path'
+import { extname, join, relative } from 'node:path'
 import type { FileContent, FileEntry } from '@shared/types'
 
 const MAX_TEXT_BYTES = 512 * 1024
@@ -158,8 +158,9 @@ async function walkProject(root: string): Promise<string[]> {
           queue.push({ dir: join(dir, e.name), depth: depth + 1 })
         }
       } else if (e.isFile()) {
-        const abs = join(dir, e.name)
-        rels.push(abs.slice(root.length + 1))
+        // relative() is robust to a trailing slash on `root` (slicing by length
+        // would drop the first char of every path when one is present).
+        rels.push(relative(root, join(dir, e.name)))
         if (rels.length >= WALK_MAX_FILES) break
       }
     }

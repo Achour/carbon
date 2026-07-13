@@ -4,6 +4,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { IPty } from 'node-pty'
 import type { PreviewCommand, PreviewCommandResult, PreviewEvent, PreviewState } from '@shared/types'
+import { killTree } from './pty'
 
 const nodeRequire = createRequire(import.meta.url)
 const pty = nodeRequire('node-pty') as typeof import('node-pty')
@@ -28,8 +29,14 @@ interface Server {
   log: string[]
   consoleLines: string[]
   urlFound: boolean
+  /** Bounded tail of stripped output, scanned for the local URL until found. */
+  sniff: string
   waiters: Array<(s: PreviewState) => void>
 }
+
+// How much recent stripped output to retain for URL sniffing. Big enough to
+// catch a URL split across chunks, small enough to keep the scan O(1) per chunk.
+const SNIFF_CAP = 8192
 
 /** Picks the package manager from lockfiles, defaulting to npm. */
 function detectRunner(cwd: string): (script: string) => string {
@@ -72,7 +79,8 @@ export class PreviewManager {
   }
 
   logs(cwd: string): string {
-    return this.servers.get(cwd)?.log.join('') ?? ''
+    // Contract (Api.previewLogs) is ANSI-stripped output.
+    return stripAnsi(this.servers.get(cwd)?.log.join('') ?? '')
   }
 
   reportConsole(cwd: string, line: string): void {
@@ -115,18 +123,27 @@ export class PreviewManager {
     const cmd = command || this.detect(cwd)
     if (!cmd) {
       const state: PreviewState = { cwd, status: 'error', error: 'No dev script found in package.json' }
-      this.servers.set(cwd, { proc: null, state, log: [], consoleLines: [], urlFound: false, waiters: [] })
+      this.servers.set(cwd, {
+        proc: null,
+        state,
+        log: [],
+        consoleLines: [],
+        urlFound: false,
+        sniff: '',
+        waiters: []
+      })
       this.emit({ type: 'state', state })
       return state
     }
     // Clear any dead server for this cwd before spawning a fresh one.
-    existing?.proc?.kill()
+    killTree(existing?.proc ?? null)
     const server: Server = {
       proc: null,
       state: { cwd, status: 'starting', command: cmd },
       log: [],
       consoleLines: [],
       urlFound: false,
+      sniff: '',
       waiters: existing?.waiters ?? []
     }
     this.servers.set(cwd, server)
@@ -151,10 +168,20 @@ export class PreviewManager {
         server.log.push(data)
         if (server.log.length > LOG_CAP) server.log.splice(0, server.log.length - LOG_CAP)
         if (!server.urlFound) {
-          const m = URL_RE.exec(stripAnsi(data))
+          // Scan a bounded rolling tail of stripped output — enough to catch a
+          // URL split across chunks (pty output isn't line-aligned) without
+          // re-joining/re-scanning the whole log on every chunk.
+          server.sniff = (server.sniff + stripAnsi(data)).slice(-SNIFF_CAP)
+          const m = URL_RE.exec(server.sniff)
           if (m) {
             server.urlFound = true
-            const url = m[1].replace('0.0.0.0', 'localhost').replace(/\/$/, '')
+            server.sniff = ''
+            const url = m[1]
+              // Trailing wrappers/punctuation the greedy path class can swallow
+              // (e.g. a URL printed inside parens or followed by a period).
+              .replace(/[)\]},.;'"]+$/, '')
+              .replace('0.0.0.0', 'localhost')
+              .replace(/\/$/, '')
             this.setState(cwd, { status: 'running', url })
           }
         }
@@ -201,7 +228,7 @@ export class PreviewManager {
   stop(cwd: string): PreviewState {
     const server = this.servers.get(cwd)
     if (!server) return { cwd, status: 'stopped' }
-    server.proc?.kill()
+    killTree(server.proc)
     server.proc = null
     this.setState(cwd, { status: 'stopped', error: undefined })
     return server.state
@@ -219,13 +246,7 @@ export class PreviewManager {
   }
 
   disposeAll(): void {
-    for (const s of this.servers.values()) {
-      try {
-        s.proc?.kill()
-      } catch {
-        // already gone
-      }
-    }
+    for (const s of this.servers.values()) killTree(s.proc)
     this.servers.clear()
   }
 }

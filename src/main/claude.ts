@@ -186,6 +186,20 @@ class ClaudeSession {
   private deltaBuf = new Map<string, { messageId: string; partIndex: number; text: string }>()
   private flushTimer: NodeJS.Timeout | null = null
   dead = false
+  // Set the instant `dispose()` is called (session superseded / chat deleted).
+  // `dead` is also set when the pump ends naturally, so it can't distinguish the
+  // two — this flag suppresses the late async emits (a delayed pump `finally`, a
+  // pending flush timer, buffered SDK messages) that would otherwise clobber a
+  // *new* session now owning the same chat id.
+  private disposed = false
+  // Set while an intentional interrupt (Stop, or force-sending a queued message)
+  // is in flight, so the error `result` the SDK emits for the aborted turn isn't
+  // surfaced as a scary failure. Cleared on the first result after the interrupt.
+  private interruptedTurn = false
+  // Last status emitted, so consecutive duplicates (e.g. interrupt() then the
+  // turn's `result` both emitting 'idle') collapse to one — consumers get a
+  // clean level-triggered stream and don't each need to edge-detect.
+  private lastEmittedStatus: ChatStatus | null = null
 
   constructor(
     private chat: ChatData,
@@ -235,6 +249,8 @@ class ClaudeSession {
   }
 
   private setStatus(status: ChatStatus): void {
+    if (status === this.lastEmittedStatus) return
+    this.lastEmittedStatus = status
     this.emit({ type: 'status', chatId: this.chat.id, status })
   }
 
@@ -269,6 +285,10 @@ class ClaudeSession {
     if (this.flushTimer) {
       clearTimeout(this.flushTimer)
       this.flushTimer = null
+    }
+    if (this.disposed) {
+      this.deltaBuf.clear()
+      return
     }
     for (const { messageId, partIndex, text } of this.deltaBuf.values()) {
       this.emit({ type: 'part-delta', chatId: this.chat.id, messageId, partIndex, delta: text })
@@ -333,6 +353,7 @@ class ClaudeSession {
 
   async interrupt(): Promise<void> {
     this.denyAllPending(true)
+    this.interruptedTurn = true
     try {
       await this.q.interrupt()
     } catch (err) {
@@ -384,18 +405,19 @@ class ClaudeSession {
       })
       // Approving a plan returns to the mode the chat was in before plan
       // mode — unless the user opted into auto-accepting edits, which the
-      // suggestions switch to acceptEdits themselves.
+      // suggestions switch to acceptEdits themselves. A chat *created* in plan
+      // mode never recorded a prior mode, so fall back to 'default' rather than
+      // leaving it stuck read-only (unable to do the work the plan describes).
       if (pending.toolName === 'ExitPlanMode') {
-        const restore = this.chat.modeBeforePlan
+        const restore = this.chat.modeBeforePlan ?? 'default'
         this.chat.modeBeforePlan = undefined
-        if (restore && restore !== 'plan' && !decision.always) {
+        if (restore !== 'plan' && !decision.always) {
           this.chat.permissionMode = restore
           this.emit({ type: 'meta', chatId: this.chat.id, patch: { permissionMode: restore } })
           void this.setPermissionMode(restore)
         }
         this.store.saveChatSoon(this.chat.id)
       }
-      this.setStatus('streaming')
     } else {
       this.markToolDenied(pending.toolUseId)
       pending.resolve({
@@ -403,8 +425,10 @@ class ClaudeSession {
         message: decision.message || 'The user denied this request.',
         interrupt: false
       })
-      this.setStatus('streaming')
     }
+    // Stay in `waiting-permission` while other parallel tool calls still await
+    // the user; only resume `streaming` once the last request is handled.
+    this.setStatus(this.pending.size > 0 ? 'waiting-permission' : 'streaming')
   }
 
   private denyAllPending(interrupt: boolean): void {
@@ -417,6 +441,7 @@ class ClaudeSession {
   }
 
   dispose(): void {
+    this.disposed = true
     this.dead = true
     // Background tasks are per-process; the next session starts with none.
     this.emitBackgroundJobs([])
@@ -498,16 +523,23 @@ class ClaudeSession {
       }
     } finally {
       this.dead = true
-      // The process (and any background tasks it owned) is gone.
-      this.emitBackgroundJobs([])
-      this.denyAllPending(false)
-      this.setStatus('idle')
+      // If a newer session already owns this chat id (dispose superseded us),
+      // stay silent — emitting idle / empty jobs here would clobber it.
+      if (!this.disposed) {
+        // The process (and any background tasks it owned) is gone.
+        this.emitBackgroundJobs([])
+        this.denyAllPending(false)
+        this.setStatus('idle')
+      }
       this.store.saveChat(this.chat.id)
       this.onDead()
     }
   }
 
   private handle(msg: SDKMessage): void {
+    // A message can arrive from the SDK subprocess after teardown; ignore it so
+    // we don't emit events for a chat this session no longer represents.
+    if (this.disposed) return
     switch (msg.type) {
       case 'system':
         if (msg.subtype === 'init') {
@@ -626,8 +658,15 @@ class ClaudeSession {
             ts: Date.now(),
             stats
           })
+        } else if (this.interruptedTurn) {
+          // The turn was aborted on purpose (Stop / force-sending a queued
+          // message). The SDK reports that as an error result with an internal
+          // diagnostic — not a real failure, so don't alarm the user with it.
         } else {
-          const errors = 'errors' in msg && msg.errors.length ? msg.errors.join('\n') : msg.subtype
+          const errors =
+            'errors' in msg && Array.isArray(msg.errors) && msg.errors.length
+              ? msg.errors.join('\n')
+              : msg.subtype
           this.pushMessage({
             id: randomUUID(),
             role: 'event',
@@ -637,6 +676,7 @@ class ClaudeSession {
             stats
           })
         }
+        this.interruptedTurn = false
         this.current = null
         this.setStatus('idle')
         this.emit({ type: 'meta', chatId: this.chat.id, patch: { updatedAt: this.chat.updatedAt } })
@@ -741,7 +781,7 @@ class ClaudeSession {
       case 'content_block_stop': {
         const message = this.current
         if (!message) break
-        const index = event.index ?? -1
+        const index = event.index ?? message.parts.length - 1
         const part = message.parts[index]
         if (part?.type === 'tool') {
           const raw = this.jsonAcc.get(index)

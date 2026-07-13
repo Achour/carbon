@@ -334,7 +334,8 @@ export function Composer({
 
   React.useEffect(() => setSlashIdx(0), [slashQuery])
 
-  const pickSlash = (c: SlashCommand): void => {
+  const pickSlash = (c: SlashCommand | undefined): void => {
+    if (!c) return
     const el = ref.current
     const caret = el?.selectionStart ?? text.length
     const next = `/${c.name} ${text.slice(caret)}`
@@ -529,7 +530,9 @@ export function Composer({
             }
             if (e.key === 'Enter' || e.key === 'Tab') {
               e.preventDefault()
-              pickSlash(slashResults[slashIdx])
+              // slashIdx can lag behind a shrunk result list (commands load
+              // async while the menu is open) — clamp to a real entry.
+              pickSlash(slashResults[slashIdx] ?? slashResults[0])
               return
             }
             if (e.key === 'Escape') {

@@ -313,6 +313,13 @@ function upsertMessage(messages: ChatMessage[], message: ChatMessage): ChatMessa
   return next
 }
 
+/** Shallow copy of a per-chat map with the given ids removed. */
+function omit<T>(map: Record<string, T>, ids: string[]): Record<string, T> {
+  const next = { ...map }
+  for (const id of ids) delete next[id]
+  return next
+}
+
 export const useApp = create<AppState>((set, get) => ({
   chats: [],
   activeId: null,
@@ -942,7 +949,15 @@ export const useApp = create<AppState>((set, get) => ({
     // Guard against a chat switch happening while we awaited.
     if (get().activeId === id && chat) {
       const cwdChanged = get().selectedCwd !== chat.cwd
-      set((s) => ({ messages: chat.messages, ...projectSwitchPatch(s, chat.cwd) }))
+      set((s) => {
+        // Events that streamed in for this chat *during* the getChat round-trip
+        // were applied to `messages` (it's the active chat now). The snapshot
+        // from disk can be up to a debounce behind, so layer the live-streamed
+        // messages over it (upsert by id) rather than clobbering them back to a
+        // stale state.
+        const messages = s.messages.reduce(upsertMessage, chat.messages)
+        return { messages, ...projectSwitchPatch(s, chat.cwd) }
+      })
       if (cwdChanged) get().loadCommands(chat.cwd)
       if (cwdChanged || !get().git) void get().refreshGit()
       if (cwdChanged && get().panelOpen && !get().filesByDir[chat.cwd]) {
@@ -1042,17 +1057,16 @@ export const useApp = create<AppState>((set, get) => ({
 
   async deleteChat(id) {
     await window.api.deleteChat(id)
-    set((s) => {
-      const queued = { ...s.queued }
-      delete queued[id]
-      return {
-        chats: s.chats.filter((c) => c.id !== id),
-        activeId: s.activeId === id ? null : s.activeId,
-        messages: s.activeId === id ? [] : s.messages,
-        queued,
-        panelOpenByChat: prunePanelState(s, [id])
-      }
-    })
+    set((s) => ({
+      chats: s.chats.filter((c) => c.id !== id),
+      activeId: s.activeId === id ? null : s.activeId,
+      messages: s.activeId === id ? [] : s.messages,
+      queued: omit(s.queued, [id]),
+      statuses: omit(s.statuses, [id]),
+      permissions: omit(s.permissions, [id]),
+      backgroundJobs: omit(s.backgroundJobs, [id]),
+      panelOpenByChat: prunePanelState(s, [id])
+    }))
   },
 
   async removeProject(cwd) {
@@ -1084,6 +1098,10 @@ export const useApp = create<AppState>((set, get) => ({
         activeId: wasActive ? null : s.activeId,
         messages: wasActive ? [] : s.messages,
         planPanel: wasActive ? null : s.planPanel,
+        queued: omit(s.queued, ids),
+        statuses: omit(s.statuses, ids),
+        permissions: omit(s.permissions, ids),
+        backgroundJobs: omit(s.backgroundJobs, ids),
         panelOpenByChat: prunePanelState(s, ids),
         defaults: s.defaults ? { ...s.defaults, recentDirs } : s.defaults
       }
@@ -1221,6 +1239,8 @@ export const useApp = create<AppState>((set, get) => ({
 
       case 'status': {
         set((st) => ({ statuses: { ...st.statuses, [ev.chatId]: ev.status } }))
+        // main dedups consecutive statuses, so an `idle` here is a real
+        // transition (the interrupt()+result double-`idle` is collapsed there).
         if (ev.status === 'idle') {
           // A queued message goes out as soon as the chat is free again.
           const next = get().queued[ev.chatId]?.[0]

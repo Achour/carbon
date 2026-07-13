@@ -294,6 +294,7 @@ function registerIpc(): void {
   ipcMain.handle('chats:delete', (_e, id: string) => {
     manager.disposeChat(id)
     store.deleteChat(id)
+    lastStatus.delete(id)
   })
 
   ipcMain.handle('chats:rename', (_e, id: string, title: string) => {
