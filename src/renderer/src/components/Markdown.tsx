@@ -61,34 +61,12 @@ function LightboxButton({
   )
 }
 
-/**
- * Rewrites every `id` (and its `url(#…)` / `href="#…"` references) in an SVG so
- * a second copy of the same diagram can coexist in the DOM. The lightbox mounts
- * the same markup as the inline diagram; without this, duplicate ids make the
- * copy's marker/clip-path refs resolve to the *inline* instance and the diagram
- * can render blank.
- */
-function uniqueSvgIds(svg: string, suffix: string): string {
-  const ids = [...svg.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1])
-  let out = svg
-  for (const id of ids) {
-    const esc = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    const next = `${id}-${suffix}`
-    out = out
-      .replace(new RegExp(`id="${esc}"`, 'g'), `id="${next}"`)
-      .replace(new RegExp(`(url\\(#|href="#|xlink:href="#)${esc}([)"])`, 'g'), `$1${next}$2`)
-  }
-  return out
-}
-
 /** Full-screen, zoom + pan viewer for a rendered diagram, Cursor-style. */
 function DiagramLightbox({ svg, onClose }: { svg: string; onClose: () => void }): React.JSX.Element {
   const [scale, setScale] = React.useState(1)
   const [pos, setPos] = React.useState({ x: 0, y: 0 })
   const drag = React.useRef<{ x: number; y: number } | null>(null)
   const [dragging, setDragging] = React.useState(false)
-  // Give the lightbox copy its own ids, and a definite box the svg fits into.
-  const uid = React.useMemo(() => uniqueSvgIds(svg, 'lightbox'), [svg])
 
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
@@ -145,11 +123,10 @@ function DiagramLightbox({ svg, onClose }: { svg: string; onClose: () => void })
         onPointerMove={(e) => {
           if (drag.current) setPos({ x: e.clientX - drag.current.x, y: e.clientY - drag.current.y })
         }}
-        onPointerUp={() => {
-          drag.current = null
-          setDragging(false)
-        }}
-        dangerouslySetInnerHTML={{ __html: uid }}
+        // Same markup as the inline diagram — duplicate ids are fine here (markers,
+        // clip-paths and mermaid's scoped `<style>#id…` all still resolve), and
+        // rewriting the id would orphan those internal style selectors.
+        dangerouslySetInnerHTML={{ __html: svg }}
       />
     </div>,
     document.body
