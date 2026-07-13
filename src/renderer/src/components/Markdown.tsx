@@ -61,12 +61,34 @@ function LightboxButton({
   )
 }
 
+/**
+ * Rewrites every `id` (and its `url(#…)` / `href="#…"` references) in an SVG so
+ * a second copy of the same diagram can coexist in the DOM. The lightbox mounts
+ * the same markup as the inline diagram; without this, duplicate ids make the
+ * copy's marker/clip-path refs resolve to the *inline* instance and the diagram
+ * can render blank.
+ */
+function uniqueSvgIds(svg: string, suffix: string): string {
+  const ids = [...svg.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1])
+  let out = svg
+  for (const id of ids) {
+    const esc = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const next = `${id}-${suffix}`
+    out = out
+      .replace(new RegExp(`id="${esc}"`, 'g'), `id="${next}"`)
+      .replace(new RegExp(`(url\\(#|href="#|xlink:href="#)${esc}([)"])`, 'g'), `$1${next}$2`)
+  }
+  return out
+}
+
 /** Full-screen, zoom + pan viewer for a rendered diagram, Cursor-style. */
 function DiagramLightbox({ svg, onClose }: { svg: string; onClose: () => void }): React.JSX.Element {
   const [scale, setScale] = React.useState(1)
   const [pos, setPos] = React.useState({ x: 0, y: 0 })
   const drag = React.useRef<{ x: number; y: number } | null>(null)
   const [dragging, setDragging] = React.useState(false)
+  // Give the lightbox copy its own ids, and a definite box the svg fits into.
+  const uid = React.useMemo(() => uniqueSvgIds(svg, 'lightbox'), [svg])
 
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
@@ -102,7 +124,11 @@ function DiagramLightbox({ svg, onClose }: { svg: string; onClose: () => void })
       </div>
       <div
         className={cn(
-          'h-fit w-fit [&>svg]:!block [&>svg]:!h-auto [&>svg]:!max-h-[85vh] [&>svg]:!w-auto [&>svg]:!max-w-[90vw]',
+          // A definite box the svg fills; mermaid's viewBox + preserveAspectRatio
+          // then fits the diagram inside it (a `w-fit` box + `w-auto` svg gave a
+          // width="100%" svg nothing to resolve against, so it collapsed to 0).
+          // max-*-none overrides mermaid's inline `max-width` so it fills the box.
+          'flex h-[88vh] w-[92vw] items-center justify-center [&>svg]:!block [&>svg]:!h-full [&>svg]:!w-full [&>svg]:!max-h-none [&>svg]:!max-w-none',
           dragging ? 'cursor-grabbing' : 'cursor-grab'
         )}
         style={{
@@ -123,7 +149,7 @@ function DiagramLightbox({ svg, onClose }: { svg: string; onClose: () => void })
           drag.current = null
           setDragging(false)
         }}
-        dangerouslySetInnerHTML={{ __html: svg }}
+        dangerouslySetInnerHTML={{ __html: uid }}
       />
     </div>,
     document.body

@@ -170,6 +170,13 @@ interface PendingPermission {
   input: Record<string, unknown>
 }
 
+/**
+ * The CLI emits internal telemetry lines (e.g. `[ede_diagnostic] result_type=…`
+ * when a turn is aborted / a queued message is force-sent) as error results.
+ * They aren't real failures, so they must not render as scary error cards.
+ */
+const isBenignTurnError = (text: string): boolean => text.includes('[ede_diagnostic]')
+
 class ClaudeSession {
   private q: Query
   private input = createInputQueue()
@@ -512,12 +519,13 @@ class ClaudeSession {
         this.handle(msg)
       }
     } catch (err) {
-      if (!this.dead) {
+      const text = err instanceof Error ? err.message : String(err)
+      if (!this.dead && !this.interruptedTurn && !isBenignTurnError(text)) {
         this.pushMessage({
           id: randomUUID(),
           role: 'event',
           kind: 'error',
-          text: err instanceof Error ? err.message : String(err),
+          text,
           ts: Date.now()
         })
       }
@@ -658,23 +666,25 @@ class ClaudeSession {
             ts: Date.now(),
             stats
           })
-        } else if (this.interruptedTurn) {
-          // The turn was aborted on purpose (Stop / force-sending a queued
-          // message). The SDK reports that as an error result with an internal
-          // diagnostic — not a real failure, so don't alarm the user with it.
         } else {
           const errors =
             'errors' in msg && Array.isArray(msg.errors) && msg.errors.length
               ? msg.errors.join('\n')
               : msg.subtype
-          this.pushMessage({
-            id: randomUUID(),
-            role: 'event',
-            kind: 'error',
-            text: errors,
-            ts: Date.now(),
-            stats
-          })
+          // Skip errors from an intentional interrupt (the flag) and the CLI's
+          // internal diagnostics (the text) — neither is a real failure. The
+          // diagnostic can surface on the *resend* turn, after the flag has been
+          // cleared, so the text check is what makes this robust.
+          if (!this.interruptedTurn && !isBenignTurnError(errors)) {
+            this.pushMessage({
+              id: randomUUID(),
+              role: 'event',
+              kind: 'error',
+              text: errors,
+              ts: Date.now(),
+              stats
+            })
+          }
         }
         this.interruptedTurn = false
         this.current = null
