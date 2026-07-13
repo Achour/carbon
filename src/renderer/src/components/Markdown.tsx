@@ -84,12 +84,17 @@ function DiagramLightbox({ svg, onClose }: { svg: string; onClose: () => void })
     setPos({ x: 0, y: 0 })
   }
 
+  const endDrag = (): void => {
+    drag.current = null
+    down.current = null
+    setDragging(false)
+  }
+
   return createPortal(
-    <div
-      className="animate-enter fixed inset-0 z-[100] flex items-center justify-center bg-background/85 backdrop-blur-sm"
-      onClick={onClose}
-    >
-      <div className="absolute top-4 right-4 z-10 flex gap-1" onClick={(e) => e.stopPropagation()}>
+    <div className="animate-enter fixed inset-0 z-[100] bg-background/85 backdrop-blur-sm">
+      {/* Controls sit ABOVE the pan surface (higher z) and outside its pointer
+          flow, so they're always clickable — never dragged or intercepted. */}
+      <div className="absolute top-4 right-4 z-20 flex gap-1">
         <LightboxButton onClick={() => setScale((s) => clampScale(s + 0.25))} label="Zoom in">
           <ZoomIn className="size-4" />
         </LightboxButton>
@@ -103,26 +108,24 @@ function DiagramLightbox({ svg, onClose }: { svg: string; onClose: () => void })
           <X className="size-4" />
         </LightboxButton>
       </div>
+      {/* Pan / zoom surface: fills the screen and stays put (only the diagram
+          inside transforms), so it can't drift over the controls. A plain click
+          dismisses; a drag pans. */}
       <div
         className={cn(
-          // A definite box the svg fills; mermaid's viewBox + preserveAspectRatio
-          // then fits the diagram inside it (a `w-fit` box + `w-auto` svg gave a
-          // width="100%" svg nothing to resolve against, so it collapsed to 0).
-          // max-*-none overrides mermaid's inline `max-width` so it fills the box.
-          'flex h-[88vh] w-[92vw] items-center justify-center [&>svg]:!block [&>svg]:!h-full [&>svg]:!w-full [&>svg]:!max-h-none [&>svg]:!max-w-none',
+          'absolute inset-0 flex touch-none items-center justify-center overflow-hidden',
           dragging ? 'cursor-grabbing' : 'cursor-grab'
         )}
-        style={{
-          transform: `translate(${pos.x}px, ${pos.y}px) scale(${scale})`,
-          transition: dragging ? 'none' : 'transform 0.12s ease-out'
-        }}
-        onClick={(e) => e.stopPropagation()}
         onWheel={(e) => setScale((s) => clampScale(s - e.deltaY * 0.0015))}
         onPointerDown={(e) => {
           drag.current = { x: e.clientX - pos.x, y: e.clientY - pos.y }
           down.current = { x: e.clientX, y: e.clientY, moved: false }
           setDragging(true)
-          e.currentTarget.setPointerCapture(e.pointerId)
+          try {
+            e.currentTarget.setPointerCapture(e.pointerId)
+          } catch {
+            // no active pointer (rare) — dragging still works via the surface
+          }
         }}
         onPointerMove={(e) => {
           if (!drag.current) return
@@ -132,23 +135,25 @@ function DiagramLightbox({ svg, onClose }: { svg: string; onClose: () => void })
           setPos({ x: e.clientX - drag.current.x, y: e.clientY - drag.current.y })
         }}
         onPointerUp={() => {
-          drag.current = null
-          setDragging(false)
-          // A plain click on the full-screen stage dismisses (like a backdrop);
-          // a drag just panned, so leave it open.
-          if (down.current && !down.current.moved) onClose()
-          down.current = null
+          const wasClick = down.current != null && !down.current.moved
+          endDrag()
+          if (wasClick) onClose()
         }}
-        onPointerCancel={() => {
-          drag.current = null
-          down.current = null
-          setDragging(false)
-        }}
-        // Same markup as the inline diagram — duplicate ids are fine here (markers,
-        // clip-paths and mermaid's scoped `<style>#id…` all still resolve), and
-        // rewriting the id would orphan those internal style selectors.
-        dangerouslySetInnerHTML={{ __html: svg }}
-      />
+        onPointerCancel={endDrag}
+      >
+        {/* Only this inner element transforms (pan/zoom). The svg fills the box;
+            mermaid's viewBox + preserveAspectRatio fit the diagram inside it, and
+            max-*-none overrides its inline max-width so it fills the space. Same
+            markup as the inline diagram — duplicate ids resolve fine. */}
+        <div
+          className="h-[88vh] w-[92vw] [&>svg]:!block [&>svg]:!h-full [&>svg]:!w-full [&>svg]:!max-h-none [&>svg]:!max-w-none"
+          style={{
+            transform: `translate(${pos.x}px, ${pos.y}px) scale(${scale})`,
+            transition: dragging ? 'none' : 'transform 0.12s ease-out'
+          }}
+          dangerouslySetInnerHTML={{ __html: svg }}
+        />
+      </div>
     </div>,
     document.body
   )
