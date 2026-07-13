@@ -154,7 +154,7 @@ export const UserBubble = React.memo(function UserBubble({
           )}
         </div>
       )}
-      <div className="flex max-w-full items-start justify-end gap-1">
+      <div className="flex w-full items-start justify-end gap-1">
         <RewindControl messageId={message.id} />
         {message.text && (
           <div className="max-w-[85%] select-text rounded-2xl rounded-br-md bg-secondary px-4 py-2.5 text-[14px] leading-relaxed whitespace-pre-wrap">
