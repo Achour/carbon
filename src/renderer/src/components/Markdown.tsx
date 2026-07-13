@@ -66,6 +66,9 @@ function DiagramLightbox({ svg, onClose }: { svg: string; onClose: () => void })
   const [scale, setScale] = React.useState(1)
   const [pos, setPos] = React.useState({ x: 0, y: 0 })
   const drag = React.useRef<{ x: number; y: number } | null>(null)
+  // Tracks the pointer-down origin so a plain click (no real drag) on the
+  // full-screen stage dismisses, while a drag pans instead.
+  const down = React.useRef<{ x: number; y: number; moved: boolean } | null>(null)
   const [dragging, setDragging] = React.useState(false)
 
   React.useEffect(() => {
@@ -117,11 +120,29 @@ function DiagramLightbox({ svg, onClose }: { svg: string; onClose: () => void })
         onWheel={(e) => setScale((s) => clampScale(s - e.deltaY * 0.0015))}
         onPointerDown={(e) => {
           drag.current = { x: e.clientX - pos.x, y: e.clientY - pos.y }
+          down.current = { x: e.clientX, y: e.clientY, moved: false }
           setDragging(true)
           e.currentTarget.setPointerCapture(e.pointerId)
         }}
         onPointerMove={(e) => {
-          if (drag.current) setPos({ x: e.clientX - drag.current.x, y: e.clientY - drag.current.y })
+          if (!drag.current) return
+          if (down.current && (Math.abs(e.clientX - down.current.x) > 4 || Math.abs(e.clientY - down.current.y) > 4)) {
+            down.current.moved = true
+          }
+          setPos({ x: e.clientX - drag.current.x, y: e.clientY - drag.current.y })
+        }}
+        onPointerUp={() => {
+          drag.current = null
+          setDragging(false)
+          // A plain click on the full-screen stage dismisses (like a backdrop);
+          // a drag just panned, so leave it open.
+          if (down.current && !down.current.moved) onClose()
+          down.current = null
+        }}
+        onPointerCancel={() => {
+          drag.current = null
+          down.current = null
+          setDragging(false)
         }}
         // Same markup as the inline diagram — duplicate ids are fine here (markers,
         // clip-paths and mermaid's scoped `<style>#id…` all still resolve), and
