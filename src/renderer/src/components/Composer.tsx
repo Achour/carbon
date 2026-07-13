@@ -403,8 +403,7 @@ export function Composer({
   }
 
   const slashResults = React.useMemo(() => {
-    // Slash commands come from the Claude session; Codex chats don't have them.
-    if (slashQuery === null || isCodex) return []
+    if (slashQuery === null) return []
     const q = slashQuery.toLowerCase()
     const matches = (c: SlashCommand): boolean =>
       c.name.toLowerCase().includes(q) || (c.aliases ?? []).some((a) => a.toLowerCase().includes(q))
@@ -416,7 +415,7 @@ export function Composer({
         return ap - bp || a.name.localeCompare(b.name)
       })
       .slice(0, 50)
-  }, [slashQuery, commands, isCodex])
+  }, [slashQuery, commands])
 
   React.useEffect(() => setSlashIdx(0), [slashQuery])
 

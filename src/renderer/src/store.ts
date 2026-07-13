@@ -501,11 +501,8 @@ export const useApp = create<AppState>((set, get) => ({
   commandsKey: null,
 
   loadCommands(cwd, provider) {
-    // Slash commands come from a *Claude* session — don't warm one (or show
-    // Claude commands) for a Codex chat. The intended provider is passed
-    // explicitly by callers that know it (new-chat, chat switch, init); fall back
-    // to the active chat's provider, then the default model's, so the new-chat
-    // screen with a saved Codex default never initializes Claude.
+    // Commands are provider-specific. Claude discovers its SDK command list;
+    // Codex gets the subset Karbun can execute through the non-interactive SDK.
     const s = get()
     const prov =
       provider ??
@@ -514,12 +511,12 @@ export const useApp = create<AppState>((set, get) => ({
     const key = cwd ? `${cwd}::${prov}` : null
     // Already loaded (or loading) for this exact provider+project — nothing to do.
     if (s.commandsKey === key) return
-    if (!cwd || prov === 'codex') {
+    if (!cwd) {
       set({ commands: [], commandsKey: key })
       return
     }
     set({ commands: [], commandsKey: key })
-    void window.api.getCommands(cwd).then((commands) => {
+    void window.api.getCommands(cwd, prov).then((commands) => {
       // Ignore a stale response if the project or provider changed while awaiting.
       if (get().commandsKey === key) set({ commands })
     })

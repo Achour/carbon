@@ -80,7 +80,8 @@ const api: Api = {
   terminalResize: (id: string, cols: number, rows: number) =>
     ipcRenderer.invoke('terminal:resize', id, cols, rows),
   terminalKill: (id: string) => ipcRenderer.invoke('terminal:kill', id),
-  getCommands: (cwd: string) => ipcRenderer.invoke('commands:get', cwd),
+  getCommands: (cwd: string, provider?: Provider) =>
+    ipcRenderer.invoke('commands:get', cwd, provider),
   previewDetect: (cwd: string) => ipcRenderer.invoke('preview:detect', cwd),
   previewState: (cwd: string) => ipcRenderer.invoke('preview:state', cwd),
   previewStart: (cwd: string, command?: string) =>

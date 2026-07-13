@@ -523,8 +523,8 @@ export interface Api {
   terminalWrite(id: string, data: string): Promise<void>
   terminalResize(id: string, cols: number, rows: number): Promise<void>
   terminalKill(id: string): Promise<void>
-  /** Slash commands cached for a project folder (empty until a session inits). */
-  getCommands(cwd: string): Promise<SlashCommand[]>
+  /** Provider-specific slash commands available for a project folder. */
+  getCommands(cwd: string, provider?: Provider): Promise<SlashCommand[]>
   // ---- Browser preview / dev server ----
   /** Detected dev command for a project, or null if none found. */
   previewDetect(cwd: string): Promise<string | null>

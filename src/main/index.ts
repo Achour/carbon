@@ -393,7 +393,9 @@ function registerIpc(): void {
   )
   ipcMain.handle('terminal:kill', (_e, id: string) => terminals.kill(id))
 
-  ipcMain.handle('commands:get', (_e, cwd: string) => manager.getCommands(cwd))
+  ipcMain.handle('commands:get', (_e, cwd: string, provider?: Provider) =>
+    manager.getCommands(cwd, provider)
+  )
 
   ipcMain.handle('preview:detect', (_e, cwd: string) => preview.detect(cwd))
   ipcMain.handle('preview:state', (_e, cwd: string) => preview.state(cwd))

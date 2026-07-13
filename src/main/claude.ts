@@ -27,12 +27,14 @@ import type {
   OpResult,
   PermissionDecision,
   PermissionModeId,
+  Provider,
   RewindResult,
   SlashCommand,
   ToolPart,
   UsageInfo
 } from '@shared/types'
-import { providerForModel } from '@shared/types'
+import { CODEX_DEFAULT_MODEL, MODEL_OPTIONS, providerForModel } from '@shared/types'
+import { CODEX_SLASH_COMMANDS, parseCodexSlashCommand } from '@shared/codexCommands'
 import type { Store } from './store'
 import type { PreviewManager } from './preview'
 import { CodexSession } from './codex'
@@ -1292,8 +1294,9 @@ export class ChatManager {
   }
 
   /** Cached commands for a folder, warming a one-shot session on a cache miss. */
-  async getCommands(cwd: string): Promise<SlashCommand[]> {
+  async getCommands(cwd: string, provider: Provider = 'claude'): Promise<SlashCommand[]> {
     if (!cwd) return []
+    if (provider === 'codex') return CODEX_SLASH_COMMANDS
     const cached = this.commandsByCwd.get(cwd)
     if (cached) return cached
     return this.warmCommands(cwd)
@@ -1372,8 +1375,17 @@ export class ChatManager {
   send(chatId: string, text: string, attachments?: Attachment[]): void {
     const chat = this.store.getChat(chatId)
     if (!chat) return
+    const command = chat.provider === 'codex' ? parseCodexSlashCommand(text) : null
+    if (command) {
+      void this.runCodexCommand(chat, command, attachments)
+      return
+    }
+    this.sendPrompt(chat, text, attachments)
+  }
+
+  private sendPrompt(chat: ChatData, text: string, attachments?: Attachment[]): void {
     try {
-      const session = this.sessionFor(chatId) ?? this.createSession(chat)
+      const session = this.sessionFor(chat.id) ?? this.createSession(chat)
       session.send(text, attachments)
     } catch (err) {
       // Session construction failed before the turn started (e.g. a missing or
@@ -1390,7 +1402,7 @@ export class ChatManager {
           ...(attachments?.length ? { attachments } : {})
         }
         chat.messages.push(userMsg)
-        this.emit({ type: 'message', chatId, message: userMsg })
+        this.emit({ type: 'message', chatId: chat.id, message: userMsg })
       }
       const errMsg = {
         id: randomUUID(),
@@ -1401,9 +1413,195 @@ export class ChatManager {
       }
       chat.messages.push(errMsg)
       chat.updatedAt = now
-      this.emit({ type: 'message', chatId, message: errMsg })
-      this.emit({ type: 'status', chatId, status: 'idle' })
-      this.store.saveChat(chatId)
+      this.emit({ type: 'message', chatId: chat.id, message: errMsg })
+      this.emit({ type: 'status', chatId: chat.id, status: 'idle' })
+      this.store.saveChat(chat.id)
+    }
+  }
+
+  private pushCommandResult(
+    chat: ChatData,
+    commandText: string,
+    text: string,
+    kind: 'info' | 'error' = 'info'
+  ): void {
+    const now = Date.now()
+    const user = { id: randomUUID(), role: 'user' as const, text: commandText, ts: now }
+    const event = { id: randomUUID(), role: 'event' as const, kind, text, ts: now }
+    chat.messages.push(user, event)
+    chat.updatedAt = now
+    this.emit({ type: 'message', chatId: chat.id, message: user })
+    this.emit({ type: 'message', chatId: chat.id, message: event })
+    this.emit({ type: 'status', chatId: chat.id, status: 'idle' })
+    this.store.saveChat(chat.id)
+  }
+
+  private async runCodexCommand(
+    chat: ChatData,
+    command: NonNullable<ReturnType<typeof parseCodexSlashCommand>>,
+    attachments?: Attachment[]
+  ): Promise<void> {
+    try {
+      switch (command.name) {
+        case 'plan': {
+          await this.setOptions(chat.id, { permissionMode: 'plan' })
+          if (command.argument) {
+            this.sendPrompt(chat, command.argument, attachments)
+          } else {
+            this.pushCommandResult(
+              chat,
+              command.original,
+              'Plan mode enabled. Send a request and Codex will prepare a reviewable plan before making changes.'
+            )
+          }
+          return
+        }
+
+        case 'model': {
+          if (!command.argument) {
+            const current =
+              MODEL_OPTIONS.find((model) => model.id === (chat.model ?? CODEX_DEFAULT_MODEL))?.label ??
+              chat.model ??
+              'Codex default'
+            this.pushCommandResult(chat, command.original, `Current model: **${current}**.`)
+            return
+          }
+          const aliases: Record<string, string> = {
+            default: CODEX_DEFAULT_MODEL,
+            codex: CODEX_DEFAULT_MODEL,
+            sol: 'gpt-5.6-sol',
+            terra: 'gpt-5.6-terra',
+            luna: 'gpt-5.6-luna'
+          }
+          const requested = command.argument.toLowerCase()
+          const modelId = aliases[requested] ?? command.argument
+          const model = MODEL_OPTIONS.find((option) => option.provider === 'codex' && option.id === modelId)
+          if (!model) {
+            this.pushCommandResult(
+              chat,
+              command.original,
+              'Unknown Codex model. Use `default`, `sol`, `terra`, `luna`, or an ID shown in the model picker.',
+              'error'
+            )
+            return
+          }
+          await this.setOptions(chat.id, { model: model.id })
+          this.pushCommandResult(chat, command.original, `Model changed to **${model.label}**.`)
+          return
+        }
+
+        case 'reasoning': {
+          if (!command.argument) {
+            this.pushCommandResult(
+              chat,
+              command.original,
+              `Current reasoning effort: **${chat.effort ?? 'default (high)'}**.`
+            )
+            return
+          }
+          const effort = command.argument.toLowerCase()
+          if (!['default', 'low', 'medium', 'high', 'xhigh'].includes(effort)) {
+            this.pushCommandResult(
+              chat,
+              command.original,
+              'Unknown reasoning effort. Use `default`, `low`, `medium`, `high`, or `xhigh`.',
+              'error'
+            )
+            return
+          }
+          await this.setOptions(chat.id, {
+            effort: effort === 'default' ? '' : (effort as EffortId)
+          })
+          this.pushCommandResult(
+            chat,
+            command.original,
+            `Reasoning effort changed to **${effort === 'default' ? 'default (high)' : effort}**.`
+          )
+          return
+        }
+
+        case 'permissions': {
+          if (!command.argument) {
+            this.pushCommandResult(
+              chat,
+              command.original,
+              `Current permission mode: **${chat.permissionMode}**.`
+            )
+            return
+          }
+          const modes: Record<string, PermissionModeId> = {
+            plan: 'plan',
+            'read-only': 'plan',
+            ask: 'default',
+            default: 'default',
+            workspace: 'default',
+            'workspace-write': 'default',
+            'accept-edits': 'acceptEdits',
+            auto: 'auto',
+            full: 'bypassPermissions',
+            'full-access': 'bypassPermissions',
+            'danger-full-access': 'bypassPermissions'
+          }
+          const mode = modes[command.argument.toLowerCase()]
+          if (!mode) {
+            this.pushCommandResult(
+              chat,
+              command.original,
+              'Unknown permission mode. Use `plan`, `ask`, `accept-edits`, `auto`, or `full-access`.',
+              'error'
+            )
+            return
+          }
+          await this.setOptions(chat.id, { permissionMode: mode })
+          this.pushCommandResult(chat, command.original, `Permission mode changed to **${mode}**.`)
+          return
+        }
+
+        case 'status': {
+          const context =
+            chat.contextTokens != null && chat.contextWindow
+              ? `${chat.contextTokens.toLocaleString()} / ${chat.contextWindow.toLocaleString()} tokens`
+              : 'Not available until a turn completes'
+          this.pushCommandResult(
+            chat,
+            command.original,
+            [
+              '**Codex status**',
+              `- Model: ${chat.model ?? 'Codex config default'}`,
+              `- Reasoning: ${chat.effort ?? 'default (high)'}`,
+              `- Permissions: ${chat.permissionMode}`,
+              `- Project: ${chat.cwd}`,
+              `- Thread: ${chat.sessionId ?? 'Not started'}`,
+              `- Context: ${context}`
+            ].join('\n')
+          )
+          return
+        }
+
+        case 'init':
+          this.sendPrompt(
+            chat,
+            'Create an AGENTS.md file for this project. Inspect the repository first, then write concise, practical guidance for coding agents: architecture, important commands, conventions, verification steps, and project-specific pitfalls. Do not overwrite useful existing instructions; improve them in place if AGENTS.md already exists.',
+            attachments
+          )
+          return
+
+        case 'review': {
+          const focus = command.argument ? ` Focus especially on: ${command.argument}` : ''
+          this.sendPrompt(
+            chat,
+            `Review the current working tree for defects, regressions, security issues, and missing tests. Do not modify any files. Report actionable findings first, ordered by severity, with file and line references.${focus}`,
+            attachments
+          )
+        }
+      }
+    } catch (error) {
+      this.pushCommandResult(
+        chat,
+        command.original,
+        error instanceof Error ? error.message : String(error),
+        'error'
+      )
     }
   }
 
