@@ -21,7 +21,7 @@ export const CODEX_SLASH_COMMANDS: SlashCommand[] = [
   {
     name: 'reasoning',
     description: 'Show or change reasoning effort',
-    argumentHint: '[default|low|medium|high|xhigh]'
+    argumentHint: '[default|minimal|low|medium|high|xhigh]'
   },
   {
     name: 'permissions',

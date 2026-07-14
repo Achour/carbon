@@ -16,7 +16,7 @@ import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { WithTooltip } from '@/components/ui/tooltip'
 import { useApp } from '@/store'
-import { GROUPABLE_TOOLS, ToolCard, ToolGroup } from './ToolCard'
+import { FILE_MUTATION_TOOLS, GROUPABLE_TOOLS, ToolCard, ToolGroup } from './ToolCard'
 import { TodoCard } from './TodoCard'
 
 /**
@@ -112,7 +112,7 @@ function RewindControl({ messageId }: { messageId: string }): React.JSX.Element 
 }
 
 /** Group a run of this many consecutive read/search tools into one row. */
-const GROUP_MIN = 3
+const GROUP_MIN = 2
 
 export const UserBubble = React.memo(function UserBubble({
   message
@@ -198,7 +198,8 @@ export const AssistantBlock = React.memo(function AssistantBlock({
   cwd,
   streaming,
   onOpenPlan,
-  latestTodoId
+  latestTodoId,
+  summarizeEdits = false
 }: {
   message: AssistantMessage
   cwd: string
@@ -206,21 +207,27 @@ export const AssistantBlock = React.memo(function AssistantBlock({
   onOpenPlan?: (plan: string) => void
   /** toolUseId of the chat's most recent TodoWrite; that card stays expanded. */
   latestTodoId?: string | null
+  /** Hide completed edit rows when the turn-level summary represents them. */
+  summarizeEdits?: boolean
 }): React.JSX.Element {
   const parts = message.parts
   const lastIndex = parts.length - 1
 
-  // Coalesce consecutive read/search tools into groups so a long run of reads
-  // collapses to one row instead of flooding the transcript. Everything else
-  // (text, thinking, edits, todos, agents) renders individually as before.
+  // Coalesce inspection/terminal sequences into one activity row. Short progress
+  // narration between calls stays available inside the expanded group instead
+  // of breaking the sequence into a wall of cards.
   const items: Array<
     | { kind: 'group'; parts: ToolPart[]; key: string }
     | { kind: 'single'; part: NonNullable<(typeof parts)[number]>; index: number }
   > = []
-  let run: { part: ToolPart; index: number }[] = []
+  let run: { part: NonNullable<(typeof parts)[number]>; index: number }[] = []
   const flushRun = (): void => {
     if (run.length >= GROUP_MIN) {
-      items.push({ kind: 'group', parts: run.map((r) => r.part), key: `grp-${run[0].index}` })
+      items.push({
+        kind: 'group',
+        parts: run.map((entry) => entry.part as ToolPart),
+        key: `grp-${run[0].index}`
+      })
     } else {
       for (const r of run) items.push({ kind: 'single', part: r.part, index: r.index })
     }
@@ -229,6 +236,14 @@ export const AssistantBlock = React.memo(function AssistantBlock({
   parts.forEach((part, i) => {
     // Streamed arrays can be sparse; persisted ones turn holes into null.
     if (!part) return
+    if (
+      part.type === 'tool' &&
+      summarizeEdits &&
+      part.status === 'success' &&
+      FILE_MUTATION_TOOLS.has(part.name)
+    ) {
+      return
+    }
     if (part.type === 'tool' && GROUPABLE_TOOLS.has(part.name)) {
       run.push({ part, index: i })
     } else {

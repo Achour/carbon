@@ -309,17 +309,23 @@ export function Composer({
   // tier or per-tool approval modes. Plan is collaboration + read-only; the
   // remaining choices select a sandbox policy.
   const isCodex = provider === 'codex'
-  // Codex has no 'max' tier, and an unset effort defers to the ~/.codex config
-  // (not necessarily "High"), so label it "Default" rather than implying High.
+  // Each provider gets exactly the effort values its SDK accepts. An unset
+  // effort defers to that provider's config rather than implying explicit High.
   const effortOptions = isCodex
     ? EFFORT_OPTIONS.filter((e) => e.id !== 'max').map((e) =>
-        e.id === '' ? { ...e, label: 'Default', description: 'Uses your Codex config' } : e
+        e.id === '' ? { ...e, description: 'Uses your Codex config' } : e
       )
-    : EFFORT_OPTIONS
-  // A Codex chat can inherit 'max' from a prior Claude chat; Codex has no such
-  // tier, so both the label and the transmitted value collapse to Default (the
-  // adapter maps 'max' → undefined, matching this "" display — see effortForCodex).
-  const effortValue = isCodex && effort === 'max' ? '' : effort
+    : EFFORT_OPTIONS.filter((e) => e.id !== 'minimal').map((e) =>
+        e.id === '' ? { ...e, description: 'Uses your Claude Code config' } : e
+      )
+  const invalidEffort = (isCodex && effort === 'max') || (!isCodex && effort === 'minimal')
+  const effortValue = invalidEffort ? '' : effort
+
+  // New-chat can switch providers with an effort already selected. Normalize
+  // immediately so the hidden stale value cannot be submitted to the other SDK.
+  React.useEffect(() => {
+    if (invalidEffort) onEffortChange('')
+  }, [invalidEffort, onEffortChange])
   const permissionOptions = isCodex ? CODEX_PERMISSION_MODES : PERMISSION_MODES
   const permissionValue = isCodex ? codexPermissionValue(permissionMode) : permissionMode
 

@@ -20,6 +20,7 @@ import {
 } from 'lucide-react'
 import type { AssistantPart, ToolPart } from '@shared/types'
 import { cn } from '@/lib/utils'
+import { humanizeShellCommand } from '@/lib/toolLabels'
 import { Markdown } from '@/components/Markdown'
 
 interface ToolMeta {
@@ -39,11 +40,11 @@ function toolMeta(part: ToolPart, cwd: string): ToolMeta {
 
   switch (part.name) {
     case 'Bash':
-      return {
-        icon: SquareTerminal,
-        label: 'Terminal',
-        summary: str(input.command) ?? str(input.description)
+      if (str(input.command)) {
+        const human = humanizeShellCommand(String(input.command), cwd)
+        return { icon: SquareTerminal, ...human }
       }
+      return { icon: SquareTerminal, label: 'Terminal', summary: str(input.description) }
     case 'BashOutput':
       return { icon: SquareTerminal, label: 'Terminal output' }
     case 'Read':
@@ -231,6 +232,9 @@ export const ToolCard = React.memo(function ToolCard({
 }): React.JSX.Element {
   const meta = toolMeta(part, cwd)
   const Icon = meta.icon
+  // Status is fully communicated by the header icon. Keep every tool compact
+  // by default—including failures—and reveal details only when the user asks.
+  const [open, setOpen] = React.useState(false)
 
   // Task/Agent tools render their spawned sub-agent's live activity.
   if (part.name === 'Task' || part.name === 'Agent') {
@@ -260,7 +264,7 @@ export const ToolCard = React.memo(function ToolCard({
   }
 
   return (
-    <Collapsible.Root className={cn(!dense && 'animate-enter')}>
+    <Collapsible.Root open={open} onOpenChange={setOpen} className={cn(!dense && 'animate-enter')}>
       <div
         className={cn(
           'overflow-hidden',
@@ -298,11 +302,16 @@ export const ToolCard = React.memo(function ToolCard({
 
 /** Tools whose runs get coalesced into a single compact group — high-volume
  *  calls (reads, searches, spawned agents) that otherwise flood the transcript. */
+export const FILE_MUTATION_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit'])
+
 export const GROUPABLE_TOOLS = new Set([
+  'Bash',
+  'BashOutput',
   'Read',
   'Grep',
   'Glob',
   'NotebookRead',
+  ...FILE_MUTATION_TOOLS,
   'WebFetch',
   'WebSearch',
   'Task',
@@ -324,6 +333,14 @@ function groupTitle(label: string | undefined, n: number): string {
       return `Fetched ${plural('page', 'pages')}`
     case 'Search':
       return `${n} web ${n === 1 ? 'search' : 'searches'}`
+    case 'Terminal':
+    case 'Run':
+    case 'Git':
+      return `Ran ${plural('command', 'commands')}`
+    case 'Edit':
+      return `Edited ${plural('file', 'files')}`
+    case 'Write':
+      return `Wrote ${plural('file', 'files')}`
     default:
       return label ? `${label} ×${n}` : `${n} steps`
   }
@@ -363,13 +380,16 @@ export const ToolGroup = React.memo(function ToolGroup({
   const errored = parts.some((p) => p.status === 'error')
   const n = parts.length
 
-  const title = uniform ? groupTitle(uniform.label, n) : `${n} steps`
+  const title = uniform ? groupTitle(uniform.label, n) : `Workspace activity · ${n} actions`
   const Icon = uniform?.icon ?? Layers
   // While running, surface the file/target of the last call for a sense of motion.
   const trailing = running ? metas[metas.length - 1]?.summary : undefined
+  // Groups follow the same stable layout as individual tools: their status is
+  // visible in the header and details open only on explicit user interaction.
+  const [open, setOpen] = React.useState(false)
 
   return (
-    <Collapsible.Root className="animate-enter">
+    <Collapsible.Root open={open} onOpenChange={setOpen} className="animate-enter">
       <div className="overflow-hidden rounded-xl border border-border bg-card/60">
         <Collapsible.Trigger className="group flex w-full items-center gap-2.5 px-3 py-2 text-left outline-none transition-colors hover:bg-accent/50 focus-visible:bg-accent/50">
           <ChevronRight className="size-3.5 shrink-0 text-muted-foreground/60 transition-transform duration-200 group-data-[panel-open]:rotate-90" />

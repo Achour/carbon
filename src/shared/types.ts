@@ -2,15 +2,38 @@ export type Provider = 'claude' | 'codex'
 
 export type PermissionModeId = 'default' | 'acceptEdits' | 'plan' | 'auto' | 'bypassPermissions'
 
-export type EffortId = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+export type EffortId = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+export type ClaudeEffortId = Exclude<EffortId, 'minimal'>
+export type CodexEffortId = Exclude<EffortId, 'max'>
 
 export const EFFORT_OPTIONS: { id: EffortId | ''; label: string; description: string }[] = [
+  { id: '', label: 'Default', description: 'Uses your provider config' },
+  { id: 'minimal', label: 'Minimal', description: 'Lowest reasoning, where supported' },
   { id: 'low', label: 'Low', description: 'Fastest, minimal thinking' },
   { id: 'medium', label: 'Medium', description: 'Moderate thinking' },
-  { id: '', label: 'High', description: 'Deep reasoning (default)' },
+  { id: 'high', label: 'High', description: 'Deep reasoning' },
   { id: 'xhigh', label: 'X-High', description: 'Deeper than high' },
   { id: 'max', label: 'Max', description: 'Maximum effort, select models' }
 ]
+
+/** Prevent a provider-specific effort from leaking across a model/provider switch. */
+export function effortForProvider(
+  effort: EffortId | undefined,
+  provider: 'claude'
+): ClaudeEffortId | undefined
+export function effortForProvider(
+  effort: EffortId | undefined,
+  provider: 'codex'
+): CodexEffortId | undefined
+export function effortForProvider(
+  effort: EffortId | undefined,
+  provider: Provider
+): EffortId | undefined
+export function effortForProvider(effort: EffortId | undefined, provider: Provider): EffortId | undefined {
+  if (provider === 'codex' && effort === 'max') return undefined
+  if (provider === 'claude' && effort === 'minimal') return undefined
+  return effort
+}
 
 export type ChatStatus = 'idle' | 'starting' | 'streaming' | 'waiting-permission'
 
@@ -112,6 +135,14 @@ export interface AssistantMessage {
   role: 'assistant'
   parts: AssistantPart[]
   ts: number
+  /** Exact per-turn worktree delta when the provider adapter can snapshot it. */
+  fileChanges?: TurnFileChange[]
+}
+
+export interface TurnFileChange {
+  path: string
+  additions: number
+  deletions: number
 }
 
 export interface TurnStats {

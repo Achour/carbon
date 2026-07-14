@@ -33,7 +33,7 @@ import type {
   ToolPart,
   UsageInfo
 } from '@shared/types'
-import { CODEX_DEFAULT_MODEL, MODEL_OPTIONS, providerForModel } from '@shared/types'
+import { CODEX_DEFAULT_MODEL, MODEL_OPTIONS, effortForProvider, providerForModel } from '@shared/types'
 import { CODEX_SLASH_COMMANDS, parseCodexSlashCommand } from '@shared/codexCommands'
 import type { Store } from './store'
 import type { PreviewManager } from './preview'
@@ -239,7 +239,7 @@ class ClaudeSession implements AgentSession {
         cwd: chat.cwd,
         resume: chat.sessionId,
         model: chat.model || undefined,
-        effort: chat.effort || undefined,
+        effort: effortForProvider(chat.effort, 'claude'),
         permissionMode: chat.permissionMode,
         allowDangerouslySkipPermissions: true,
         includePartialMessages: true,
@@ -1495,16 +1495,16 @@ export class ChatManager {
             this.pushCommandResult(
               chat,
               command.original,
-              `Current reasoning effort: **${chat.effort ?? 'default (high)'}**.`
+              `Current reasoning effort: **${chat.effort ?? 'default (Codex config)'}**.`
             )
             return
           }
           const effort = command.argument.toLowerCase()
-          if (!['default', 'low', 'medium', 'high', 'xhigh'].includes(effort)) {
+          if (!['default', 'minimal', 'low', 'medium', 'high', 'xhigh'].includes(effort)) {
             this.pushCommandResult(
               chat,
               command.original,
-              'Unknown reasoning effort. Use `default`, `low`, `medium`, `high`, or `xhigh`.',
+              'Unknown reasoning effort. Use `default`, `minimal`, `low`, `medium`, `high`, or `xhigh`.',
               'error'
             )
             return
@@ -1515,7 +1515,7 @@ export class ChatManager {
           this.pushCommandResult(
             chat,
             command.original,
-            `Reasoning effort changed to **${effort === 'default' ? 'default (high)' : effort}**.`
+            `Reasoning effort changed to **${effort === 'default' ? 'default (Codex config)' : effort}**.`
           )
           return
         }
@@ -1568,7 +1568,7 @@ export class ChatManager {
             [
               '**Codex status**',
               `- Model: ${chat.model ?? 'Codex config default'}`,
-              `- Reasoning: ${chat.effort ?? 'default (high)'}`,
+              `- Reasoning: ${chat.effort ?? 'default (Codex config)'}`,
               `- Permissions: ${chat.permissionMode}`,
               `- Project: ${chat.cwd}`,
               `- Thread: ${chat.sessionId ?? 'Not started'}`,
@@ -1685,9 +1685,14 @@ export class ChatManager {
         // backends, so drop the live session and clear the resume id — the next
         // send starts the right backend fresh (the transcript is kept as-is).
         chat.provider = nextProvider
+        chat.effort = effortForProvider(chat.effort, nextProvider)
         chat.sessionId = undefined
         this.disposeChat(chatId)
-        this.emit({ type: 'meta', chatId, patch: { provider: nextProvider, sessionId: undefined } })
+        this.emit({
+          type: 'meta',
+          chatId,
+          patch: { provider: nextProvider, sessionId: undefined, effort: chat.effort }
+        })
         // A disposed session emits no final status; release the renderer so a
         // switch during a live turn doesn't leave the chat stuck 'streaming'.
         this.emit({ type: 'status', chatId, status: 'idle' })
@@ -1706,7 +1711,7 @@ export class ChatManager {
       await session?.setPermissionMode(patch.permissionMode)
     }
     if (patch.effort !== undefined && (patch.effort || undefined) !== chat.effort) {
-      chat.effort = patch.effort || undefined
+      chat.effort = effortForProvider(patch.effort || undefined, chat.provider)
       // Effort has no live setter — drop the session; the next send resumes
       // the conversation in a fresh process with the new effort applied.
       if (session) {

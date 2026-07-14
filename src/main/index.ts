@@ -19,6 +19,7 @@ import type {
   TerminalCreateOpts,
   TerminalEvent
 } from '@shared/types'
+import { effortForProvider } from '@shared/types'
 import { ChatManager } from './claude'
 import { listDir, readFileContent, searchFiles, statPath } from './files'
 import * as gitOps from './git'
@@ -26,6 +27,7 @@ import { getPermissionRules, removePermissionRule } from './permissions'
 import { PreviewManager } from './preview'
 import { Store } from './store'
 import { TerminalManager } from './terminal'
+import { hydrateShellPath } from './shellEnv'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -269,13 +271,15 @@ function registerIpc(): void {
       }
     ) => {
     const now = Date.now()
+    const provider = opts.provider ?? 'claude'
+    const effort = effortForProvider(opts.effort, provider)
     const chat: ChatData = {
       id: randomUUID(),
       title: '',
       cwd: opts.cwd,
-      provider: opts.provider ?? 'claude',
+      provider,
       model: opts.model || undefined,
-      effort: opts.effort || undefined,
+      effort,
       permissionMode: opts.permissionMode ?? store.getDefaults().permissionMode,
       createdAt: now,
       updatedAt: now,
@@ -285,7 +289,7 @@ function registerIpc(): void {
     store.rememberDir(opts.cwd)
     store.rememberOptions({
       model: opts.model ?? '',
-      effort: opts.effort ?? '',
+      effort: effort ?? '',
       permissionMode: chat.permissionMode
     })
     const { messages: _messages, ...meta } = chat
@@ -443,6 +447,10 @@ function registerIpc(): void {
 
 app.whenReady().then(() => {
   app.setName('Karbun')
+  // Finder/Dock launches do not inherit the user's shell PATH. Hydrate it
+  // before constructing managers so Claude, Codex, previews, Git, and terminal
+  // sessions all see the same command-line tools as an interactive shell.
+  hydrateShellPath()
   // Pin userData to the original folder so existing chat history carries over
   // after the rename (dev and packaged builds share this location).
   // AIGUI_USERDATA overrides it — used to run an isolated dev instance without

@@ -40,12 +40,24 @@ import type { AgentSession, Emit } from './session'
 import { IMAGE_EXT, pickTurnImages } from './imageScan'
 import { isMissingCodexThreadError } from './codexResume'
 import { parseCodexPlan, promptForCodexMode } from './codexMode'
+import {
+  captureWorkspaceTree,
+  rewindWorkspaceCheckpoint,
+  summarizeWorkspaceCheckpoint,
+  type WorkspaceCheckpoint
+} from './workspaceCheckpoint'
 
 const OUTPUT_CAP = 100_000
 
 // Fallback context window when the selected Codex model isn't in MODEL_OPTIONS
 // (per-model windows live there). The gpt-5.6 family is 1,050,000 tokens.
 const CODEX_CONTEXT_WINDOW = 1_050_000
+
+interface PendingTurn {
+  input: Input
+  temps: string[]
+  userMessageId: string
+}
 
 /**
  * Karbun's permission modes map onto Codex's sandbox policy. The Codex SDK runs
@@ -76,6 +88,8 @@ function sandboxForMode(mode: PermissionModeId): SandboxMode {
  */
 function effortForCodex(effort?: EffortId): ModelReasoningEffort | undefined {
   switch (effort) {
+    case 'minimal':
+      return 'minimal'
     case 'low':
       return 'low'
     case 'medium':
@@ -164,7 +178,9 @@ export class CodexSession implements AgentSession {
   // Rebuild the thread before the next turn — thread options (model, sandbox,
   // effort) are fixed at start/resume time and have no live setter.
   private optionsDirty = true
-  private pending: { input: Input; temps: string[] }[] = []
+  private pending: PendingTurn[] = []
+  private checkpoints = new Map<string, WorkspaceCheckpoint>()
+  private activeUserMessageId: string | null = null
   private running = false
   private abort: AbortController | null = null
   private current: AssistantMessage | null = null
@@ -178,7 +194,7 @@ export class CodexSession implements AgentSession {
   // empty and no shell command mentions the saved path.
   private generatedBeforeTurn = new Map<string, number>()
   /** Synthetic ExitPlanMode request used to reuse Karbun's plan-review UI. */
-  private planReview: { requestId: string; plan: string } | null = null
+  private planReview: { requestId: string; plan: string; userMessageId: string } | null = null
   private interrupted = false
   private lastEmittedStatus: ChatStatus | null = null
   dead = false
@@ -255,7 +271,7 @@ export class CodexSession implements AgentSession {
       ...(attachments.length ? { attachments } : {})
     })
     this.emit({ type: 'meta', chatId: this.chat.id, patch: { updatedAt: this.chat.updatedAt } })
-    this.pending.push(this.buildInput(text, attachments))
+    this.pending.push({ ...this.buildInput(text, attachments), userMessageId: messageId })
     void this.drain()
   }
 
@@ -385,12 +401,14 @@ export class CodexSession implements AgentSession {
     }
   }
 
-  private async runTurn(turn: { input: Input; temps: string[] }): Promise<void> {
+  private async runTurn(turn: PendingTurn): Promise<void> {
+    const before = await captureWorkspaceTree(this.chat.cwd)
     this.abort = new AbortController()
     this.interrupted = false
     this.turnStart = Date.now()
     this.generatedBeforeTurn = this.threadGeneratedImages()
     this.current = null
+    this.activeUserMessageId = turn.userMessageId
     this.itemLoc.clear()
     // 'starting' until the thread has an id (first turn / cold resume), matching
     // how a fresh Claude session reads before its init.
@@ -430,8 +448,12 @@ export class CodexSession implements AgentSession {
         }
       }
     } finally {
+      // Event handlers called above populate `current`; TS cannot see mutation
+      // through those method calls, so retain the runtime value explicitly.
+      const completedMessage = this.current as AssistantMessage | null
       this.terminalizeRunning()
       this.current = null
+      this.activeUserMessageId = null
       this.itemLoc.clear()
       this.abort = null
       // The SDK consumed any temp attachment copies at turn start — drop them now
@@ -441,6 +463,19 @@ export class CodexSession implements AgentSession {
           rmSync(f, { force: true })
         } catch {
           // best-effort cleanup
+        }
+      }
+      if (before) {
+        const after = await captureWorkspaceTree(this.chat.cwd)
+        if (after && after.root === before.root) {
+          const checkpoint = { before, after }
+          this.checkpoints.set(turn.userMessageId, checkpoint)
+          if (completedMessage) {
+            const fileChanges = await summarizeWorkspaceCheckpoint(checkpoint)
+            completedMessage.fileChanges = fileChanges
+            this.emit({ type: 'message', chatId: this.chat.id, message: completedMessage })
+            this.store.saveChatSoon(this.chat.id)
+          }
         }
       }
     }
@@ -616,7 +651,11 @@ export class CodexSession implements AgentSession {
         this.emitPart(message, index)
       }
       const requestId = randomUUID()
-      this.planReview = { requestId, plan: parsed.plan }
+      this.planReview = {
+        requestId,
+        plan: parsed.plan,
+        userMessageId: this.activeUserMessageId ?? ''
+      }
       this.emit({
         type: 'permission-request',
         chatId: this.chat.id,
@@ -835,19 +874,26 @@ export class CodexSession implements AgentSession {
         ts: Date.now()
       })
       this.pending.push(
-        this.buildInput(
-          `The user approved the following plan. Implement it completely now.\n\n<approved_plan>\n${review.plan}\n</approved_plan>`,
-          []
-        )
+        {
+          ...this.buildInput(
+            `The user approved the following plan. Implement it completely now.\n\n<approved_plan>\n${review.plan}\n</approved_plan>`,
+            []
+          ),
+          userMessageId: review.userMessageId
+        }
       )
     } else {
       const feedback = decision.message?.trim() || 'Revise the plan and propose it again.'
-      this.pushMessage({ id: randomUUID(), role: 'user', text: feedback, ts: Date.now() })
+      const feedbackId = randomUUID()
+      this.pushMessage({ id: feedbackId, role: 'user', text: feedback, ts: Date.now() })
       this.pending.push(
-        this.buildInput(
-          `The user requested changes to the proposed plan. Stay in Plan mode and produce a revised proposal.\n\n<previous_plan>\n${review.plan}\n</previous_plan>\n\n<plan_feedback>\n${feedback}\n</plan_feedback>`,
-          []
-        )
+        {
+          ...this.buildInput(
+            `The user requested changes to the proposed plan. Stay in Plan mode and produce a revised proposal.\n\n<previous_plan>\n${review.plan}\n</previous_plan>\n\n<plan_feedback>\n${feedback}\n</plan_feedback>`,
+            []
+          ),
+          userMessageId: feedbackId
+        }
       )
     }
     this.chat.updatedAt = Date.now()
@@ -862,8 +908,12 @@ export class CodexSession implements AgentSession {
     this.emit({ type: 'permission-resolved', chatId: this.chat.id, requestId })
   }
 
-  async rewindFiles(): Promise<RewindResult> {
-    return { canRewind: false, error: 'Rewind isn’t available for Codex sessions.' }
+  async rewindFiles(userMessageId: string, dryRun: boolean): Promise<RewindResult> {
+    const checkpoint = this.checkpoints.get(userMessageId)
+    if (!checkpoint) {
+      return { canRewind: false, error: 'No Codex workspace checkpoint is available for this turn.' }
+    }
+    return rewindWorkspaceCheckpoint(this.chat.cwd, checkpoint, dryRun)
   }
 
   async mcpStatus(): Promise<McpServerInfo[]> {

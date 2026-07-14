@@ -40,16 +40,23 @@ import {
   StreamingIndicator,
   UserBubble
 } from '@/components/messages/Parts'
-import { GROUPABLE_TOOLS, ToolGroup } from '@/components/messages/ToolCard'
+import {
+  FILE_MUTATION_TOOLS,
+  GROUPABLE_TOOLS,
+  ToolCard,
+  ToolGroup
+} from '@/components/messages/ToolCard'
 import { PermissionCard } from '@/components/messages/PermissionCard'
 import { QuestionCard } from '@/components/messages/QuestionCard'
 import { BackgroundJobs } from '@/components/BackgroundJobs'
+import { TurnChangesCard } from '@/components/messages/TurnChangesCard'
+import { turnPresentations } from '@/lib/turnChanges'
 
 const NO_PERMISSIONS: never[] = []
 const NO_QUEUED: never[] = []
 
 /** Coalesce a run of this many consecutive read/search-only messages into one row. */
-const GROUP_MIN = 3
+const GROUP_MIN = 2
 
 /** True when a message is nothing but read/search tool calls — each such call
  *  arrives as its own assistant message, so these are what pile up. */
@@ -78,24 +85,60 @@ interface RenderCtx {
 function renderMessages(messages: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
   const out: React.ReactNode[] = []
   let run: AssistantMessage[] = []
+  const presentations = turnPresentations(messages, ctx.cwd, ctx.busy)
 
-  const renderAssistant = (m: AssistantMessage): React.ReactNode => (
-    <AssistantBlock
-      key={m.id}
-      message={m}
-      cwd={ctx.cwd}
-      streaming={ctx.busy && m.id === ctx.lastAssistantId}
-      onOpenPlan={ctx.onOpenPlan}
-      latestTodoId={ctx.latestTodoId}
-    />
-  )
+  const renderAssistant = (m: AssistantMessage): React.ReactNode => {
+    const turn = presentations.get(m.id)
+    const showSummary = turn?.summary?.id === m.id
+    return (
+      <React.Fragment key={m.id}>
+        <AssistantBlock
+          message={m}
+          cwd={ctx.cwd}
+          streaming={ctx.busy && m.id === ctx.lastAssistantId}
+          onOpenPlan={ctx.onOpenPlan}
+          latestTodoId={ctx.latestTodoId}
+          summarizeEdits={turn?.hasChanges ?? false}
+        />
+        {showSummary && turn?.summary && (
+          <TurnChangesCard
+            message={turn.summary}
+            cwd={ctx.cwd}
+            userMessageId={turn.userMessageId}
+          />
+        )}
+      </React.Fragment>
+    )
+  }
 
   const flush = (): void => {
     if (run.length >= GROUP_MIN) {
+      const turn = presentations.get(run[0].id)
       const parts = run.flatMap((m) =>
         m.parts.filter((p): p is ToolPart => !!p && p.type === 'tool')
       )
-      out.push(<ToolGroup key={`grp-${run[0].id}`} parts={parts} cwd={ctx.cwd} />)
+      const visibleParts = turn?.hasChanges
+        ? parts.filter(
+            (part) => !(part.status === 'success' && FILE_MUTATION_TOOLS.has(part.name))
+          )
+        : parts
+      if (visibleParts.length >= GROUP_MIN) {
+        out.push(<ToolGroup key={`grp-${run[0].id}`} parts={visibleParts} cwd={ctx.cwd} />)
+      } else if (visibleParts.length === 1) {
+        out.push(<ToolCard key={visibleParts[0].toolUseId} part={visibleParts[0]} cwd={ctx.cwd} />)
+      }
+      const last = run[run.length - 1]
+      const lastTurn = presentations.get(last.id)
+      if (lastTurn?.summary?.id === last.id) {
+        out.push(
+          <TurnChangesCard
+            key={`changes-${last.id}`}
+            message={lastTurn.summary}
+            cwd={ctx.cwd}
+            userMessageId={lastTurn.userMessageId}
+          />
+        )
+      }
     } else {
       for (const m of run) out.push(renderAssistant(m))
     }
@@ -108,7 +151,9 @@ function renderMessages(messages: ChatMessage[], ctx: RenderCtx): React.ReactNod
       continue
     }
     flush()
-    if (m.role === 'user') out.push(<UserBubble key={m.id} message={m} />)
+    if (m.role === 'user') {
+      out.push(<UserBubble key={m.id} message={m} />)
+    }
     else if (m.role === 'assistant') out.push(renderAssistant(m))
     else out.push(<EventRow key={m.id} message={m} />)
   }
