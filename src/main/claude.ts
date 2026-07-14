@@ -332,9 +332,11 @@ class ClaudeSession implements AgentSession {
     this.store.saveChatSoon(this.chat.id)
   }
 
-  send(text: string, attachments: Attachment[] = []): void {
+  send(text: string, attachments: Attachment[] = [], label?: string): void {
     if (!this.chat.title) {
-      const title = text || attachments.map((a) => a.name).join(', ')
+      // A labelled action message (e.g. "Commit") makes a poor chat title — use
+      // the label so the sidebar reads "Commit", not the verbose prompt.
+      const title = label || text || attachments.map((a) => a.name).join(', ')
       this.chat.title = title.replace(/\s+/g, ' ').trim().slice(0, 64)
       this.emit({ type: 'meta', chatId: this.chat.id, patch: { title: this.chat.title } })
     }
@@ -346,7 +348,8 @@ class ClaudeSession implements AgentSession {
       role: 'user',
       text,
       ts: Date.now(),
-      ...(attachments.length ? { attachments } : {})
+      ...(attachments.length ? { attachments } : {}),
+      ...(label ? { label } : {})
     })
     this.emit({ type: 'meta', chatId: this.chat.id, patch: { updatedAt: this.chat.updatedAt } })
     this.setStatus(this.chat.sessionId ? 'streaming' : 'starting')
@@ -1372,7 +1375,7 @@ export class ChatManager {
     return session
   }
 
-  send(chatId: string, text: string, attachments?: Attachment[]): void {
+  send(chatId: string, text: string, attachments?: Attachment[], label?: string): void {
     const chat = this.store.getChat(chatId)
     if (!chat) return
     const command = chat.provider === 'codex' ? parseCodexSlashCommand(text) : null
@@ -1380,13 +1383,18 @@ export class ChatManager {
       void this.runCodexCommand(chat, command, attachments)
       return
     }
-    this.sendPrompt(chat, text, attachments)
+    this.sendPrompt(chat, text, attachments, label)
   }
 
-  private sendPrompt(chat: ChatData, text: string, attachments?: Attachment[]): void {
+  private sendPrompt(
+    chat: ChatData,
+    text: string,
+    attachments?: Attachment[],
+    label?: string
+  ): void {
     try {
       const session = this.sessionFor(chat.id) ?? this.createSession(chat)
-      session.send(text, attachments)
+      session.send(text, attachments, label)
     } catch (err) {
       // Session construction failed before the turn started (e.g. a missing or
       // non-executable Codex binary). Persist the prompt, surface the error, and
@@ -1399,7 +1407,8 @@ export class ChatManager {
           role: 'user' as const,
           text,
           ts: now,
-          ...(attachments?.length ? { attachments } : {})
+          ...(attachments?.length ? { attachments } : {}),
+          ...(label ? { label } : {})
         }
         chat.messages.push(userMsg)
         this.emit({ type: 'message', chatId: chat.id, message: userMsg })

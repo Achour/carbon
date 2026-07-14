@@ -264,6 +264,8 @@ export function Settings(): React.JSX.Element {
   const setNotifyPrefs = useApp((s) => s.setNotifyPrefs)
   const codeFontSize = useApp((s) => s.codeFontSize)
   const setCodeFontSize = useApp((s) => s.setCodeFontSize)
+  const translucentSidebar = useApp((s) => s.translucentSidebar)
+  const setTranslucentSidebar = useApp((s) => s.setTranslucentSidebar)
   const chatsPerProject = useApp((s) => s.chatsPerProject)
   const setChatsPerProject = useApp((s) => s.setChatsPerProject)
 
@@ -339,6 +341,17 @@ export function Settings(): React.JSX.Element {
                     onSelect={setTheme}
                   />
                 </div>
+
+                {window.api.platform === 'darwin' && (
+                  <div className="mt-7">
+                    <Toggle
+                      label="Translucent sidebar"
+                      description="Frost the sidebar so the desktop blurs through behind it"
+                      checked={translucentSidebar}
+                      onChange={setTranslucentSidebar}
+                    />
+                  </div>
+                )}
 
                 <div className="mt-8">
                   <Row label="Code font size" description="Code blocks, the file viewer and diffs">

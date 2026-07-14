@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, Notification, shell } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { writeFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
@@ -113,6 +113,13 @@ function sendPreviewCommand(cmd: Omit<PreviewCommand, 'id'>): Promise<PreviewCom
 
 function createWindow(): void {
   const bounds = store.getWindowBounds()
+  // macOS: give the window a transparent, vibrant backing up front. The native
+  // "sidebar" material stays behind the whole window permanently; the renderer
+  // decides what shows it — an opaque body hides it entirely (effect off), a
+  // transparent body reveals it behind the sidebar (effect on). This must be set
+  // at creation: a window created opaque can't be made transparent at runtime,
+  // so toggling the CSS is what turns the frosted sidebar on and off live.
+  const mac = process.platform === 'darwin'
   win = new BrowserWindow({
     width: bounds?.width ?? 1280,
     height: bounds?.height ?? 832,
@@ -123,7 +130,8 @@ function createWindow(): void {
     show: false,
     titleBarStyle: 'hidden',
     trafficLightPosition: { x: 13, y: 12 },
-    backgroundColor: '#1c1c1c',
+    backgroundColor: mac ? '#00000000' : '#1c1c1c',
+    ...(mac ? { vibrancy: 'sidebar' as const } : {}),
     title: 'Karbun',
     webPreferences: {
       preload: join(__dirname, '../preload/index.mjs'),
@@ -221,6 +229,17 @@ function createWindow(): void {
   }
 }
 
+// Translucent-sidebar effect (macOS only). The vibrancy material is created with
+// the window and never removed; the renderer reveals or hides it purely in CSS.
+// The one thing that must happen natively is aligning the material's (and the
+// native chrome's) light/dark with the app theme while the effect is on — an
+// out-of-appearance material bleeds the wrong tone through the sidebar. When off,
+// hand the appearance back to the system.
+function applyVibrancy(enabled: boolean, dark: boolean): void {
+  if (process.platform !== 'darwin') return
+  nativeTheme.themeSource = enabled ? (dark ? 'dark' : 'light') : 'system'
+}
+
 function buildMenu(): void {
   const template: Electron.MenuItemConstructorOptions[] = [
     {
@@ -312,9 +331,12 @@ function registerIpc(): void {
     emit({ type: 'meta', chatId: id, patch: { title } })
   })
 
-  ipcMain.handle('chat:send', (_e, chatId: string, text: string, attachments?: Attachment[]) => {
-    manager.send(chatId, text, attachments)
-  })
+  ipcMain.handle(
+    'chat:send',
+    (_e, chatId: string, text: string, attachments?: Attachment[], label?: string) => {
+      manager.send(chatId, text, attachments, label)
+    }
+  )
 
   ipcMain.handle('chat:interrupt', (_e, chatId: string) => manager.interrupt(chatId))
 
@@ -373,6 +395,10 @@ function registerIpc(): void {
   ipcMain.handle('app:get-defaults', () => store.getDefaults())
 
   ipcMain.handle('app:forget-dir', (_e, dir: string) => store.forgetDir(dir))
+
+  ipcMain.handle('window:set-vibrancy', (_e, enabled: boolean, dark: boolean) =>
+    applyVibrancy(enabled, dark)
+  )
 
   ipcMain.handle('app:focus-window', () => {
     if (!win) return
@@ -445,6 +471,9 @@ function registerIpc(): void {
   ipcMain.handle('git:push', (_e, cwd: string) => gitOps.gitPush(cwd))
   ipcMain.handle('git:pull', (_e, cwd: string) => gitOps.gitPull(cwd))
   ipcMain.handle('git:fetch', (_e, cwd: string) => gitOps.gitFetch(cwd))
+  ipcMain.handle('git:branch-changes', (_e, cwd: string, baseBranch?: string) =>
+    gitOps.gitBranchChanges(cwd, baseBranch)
+  )
   ipcMain.handle('git:init', (_e, cwd: string) => gitOps.gitInit(cwd))
   ipcMain.handle('github:state', (_e, cwd: string) => githubOps.ghState(cwd))
   ipcMain.handle('github:open-pr', (_e, cwd: string) => githubOps.openPrWeb(cwd))

@@ -129,6 +129,12 @@ export interface UserMessage {
   text: string
   ts: number
   attachments?: Attachment[]
+  /**
+   * Display label for an app-initiated action message (e.g. a "Commit" from the
+   * source-control button). When set, the UI shows a compact chip instead of the
+   * verbose prompt `text` — the prompt still goes to the agent, just not the eye.
+   */
+  label?: string
 }
 
 export interface AssistantMessage {
@@ -430,6 +436,18 @@ export interface GitFileChange {
   additions?: number
   /** Removed lines for this file (undefined when unknown, e.g. binary). */
   deletions?: number
+  /** Branch scope: this delta is (partly) already committed vs the branch base. */
+  committed?: boolean
+}
+
+/** Branch-scope change set: everything on the current branch vs its base. */
+export interface BranchChanges {
+  /** merge-base sha with the base branch, or null if it couldn't be resolved. */
+  base: string | null
+  /** Short name of the base branch compared against (e.g. "main"). */
+  baseBranch: string | null
+  /** Files differing from `base` (committed on the branch and/or uncommitted). */
+  changes: GitFileChange[]
 }
 
 export interface GitStatus {
@@ -451,6 +469,8 @@ export interface GitDiffTarget {
   path: string
   staged: boolean
   untracked?: boolean
+  /** Branch scope: diff the working tree against this base sha instead of the index. */
+  base?: string
 }
 
 // ---------- GitHub (gh CLI) ----------
@@ -569,7 +589,7 @@ export interface Api {
   }): Promise<ChatMeta>
   deleteChat(id: string): Promise<void>
   renameChat(id: string, title: string): Promise<void>
-  send(chatId: string, text: string, attachments?: Attachment[]): Promise<void>
+  send(chatId: string, text: string, attachments?: Attachment[], label?: string): Promise<void>
   /** Absolute path of a dragged/picked File (empty string for in-memory files). */
   pathForFile(file: File): string
   interrupt(chatId: string): Promise<void>
@@ -613,6 +633,8 @@ export interface Api {
   gitPull(cwd: string): Promise<GitResult>
   /** Update remote-tracking refs so ahead/behind reflects the real remote. */
   gitFetch(cwd: string): Promise<GitResult>
+  /** Branch-scope changes: everything on the current branch vs its base branch. */
+  gitBranchChanges(cwd: string, baseBranch?: string): Promise<BranchChanges>
   gitInit(cwd: string): Promise<GitResult>
   /** GitHub state (PR + checks) for the cwd's current branch; best-effort. */
   githubState(cwd: string): Promise<GitHubState>
@@ -622,6 +644,14 @@ export interface Api {
   forgetDir(dir: string): Promise<void>
   /** Bring the app window to the foreground (notification clicks). */
   focusWindow(): Promise<void>
+  /**
+   * Toggle the native macOS window vibrancy behind a translucent sidebar.
+   * `dark` aligns the material (and native chrome) with the app theme's
+   * appearance. No-op off macOS.
+   */
+  setWindowVibrancy(enabled: boolean, dark: boolean): Promise<void>
+  /** Host platform (e.g. 'darwin'); gates macOS-only appearance options. */
+  readonly platform: string
   // ---- Terminal ----
   terminalCreate(opts: TerminalCreateOpts): Promise<void>
   terminalWrite(id: string, data: string): Promise<void>

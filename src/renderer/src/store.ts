@@ -2,21 +2,24 @@ import { create } from 'zustand'
 import {
   applyCodeFontSize,
   applyTheme,
+  applyTranslucent,
   CODE_FONT_MAX,
   CODE_FONT_MIN,
   storedCodeFontSize,
-  storedTheme
+  storedTheme,
+  storedTranslucent
 } from '@/lib/themes'
 import { loadNotifyPrefs, notify, playChime, saveNotifyPrefs, type NotifyPrefs } from '@/lib/notify'
 import { formatCost, formatDuration } from '@/lib/format'
 import { invalidateLocalImages } from '@/lib/imageCache'
-import { gitActionPrompt, type GitActionId } from '@/lib/gitActions'
+import { gitAction, gitActionPrompt, type GitActionId } from '@/lib/gitActions'
 import { changedPathsFromParts } from '@/lib/turnChanges'
 import { providerForModel } from '@shared/types'
 import type {
   AppDefaults,
   AssistantMessage,
   Attachment,
+  BranchChanges,
   ChatEvent,
   ChatMessage,
   ChatMeta,
@@ -47,6 +50,8 @@ export interface QueuedMessage {
   id: string
   text: string
   attachments?: Attachment[]
+  /** Display label for an app-initiated action (e.g. "Commit"); see UserMessage.label. */
+  label?: string
 }
 
 export interface TerminalTab {
@@ -80,7 +85,17 @@ export interface DiffTabMeta {
   file: string
   staged: boolean
   untracked: boolean
+  /** Branch scope: diff against this base sha (base → working tree). */
+  base?: string
 }
+
+/**
+ * Which changes the source-control panel shows and commits, Codex/Cursor-style:
+ * - `last-turn`   — only the files the active chat's last turn edited
+ * - `uncommitted` — the whole working tree (default)
+ * - `branch`      — everything on the branch vs its base (committed + uncommitted)
+ */
+export type ChangeScope = 'last-turn' | 'uncommitted' | 'branch'
 
 export interface OpenTab {
   /** Absolute file path, a `diff:` id for diff tabs, or an `untitled:N` id. */
@@ -179,6 +194,9 @@ interface AppState {
   /** When true the main area shows the settings page instead of a chat. */
   settingsOpen: boolean
   theme: string
+  /** macOS-only: blur the desktop behind a translucent sidebar (native vibrancy). */
+  translucentSidebar: boolean
+  setTranslucentSidebar(on: boolean): void
   codeFontSize: number
   notifyPrefs: NotifyPrefs
   openSettings(): void
@@ -211,8 +229,8 @@ interface AppState {
   fileContents: Record<string, FileContent>
   /** 'plan', an open file path, or a diff tab id. */
   activeTab: string | null
-  /** Saved tab sets per project, restored when switching back. */
-  workspaces: Record<string, { openFiles: OpenTab[]; activeTab: string | null }>
+  /** Saved tab set per chat (keyed by chat id), restored when switching back. */
+  tabsByChat: Record<string, { openFiles: OpenTab[]; activeTab: string | null }>
   /** Panel visibility remembered per chat. */
   panelOpenByChat: Record<string, boolean>
 
@@ -237,6 +255,10 @@ interface AppState {
   github: GitHubState | null
   /** True while a gh state fetch is in flight (guards against overlap). */
   githubBusy: boolean
+  /** Which changes the source-control panel shows and commits (persisted). */
+  changeScope: ChangeScope
+  /** Branch-scope change set (branch vs base); fetched lazily for 'branch' scope. */
+  branchChanges: BranchChanges | null
   /** Diff text per diff tab id. */
   diffContents: Record<string, string>
 
@@ -261,6 +283,10 @@ interface AppState {
   setPreferredGitAction(id: GitActionId): void
   /** Re-read GitHub state (PR + checks) for the selected project. */
   refreshGithub(): Promise<void>
+  /** Switch the change scope (Last Turn / Uncommitted / Branch); fetches for branch. */
+  setChangeScope(scope: ChangeScope): void
+  /** Re-read the branch-vs-base change set (used by the Branch scope). */
+  refreshBranchChanges(): Promise<void>
   /** Open the current branch's PR in the browser. */
   openPr(): Promise<void>
   /** Open a file's diff. Single click previews (ephemeral); double click pins it. */
@@ -286,9 +312,11 @@ interface AppState {
       effort?: EffortId
       permissionMode?: ChatMeta['permissionMode']
       attachments?: Attachment[]
+      /** Display label for an app-initiated first message (e.g. "Commit"). */
+      label?: string
     }
   ): Promise<void>
-  sendMessage(text: string, attachments?: Attachment[]): Promise<void>
+  sendMessage(text: string, attachments?: Attachment[], label?: string): Promise<void>
   /** Force a queued message through now: interrupt the running turn and send it. */
   sendQueuedNow(chatId: string, id: string): Promise<void>
   removeQueued(chatId: string, id: string): void
@@ -308,25 +336,31 @@ interface AppState {
 }
 
 /**
- * Tabs belong to a project. Switching projects stashes the current tab set
- * and restores whatever was open in the target project last time.
+ * Tabs belong to a chat. Switching chats stashes the current tab set under the
+ * outgoing chat and restores whatever the target chat had open — empty for a
+ * fresh or never-visited chat, and for the draft/home state (`nextId` null).
+ * Does not touch `selectedCwd`; callers set the folder separately.
  */
-function projectSwitchPatch(
-  s: Pick<AppState, 'selectedCwd' | 'openFiles' | 'activeTab' | 'workspaces'>,
-  nextCwd: string | null
+function chatSwitchPatch(
+  s: Pick<AppState, 'activeId' | 'openFiles' | 'activeTab' | 'tabsByChat'>,
+  nextId: string | null
 ): Partial<AppState> {
-  if (s.selectedCwd === nextCwd) return { selectedCwd: nextCwd }
-  const workspaces = { ...s.workspaces }
-  if (s.selectedCwd) {
-    workspaces[s.selectedCwd] = { openFiles: s.openFiles, activeTab: s.activeTab }
+  const tabsByChat = { ...s.tabsByChat }
+  if (s.activeId) {
+    tabsByChat[s.activeId] = { openFiles: s.openFiles, activeTab: s.activeTab }
   }
-  const restored = (nextCwd ? workspaces[nextCwd] : null) ?? { openFiles: [], activeTab: null }
-  return {
-    workspaces,
-    selectedCwd: nextCwd,
-    openFiles: restored.openFiles,
-    activeTab: restored.activeTab
-  }
+  const restored = (nextId ? tabsByChat[nextId] : null) ?? { openFiles: [], activeTab: null }
+  return { tabsByChat, openFiles: restored.openFiles, activeTab: restored.activeTab }
+}
+
+/** Drop saved tab sets for deleted chats. */
+function pruneTabsByChat(
+  s: Pick<AppState, 'tabsByChat'>,
+  ids: string[]
+): AppState['tabsByChat'] {
+  const tabsByChat = { ...s.tabsByChat }
+  for (const id of ids) delete tabsByChat[id]
+  return tabsByChat
 }
 
 /** Sets panel visibility and remembers it for the active chat. */
@@ -366,26 +400,52 @@ function omit<T>(map: Record<string, T>, ids: string[]): Record<string, T> {
 }
 
 /**
- * Repo-relative files the active chat's agent edited — used to scope a commit
- * to this session instead of `git add -A`. Empty when no active chat matches
- * this cwd (caller then stages everything). Prefers the still-dirty subset, but
- * falls back to the full edit set if none intersect (e.g. a repo-root mismatch).
+ * Repo-relative files the active chat's *last turn* edited (everything after the
+ * last user message). Powers the "Last Turn" scope. Empty when no active chat
+ * matches this cwd. Intersects with the dirty set so already-reverted edits drop
+ * out, but falls back to the raw set if none intersect (e.g. repo-root mismatch).
  */
-function sessionEditedPaths(
+function lastTurnEditedPaths(
   s: Pick<AppState, 'activeId' | 'chats' | 'messages' | 'git'>,
   cwd: string
 ): string[] {
   const chat = s.chats.find((c) => c.id === s.activeId)
   if (!chat || chat.cwd !== cwd) return []
+  let lastUser = -1
+  for (let i = s.messages.length - 1; i >= 0; i--) {
+    if (s.messages[i].role === 'user') {
+      lastUser = i
+      break
+    }
+  }
+  if (lastUser === -1) return []
   const edited = new Set<string>()
-  for (const m of s.messages) {
-    if (m.role !== 'assistant') continue
-    for (const p of changedPathsFromParts(m.parts, cwd)) edited.add(p)
+  for (let i = lastUser + 1; i < s.messages.length; i++) {
+    const m = s.messages[i]
+    if (m.role === 'assistant') for (const p of changedPathsFromParts(m.parts, cwd)) edited.add(p)
   }
   if (edited.size === 0) return []
   const dirty = new Set((s.git?.changes ?? []).map((c) => c.path))
   const scoped = [...edited].filter((p) => dirty.has(p))
   return scoped.length > 0 ? scoped : [...edited]
+}
+
+/**
+ * The change list shown/committed for the current scope selector. Pure, so
+ * components compute it inside a useMemo over their selected inputs (a selector
+ * returning a fresh array would thrash zustand's snapshot).
+ */
+export function scopedChanges(
+  s: Pick<AppState, 'changeScope' | 'git' | 'branchChanges' | 'activeId' | 'chats' | 'messages'>,
+  cwd: string
+): GitFileChange[] {
+  if (s.changeScope === 'branch') return s.branchChanges?.changes ?? []
+  const changes = s.git?.changes ?? []
+  if (s.changeScope === 'last-turn') {
+    const paths = new Set(lastTurnEditedPaths(s, cwd))
+    return changes.filter((c) => paths.has(c.path))
+  }
+  return changes
 }
 
 export const useApp = create<AppState>((set, get) => ({
@@ -600,6 +660,19 @@ export const useApp = create<AppState>((set, get) => ({
   setTheme(id) {
     applyTheme(id)
     set({ theme: id })
+    // Keep the native vibrancy material aligned with the new theme's appearance.
+    if (get().translucentSidebar) {
+      void window.api.setWindowVibrancy(true, document.documentElement.classList.contains('dark'))
+    }
+  },
+
+  translucentSidebar: storedTranslucent(),
+
+  setTranslucentSidebar(on) {
+    applyTranslucent(on)
+    localStorage.setItem('translucentSidebar', String(on))
+    void window.api.setWindowVibrancy(on, document.documentElement.classList.contains('dark'))
+    set({ translucentSidebar: on })
   },
 
   codeFontSize: storedCodeFontSize(),
@@ -653,6 +726,12 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   async init() {
+    // Sync the native window vibrancy with the stored appearance preference
+    // (the CSS flag was already applied pre-paint in main.tsx).
+    void window.api.setWindowVibrancy(
+      get().translucentSidebar,
+      document.documentElement.classList.contains('dark')
+    )
     const [chats, defaults] = await Promise.all([window.api.listChats(), window.api.getDefaults()])
     set({
       chats,
@@ -671,16 +750,18 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   setSelectedCwd(cwd) {
+    // Tabs follow the active chat, not the folder — picking a folder only sets
+    // the cwd (the draft flows that call this then open a fresh chat, which
+    // clears the tab set via chatSwitchPatch).
     set((s) => {
-      const patch = projectSwitchPatch(s, cwd)
       // Explicitly picking a folder brings a hidden project back into the sidebar.
       if (cwd && s.hiddenProjects[cwd]) {
         const hiddenProjects = { ...s.hiddenProjects }
         delete hiddenProjects[cwd]
         localStorage.setItem('hiddenProjects', JSON.stringify(hiddenProjects))
-        return { ...patch, hiddenProjects }
+        return { selectedCwd: cwd, hiddenProjects }
       }
-      return patch
+      return { selectedCwd: cwd }
     })
     get().loadCommands(cwd)
     if (cwd) {
@@ -711,7 +792,7 @@ export const useApp = create<AppState>((set, get) => ({
   untitledSeq: 0,
   fileContents: {},
   activeTab: null,
-  workspaces: {},
+  tabsByChat: {},
   panelOpenByChat: (() => {
     try {
       return JSON.parse(localStorage.getItem('panelOpenByChat') ?? '{}') as Record<
@@ -851,6 +932,8 @@ export const useApp = create<AppState>((set, get) => ({
   gitError: null,
   github: null,
   githubBusy: false,
+  changeScope: (localStorage.getItem('changeScope') as ChangeScope | null) ?? 'uncommitted',
+  branchChanges: null,
   preferredGitAction: (localStorage.getItem('preferredGitAction') as GitActionId | null) ?? null,
   diffContents: {},
 
@@ -899,6 +982,8 @@ export const useApp = create<AppState>((set, get) => ({
     } catch {
       set({ git: null })
     }
+    // The Branch scope compares against committed history too, so keep it fresh.
+    if (get().changeScope === 'branch') void get().refreshBranchChanges()
     // Keep open diff tabs for this project in sync with the working tree.
     const { openFiles, git } = get()
     await Promise.all(
@@ -909,7 +994,12 @@ export const useApp = create<AppState>((set, get) => ({
           const untracked =
             git?.changes.some((c) => c.path === d.file && !c.staged && c.status === '?') ??
             d.untracked
-          const text = await window.api.gitDiff(cwd, { path: d.file, staged: d.staged, untracked })
+          const text = await window.api.gitDiff(cwd, {
+            path: d.file,
+            staged: d.staged,
+            untracked,
+            base: d.base
+          })
           set((st) => ({ diffContents: { ...st.diffContents, [f.path]: text } }))
         })
     )
@@ -950,25 +1040,30 @@ export const useApp = create<AppState>((set, get) => ({
     }
     const git = get().git
     const hasStaged = git?.changes.some((c) => c.staged) ?? false
-    // `commitScope` is spliced into the commit-bearing prompts. Priority:
-    //   1. explicit staging wins (commit just what's staged);
-    //   2. else scope to the files THIS chat's agent actually edited, so a
-    //      commit doesn't sweep in unrelated working-tree changes;
-    //   3. else fall back to staging everything.
+    // `commitScope` is spliced into the commit-bearing prompts and follows the
+    // scope selector. Priority:
+    //   1. explicit staging always wins (commit exactly what's staged);
+    //   2. "Last Turn" scope → just this chat's last turn's files;
+    //   3. "Uncommitted"/"Branch" → the whole working tree (branch's committed
+    //      part is already committed, so there's nothing extra to commit).
     let commitScope: string
     if (hasStaged) {
       commitScope = 'Commit the currently staged changes (leave everything else unstaged)'
-    } else {
-      const session = sessionEditedPaths(get(), cwd)
+    } else if (get().changeScope === 'last-turn') {
+      const paths = lastTurnEditedPaths(get(), cwd)
       commitScope =
-        session.length > 0
-          ? `Stage and commit only the files this session changed (${session.join(', ')}), leaving any other working-tree changes unstaged`
+        paths.length > 0
+          ? `Stage and commit only the files this session's last turn changed (${paths.join(', ')}), leaving any other working-tree changes unstaged`
           : 'Stage all current changes and commit them'
+    } else {
+      commitScope = 'Stage all current changes and commit them'
     }
     set({ gitError: null })
     const prompt = gitActionPrompt(id, { commitScope })
-    if (get().activeId) await get().sendMessage(prompt)
-    else await get().newChat(cwd, prompt)
+    // Show the action as a compact chip in the chat, not the verbose prompt.
+    const label = gitAction(id).label
+    if (get().activeId) await get().sendMessage(prompt, undefined, label)
+    else await get().newChat(cwd, prompt, { label })
   },
 
   async pushChanges() {
@@ -1040,6 +1135,26 @@ export const useApp = create<AppState>((set, get) => ({
     }
   },
 
+  setChangeScope(scope) {
+    localStorage.setItem('changeScope', scope)
+    set({ changeScope: scope })
+    if (scope === 'branch') void get().refreshBranchChanges()
+  },
+
+  async refreshBranchChanges() {
+    const cwd = get().selectedCwd
+    if (!cwd) {
+      set({ branchChanges: null })
+      return
+    }
+    try {
+      const branchChanges = await window.api.gitBranchChanges(cwd, get().github?.defaultBranch)
+      if (get().selectedCwd === cwd) set({ branchChanges })
+    } catch {
+      if (get().selectedCwd === cwd) set({ branchChanges: null })
+    }
+  },
+
   async openPr() {
     const cwd = get().selectedCwd
     if (!cwd || !get().github?.pr) return
@@ -1056,14 +1171,27 @@ export const useApp = create<AppState>((set, get) => ({
     const cwd = get().selectedCwd
     if (!cwd) return
     const preview = opts?.preview ?? false
-    const id = `diff:${change.staged ? 's' : 'w'}:${cwd}:${change.path}`
+    const untracked = change.status === '?'
+    // Branch scope: diff the whole branch delta (base → working tree) for this
+    // file — except untracked files, which have no base blob and use --no-index.
+    const base =
+      !untracked && get().changeScope === 'branch'
+        ? (get().branchChanges?.base ?? undefined)
+        : undefined
+    const kind = base ? 'b' : change.staged ? 's' : 'w'
+    const id = `diff:${kind}:${cwd}:${change.path}`
     const name = change.path.split('/').pop() ?? change.path
-    const label = change.staged ? `${name} (staged)` : `${name} (diff)`
+    const label = base
+      ? `${name} (branch)`
+      : change.staged
+        ? `${name} (staged)`
+        : `${name} (diff)`
     const meta: DiffTabMeta = {
       cwd,
       file: change.path,
       staged: change.staged,
-      untracked: change.status === '?'
+      untracked,
+      base
     }
     set((s) => {
       const existing = s.openFiles.find((f) => f.path === id)
@@ -1087,7 +1215,8 @@ export const useApp = create<AppState>((set, get) => ({
     const text = await window.api.gitDiff(cwd, {
       path: change.path,
       staged: change.staged,
-      untracked: meta.untracked
+      untracked: meta.untracked,
+      base: meta.base
     })
     set((s) => ({ diffContents: { ...s.diffContents, [id]: text } }))
   },
@@ -1121,7 +1250,9 @@ export const useApp = create<AppState>((set, get) => ({
 
   async openChat(id) {
     if (id === null) {
-      set({
+      set((s) => ({
+        // Stash the outgoing chat's tabs; the draft/home state opens no tabs.
+        ...chatSwitchPatch(s, null),
         activeId: null,
         messages: [],
         planPanel: null,
@@ -1129,10 +1260,14 @@ export const useApp = create<AppState>((set, get) => ({
         panelMaximized: false,
         // The right panel is per chat; a fresh/draft chat starts collapsed.
         panelOpen: false
-      })
+      }))
       return
     }
     set((s) => ({
+      // Restore this chat's own tab set (empty if never visited); stash the
+      // outgoing chat's. Done synchronously so tabs swap on click, not after
+      // the getChat round-trip below.
+      ...chatSwitchPatch(s, id),
       activeId: id,
       messages: [],
       planPanel: null,
@@ -1156,7 +1291,9 @@ export const useApp = create<AppState>((set, get) => ({
         // messages over it (upsert by id) rather than clobbering them back to a
         // stale state.
         const messages = s.messages.reduce(upsertMessage, chat.messages)
-        return { messages, ...projectSwitchPatch(s, chat.cwd) }
+        // Tabs were already restored synchronously above; only the folder is
+        // deferred until now (it needs the chat's cwd from disk).
+        return { messages, selectedCwd: chat.cwd }
       })
       // Keyed by provider too: switching Claude→Codex in the same folder must
       // clear Claude's commands (and Codex→Claude must restore them).
@@ -1176,12 +1313,15 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   async newChat(cwd, firstMessage, opts) {
-    const { attachments, ...createOpts } = opts ?? {}
+    const { attachments, label, ...createOpts } = opts ?? {}
     const meta = await window.api.createChat({ cwd, ...createOpts })
     // Starting a chat in a hidden project brings it back into the sidebar.
     if (get().hiddenProjects[cwd]) get().setProjectHidden(cwd, false)
     set((s) => ({
-      ...projectSwitchPatch(s, cwd),
+      // A brand-new chat has no saved tabs, so this stashes the outgoing chat's
+      // and opens an empty tab set.
+      ...chatSwitchPatch(s, meta.id),
+      selectedCwd: cwd,
       chats: [meta, ...s.chats],
       activeId: meta.id,
       messages: [],
@@ -1203,19 +1343,19 @@ export const useApp = create<AppState>((set, get) => ({
     get().loadCommands(cwd, meta.provider)
     void get().refreshGit()
     if (get().panelOpen && !get().filesByDir[cwd]) void get().loadDir(cwd)
-    await window.api.send(meta.id, firstMessage, attachments)
+    await window.api.send(meta.id, firstMessage, attachments, label)
   },
 
-  async sendMessage(text, attachments) {
+  async sendMessage(text, attachments, label) {
     const id = get().activeId
     if (!id) return
     // Mid-turn sends wait in a queue until the chat goes idle, like Cursor.
     if ((get().statuses[id] ?? 'idle') !== 'idle') {
-      const item: QueuedMessage = { id: crypto.randomUUID(), text, attachments }
+      const item: QueuedMessage = { id: crypto.randomUUID(), text, attachments, label }
       set((s) => ({ queued: { ...s.queued, [id]: [...(s.queued[id] ?? []), item] } }))
       return
     }
-    await window.api.send(id, text, attachments)
+    await window.api.send(id, text, attachments, label)
   },
 
   async sendQueuedNow(chatId, id) {
@@ -1237,7 +1377,7 @@ export const useApp = create<AppState>((set, get) => ({
     set((s) => ({
       queued: { ...s.queued, [chatId]: (s.queued[chatId] ?? []).filter((q) => q.id !== id) }
     }))
-    await window.api.send(chatId, item.text, item.attachments)
+    await window.api.send(chatId, item.text, item.attachments, item.label)
   },
 
   removeQueued(chatId, id) {
@@ -1280,17 +1420,25 @@ export const useApp = create<AppState>((set, get) => ({
 
   async deleteChat(id) {
     await window.api.deleteChat(id)
-    set((s) => ({
-      chats: s.chats.filter((c) => c.id !== id),
-      activeId: s.activeId === id ? null : s.activeId,
-      messages: s.activeId === id ? [] : s.messages,
-      queued: omit(s.queued, [id]),
-      statuses: omit(s.statuses, [id]),
-      permissions: omit(s.permissions, [id]),
-      backgroundJobs: omit(s.backgroundJobs, [id]),
-      rateLimits: omit(s.rateLimits, [id]),
-      panelOpenByChat: prunePanelState(s, [id])
-    }))
+    set((s) => {
+      const wasActive = s.activeId === id
+      return {
+        chats: s.chats.filter((c) => c.id !== id),
+        activeId: wasActive ? null : s.activeId,
+        messages: wasActive ? [] : s.messages,
+        // Deleting the active chat drops to the draft/home state — clear its tabs.
+        planPanel: wasActive ? null : s.planPanel,
+        openFiles: wasActive ? [] : s.openFiles,
+        activeTab: wasActive ? null : s.activeTab,
+        queued: omit(s.queued, [id]),
+        statuses: omit(s.statuses, [id]),
+        permissions: omit(s.permissions, [id]),
+        backgroundJobs: omit(s.backgroundJobs, [id]),
+        rateLimits: omit(s.rateLimits, [id]),
+        panelOpenByChat: prunePanelState(s, [id]),
+        tabsByChat: pruneTabsByChat(s, [id])
+      }
+    })
   },
 
   async removeProject(cwd) {
@@ -1303,11 +1451,6 @@ export const useApp = create<AppState>((set, get) => ({
       const chats = s.chats.filter((c) => c.cwd !== cwd)
       const wasActive = s.activeId !== null && ids.includes(s.activeId)
       const recentDirs = s.defaults?.recentDirs.filter((d) => d !== cwd) ?? []
-      const patch =
-        s.selectedCwd === cwd
-          ? projectSwitchPatch(s, chats[0]?.cwd ?? recentDirs[0] ?? null)
-          : {}
-      delete patch.workspaces?.[cwd]
       // Drop any stale hidden flag so re-adding the folder later isn't hidden.
       let hiddenProjects = s.hiddenProjects
       if (hiddenProjects[cwd]) {
@@ -1316,18 +1459,24 @@ export const useApp = create<AppState>((set, get) => ({
         localStorage.setItem('hiddenProjects', JSON.stringify(hiddenProjects))
       }
       return {
-        ...patch,
+        // If the removed folder was selected, fall back to another one.
+        selectedCwd:
+          s.selectedCwd === cwd ? (chats[0]?.cwd ?? recentDirs[0] ?? null) : s.selectedCwd,
         chats,
         hiddenProjects,
         activeId: wasActive ? null : s.activeId,
         messages: wasActive ? [] : s.messages,
         planPanel: wasActive ? null : s.planPanel,
+        // Removing the active chat's project drops to the draft state — clear tabs.
+        openFiles: wasActive ? [] : s.openFiles,
+        activeTab: wasActive ? null : s.activeTab,
         queued: omit(s.queued, ids),
         statuses: omit(s.statuses, ids),
         permissions: omit(s.permissions, ids),
         backgroundJobs: omit(s.backgroundJobs, ids),
         rateLimits: omit(s.rateLimits, ids),
         panelOpenByChat: prunePanelState(s, ids),
+        tabsByChat: pruneTabsByChat(s, ids),
         defaults: s.defaults ? { ...s.defaults, recentDirs } : s.defaults
       }
     })
@@ -1484,7 +1633,7 @@ export const useApp = create<AppState>((set, get) => ({
             set((st) => ({
               queued: { ...st.queued, [ev.chatId]: st.queued[ev.chatId].slice(1) }
             }))
-            void window.api.send(ev.chatId, next.text, next.attachments)
+            void window.api.send(ev.chatId, next.text, next.attachments, next.label)
           }
           // Drop cached local images after ANY chat's turn — a background chat
           // can overwrite an image (e.g. a regenerated logo) that a foreground or

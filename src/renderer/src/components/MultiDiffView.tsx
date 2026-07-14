@@ -1,6 +1,7 @@
 import * as React from 'react'
 import {
   Check,
+  ChevronDown,
   ChevronRight,
   ChevronsDownUp,
   ChevronsUpDown,
@@ -11,12 +12,24 @@ import {
 } from 'lucide-react'
 import type { GitFileChange } from '@shared/types'
 import { cn } from '@/lib/utils'
-import { useApp } from '@/store'
+import { scopedChanges, useApp, type ChangeScope } from '@/store'
 import { Button } from '@/components/ui/button'
 import { WithTooltip } from '@/components/ui/tooltip'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger
+} from '@/components/ui/dropdown-menu'
 import { DiffTable } from '@/components/DiffView'
 import { LineDeltas } from '@/components/GitPanel'
 import { languageForPath } from '@/lib/highlight'
+
+const SCOPES: { id: ChangeScope; label: string; hint: string }[] = [
+  { id: 'last-turn', label: 'Last Turn', hint: "This chat's last turn's changes" },
+  { id: 'uncommitted', label: 'Uncommitted', hint: 'All working-tree changes' },
+  { id: 'branch', label: 'Branch', hint: 'Everything on this branch vs its base' }
+]
 
 const STATUS_COLORS: Record<string, string> = {
   M: 'text-amber-500',
@@ -38,13 +51,39 @@ const keyOf = (c: GitFileChange): string => `${c.staged ? 's' : 'w'}:${c.path}`
  * control tree scrolls here (via the store's `changesScroll` signal).
  */
 export function MultiDiffView({ cwd }: { cwd: string }): React.JSX.Element {
-  const changes = useApp((s) => s.git?.changes ?? NO_CHANGES)
+  const git = useApp((s) => s.git)
+  const changeScope = useApp((s) => s.changeScope)
+  const branchChanges = useApp((s) => s.branchChanges)
+  const activeId = useApp((s) => s.activeId)
+  const chats = useApp((s) => s.chats)
+  const messages = useApp((s) => s.messages)
   const stagePaths = useApp((s) => s.stagePaths)
   const unstagePaths = useApp((s) => s.unstagePaths)
   const openDiff = useApp((s) => s.openDiff)
   const scroll = useApp((s) => s.changesScroll)
   const explorerOpen = useApp((s) => s.explorerOpen)
   const toggleExplorer = useApp((s) => s.toggleExplorer)
+
+  const setChangeScope = useApp((s) => s.setChangeScope)
+  const isBranch = changeScope === 'branch'
+  const branchBase = isBranch ? (branchChanges?.base ?? undefined) : undefined
+  const changes = React.useMemo(
+    () =>
+      scopedChanges({ changeScope, git, branchChanges, activeId, chats, messages }, cwd) ?? NO_CHANGES,
+    [changeScope, git, branchChanges, activeId, chats, messages, cwd]
+  )
+  const scopeMeta = SCOPES.find((s) => s.id === changeScope) ?? SCOPES[1]
+  const totalAdd = changes.reduce((n, c) => n + (c.additions ?? 0), 0)
+  const totalDel = changes.reduce((n, c) => n + (c.deletions ?? 0), 0)
+  const branchLoading = isBranch && !branchChanges
+  const emptyLabel =
+    changeScope === 'last-turn'
+      ? 'No changes in the last turn'
+      : isBranch
+        ? branchChanges?.baseBranch
+          ? `No changes vs ${branchChanges.baseBranch}`
+          : 'No base branch to compare against'
+        : 'Working tree clean'
 
   const [texts, setTexts] = React.useState<Record<string, string | undefined>>({})
   const [collapsed, setCollapsed] = React.useState<Record<string, boolean>>({})
@@ -55,8 +94,10 @@ export function MultiDiffView({ cwd }: { cwd: string }): React.JSX.Element {
   // the diffs), so key the fetch on a stable signature: refetch only when the
   // set of files or their line counts actually shift, not on every refresh.
   const sig = React.useMemo(
-    () => changes.map((c) => `${keyOf(c)}:${c.status}:${c.additions}:${c.deletions}`).join('|'),
-    [changes]
+    () =>
+      `${branchBase ?? ''}|` +
+      changes.map((c) => `${keyOf(c)}:${c.status}:${c.additions}:${c.deletions}`).join('|'),
+    [changes, branchBase]
   )
 
   // Fetch every file's diff (in parallel) whenever the change set shifts.
@@ -64,10 +105,13 @@ export function MultiDiffView({ cwd }: { cwd: string }): React.JSX.Element {
     let alive = true
     Promise.all(
       changes.map(async (c) => {
+        const untracked = c.status === '?'
         const text = await window.api.gitDiff(cwd, {
           path: c.path,
           staged: c.staged,
-          untracked: c.status === '?'
+          untracked,
+          // Branch scope: diff the whole delta vs base (untracked files have no base blob).
+          base: untracked ? undefined : branchBase
         })
         return [keyOf(c), text] as const
       })
@@ -97,35 +141,60 @@ export function MultiDiffView({ cwd }: { cwd: string }): React.JSX.Element {
     setCollapsed(allCollapsed ? {} : Object.fromEntries(changes.map((c) => [keyOf(c), true])))
   }
 
-  if (changes.length === 0) {
-    return (
-      <div className="flex h-full items-center justify-center gap-1.5 text-xs text-muted-foreground">
-        <Check className="size-3.5 text-emerald-500" /> Working tree clean
-      </div>
-    )
-  }
-
   return (
     <div className="flex h-full flex-col">
-      <div className="flex h-8 shrink-0 items-center gap-2 border-b border-border/60 px-3 text-[11px] text-muted-foreground">
-        <span>
-          {changes.length} file{changes.length === 1 ? '' : 's'} changed
-        </span>
+      {/* Scope selector at the top of the review, Codex/Cursor-style */}
+      <div className="flex h-8 shrink-0 items-center gap-2 border-b border-border/60 pr-2 pl-2.5 text-[11px] text-muted-foreground">
+        <DropdownMenu>
+          <WithTooltip label={scopeMeta.hint}>
+            <DropdownMenuTrigger
+              render={
+                <button
+                  type="button"
+                  className="-ml-1 flex items-center gap-1 rounded px-1.5 py-0.5 text-[12px] font-semibold text-foreground/90 outline-none transition-colors hover:bg-accent"
+                >
+                  {scopeMeta.label}
+                  <ChevronDown className="size-3 text-muted-foreground" />
+                </button>
+              }
+            />
+          </WithTooltip>
+          <DropdownMenuContent align="start" className="min-w-52">
+            {SCOPES.map((s) => (
+              <DropdownMenuItem key={s.id} onClick={() => setChangeScope(s.id)}>
+                <span className="flex min-w-0 flex-col">
+                  <span className={cn('text-[13px]', s.id === changeScope && 'text-primary')}>
+                    {s.label}
+                  </span>
+                  <span className="text-[10.5px] text-muted-foreground">{s.hint}</span>
+                </span>
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <LineDeltas additions={totalAdd} deletions={totalDel} />
+        {isBranch && branchChanges?.baseBranch && (
+          <span className="truncate text-[10px] text-muted-foreground/60">
+            vs {branchChanges.baseBranch}
+          </span>
+        )}
         <div className="flex-1" />
-        <WithTooltip label={allCollapsed ? 'Expand all files' : 'Collapse all files'}>
-          <button
-            type="button"
-            onClick={toggleAll}
-            className="flex items-center gap-1 rounded px-1.5 py-0.5 transition-colors hover:bg-accent hover:text-foreground"
-          >
-            {allCollapsed ? (
-              <ChevronsUpDown className="size-3" />
-            ) : (
-              <ChevronsDownUp className="size-3" />
-            )}
-            {allCollapsed ? 'Expand all' : 'Collapse all'}
-          </button>
-        </WithTooltip>
+        {changes.length > 0 && (
+          <WithTooltip label={allCollapsed ? 'Expand all files' : 'Collapse all files'}>
+            <button
+              type="button"
+              onClick={toggleAll}
+              className="flex items-center gap-1 rounded px-1.5 py-0.5 transition-colors hover:bg-accent hover:text-foreground"
+            >
+              {allCollapsed ? (
+                <ChevronsUpDown className="size-3" />
+              ) : (
+                <ChevronsDownUp className="size-3" />
+              )}
+              {allCollapsed ? 'Expand all' : 'Collapse all'}
+            </button>
+          </WithTooltip>
+        )}
         <WithTooltip label={explorerOpen ? 'Hide file tree' : 'Show file tree'}>
           <button
             type="button"
@@ -147,7 +216,16 @@ export function MultiDiffView({ cwd }: { cwd: string }): React.JSX.Element {
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto">
-        {changes.map((c) => {
+        {branchLoading ? (
+          <div className="flex h-full items-center justify-center text-xs">
+            <span className="shimmer-text">Reading branch…</span>
+          </div>
+        ) : changes.length === 0 ? (
+          <div className="flex h-full items-center justify-center gap-1.5 text-xs text-muted-foreground">
+            <Check className="size-3.5 text-emerald-500" /> {emptyLabel}
+          </div>
+        ) : (
+          changes.map((c) => {
           const k = keyOf(c)
           const open = !collapsed[k]
           const name = c.path.split('/').pop() ?? c.path
@@ -189,26 +267,33 @@ export function MultiDiffView({ cwd }: { cwd: string }): React.JSX.Element {
                       {dir}
                     </span>
                   )}
-                  {c.staged && (
+                  {!isBranch && c.staged && (
                     <span className="shrink-0 rounded bg-amber-500/10 px-1 text-[9px] text-amber-500">
                       staged
                     </span>
                   )}
+                  {isBranch && c.committed && (
+                    <span className="shrink-0 rounded bg-primary/10 px-1 text-[9px] text-primary">
+                      committed
+                    </span>
+                  )}
                 </button>
                 <LineDeltas additions={c.additions} deletions={c.deletions} />
-                <WithTooltip label={c.staged ? 'Unstage' : 'Stage'}>
-                  <Button
-                    size="icon-sm"
-                    variant="ghost"
-                    className="size-5 shrink-0"
-                    aria-label={c.staged ? `Unstage ${name}` : `Stage ${name}`}
-                    onClick={() =>
-                      c.staged ? void unstagePaths([c.path]) : void stagePaths([c.path])
-                    }
-                  >
-                    {c.staged ? <Minus /> : <Plus />}
-                  </Button>
-                </WithTooltip>
+                {!isBranch && (
+                  <WithTooltip label={c.staged ? 'Unstage' : 'Stage'}>
+                    <Button
+                      size="icon-sm"
+                      variant="ghost"
+                      className="size-5 shrink-0"
+                      aria-label={c.staged ? `Unstage ${name}` : `Stage ${name}`}
+                      onClick={() =>
+                        c.staged ? void unstagePaths([c.path]) : void stagePaths([c.path])
+                      }
+                    >
+                      {c.staged ? <Minus /> : <Plus />}
+                    </Button>
+                  </WithTooltip>
+                )}
               </div>
               {open &&
                 (text === undefined ? (
@@ -220,7 +305,8 @@ export function MultiDiffView({ cwd }: { cwd: string }): React.JSX.Element {
                 ))}
             </div>
           )
-        })}
+          })
+        )}
       </div>
     </div>
   )

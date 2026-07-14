@@ -9,14 +9,17 @@ import { previewForCwd } from './lib/previewRegistry'
 import {
   applyCodeFontSize,
   applyTheme,
+  applyTranslucent,
   installThemes,
   storedCodeFontSize,
-  storedTheme
+  storedTheme,
+  storedTranslucent
 } from './lib/themes'
 
 installThemes()
 applyTheme(storedTheme())
 applyCodeFontSize(storedCodeFontSize())
+applyTranslucent(storedTranslucent())
 
 if (import.meta.env.DEV) {
   // Expose the store (and preview registry) for the AIGUI_E2E dev hook.

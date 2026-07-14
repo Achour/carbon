@@ -495,6 +495,17 @@ export function applyTheme(id: string): void {
   localStorage.setItem('themeAppearance', theme.appearance)
 }
 
+// Translucent sidebar (macOS vibrancy). Renderer-owned like the other
+// appearance prefs; the native side is toggled over IPC from the store.
+export function storedTranslucent(): boolean {
+  return localStorage.getItem('translucentSidebar') === 'true'
+}
+
+/** Sets the `data-translucent` flag index.css keys the sidebar tint off. */
+export function applyTranslucent(on: boolean): void {
+  document.documentElement.dataset.translucent = on ? 'true' : 'false'
+}
+
 // Code font size (code blocks, file viewer, diffs) via --code-font-size.
 export const CODE_FONT_MIN = 10
 export const CODE_FONT_MAX = 24

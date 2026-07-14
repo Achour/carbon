@@ -260,10 +260,11 @@ export class CodexSession implements AgentSession {
 
   // ---------- Sending ----------
 
-  send(text: string, attachments: Attachment[] = []): void {
+  send(text: string, attachments: Attachment[] = [], label?: string): void {
     if (this.disposed) return
     if (!this.chat.title) {
-      const title = text || attachments.map((a) => a.name).join(', ')
+      // A labelled action ("Commit") titles the chat by its label, not the prompt.
+      const title = label || text || attachments.map((a) => a.name).join(', ')
       this.chat.title = title.replace(/\s+/g, ' ').trim().slice(0, 64)
       this.emit({ type: 'meta', chatId: this.chat.id, patch: { title: this.chat.title } })
     }
@@ -273,7 +274,8 @@ export class CodexSession implements AgentSession {
       role: 'user',
       text,
       ts: Date.now(),
-      ...(attachments.length ? { attachments } : {})
+      ...(attachments.length ? { attachments } : {}),
+      ...(label ? { label } : {})
     })
     this.emit({ type: 'meta', chatId: this.chat.id, patch: { updatedAt: this.chat.updatedAt } })
     this.pending.push({ ...this.buildInput(text, attachments), userMessageId: messageId })

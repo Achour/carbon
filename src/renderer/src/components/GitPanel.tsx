@@ -26,7 +26,7 @@ import type { GitFileChange, PrChecks, PrInfo } from '@shared/types'
 import { cn } from '@/lib/utils'
 import { handleTreeKeyDown } from '@/lib/treeKeyNav'
 import { resolveGitActions, type GitActionId } from '@/lib/gitActions'
-import { useApp } from '@/store'
+import { scopedChanges, useApp } from '@/store'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -80,6 +80,8 @@ function ChangeRow({
   const unstagePaths = useApp((s) => s.unstagePaths)
   const activeTab = useApp((s) => s.activeTab)
   const changesScroll = useApp((s) => s.changesScroll)
+  // Branch scope is a read-only view of branch history — no staging there.
+  const readOnly = useApp((s) => s.changeScope === 'branch')
 
   const name = change.path.split('/').pop() ?? change.path
   const changesActive = typeof activeTab === 'string' && activeTab.startsWith('changes:')
@@ -112,24 +114,31 @@ function ChangeRow({
         </span>
         <span className="truncate text-[12.5px]">{name}</span>
       </button>
+      {readOnly && change.committed && (
+        <WithTooltip label="Already committed on this branch">
+          <span className="size-1.5 shrink-0 rounded-full bg-primary/60" />
+        </WithTooltip>
+      )}
       <LineDeltas
         additions={change.additions}
         deletions={change.deletions}
-        className="group-hover:hidden"
+        className={cn(!readOnly && 'group-hover:hidden')}
       />
-      <WithTooltip label={change.staged ? 'Unstage' : 'Stage'}>
-        <Button
-          size="icon-sm"
-          variant="ghost"
-          className="size-5 shrink-0 opacity-0 transition-opacity group-hover:opacity-100"
-          aria-label={change.staged ? `Unstage ${name}` : `Stage ${name}`}
-          onClick={() =>
-            change.staged ? void unstagePaths([change.path]) : void stagePaths([change.path])
-          }
-        >
-          {change.staged ? <Minus /> : <Plus />}
-        </Button>
-      </WithTooltip>
+      {!readOnly && (
+        <WithTooltip label={change.staged ? 'Unstage' : 'Stage'}>
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            className="size-5 shrink-0 opacity-0 transition-opacity group-hover:opacity-100"
+            aria-label={change.staged ? `Unstage ${name}` : `Stage ${name}`}
+            onClick={() =>
+              change.staged ? void unstagePaths([change.path]) : void stagePaths([change.path])
+            }
+          >
+            {change.staged ? <Minus /> : <Plus />}
+          </Button>
+        </WithTooltip>
+      )}
     </div>
   )
 }
@@ -264,9 +273,9 @@ function Section({
 }: {
   title: string
   count: number
-  action: () => void
-  actionLabel: string
-  actionIcon: React.ReactNode
+  action?: () => void
+  actionLabel?: string
+  actionIcon?: React.ReactNode
   children: React.ReactNode
 }): React.JSX.Element {
   return (
@@ -279,17 +288,19 @@ function Section({
           {count}
         </span>
         <div className="flex-1" />
-        <WithTooltip label={actionLabel}>
-          <Button
-            size="icon-sm"
-            variant="ghost"
-            className="size-5 opacity-0 transition-opacity group-hover/section:opacity-100"
-            aria-label={actionLabel}
-            onClick={action}
-          >
-            {actionIcon}
-          </Button>
-        </WithTooltip>
+        {action && (
+          <WithTooltip label={actionLabel ?? ''}>
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              className="size-5 opacity-0 transition-opacity group-hover/section:opacity-100"
+              aria-label={actionLabel}
+              onClick={action}
+            >
+              {actionIcon}
+            </Button>
+          </WithTooltip>
+        )}
       </div>
       <div className="px-1">{children}</div>
     </div>
@@ -468,7 +479,19 @@ export function GitPanel(): React.JSX.Element {
   const initRepo = useApp((s) => s.initRepo)
   const refreshGithub = useApp((s) => s.refreshGithub)
   const fetchRemote = useApp((s) => s.fetchRemote)
+  // The scope (Last Turn / Uncommitted / Branch) is chosen from the review
+  // panel's header; here we just read it to scope the change tree + commit.
+  const changeScope = useApp((s) => s.changeScope)
+  const branchChanges = useApp((s) => s.branchChanges)
+  const activeId = useApp((s) => s.activeId)
+  const chats = useApp((s) => s.chats)
+  const messages = useApp((s) => s.messages)
   const [refreshing, setRefreshing] = React.useState(false)
+
+  const changes = React.useMemo(
+    () => scopedChanges({ changeScope, git, branchChanges, activeId, chats, messages }, cwd ?? ''),
+    [changeScope, git, branchChanges, activeId, chats, messages, cwd]
+  )
 
   React.useEffect(() => {
     if (cwd) {
@@ -508,8 +531,18 @@ export function GitPanel(): React.JSX.Element {
     )
   }
 
-  const staged = git.changes.filter((c) => c.staged)
-  const unstaged = git.changes.filter((c) => !c.staged)
+  const isBranch = changeScope === 'branch'
+  const staged = changes.filter((c) => c.staged)
+  const unstaged = changes.filter((c) => !c.staged)
+  const branchLoading = isBranch && !branchChanges
+  const emptyLabel =
+    changeScope === 'last-turn'
+      ? 'No changes in the last turn'
+      : isBranch
+        ? branchChanges?.baseBranch
+          ? `No changes vs ${branchChanges.baseBranch}`
+          : 'No base branch to compare against'
+        : 'Working tree clean'
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -554,39 +587,51 @@ export function GitPanel(): React.JSX.Element {
       {/* GitHub PR status card, once a PR exists for this branch */}
       <PrCard />
 
-      {/* Changes */}
+      {/* Changes (scope is chosen from the review panel's header) */}
       <div
         className="min-h-0 flex-1 overflow-y-auto border-t border-border/60 pb-2 outline-none"
         tabIndex={0}
         role="tree"
         onKeyDown={handleTreeKeyDown}
       >
-        {git.changes.length === 0 && (
-          <div className="flex items-center justify-center gap-1.5 px-3 py-6 text-xs text-muted-foreground">
-            <Check className="size-3.5 text-emerald-500" /> Working tree clean
+        {branchLoading ? (
+          <div className="px-3 py-6 text-center text-xs">
+            <span className="shimmer-text">Reading branch…</span>
           </div>
-        )}
-        {staged.length > 0 && (
-          <Section
-            title="Staged"
-            count={staged.length}
-            action={() => void unstagePaths(['.'])}
-            actionLabel="Unstage all"
-            actionIcon={<Minus />}
-          >
-            <ChangeTree changes={staged} />
+        ) : changes.length === 0 ? (
+          <div className="flex items-center justify-center gap-1.5 px-3 py-6 text-xs text-muted-foreground">
+            <Check className="size-3.5 text-emerald-500" /> {emptyLabel}
+          </div>
+        ) : isBranch ? (
+          // Branch scope: a flat, read-only view of the whole branch delta.
+          <Section title="Files" count={changes.length}>
+            <ChangeTree changes={changes} />
           </Section>
-        )}
-        {unstaged.length > 0 && (
-          <Section
-            title="Changes"
-            count={unstaged.length}
-            action={() => void stagePaths(['.'])}
-            actionLabel="Stage all"
-            actionIcon={<Plus />}
-          >
-            <ChangeTree changes={unstaged} />
-          </Section>
+        ) : (
+          <>
+            {staged.length > 0 && (
+              <Section
+                title="Staged"
+                count={staged.length}
+                action={() => void unstagePaths(['.'])}
+                actionLabel="Unstage all"
+                actionIcon={<Minus />}
+              >
+                <ChangeTree changes={staged} />
+              </Section>
+            )}
+            {unstaged.length > 0 && (
+              <Section
+                title="Changes"
+                count={unstaged.length}
+                action={() => void stagePaths(['.'])}
+                actionLabel="Stage all"
+                actionIcon={<Plus />}
+              >
+                <ChangeTree changes={unstaged} />
+              </Section>
+            )}
+          </>
         )}
       </div>
 

@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   ChevronRight,
   FileText,
+  GitCommitHorizontal,
   Loader2,
   MousePointerClick,
   RotateCcw
@@ -119,6 +120,19 @@ export const UserBubble = React.memo(function UserBubble({
 }: {
   message: UserMessage
 }): React.JSX.Element {
+  // App-initiated actions (e.g. a "Commit" from the source-control button) show
+  // as a compact chip, Cursor-style — the verbose prompt behind it stays hidden.
+  if (message.label) {
+    return (
+      <div className="group flex animate-enter items-center justify-end gap-1">
+        <RewindControl messageId={message.id} />
+        <div className="flex items-center gap-1.5 rounded-full border border-primary/25 bg-primary/10 py-1 pr-3 pl-2.5">
+          <GitCommitHorizontal className="size-3.5 shrink-0 text-primary" />
+          <span className="text-[12.5px] font-medium text-primary">{message.label}</span>
+        </div>
+      </div>
+    )
+  }
   return (
     <div className="group flex animate-enter flex-col items-end gap-1.5">
       {message.attachments && message.attachments.length > 0 && (

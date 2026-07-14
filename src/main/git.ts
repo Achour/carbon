@@ -2,7 +2,13 @@ import { execFile } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
-import type { GitDiffTarget, GitFileChange, GitResult, GitStatus } from '@shared/types'
+import type {
+  BranchChanges,
+  GitDiffTarget,
+  GitFileChange,
+  GitResult,
+  GitStatus
+} from '@shared/types'
 
 const execFileP = promisify(execFile)
 
@@ -235,12 +241,89 @@ export async function gitDiff(cwd: string, target: GitDiffTarget): Promise<strin
         throw err
       }
     }
-    const args = target.staged
-      ? ['diff', '--no-color', '--cached', '--', target.path]
-      : ['diff', '--no-color', '--', target.path]
+    // Branch scope: diff the whole branch delta for this file (base → working tree).
+    const args = target.base
+      ? ['diff', '--no-color', target.base, '--', target.path]
+      : target.staged
+        ? ['diff', '--no-color', '--cached', '--', target.path]
+        : ['diff', '--no-color', '--', target.path]
     return await git(cwd, args)
   } catch (err) {
     return `error: ${errText(err)}`
+  }
+}
+
+/**
+ * Branch-scope change set: every file that differs between the current branch's
+ * merge-base with its base branch and the working tree — i.e. everything you've
+ * done on this branch, committed and uncommitted. Untracked files are folded in
+ * (they're branch work too); `committed` marks rows already in a branch commit.
+ * Best-effort: returns an empty set if no base branch can be resolved.
+ */
+export async function gitBranchChanges(
+  cwd: string,
+  baseBranch?: string
+): Promise<BranchChanges> {
+  const empty: BranchChanges = { base: null, baseBranch: null, changes: [] }
+  // Resolve the merge-base against the (given or conventional) base branch.
+  const candidates = baseBranch ? [baseBranch] : ['main', 'master']
+  let base: string | null = null
+  let resolvedBase: string | null = null
+  for (const b of candidates) {
+    for (const ref of [b, `origin/${b}`]) {
+      try {
+        const mb = (await git(cwd, ['merge-base', 'HEAD', ref])).trim()
+        if (mb) {
+          base = mb
+          resolvedBase = b
+          break
+        }
+      } catch {
+        // ref doesn't exist locally — try the next
+      }
+    }
+    if (base) break
+  }
+  if (!base) return empty
+
+  try {
+    const [nameStatus, numstat, committedNames, untracked] = await Promise.all([
+      git(cwd, ['-c', 'core.quotepath=false', 'diff', '--name-status', base]),
+      git(cwd, ['-c', 'core.quotepath=false', 'diff', '--numstat', base]),
+      git(cwd, ['-c', 'core.quotepath=false', 'diff', '--name-only', base, 'HEAD']),
+      git(cwd, ['-c', 'core.quotepath=false', 'ls-files', '--others', '--exclude-standard'])
+    ])
+    const deltas = numstatMap(numstat)
+    const committed = new Set(committedNames.split('\n').filter(Boolean))
+    const changes: GitFileChange[] = []
+
+    for (const line of nameStatus.split('\n')) {
+      if (!line) continue
+      const parts = line.split('\t')
+      const status = parts[0][0] // "R100" → "R"
+      const path = parts[parts.length - 1]
+      const origPath = status === 'R' && parts.length > 2 ? parts[1] : undefined
+      const d = deltas.get(path)
+      changes.push({
+        path,
+        origPath,
+        status,
+        staged: false,
+        committed: committed.has(path),
+        additions: d?.additions,
+        deletions: d?.deletions
+      })
+    }
+
+    const untrackedPaths = untracked.split('\n').filter(Boolean)
+    const counts = await untrackedLineCounts(cwd, untrackedPaths)
+    for (const p of untrackedPaths) {
+      changes.push({ path: p, status: '?', staged: false, additions: counts.get(p) ?? 0, deletions: 0 })
+    }
+
+    return { base, baseBranch: resolvedBase, changes }
+  } catch {
+    return { base, baseBranch: resolvedBase, changes: [] }
   }
 }
 

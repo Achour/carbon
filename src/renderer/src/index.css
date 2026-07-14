@@ -176,6 +176,21 @@
   -webkit-app-region: no-drag;
 }
 
+/* Translucent sidebar (macOS window vibrancy). When on, the window base is
+   transparent so the native blurred material shows through; the main content
+   and right panel stay opaque (App wraps them in a bg-background layer), and
+   only the sidebar is painted as a light theme tint over the frosted glass.
+   Light themes need a touch more opacity to stay legible over the material. */
+:root[data-translucent='true'] body {
+  background: transparent;
+}
+:root[data-translucent='true'] [data-sidebar] {
+  background-color: oklch(from var(--sidebar) l c h / 0.55);
+}
+:root[data-translucent='true']:not(.dark) [data-sidebar] {
+  background-color: oklch(from var(--sidebar) l c h / 0.68);
+}
+
 /* Scrollbars */
 ::-webkit-scrollbar {
   width: 12px;

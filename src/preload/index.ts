@@ -28,8 +28,8 @@ const api: Api = {
   }) => ipcRenderer.invoke('chats:create', opts),
   deleteChat: (id: string) => ipcRenderer.invoke('chats:delete', id),
   renameChat: (id: string, title: string) => ipcRenderer.invoke('chats:rename', id, title),
-  send: (chatId: string, text: string, attachments?: Attachment[]) =>
-    ipcRenderer.invoke('chat:send', chatId, text, attachments),
+  send: (chatId: string, text: string, attachments?: Attachment[], label?: string) =>
+    ipcRenderer.invoke('chat:send', chatId, text, attachments, label),
   pathForFile: (file: File) => {
     try {
       return webUtils.getPathForFile(file)
@@ -73,12 +73,17 @@ const api: Api = {
   gitPush: (cwd: string) => ipcRenderer.invoke('git:push', cwd),
   gitPull: (cwd: string) => ipcRenderer.invoke('git:pull', cwd),
   gitFetch: (cwd: string) => ipcRenderer.invoke('git:fetch', cwd),
+  gitBranchChanges: (cwd: string, baseBranch?: string) =>
+    ipcRenderer.invoke('git:branch-changes', cwd, baseBranch),
   gitInit: (cwd: string) => ipcRenderer.invoke('git:init', cwd),
   githubState: (cwd: string) => ipcRenderer.invoke('github:state', cwd),
   githubOpenPr: (cwd: string) => ipcRenderer.invoke('github:open-pr', cwd),
   getDefaults: () => ipcRenderer.invoke('app:get-defaults'),
   forgetDir: (dir: string) => ipcRenderer.invoke('app:forget-dir', dir),
   focusWindow: () => ipcRenderer.invoke('app:focus-window'),
+  setWindowVibrancy: (enabled: boolean, dark: boolean) =>
+    ipcRenderer.invoke('window:set-vibrancy', enabled, dark),
+  platform: process.platform,
   terminalCreate: (opts: TerminalCreateOpts) => ipcRenderer.invoke('terminal:create', opts),
   terminalWrite: (id: string, data: string) => ipcRenderer.invoke('terminal:write', id, data),
   terminalResize: (id: string, cols: number, rows: number) =>

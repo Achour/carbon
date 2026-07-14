@@ -25,7 +25,7 @@ export type Emit = (ev: ChatEvent) => void
 export interface AgentSession {
   /** True once the underlying session is gone; the manager drops dead sessions. */
   readonly dead: boolean
-  send(text: string, attachments?: Attachment[]): void
+  send(text: string, attachments?: Attachment[], label?: string): void
   interrupt(): Promise<void>
   setModel(model?: string): Promise<void>
   setPermissionMode(mode: PermissionModeId): Promise<void>

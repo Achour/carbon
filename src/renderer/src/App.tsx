@@ -146,18 +146,23 @@ export default function App(): React.JSX.Element {
       <div className="flex h-full">
         <Sidebar />
         <ErrorBoundary>
-          {settingsOpen ? (
-            <Settings />
-          ) : panelFullscreen ? null : loading ? (
-            <div className="flex flex-1 items-center justify-center">
-              <span className="shimmer-text text-sm font-medium">Loading…</span>
-            </div>
-          ) : activeChat ? (
-            <ChatView key={activeChat.id} chat={activeChat} />
-          ) : (
-            <NewChat />
-          )}
-          {!settingsOpen && <RightPanel />}
+          {/* Opaque layer: the translucent-sidebar effect makes the window base
+              transparent, so everything except the sidebar sits on its own
+              solid background and never shows the frosted-glass material. */}
+          <div className="flex min-w-0 flex-1 bg-background">
+            {settingsOpen ? (
+              <Settings />
+            ) : panelFullscreen ? null : loading ? (
+              <div className="flex flex-1 items-center justify-center">
+                <span className="shimmer-text text-sm font-medium">Loading…</span>
+              </div>
+            ) : activeChat ? (
+              <ChatView key={activeChat.id} chat={activeChat} />
+            ) : (
+              <NewChat />
+            )}
+            {!settingsOpen && <RightPanel />}
+          </div>
         </ErrorBoundary>
       </div>
       <FileSearchDialog />
