@@ -453,6 +453,48 @@ export interface GitDiffTarget {
   untracked?: boolean
 }
 
+// ---------- GitHub (gh CLI) ----------
+
+/** Aggregate CI/status-check outcome for a PR, rolled up from `statusCheckRollup`. */
+export interface PrChecks {
+  passed: number
+  failed: number
+  /** Queued / in-progress / expected checks. */
+  pending: number
+  total: number
+}
+
+/** The pull request for the current branch, as reported by `gh pr view`. */
+export interface PrInfo {
+  number: number
+  url: string
+  title: string
+  state: 'OPEN' | 'MERGED' | 'CLOSED'
+  isDraft: boolean
+  /** '' when no review has been requested/left yet. */
+  reviewDecision: 'APPROVED' | 'CHANGES_REQUESTED' | 'REVIEW_REQUIRED' | ''
+  /** Undefined when the PR has no checks configured. */
+  checks?: PrChecks
+}
+
+/**
+ * GitHub layer for a working directory, derived from the `gh` CLI. Everything is
+ * best-effort: a missing binary, no login, no GitHub remote, or an offline box
+ * all degrade to `installed`/`authed` flags with no `repo`/`pr`.
+ */
+export interface GitHubState {
+  /** `gh` binary is on PATH. */
+  installed: boolean
+  /** `gh` has a logged-in account. */
+  authed: boolean
+  /** owner/repo, when the cwd maps to a GitHub repository gh recognizes. */
+  repo?: string
+  /** The repo's default branch (e.g. "main"); used to steer commits off it. */
+  defaultBranch?: string
+  /** PR for the current branch, if one exists. */
+  pr?: PrInfo
+}
+
 // ---------- Terminal ----------
 
 export interface TerminalCreateOpts {
@@ -568,7 +610,14 @@ export interface Api {
   gitUnstage(cwd: string, paths: string[]): Promise<GitResult>
   gitCommit(cwd: string, message: string): Promise<GitResult>
   gitPush(cwd: string): Promise<GitResult>
+  gitPull(cwd: string): Promise<GitResult>
+  /** Update remote-tracking refs so ahead/behind reflects the real remote. */
+  gitFetch(cwd: string): Promise<GitResult>
   gitInit(cwd: string): Promise<GitResult>
+  /** GitHub state (PR + checks) for the cwd's current branch; best-effort. */
+  githubState(cwd: string): Promise<GitHubState>
+  /** Open the current branch's PR in the browser (`gh pr view --web`). */
+  githubOpenPr(cwd: string): Promise<GitResult>
   getDefaults(): Promise<AppDefaults>
   forgetDir(dir: string): Promise<void>
   /** Bring the app window to the foreground (notification clicks). */

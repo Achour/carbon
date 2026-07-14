@@ -23,6 +23,7 @@ import { effortForProvider } from '@shared/types'
 import { ChatManager } from './claude'
 import { listDir, readFileContent, searchFiles, statPath } from './files'
 import * as gitOps from './git'
+import * as githubOps from './github'
 import { getPermissionRules, removePermissionRule } from './permissions'
 import { PreviewManager } from './preview'
 import { Store } from './store'
@@ -442,7 +443,11 @@ function registerIpc(): void {
   ipcMain.handle('git:unstage', (_e, cwd: string, paths: string[]) => gitOps.gitUnstage(cwd, paths))
   ipcMain.handle('git:commit', (_e, cwd: string, message: string) => gitOps.gitCommit(cwd, message))
   ipcMain.handle('git:push', (_e, cwd: string) => gitOps.gitPush(cwd))
+  ipcMain.handle('git:pull', (_e, cwd: string) => gitOps.gitPull(cwd))
+  ipcMain.handle('git:fetch', (_e, cwd: string) => gitOps.gitFetch(cwd))
   ipcMain.handle('git:init', (_e, cwd: string) => gitOps.gitInit(cwd))
+  ipcMain.handle('github:state', (_e, cwd: string) => githubOps.ghState(cwd))
+  ipcMain.handle('github:open-pr', (_e, cwd: string) => githubOps.openPrWeb(cwd))
 }
 
 app.whenReady().then(() => {

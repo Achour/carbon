@@ -10,6 +10,8 @@ import {
 import { loadNotifyPrefs, notify, playChime, saveNotifyPrefs, type NotifyPrefs } from '@/lib/notify'
 import { formatCost, formatDuration } from '@/lib/format'
 import { invalidateLocalImages } from '@/lib/imageCache'
+import { gitActionPrompt, type GitActionId } from '@/lib/gitActions'
+import { changedPathsFromParts } from '@/lib/turnChanges'
 import { providerForModel } from '@shared/types'
 import type {
   AppDefaults,
@@ -24,6 +26,7 @@ import type {
   FileContent,
   FileEntry,
   GitFileChange,
+  GitHubState,
   GitStatus,
   ModelOption,
   PermissionDecision,
@@ -80,12 +83,14 @@ export interface DiffTabMeta {
 }
 
 export interface OpenTab {
-  /** Absolute file path, or a `diff:` id for diff tabs. */
+  /** Absolute file path, a `diff:` id for diff tabs, or an `untitled:N` id. */
   path: string
   name: string
   diff?: DiffTabMeta
   /** Preview tabs (single click) are reused by the next preview; double-click pins. */
   preview?: boolean
+  /** A blank "open a file" placeholder tab; replaced in place once a file is picked. */
+  untitled?: boolean
 }
 
 interface AppState {
@@ -201,6 +206,8 @@ interface AppState {
   filesByDir: Record<string, FileEntry[]>
   expandedDirs: Record<string, boolean>
   openFiles: OpenTab[]
+  /** Monotonic counter for Untitled placeholder tab ids. */
+  untitledSeq: number
   fileContents: Record<string, FileContent>
   /** 'plan', an open file path, or a diff tab id. */
   activeTab: string | null
@@ -212,7 +219,9 @@ interface AppState {
   togglePanel(): void
   loadDir(dir: string): Promise<void>
   toggleDir(dir: string): void
-  openFile(path: string, opts?: { preview?: boolean }): Promise<void>
+  openFile(path: string, opts?: { preview?: boolean; replace?: string }): Promise<void>
+  /** Open a blank "Untitled" placeholder tab (a file picker until one is chosen). */
+  openUntitled(): void
   closeFile(path: string): void
   /** Pins a preview tab so the next preview doesn't replace it. */
   promoteTab(path: string): void
@@ -224,6 +233,10 @@ interface AppState {
   /** True while a push is in flight. */
   gitBusy: boolean
   gitError: string | null
+  /** GitHub state (PR + checks) for the selected project; null until first fetch. */
+  github: GitHubState | null
+  /** True while a gh state fetch is in flight (guards against overlap). */
+  githubBusy: boolean
   /** Diff text per diff tab id. */
   diffContents: Record<string, string>
 
@@ -236,9 +249,20 @@ interface AppState {
   refreshGit(): Promise<void>
   stagePaths(paths: string[]): Promise<void>
   unstagePaths(paths: string[]): Promise<void>
-  commitChanges(): Promise<void>
   pushChanges(): Promise<void>
+  pullChanges(): Promise<void>
+  /** git fetch, then refresh, so ahead/behind reflects the live remote. */
+  fetchRemote(): Promise<void>
   initRepo(): Promise<void>
+  /** Run one rung of the source-control ladder (agent-delegated, or direct push/pull). */
+  runGitAction(id: GitActionId): Promise<void>
+  /** Sticky default for the split button (persisted); the dropdown sets it. */
+  preferredGitAction: GitActionId | null
+  setPreferredGitAction(id: GitActionId): void
+  /** Re-read GitHub state (PR + checks) for the selected project. */
+  refreshGithub(): Promise<void>
+  /** Open the current branch's PR in the browser. */
+  openPr(): Promise<void>
   /** Open a file's diff. Single click previews (ephemeral); double click pins it. */
   openDiff(change: GitFileChange, opts?: { preview?: boolean }): Promise<void>
   /** Open the single "Changes" tab (all files stacked); optionally scroll to one. */
@@ -339,6 +363,29 @@ function omit<T>(map: Record<string, T>, ids: string[]): Record<string, T> {
   const next = { ...map }
   for (const id of ids) delete next[id]
   return next
+}
+
+/**
+ * Repo-relative files the active chat's agent edited — used to scope a commit
+ * to this session instead of `git add -A`. Empty when no active chat matches
+ * this cwd (caller then stages everything). Prefers the still-dirty subset, but
+ * falls back to the full edit set if none intersect (e.g. a repo-root mismatch).
+ */
+function sessionEditedPaths(
+  s: Pick<AppState, 'activeId' | 'chats' | 'messages' | 'git'>,
+  cwd: string
+): string[] {
+  const chat = s.chats.find((c) => c.id === s.activeId)
+  if (!chat || chat.cwd !== cwd) return []
+  const edited = new Set<string>()
+  for (const m of s.messages) {
+    if (m.role !== 'assistant') continue
+    for (const p of changedPathsFromParts(m.parts, cwd)) edited.add(p)
+  }
+  if (edited.size === 0) return []
+  const dirty = new Set((s.git?.changes ?? []).map((c) => c.path))
+  const scoped = [...edited].filter((p) => dirty.has(p))
+  return scoped.length > 0 ? scoped : [...edited]
 }
 
 export const useApp = create<AppState>((set, get) => ({
@@ -614,7 +661,10 @@ export const useApp = create<AppState>((set, get) => ({
       selectedCwd: chats[0]?.cwd ?? defaults.recentDirs[0] ?? null
     })
     const cwd = get().selectedCwd
-    if (cwd) void get().refreshGit()
+    if (cwd) {
+      void get().refreshGit()
+      void get().refreshGithub()
+    }
     // No active chat yet on boot — derive the provider from the saved default
     // model so a Codex default never warms a Claude command session.
     get().loadCommands(cwd, defaults?.model ? providerForModel(defaults.model) : 'claude')
@@ -635,6 +685,7 @@ export const useApp = create<AppState>((set, get) => ({
     get().loadCommands(cwd)
     if (cwd) {
       void get().refreshGit()
+      void get().refreshGithub()
       if (get().panelOpen && !get().filesByDir[cwd]) void get().loadDir(cwd)
     }
   },
@@ -657,6 +708,7 @@ export const useApp = create<AppState>((set, get) => ({
   filesByDir: {},
   expandedDirs: {},
   openFiles: [],
+  untitledSeq: 0,
   fileContents: {},
   activeTab: null,
   workspaces: {},
@@ -702,6 +754,9 @@ export const useApp = create<AppState>((set, get) => ({
 
   async openFile(path, opts) {
     const preview = opts?.preview ?? false
+    // `replace` swaps a placeholder (e.g. an Untitled tab) for the chosen file
+    // in the same slot, so picking a file doesn't leave the blank tab behind.
+    const replace = opts?.replace
     const name = path.split('/').pop() ?? path
     set((s) => {
       const existing = s.openFiles.find((f) => f.path === path)
@@ -711,6 +766,10 @@ export const useApp = create<AppState>((set, get) => ({
         if (!preview && existing.preview) {
           openFiles = openFiles.map((f) => (f.path === path ? { ...f, preview: false } : f))
         }
+        // The file was already open — drop the placeholder we opened it from.
+        if (replace && replace !== path) openFiles = openFiles.filter((f) => f.path !== replace)
+      } else if (replace && s.openFiles.some((f) => f.path === replace)) {
+        openFiles = s.openFiles.map((f) => (f.path === replace ? { path, name } : f))
       } else if (preview) {
         // A single-clicked file reuses the current preview slot, like Cursor.
         const slot = openFiles.findIndex((f) => f.preview)
@@ -724,6 +783,18 @@ export const useApp = create<AppState>((set, get) => ({
     })
     const content = await window.api.readFile(path)
     set((s) => ({ fileContents: { ...s.fileContents, [path]: content } }))
+  },
+
+  openUntitled() {
+    set((s) => {
+      const path = `untitled:${s.untitledSeq + 1}`
+      return {
+        openFiles: [...s.openFiles, { path, name: 'Untitled', untitled: true }],
+        untitledSeq: s.untitledSeq + 1,
+        activeTab: path,
+        ...panelPatch(s, true)
+      }
+    })
   },
 
   promoteTab(path) {
@@ -778,6 +849,9 @@ export const useApp = create<AppState>((set, get) => ({
   git: null,
   gitBusy: false,
   gitError: null,
+  github: null,
+  githubBusy: false,
+  preferredGitAction: (localStorage.getItem('preferredGitAction') as GitActionId | null) ?? null,
   diffContents: {},
 
   setExplorerOpen(open) {
@@ -859,18 +933,40 @@ export const useApp = create<AppState>((set, get) => ({
     await get().refreshGit()
   },
 
-  async commitChanges() {
-    // Committing goes through the chat: we prompt Claude Code and it runs
-    // git itself, so the commit shows up in the conversation.
+  async runGitAction(id) {
+    // The source-control split button funnels every rung here. `push` is
+    // mechanical (run it directly); everything else is delegated to the chat's
+    // agent so branch names / commit messages / PR bodies are authored well and
+    // the work lands in the conversation — the same pattern Cursor 3.0 uses.
     const cwd = get().selectedCwd
+    if (!cwd) return
+    if (id === 'push') {
+      await get().pushChanges()
+      return
+    }
+    if (id === 'pull') {
+      await get().pullChanges()
+      return
+    }
     const git = get().git
-    if (!cwd || !git || git.changes.length === 0) return
-    const hasStaged = git.changes.some((c) => c.staged)
-    const scope = hasStaged
-      ? 'Commit the currently staged changes (leave everything else unstaged).'
-      : 'Stage all current changes and commit them.'
+    const hasStaged = git?.changes.some((c) => c.staged) ?? false
+    // `commitScope` is spliced into the commit-bearing prompts. Priority:
+    //   1. explicit staging wins (commit just what's staged);
+    //   2. else scope to the files THIS chat's agent actually edited, so a
+    //      commit doesn't sweep in unrelated working-tree changes;
+    //   3. else fall back to staging everything.
+    let commitScope: string
+    if (hasStaged) {
+      commitScope = 'Commit the currently staged changes (leave everything else unstaged)'
+    } else {
+      const session = sessionEditedPaths(get(), cwd)
+      commitScope =
+        session.length > 0
+          ? `Stage and commit only the files this session changed (${session.join(', ')}), leaving any other working-tree changes unstaged`
+          : 'Stage all current changes and commit them'
+    }
     set({ gitError: null })
-    const prompt = `${scope} Commit directly with a clear one-line message — do not review diffs, run tests, or verify anything. At most glance at the changed file names for the message.`
+    const prompt = gitActionPrompt(id, { commitScope })
     if (get().activeId) await get().sendMessage(prompt)
     else await get().newChat(cwd, prompt)
   },
@@ -888,6 +984,33 @@ export const useApp = create<AppState>((set, get) => ({
     }
   },
 
+  async pullChanges() {
+    const cwd = get().selectedCwd
+    if (!cwd || get().gitBusy) return
+    set({ gitBusy: true, gitError: null })
+    try {
+      const res = await window.api.gitPull(cwd)
+      if (!res.ok) set({ gitError: res.error })
+    } finally {
+      set({ gitBusy: false })
+      await get().refreshGit()
+      // A pull can land the PR merge / new commits — refresh GitHub too.
+      void get().refreshGithub()
+    }
+  },
+
+  async fetchRemote() {
+    // Updates remote-tracking refs so refreshGit sees a truthful ahead/behind.
+    // Best-effort: a no-remote/offline repo just leaves the counts as they were.
+    const cwd = get().selectedCwd
+    if (!cwd) return
+    await window.api.gitFetch(cwd)
+    if (get().selectedCwd === cwd) {
+      await get().refreshGit()
+      void get().refreshGithub()
+    }
+  },
+
   async initRepo() {
     const cwd = get().selectedCwd
     if (!cwd) return
@@ -895,6 +1018,38 @@ export const useApp = create<AppState>((set, get) => ({
     const res = await window.api.gitInit(cwd)
     if (!res.ok) set({ gitError: res.error })
     await get().refreshGit()
+  },
+
+  async refreshGithub() {
+    const cwd = get().selectedCwd
+    if (!cwd) {
+      set({ github: null })
+      return
+    }
+    // gh calls hit the network — don't stack overlapping fetches.
+    if (get().githubBusy) return
+    set({ githubBusy: true })
+    try {
+      const github = await window.api.githubState(cwd)
+      // Guard against a project switch happening while we awaited.
+      if (get().selectedCwd === cwd) set({ github })
+    } catch {
+      if (get().selectedCwd === cwd) set({ github: null })
+    } finally {
+      set({ githubBusy: false })
+    }
+  },
+
+  async openPr() {
+    const cwd = get().selectedCwd
+    if (!cwd || !get().github?.pr) return
+    const res = await window.api.githubOpenPr(cwd)
+    if (!res.ok) set({ gitError: res.error })
+  },
+
+  setPreferredGitAction(id) {
+    localStorage.setItem('preferredGitAction', id)
+    set({ preferredGitAction: id })
   },
 
   async openDiff(change, opts) {
@@ -1007,6 +1162,7 @@ export const useApp = create<AppState>((set, get) => ({
       // clear Claude's commands (and Codex→Claude must restore them).
       get().loadCommands(chat.cwd, chat.provider)
       if (cwdChanged || !get().git) void get().refreshGit()
+      if (cwdChanged || !get().github) void get().refreshGithub()
       if (cwdChanged && get().panelOpen && !get().filesByDir[chat.cwd]) {
         void get().loadDir(chat.cwd)
       }
@@ -1339,6 +1495,8 @@ export const useApp = create<AppState>((set, get) => ({
           // the agent's edits show up.
           if (ev.chatId === s.activeId) {
             void get().refreshGit()
+            // The agent may have pushed or opened a PR — pick up the new state.
+            void get().refreshGithub()
             if (s.panelOpen || s.openFiles.length > 0) void get().refreshFiles()
           }
         }

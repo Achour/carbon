@@ -3,20 +3,37 @@ import {
   ArrowDown,
   ArrowUp,
   Check,
+  CheckCircle2,
+  ChevronDown,
   ChevronRight,
+  CircleDot,
   Folder,
   GitBranch,
+  GitMerge,
+  GitPullRequest,
+  GitPullRequestClosed,
+  GitPullRequestDraft,
+  CloudUpload,
   Minus,
   Plus,
   RefreshCw,
   Sparkles,
-  Upload
+  Upload,
+  XCircle,
+  type LucideIcon
 } from 'lucide-react'
-import type { GitFileChange } from '@shared/types'
+import type { GitFileChange, PrChecks, PrInfo } from '@shared/types'
 import { cn } from '@/lib/utils'
 import { handleTreeKeyDown } from '@/lib/treeKeyNav'
+import { resolveGitActions, type GitActionId } from '@/lib/gitActions'
 import { useApp } from '@/store'
 import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger
+} from '@/components/ui/dropdown-menu'
 import { WithTooltip } from '@/components/ui/tooltip'
 
 const STATUS_COLORS: Record<string, string> = {
@@ -279,26 +296,189 @@ function Section({
   )
 }
 
+/** Icon + accent color + label for a PR's lifecycle state. */
+function prAppearance(pr: PrInfo): {
+  Icon: typeof GitPullRequest
+  color: string
+  label: string
+} {
+  if (pr.state === 'MERGED') return { Icon: GitMerge, color: 'text-purple-500', label: 'Merged' }
+  if (pr.state === 'CLOSED')
+    return { Icon: GitPullRequestClosed, color: 'text-red-500', label: 'Closed' }
+  if (pr.isDraft)
+    return { Icon: GitPullRequestDraft, color: 'text-muted-foreground', label: 'Draft' }
+  return { Icon: GitPullRequest, color: 'text-emerald-500', label: 'Open' }
+}
+
+/** Compact CI rollup: `✗2 •1 ✓4`, only showing the nonzero buckets. */
+function ChecksSummary({ checks }: { checks: PrChecks }): React.JSX.Element {
+  return (
+    <span className="flex shrink-0 items-center gap-1.5 text-[10.5px] tabular-nums">
+      {checks.failed > 0 && (
+        <span className="flex items-center gap-0.5 text-red-500">
+          <XCircle className="size-3" />
+          {checks.failed}
+        </span>
+      )}
+      {checks.pending > 0 && (
+        <span className="flex items-center gap-0.5 text-amber-500">
+          <CircleDot className="size-3" />
+          {checks.pending}
+        </span>
+      )}
+      {checks.passed > 0 && (
+        <span className="flex items-center gap-0.5 text-emerald-500">
+          <CheckCircle2 className="size-3" />
+          {checks.passed}
+        </span>
+      )}
+    </span>
+  )
+}
+
+/**
+ * The PR status card under the git actions: state icon + number + title +
+ * review/checks, linking out to GitHub. Renders nothing until a PR exists —
+ * *opening* one is a rung of the action button below, not shown here.
+ */
+function PrCard(): React.JSX.Element | null {
+  const pr = useApp((s) => s.github?.pr)
+  const openPr = useApp((s) => s.openPr)
+  if (!pr) return null
+
+  const { Icon, color, label } = prAppearance(pr)
+  return (
+    <div className="px-2.5 pb-2">
+      <WithTooltip label={`#${pr.number} · ${label} — open on GitHub`}>
+        <button
+          type="button"
+          onClick={() => void openPr()}
+          className="flex w-full items-center gap-1.5 rounded-md border border-border/60 px-2 py-1.5 text-left transition-colors hover:bg-accent/60"
+        >
+          <Icon className={cn('size-3.5 shrink-0', color)} />
+          <span className="shrink-0 text-[11px] font-semibold text-muted-foreground tabular-nums">
+            #{pr.number}
+          </span>
+          <span className="min-w-0 flex-1 truncate text-[12px]">{pr.title}</span>
+          {pr.reviewDecision === 'APPROVED' && (
+            <Check className="size-3 shrink-0 text-emerald-500" />
+          )}
+          {pr.checks && <ChecksSummary checks={pr.checks} />}
+        </button>
+      </WithTooltip>
+    </div>
+  )
+}
+
+/** Icon per rung. Agent-delegated rungs get the sparkle; mechanical ones don't. */
+const ACTION_ICON: Partial<Record<GitActionId, LucideIcon>> = {
+  push: Upload,
+  pull: ArrowDown,
+  'publish-github': CloudUpload,
+  'sync-cleanup': GitMerge
+}
+
+/**
+ * Cursor-style split button: the primary is the sensible next step for the
+ * repo's current state (see `resolveGitActions`), and the chevron opens the
+ * fuller ladder. Every rung but `push` is delegated to the chat's agent.
+ */
+function GitActionButton(): React.JSX.Element | null {
+  const git = useApp((s) => s.git)
+  const github = useApp((s) => s.github)
+  const gitBusy = useApp((s) => s.gitBusy)
+  const runGitAction = useApp((s) => s.runGitAction)
+  const preferred = useApp((s) => s.preferredGitAction)
+  const setPreferred = useApp((s) => s.setPreferredGitAction)
+  const agentName = useApp((s) =>
+    s.chats.find((c) => c.id === s.activeId)?.provider === 'codex' ? 'Codex' : 'Claude'
+  )
+
+  const { primary, rungs } = React.useMemo(() => resolveGitActions(git, github), [git, github])
+  if (!primary) return null
+
+  // The dropdown is a default-PICKER (Cursor-style), not an action menu: the
+  // main button runs whichever action is currently selected; picking from the
+  // dropdown just swaps which one that is (persisted). The sticky choice applies
+  // only while it's still an available action for the current state.
+  const available = [primary, ...rungs]
+  const current = available.find((a) => a.id === preferred) ?? primary
+  const others = available.filter((a) => a.id !== current.id)
+
+  const Icon = ACTION_ICON[current.id] ?? Sparkles
+  // push / pull are mechanical (run directly); everything else is delegated.
+  const direct = current.id === 'push' || current.id === 'pull'
+  const tip = direct
+    ? current.id === 'pull'
+      ? 'Pull changes from the remote'
+      : 'Push commits to the remote'
+    : `Asks ${agentName} to do this in the chat`
+
+  return (
+    <div className="flex px-2.5 pb-2">
+      <WithTooltip label={tip}>
+        <Button
+          size="sm"
+          className={cn('h-6.5 min-w-0 flex-1 text-xs', others.length > 0 && 'rounded-r-none')}
+          disabled={gitBusy}
+          onClick={() => void runGitAction(current.id)}
+        >
+          <Icon className="size-3 shrink-0" />
+          <span className="truncate">{current.label}</span>
+        </Button>
+      </WithTooltip>
+      {others.length > 0 && (
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <Button
+                size="sm"
+                className="h-6.5 shrink-0 rounded-l-none border-l border-primary-foreground/25 px-1.5"
+                disabled={gitBusy}
+                aria-label="Choose the default source-control action"
+              >
+                <ChevronDown className="size-3" />
+              </Button>
+            }
+          />
+          <DropdownMenuContent align="end" className="min-w-60">
+            {others.map((a) => {
+              const AIcon = ACTION_ICON[a.id] ?? Sparkles
+              return (
+                <DropdownMenuItem key={a.id} onClick={() => setPreferred(a.id)}>
+                  <AIcon />
+                  {a.label}
+                </DropdownMenuItem>
+              )
+            })}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
+    </div>
+  )
+}
+
 export function GitPanel(): React.JSX.Element {
   const cwd = useApp((s) => s.selectedCwd)
   const git = useApp((s) => s.git)
-  const gitBusy = useApp((s) => s.gitBusy)
   const gitError = useApp((s) => s.gitError)
   const refreshGit = useApp((s) => s.refreshGit)
   const stagePaths = useApp((s) => s.stagePaths)
   const unstagePaths = useApp((s) => s.unstagePaths)
-  const commitChanges = useApp((s) => s.commitChanges)
-  const pushChanges = useApp((s) => s.pushChanges)
   const initRepo = useApp((s) => s.initRepo)
-  // Committing is delegated to the active chat's agent — name it accordingly.
-  const agentName = useApp((s) =>
-    s.chats.find((c) => c.id === s.activeId)?.provider === 'codex' ? 'Codex' : 'Claude'
-  )
+  const refreshGithub = useApp((s) => s.refreshGithub)
+  const fetchRemote = useApp((s) => s.fetchRemote)
   const [refreshing, setRefreshing] = React.useState(false)
 
   React.useEffect(() => {
-    if (cwd) void refreshGit()
-  }, [cwd, refreshGit])
+    if (cwd) {
+      // Instant local status first, then a background fetch so ahead/behind
+      // reflects the live remote without the user clicking Refresh.
+      void refreshGit()
+      void refreshGithub()
+      void fetchRemote()
+    }
+  }, [cwd, refreshGit, refreshGithub, fetchRemote])
 
   if (!cwd) {
     return (
@@ -330,9 +510,6 @@ export function GitPanel(): React.JSX.Element {
 
   const staged = git.changes.filter((c) => c.staged)
   const unstaged = git.changes.filter((c) => !c.staged)
-  const canCommit = git.changes.length > 0
-  const pushDisabled =
-    gitBusy || !git.hasRemote || (git.hasUpstream && git.ahead === 0 && staged.length === 0)
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -355,15 +532,15 @@ export function GitPanel(): React.JSX.Element {
           </span>
         )}
         <div className="flex-1" />
-        <WithTooltip label="Refresh">
+        <WithTooltip label="Fetch & refresh">
           <Button
             size="icon-sm"
             variant="ghost"
             className="size-5"
-            aria-label="Refresh git status"
+            aria-label="Fetch and refresh git status"
             onClick={() => {
               setRefreshing(true)
-              void refreshGit().finally(() => setRefreshing(false))
+              void fetchRemote().finally(() => setRefreshing(false))
             }}
           >
             <RefreshCw className={cn(refreshing && 'animate-spin')} />
@@ -371,42 +548,11 @@ export function GitPanel(): React.JSX.Element {
         </WithTooltip>
       </div>
 
-      {/* Actions — committing is delegated to the chat's agent */}
-      <div className="flex flex-col gap-1.5 px-2.5 pb-2">
-        <div className="flex gap-1.5">
-          <WithTooltip label={`Asks ${agentName} to commit in the chat`}>
-            <Button
-              size="sm"
-              className="h-6.5 flex-1 text-xs"
-              disabled={!canCommit}
-              onClick={() => void commitChanges()}
-            >
-              <Sparkles className="size-3" />
-              {staged.length > 0 ? `Commit (${staged.length})` : 'Commit all'}
-            </Button>
-          </WithTooltip>
-          <WithTooltip
-            label={
-              !git.hasRemote
-                ? 'No git remote configured'
-                : git.hasUpstream
-                  ? 'Push commits to the remote'
-                  : 'Publish this branch to the remote'
-            }
-          >
-            <Button
-              size="sm"
-              variant="secondary"
-              className="h-6.5 text-xs"
-              disabled={pushDisabled}
-              onClick={() => void pushChanges()}
-            >
-              <Upload className="size-3" />
-              {git.hasUpstream ? (git.ahead > 0 ? `Push ${git.ahead}` : 'Push') : 'Publish'}
-            </Button>
-          </WithTooltip>
-        </div>
-      </div>
+      {/* Context-aware source-control action (agent-delegated), Cursor-style */}
+      <GitActionButton />
+
+      {/* GitHub PR status card, once a PR exists for this branch */}
+      <PrCard />
 
       {/* Changes */}
       <div

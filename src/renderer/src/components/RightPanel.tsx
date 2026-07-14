@@ -344,7 +344,11 @@ function TabScroller({ children }: { children: React.ReactNode }): React.JSX.Ele
   }
 
   return (
-    <div className="relative flex min-w-0 flex-1 items-center">
+    // Not flex-1: the strip is only as wide as its tabs, so the "+" that follows
+    // it sits right after the last tab. It shrinks (min-w-0) and scrolls once the
+    // tabs would overflow, which pins the "+" at the strip's end instead of
+    // pushing it off-screen.
+    <div className="relative flex min-w-0 shrink items-center">
       <div
         ref={ref}
         onScroll={onScroll}
@@ -362,6 +366,139 @@ function TabScroller({ children }: { children: React.ReactNode }): React.JSX.Ele
           style={{ transform: `translateX(${thumb.left}px)`, width: thumb.width }}
         />
       )}
+    </div>
+  )
+}
+
+/**
+ * Shown in the viewer when the panel is open but nothing is: a Cursor-style
+ * launcher grid. "File" opens a blank Untitled tab (a picker until you choose).
+ */
+function EmptyLauncher(): React.JSX.Element {
+  const reviewChanges = useApp((s) => s.reviewChanges)
+  const openPreview = useApp((s) => s.openPreview)
+  const openTerminal = useApp((s) => s.openTerminal)
+  const openUntitled = useApp((s) => s.openUntitled)
+
+  const items = [
+    { icon: <GitBranch />, label: 'Changes', run: () => void reviewChanges() },
+    { icon: <Globe />, label: 'Browser', run: () => openPreview() },
+    { icon: <SquareTerminal />, label: 'Terminal', run: () => openTerminal() },
+    { icon: <FileText />, label: 'File', run: () => openUntitled() }
+  ]
+  return (
+    <div className="flex h-full items-center justify-center p-6">
+      <div className="grid grid-cols-2 gap-3">
+        {items.map((it) => (
+          <button
+            key={it.label}
+            type="button"
+            onClick={it.run}
+            className="flex size-32 flex-col items-center justify-center gap-2.5 rounded-xl border border-border/60 text-muted-foreground transition-colors hover:border-border hover:bg-accent/50 hover:text-foreground [&_svg]:size-6"
+          >
+            {it.icon}
+            <span className="text-[13px]">{it.label}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/** The body of an Untitled tab: an inline file picker; choosing one replaces it. */
+function UntitledView({ tabPath }: { tabPath: string }): React.JSX.Element {
+  const cwd = useApp((s) => s.selectedCwd)
+  const openFile = useApp((s) => s.openFile)
+  const [query, setQuery] = React.useState('')
+  const [results, setResults] = React.useState<{ rel: string; path: string }[]>([])
+  const [idx, setIdx] = React.useState(0)
+  const inputRef = React.useRef<HTMLInputElement>(null)
+
+  React.useEffect(() => {
+    const t = setTimeout(() => inputRef.current?.focus(), 30)
+    return () => clearTimeout(t)
+  }, [])
+
+  React.useEffect(() => {
+    if (!cwd || !query.trim()) {
+      setResults([])
+      return
+    }
+    let alive = true
+    const t = setTimeout(() => {
+      void window.api.searchFiles(cwd, query.trim()).then((res) => {
+        if (alive) {
+          setResults(res)
+          setIdx(0)
+        }
+      })
+    }, 80)
+    return () => {
+      alive = false
+      clearTimeout(t)
+    }
+  }, [query, cwd])
+
+  const pick = (r: { rel: string; path: string }): void => {
+    void openFile(r.path, { replace: tabPath })
+  }
+
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-3 px-6">
+      <FileText className="size-8 text-muted-foreground/30" />
+      <p className="text-sm text-muted-foreground">Open a file</p>
+      <div className="w-full max-w-sm overflow-hidden rounded-lg border border-border">
+        <div className="flex items-center gap-2 border-b border-border px-3 py-2">
+          <Search className="size-3.5 shrink-0 text-muted-foreground" />
+          <input
+            ref={inputRef}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (!results.length) return
+              if (e.key === 'ArrowDown') {
+                e.preventDefault()
+                setIdx((i) => (i + 1) % results.length)
+              } else if (e.key === 'ArrowUp') {
+                e.preventDefault()
+                setIdx((i) => (i - 1 + results.length) % results.length)
+              } else if (e.key === 'Enter') {
+                e.preventDefault()
+                pick(results[idx])
+              }
+            }}
+            placeholder="Search files by name…"
+            spellCheck={false}
+            className="w-full bg-transparent text-[13px] outline-none placeholder:text-muted-foreground/60"
+          />
+        </div>
+        {results.length > 0 && (
+          <div className="max-h-64 overflow-y-auto p-1">
+            {results.map((r, i) => {
+              const name = r.rel.split('/').pop() ?? r.rel
+              const dir = r.rel.slice(0, r.rel.length - name.length).replace(/\/$/, '')
+              return (
+                <button
+                  key={r.path}
+                  type="button"
+                  onMouseEnter={() => setIdx(i)}
+                  onClick={() => pick(r)}
+                  className={cn(
+                    'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors',
+                    i === idx && 'bg-accent'
+                  )}
+                >
+                  <FileText className="size-3.5 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0 truncate text-xs">
+                    <span className="text-foreground">{name}</span>
+                    {dir && <span className="ml-1.5 text-muted-foreground/60">{dir}</span>}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+        )}
+      </div>
     </div>
   )
 }
@@ -508,6 +645,10 @@ export function RightPanel(): React.JSX.Element | null {
   const currentIsChanges = typeof current === 'string' && current.startsWith('changes:')
   const activeEntry = openFiles.find((f) => f.path === current)
   const activeIsMarkdown = !!activeEntry && !activeEntry.diff && MARKDOWN_RE.test(activeEntry.name)
+  const isUntitled = !!activeEntry?.untitled
+  // Nothing open at all → show the launcher (vs. `current === 'files'`, which is
+  // browse mode with the tree docked).
+  const isEmpty = current === null
 
   return (
     <aside
@@ -608,6 +749,9 @@ export function RightPanel(): React.JSX.Element | null {
           ))}
         </TabScroller>
         <QuickOpen />
+        {/* Pushes the panel controls to the far right; collapses to 0 when the
+            tab strip fills the width, so "+" pins beside these controls. */}
+        <div className="min-w-2 flex-1" />
         <WithTooltip label={panelMaximized ? 'Restore panel' : 'Maximize panel'}>
           <Button
             size="icon-sm"
@@ -635,7 +779,7 @@ export function RightPanel(): React.JSX.Element | null {
       {/* Breadcrumb row with the file-tree toggle at its right, Cursor-style.
           Hidden for terminal, preview and the stacked-changes tab, which each
           carry their own toolbar. */}
-      {!currentIsTerminal && !currentIsPreview && !currentIsChanges && (
+      {!currentIsTerminal && !currentIsPreview && !currentIsChanges && !isEmpty && !isUntitled && (
         <div className="flex h-8 shrink-0 items-center gap-2 border-b border-border/60 pr-1.5 pl-3">
           <div className="min-w-0 flex-1">
             {activeEntry && <PathBar entry={activeEntry} cwd={selectedCwd} />}
@@ -691,6 +835,8 @@ export function RightPanel(): React.JSX.Element | null {
                 text={diffContents[current!]}
                 language={languageForPath(activeEntry.diff.file)}
               />
+            ) : isUntitled ? (
+              <UntitledView tabPath={current!} />
             ) : activeEntry ? (
               <FileViewer
                 content={fileContents[current!]}
@@ -698,6 +844,8 @@ export function RightPanel(): React.JSX.Element | null {
                 cwd={selectedCwd}
                 mode={mdMode}
               />
+            ) : isEmpty ? (
+              <EmptyLauncher />
             ) : (
               <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
                 Select a file from the tree

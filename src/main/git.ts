@@ -304,3 +304,30 @@ export async function gitInit(cwd: string): Promise<GitResult> {
     return { ok: false, error: errText(err) }
   }
 }
+
+/**
+ * Updates remote-tracking refs so `gitStatus` can report a truthful ahead/behind.
+ * Without this, `# branch.ab` is measured against a stale `origin/*` and a repo
+ * whose remote moved still looks "in sync". Best-effort: a no-remote repo or an
+ * offline box fails quietly.
+ */
+export async function gitFetch(cwd: string): Promise<GitResult> {
+  try {
+    await git(cwd, ['fetch', '--prune'], 45_000)
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: errText(err) }
+  }
+}
+
+export async function gitPull(cwd: string): Promise<GitResult> {
+  try {
+    // Plain pull: fast-forwards when only behind, merges when diverged. A merge
+    // conflict leaves the tree in a conflicted state and surfaces as an error;
+    // the changed files then show up in the next status read.
+    const out = await git(cwd, ['pull'], 60_000)
+    return { ok: true, output: out.trim() }
+  } catch (err) {
+    return { ok: false, error: errText(err) }
+  }
+}
