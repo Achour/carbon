@@ -318,6 +318,22 @@ export function Sidebar(): React.JSX.Element {
     })
   }
 
+  // User-controlled project order (array of cwds). Persisted; a project not yet
+  // listed keeps its discovery order. `dragCwd`/`dropCwd` drive drag-to-reorder.
+  const [projectOrder, setProjectOrder] = React.useState<string[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem('projectOrder') ?? '[]') as string[]
+    } catch {
+      return []
+    }
+  })
+  const persistOrder = (next: string[]): void => {
+    setProjectOrder(next)
+    localStorage.setItem('projectOrder', JSON.stringify(next))
+  }
+  const [dragCwd, setDragCwd] = React.useState<string | null>(null)
+  const [dropCwd, setDropCwd] = React.useState<string | null>(null)
+
   const [width, setWidth] = React.useState<number>(() => {
     const saved = Number(localStorage.getItem('sidebarWidth'))
     return Number.isFinite(saved) && saved >= SIDEBAR_MIN && saved <= SIDEBAR_MAX
@@ -361,13 +377,28 @@ export function Sidebar(): React.JSX.Element {
     localStorage.removeItem('sidebarWidth')
   }
 
-  // Group chats by project folder; groups ordered by most recent activity
-  // (the chat list is already sorted by updatedAt descending).
+  // Group chats by project folder. Chats within a project stay sorted by
+  // updatedAt (the chat list is pre-sorted), but the PROJECT order is fixed by
+  // the user's saved order — so a chat bump no longer yanks its project to the
+  // top. Projects not yet in the saved order keep their discovery order.
   const groups: { cwd: string; chats: ChatMeta[] }[] = []
   for (const chat of chats) {
     const group = groups.find((g) => g.cwd === chat.cwd)
     if (group) group.chats.push(chat)
     else groups.push({ cwd: chat.cwd, chats: [chat] })
+  }
+  const orderRank = (cwd: string): number => {
+    const i = projectOrder.indexOf(cwd)
+    return i === -1 ? Number.MAX_SAFE_INTEGER : i
+  }
+  groups.sort((a, b) => orderRank(a.cwd) - orderRank(b.cwd))
+  // Drag-to-reorder: move `from` just before `to`, then persist the full order.
+  const moveProject = (from: string, to: string): void => {
+    if (from === to) return
+    const ordered = groups.map((g) => g.cwd).filter((c) => c !== from)
+    const idx = ordered.indexOf(to)
+    ordered.splice(idx === -1 ? ordered.length : idx, 0, from)
+    persistOrder(ordered)
   }
   const visibleGroups = groups.filter((g) => !hiddenProjects[g.cwd])
   const activeGroups = visibleGroups.filter((g) => !archivedProjects[g.cwd])
@@ -472,7 +503,42 @@ export function Sidebar(): React.JSX.Element {
               <div className={cn(archived && 'opacity-70')}>
                 <ContextMenu>
                   <ContextMenuTrigger
-                    render={<div className="group/project flex items-center gap-0.5" />}
+                    render={
+                      <div
+                        className={cn(
+                          'group/project flex items-center gap-0.5 rounded-md',
+                          dragCwd === group.cwd && 'opacity-50',
+                          dropCwd === group.cwd &&
+                            dragCwd &&
+                            dragCwd !== group.cwd &&
+                            'ring-1 ring-inset ring-primary/50'
+                        )}
+                        draggable
+                        onDragStart={(e) => {
+                          setDragCwd(group.cwd)
+                          e.dataTransfer.effectAllowed = 'move'
+                        }}
+                        onDragOver={(e) => {
+                          if (!dragCwd || dragCwd === group.cwd) return
+                          e.preventDefault()
+                          e.dataTransfer.dropEffect = 'move'
+                          if (dropCwd !== group.cwd) setDropCwd(group.cwd)
+                        }}
+                        onDragLeave={() =>
+                          setDropCwd((c) => (c === group.cwd ? null : c))
+                        }
+                        onDrop={(e) => {
+                          e.preventDefault()
+                          if (dragCwd) moveProject(dragCwd, group.cwd)
+                          setDragCwd(null)
+                          setDropCwd(null)
+                        }}
+                        onDragEnd={() => {
+                          setDragCwd(null)
+                          setDropCwd(null)
+                        }}
+                      />
+                    }
                   >
                     <WithTooltip label={group.cwd}>
                       <button
