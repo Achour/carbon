@@ -333,6 +333,8 @@ export function Sidebar(): React.JSX.Element {
   }
   const [dragCwd, setDragCwd] = React.useState<string | null>(null)
   const [dropCwd, setDropCwd] = React.useState<string | null>(null)
+  // Whether the drop lands after (below) the target row vs before (above it).
+  const [dropAfter, setDropAfter] = React.useState(false)
 
   const [width, setWidth] = React.useState<number>(() => {
     const saved = Number(localStorage.getItem('sidebarWidth'))
@@ -393,11 +395,12 @@ export function Sidebar(): React.JSX.Element {
   }
   groups.sort((a, b) => orderRank(a.cwd) - orderRank(b.cwd))
   // Drag-to-reorder: move `from` just before `to`, then persist the full order.
-  const moveProject = (from: string, to: string): void => {
+  const moveProject = (from: string, to: string, after: boolean): void => {
     if (from === to) return
     const ordered = groups.map((g) => g.cwd).filter((c) => c !== from)
-    const idx = ordered.indexOf(to)
-    ordered.splice(idx === -1 ? ordered.length : idx, 0, from)
+    const i = ordered.indexOf(to)
+    const at = i === -1 ? ordered.length : after ? i + 1 : i
+    ordered.splice(at, 0, from)
     persistOrder(ordered)
   }
   const visibleGroups = groups.filter((g) => !hiddenProjects[g.cwd])
@@ -500,18 +503,24 @@ export function Sidebar(): React.JSX.Element {
                   <div className="h-px flex-1 bg-sidebar-border" />
                 </div>
               )}
-              <div className={cn(archived && 'opacity-70')}>
+              <div className={cn('relative', archived && 'opacity-70')}>
+                {/* Insertion line: shows exactly where the dragged project lands
+                    (above or below this row) — reads as reorder, not nesting. */}
+                {dropCwd === group.cwd && dragCwd && dragCwd !== group.cwd && (
+                  <div
+                    className={cn(
+                      'pointer-events-none absolute inset-x-1.5 z-10 h-0.5 rounded-full bg-primary',
+                      dropAfter ? '-bottom-0.5' : '-top-0.5'
+                    )}
+                  />
+                )}
                 <ContextMenu>
                   <ContextMenuTrigger
                     render={
                       <div
                         className={cn(
                           'group/project flex items-center gap-0.5 rounded-md',
-                          dragCwd === group.cwd && 'opacity-50',
-                          dropCwd === group.cwd &&
-                            dragCwd &&
-                            dragCwd !== group.cwd &&
-                            'ring-1 ring-inset ring-primary/50'
+                          dragCwd === group.cwd && 'opacity-50'
                         )}
                         draggable
                         onDragStart={(e) => {
@@ -522,14 +531,19 @@ export function Sidebar(): React.JSX.Element {
                           if (!dragCwd || dragCwd === group.cwd) return
                           e.preventDefault()
                           e.dataTransfer.dropEffect = 'move'
-                          if (dropCwd !== group.cwd) setDropCwd(group.cwd)
+                          const rect = e.currentTarget.getBoundingClientRect()
+                          const after = e.clientY > rect.top + rect.height / 2
+                          if (dropCwd !== group.cwd || dropAfter !== after) {
+                            setDropCwd(group.cwd)
+                            setDropAfter(after)
+                          }
                         }}
                         onDragLeave={() =>
                           setDropCwd((c) => (c === group.cwd ? null : c))
                         }
                         onDrop={(e) => {
                           e.preventDefault()
-                          if (dragCwd) moveProject(dragCwd, group.cwd)
+                          if (dragCwd) moveProject(dragCwd, group.cwd, dropAfter)
                           setDragCwd(null)
                           setDropCwd(null)
                         }}
