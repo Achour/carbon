@@ -1500,11 +1500,15 @@ export class ChatManager {
             return
           }
           const effort = command.argument.toLowerCase()
-          if (!['default', 'minimal', 'low', 'medium', 'high', 'xhigh'].includes(effort)) {
+          const model = MODEL_OPTIONS.find((option) => option.id === chat.model)
+          const supported = model?.supportedEfforts ?? ['low', 'medium', 'high', 'xhigh']
+          if (effort !== 'default' && !supported.includes(effort as EffortId)) {
             this.pushCommandResult(
               chat,
               command.original,
-              'Unknown reasoning effort. Use `default`, `minimal`, `low`, `medium`, `high`, or `xhigh`.',
+              `Unsupported reasoning effort for this model. Use ${['default', ...supported]
+                .map((value) => `\`${value}\``)
+                .join(', ')}.`,
               'error'
             )
             return
@@ -1559,7 +1563,9 @@ export class ChatManager {
 
         case 'status': {
           const context =
-            chat.contextTokens != null && chat.contextWindow
+            chat.provider === 'codex'
+              ? 'Unavailable through the embedded Codex SDK'
+              : chat.contextTokens != null && chat.contextWindow
               ? `${chat.contextTokens.toLocaleString()} / ${chat.contextWindow.toLocaleString()} tokens`
               : 'Not available until a turn completes'
           this.pushCommandResult(

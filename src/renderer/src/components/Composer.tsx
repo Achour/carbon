@@ -305,20 +305,22 @@ export function Composer({
     return match ? match.id : model
   }, [modelOptions, model])
 
-  // Codex's effort/permission surfaces differ from Claude's: it has no 'max'
-  // tier or per-tool approval modes. Plan is collaboration + read-only; the
-  // remaining choices select a sandbox policy.
+  // Codex effort support is model-specific. The CLI's global config accepts
+  // more values than any one model necessarily advertises, so do not build this
+  // menu from the provider-wide SDK union.
   const isCodex = provider === 'codex'
-  // Each provider gets exactly the effort values its SDK accepts. An unset
-  // effort defers to that provider's config rather than implying explicit High.
+  const selectedModelOption = modelOptions.find((option) => option.id === selectedModel)
+  const codexEfforts = new Set(
+    selectedModelOption?.supportedEfforts ?? ['low', 'medium', 'high', 'xhigh']
+  )
   const effortOptions = isCodex
-    ? EFFORT_OPTIONS.filter((e) => e.id !== 'max').map((e) =>
+    ? EFFORT_OPTIONS.filter((e) => e.id === '' || codexEfforts.has(e.id as EffortId)).map((e) =>
         e.id === '' ? { ...e, description: 'Uses your Codex config' } : e
       )
-    : EFFORT_OPTIONS.filter((e) => e.id !== 'minimal').map((e) =>
+    : EFFORT_OPTIONS.filter((e) => e.id !== 'minimal' && e.id !== 'ultra').map((e) =>
         e.id === '' ? { ...e, description: 'Uses your Claude Code config' } : e
       )
-  const invalidEffort = (isCodex && effort === 'max') || (!isCodex && effort === 'minimal')
+  const invalidEffort = effort !== '' && !effortOptions.some((option) => option.id === effort)
   const effortValue = invalidEffort ? '' : effort
 
   // New-chat can switch providers with an effort already selected. Normalize

@@ -49,9 +49,9 @@ import {
 
 const OUTPUT_CAP = 100_000
 
-// Fallback context window when the selected Codex model isn't in MODEL_OPTIONS
-// (per-model windows live there). The gpt-5.6 family is 1,050,000 tokens.
-const CODEX_CONTEXT_WINDOW = 1_050_000
+// Used only for an unknown/config-selected model. Explicit models carry their
+// advertised window in MODEL_OPTIONS.
+const CODEX_CONTEXT_WINDOW = 272_000
 
 interface PendingTurn {
   input: Input
@@ -80,24 +80,19 @@ function sandboxForMode(mode: PermissionModeId): SandboxMode {
 }
 
 /**
- * Codex reasoning tops out at 'xhigh'. '' (app default) defers to ~/.codex config.
- * 'max' is a Claude-only tier the composer never offers for Codex — a chat can
- * only carry it as leftover inherited state, and the composer displays that as
- * "Default", so map it to undefined here too. Mapping it to 'xhigh' instead would
- * silently send X-High while the UI reads "Default".
+ * An unset effort defers to ~/.codex/config.toml. The SDK's current TypeScript
+ * union lags the CLI model catalog for max/ultra, but its runtime forwards this
+ * string directly as model_reasoning_effort.
  */
 function effortForCodex(effort?: EffortId): ModelReasoningEffort | undefined {
   switch (effort) {
-    case 'minimal':
-      return 'minimal'
     case 'low':
-      return 'low'
     case 'medium':
-      return 'medium'
     case 'high':
-      return 'high'
     case 'xhigh':
-      return 'xhigh'
+    case 'max':
+    case 'ultra':
+      return effort as ModelReasoningEffort
     default:
       return undefined
   }
@@ -209,6 +204,16 @@ export class CodexSession implements AgentSession {
     private onDead: () => void
   ) {
     this.threadId = chat.sessionId ?? null
+    // Codex's turn.completed usage is cumulative across every model call made
+    // during the turn. It is useful for turn statistics, but it is not the
+    // number of tokens currently occupying the model's context window and can
+    // legitimately exceed that window. Clear values persisted by older builds
+    // so the renderer does not show a misleading context meter.
+    if (chat.contextTokens != null) {
+      chat.contextTokens = undefined
+      this.emit({ type: 'meta', chatId: chat.id, patch: { contextTokens: undefined } })
+      this.store.saveChatSoon(chat.id)
+    }
     void this.onDead
     cleanupStaleTempFiles()
   }
@@ -609,13 +614,6 @@ export class CodexSession implements AgentSession {
 
   private onTurnCompleted(usage: Usage | null): void {
     this.surfaceTurnImages()
-    // input_tokens is the full prompt of the completed turn — i.e. what now
-    // occupies the context window.
-    const total = usage?.input_tokens ?? 0
-    if (total > 0 && total !== this.chat.contextTokens) {
-      this.chat.contextTokens = total
-      this.emit({ type: 'meta', chatId: this.chat.id, patch: { contextTokens: total } })
-    }
     const window = this.contextWindow()
     if (this.chat.contextWindow !== window) {
       this.chat.contextWindow = window

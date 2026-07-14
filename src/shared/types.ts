@@ -2,9 +2,9 @@ export type Provider = 'claude' | 'codex'
 
 export type PermissionModeId = 'default' | 'acceptEdits' | 'plan' | 'auto' | 'bypassPermissions'
 
-export type EffortId = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
-export type ClaudeEffortId = Exclude<EffortId, 'minimal'>
-export type CodexEffortId = Exclude<EffortId, 'max'>
+export type EffortId = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra'
+export type ClaudeEffortId = Exclude<EffortId, 'minimal' | 'ultra'>
+export type CodexEffortId = Exclude<EffortId, 'minimal'>
 
 export const EFFORT_OPTIONS: { id: EffortId | ''; label: string; description: string }[] = [
   { id: '', label: 'Default', description: 'Uses your provider config' },
@@ -13,7 +13,8 @@ export const EFFORT_OPTIONS: { id: EffortId | ''; label: string; description: st
   { id: 'medium', label: 'Medium', description: 'Moderate thinking' },
   { id: 'high', label: 'High', description: 'Deep reasoning' },
   { id: 'xhigh', label: 'X-High', description: 'Deeper than high' },
-  { id: 'max', label: 'Max', description: 'Maximum effort, select models' }
+  { id: 'max', label: 'Max', description: 'Maximum effort, select models' },
+  { id: 'ultra', label: 'Ultra', description: 'Maximum reasoning with automatic delegation' }
 ]
 
 /** Prevent a provider-specific effort from leaking across a model/provider switch. */
@@ -30,8 +31,8 @@ export function effortForProvider(
   provider: Provider
 ): EffortId | undefined
 export function effortForProvider(effort: EffortId | undefined, provider: Provider): EffortId | undefined {
-  if (provider === 'codex' && effort === 'max') return undefined
-  if (provider === 'claude' && effort === 'minimal') return undefined
+  if (provider === 'codex' && effort === 'minimal') return undefined
+  if (provider === 'claude' && (effort === 'minimal' || effort === 'ultra')) return undefined
   return effort
 }
 
@@ -337,6 +338,8 @@ export interface ModelOption {
   resolvedModel?: string
   /** Context window in tokens, when known — feeds the composer's context ring. */
   contextWindow?: number
+  /** Reasoning levels advertised by this exact model, when known. */
+  supportedEfforts?: EffortId[]
 }
 
 /** Sentinel model id: use Codex without pinning a model (defer to ~/.codex config). */
@@ -348,10 +351,31 @@ export const MODEL_OPTIONS: ModelOption[] = [
   { id: 'claude-opus-4-8', label: 'Opus 4.8', description: 'Powerful all-rounder', provider: 'claude' },
   { id: 'claude-sonnet-5', label: 'Sonnet 5', description: 'Fast and capable', provider: 'claude' },
   { id: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5', description: 'Fastest', provider: 'claude' },
-  { id: 'codex-default', label: 'Codex (default)', description: 'Model from your Codex config', provider: 'codex', contextWindow: 1_050_000 },
-  { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', description: 'OpenAI Codex', provider: 'codex', contextWindow: 1_050_000 },
-  { id: 'gpt-5.6-terra', label: 'GPT-5.6 Terra', description: 'OpenAI Codex', provider: 'codex', contextWindow: 1_050_000 },
-  { id: 'gpt-5.6-luna', label: 'GPT-5.6 Luna', description: 'OpenAI Codex', provider: 'codex', contextWindow: 1_050_000 }
+  { id: 'codex-default', label: 'Codex (default)', description: 'Model from your Codex config', provider: 'codex' },
+  {
+    id: 'gpt-5.6-sol',
+    label: 'GPT-5.6 Sol',
+    description: 'OpenAI Codex',
+    provider: 'codex',
+    contextWindow: 272_000,
+    supportedEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra']
+  },
+  {
+    id: 'gpt-5.6-terra',
+    label: 'GPT-5.6 Terra',
+    description: 'OpenAI Codex',
+    provider: 'codex',
+    contextWindow: 272_000,
+    supportedEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra']
+  },
+  {
+    id: 'gpt-5.6-luna',
+    label: 'GPT-5.6 Luna',
+    description: 'OpenAI Codex',
+    provider: 'codex',
+    contextWindow: 272_000,
+    supportedEfforts: ['low', 'medium', 'high', 'xhigh', 'max']
+  }
 ]
 
 /**
