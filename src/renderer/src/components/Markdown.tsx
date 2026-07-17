@@ -7,7 +7,6 @@ import mermaid from 'mermaid'
 import { Check, Code2, Copy, Maximize2, RotateCcw, X, ZoomIn, ZoomOut } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useApp } from '@/store'
-import { THEMES } from '@/lib/themes'
 import { getImageEpoch, readImageOnce, subscribeImageEpoch } from '@/lib/imageCache'
 
 /** Project folder used to resolve relative file paths in inline code. */
@@ -167,11 +166,7 @@ function DiagramLightbox({ svg, onClose }: { svg: string; onClose: () => void })
  * parse errors, and worst case is exactly what we showed before.
  */
 function MermaidBlock({ code }: { code: string }): React.JSX.Element {
-  const theme = useApp((s) => s.theme)
-  const isDark = React.useMemo(
-    () => THEMES.find((t) => t.id === theme)?.appearance !== 'light',
-    [theme]
-  )
+  const isDark = useApp((s) => s.resolvedAppearance === 'dark')
   const rawId = React.useId()
   const id = React.useMemo(() => 'mmd' + rawId.replace(/[^a-zA-Z0-9]/g, ''), [rawId])
   const [svg, setSvg] = React.useState<string | null>(null)

@@ -128,8 +128,8 @@ function createWindow(): void {
     show: false,
     titleBarStyle: 'hidden',
     trafficLightPosition: { x: 13, y: 12 },
-    // Cursor uses a 25% black backing for its dark glass theme. applyVibrancy
-    // switches this to transparent white when the renderer reports a light theme.
+    // Cursor uses a 25% black backing for its dark glass theme. The renderer
+    // switches this to transparent white when it resolves a light appearance.
     backgroundColor: mac ? '#40000000' : '#1c1c1c',
     ...(mac
       ? { vibrancy: 'sidebar' as const, visualEffectState: 'active' as const }
@@ -231,18 +231,19 @@ function createWindow(): void {
   }
 }
 
-// Translucent-sidebar effect (macOS only). The vibrancy material is created with
-// the window and never removed; the renderer reveals or hides it purely in CSS.
-// The one thing that must happen natively is aligning the material's (and the
-// native chrome's) light/dark with the app theme while the effect is on — an
-// out-of-appearance material bleeds the wrong tone through the sidebar. When off,
-// hand the appearance back to the system.
-function applyVibrancy(enabled: boolean, dark: boolean): void {
+// Align native chrome and dialogs with the renderer's resolved appearance.
+// The vibrancy material is created with the window and revealed through CSS;
+// keeping nativeTheme aligned also prevents the wrong material tone bleeding
+// through the translucent sidebar.
+function applyWindowAppearance(
+  mode: 'dark' | 'light' | 'system',
+  resolvedDark: boolean
+): void {
   if (process.platform !== 'darwin') return
-  nativeTheme.themeSource = enabled ? (dark ? 'dark' : 'light') : 'system'
+  nativeTheme.themeSource = mode
   // Match Cursor's native glass backing. The opaque renderer layer covers this
   // everywhere except the sidebar, so changing it cannot tint the work area.
-  win?.setBackgroundColor(dark ? '#40000000' : '#00FFFFFF')
+  win?.setBackgroundColor(resolvedDark ? '#40000000' : '#00FFFFFF')
 }
 
 function buildMenu(): void {
@@ -403,8 +404,10 @@ function registerIpc(): void {
 
   ipcMain.handle('app:forget-dir', (_e, dir: string) => store.forgetDir(dir))
 
-  ipcMain.handle('window:set-vibrancy', (_e, enabled: boolean, dark: boolean) =>
-    applyVibrancy(enabled, dark)
+  ipcMain.handle(
+    'window:set-appearance',
+    (_e, mode: 'dark' | 'light' | 'system', resolvedDark: boolean) =>
+      applyWindowAppearance(mode, resolvedDark)
   )
 
   ipcMain.handle('app:focus-window', () => {

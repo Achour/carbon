@@ -660,11 +660,14 @@ export interface Api {
   /** Bring the app window to the foreground (notification clicks). */
   focusWindow(): Promise<void>
   /**
-   * Toggle the native macOS window vibrancy behind a translucent sidebar.
-   * `dark` aligns the material (and native chrome) with the app theme's
-   * appearance. No-op off macOS.
+   * Align native macOS chrome and vibrancy with the app's appearance.
+   * `resolvedDark` supplies the current material tone while System mode stays
+   * attached to OS appearance changes. No-op off macOS.
    */
-  setWindowVibrancy(enabled: boolean, dark: boolean): Promise<void>
+  setWindowAppearance(
+    mode: 'dark' | 'light' | 'system',
+    resolvedDark: boolean
+  ): Promise<void>
   /** Host platform (e.g. 'darwin'); gates macOS-only appearance options. */
   readonly platform: string
   // ---- Terminal ----

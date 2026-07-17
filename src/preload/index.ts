@@ -81,8 +81,8 @@ const api: Api = {
   getDefaults: () => ipcRenderer.invoke('app:get-defaults'),
   forgetDir: (dir: string) => ipcRenderer.invoke('app:forget-dir', dir),
   focusWindow: () => ipcRenderer.invoke('app:focus-window'),
-  setWindowVibrancy: (enabled: boolean, dark: boolean) =>
-    ipcRenderer.invoke('window:set-vibrancy', enabled, dark),
+  setWindowAppearance: (mode: 'dark' | 'light' | 'system', resolvedDark: boolean) =>
+    ipcRenderer.invoke('window:set-appearance', mode, resolvedDark),
   platform: process.platform,
   terminalCreate: (opts: TerminalCreateOpts) => ipcRenderer.invoke('terminal:create', opts),
   terminalWrite: (id: string, data: string) => ipcRenderer.invoke('terminal:write', id, data),

@@ -1,7 +1,30 @@
 import * as React from 'react'
-import { Bell, Check, Info, MessageSquare, Minus, Moon, Palette, Plus, Sun, X } from 'lucide-react'
+import { Select } from '@base-ui/react/select'
+import {
+  Bell,
+  Check,
+  ChevronDown,
+  Info,
+  MessageSquare,
+  Minus,
+  Monitor,
+  Moon,
+  Palette,
+  Plus,
+  Sun,
+  X
+} from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { CODE_FONT_DEFAULT, CODE_FONT_MAX, CODE_FONT_MIN, THEMES, type ThemeDef } from '@/lib/themes'
+import {
+  CODE_FONT_DEFAULT,
+  CODE_FONT_MAX,
+  CODE_FONT_MIN,
+  THEMES,
+  varsForAppearance,
+  type ResolvedAppearance,
+  type ThemeDef,
+  type ThemeMode
+} from '@/lib/themes'
 import { playChime } from '@/lib/notify'
 import {
   CHATS_PER_PROJECT_DEFAULT,
@@ -150,9 +173,56 @@ function Toggle({
   )
 }
 
-/** Miniature app mock rendered with the theme's own palette. */
-function ThemePreview({ theme }: { theme: ThemeDef }): React.JSX.Element {
-  const v = (name: string): string => theme.vars[name]
+const THEME_MODES = [
+  { id: 'dark', label: 'Dark', icon: Moon },
+  { id: 'light', label: 'Light', icon: Sun },
+  { id: 'system', label: 'System', icon: Monitor }
+] as const
+
+function ThemeModePicker({
+  value,
+  onChange
+}: {
+  value: ThemeMode
+  onChange: (mode: ThemeMode) => void
+}): React.JSX.Element {
+  return (
+    <div
+      role="group"
+      aria-label="Color mode"
+      className="grid grid-cols-3 gap-1 rounded-xl bg-secondary p-1"
+    >
+      {THEME_MODES.map((option) => (
+        <button
+          key={option.id}
+          type="button"
+          aria-pressed={value === option.id}
+          onClick={() => onChange(option.id)}
+          className={cn(
+            'flex h-8 items-center justify-center gap-1.5 rounded-lg px-2.5 text-xs font-medium outline-none transition-all focus-visible:ring-2 focus-visible:ring-ring',
+            value === option.id
+              ? 'bg-background text-foreground shadow-sm'
+              : 'text-muted-foreground hover:text-foreground'
+          )}
+        >
+          <option.icon className="size-3.5" />
+          {option.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+/** Miniature app mock rendered with the theme's resolved light/dark palette. */
+function ThemePreview({
+  theme,
+  appearance
+}: {
+  theme: ThemeDef
+  appearance: ResolvedAppearance
+}): React.JSX.Element {
+  const vars = varsForAppearance(theme, appearance)
+  const v = (name: string): string => vars[name]
   return (
     <div
       className="pointer-events-none h-24 w-full overflow-hidden rounded-lg border"
@@ -196,69 +266,95 @@ function ThemePreview({ theme }: { theme: ThemeDef }): React.JSX.Element {
   )
 }
 
-function ThemeCard({
+function ThemeSwatch({
   theme,
-  selected,
-  onSelect
+  appearance,
+  compact = false
 }: {
   theme: ThemeDef
-  selected: boolean
-  onSelect: () => void
+  appearance: ResolvedAppearance
+  compact?: boolean
 }): React.JSX.Element {
+  const vars = varsForAppearance(theme, appearance)
   return (
-    <button
-      type="button"
-      onClick={onSelect}
-      aria-pressed={selected}
+    <span
       className={cn(
-        'rounded-xl border p-1.5 text-left transition-all',
-        selected
-          ? 'border-primary/60 ring-2 ring-primary/25'
-          : 'border-border hover:border-muted-foreground/40'
+        'grid shrink-0 place-items-center rounded-lg border font-semibold',
+        compact ? 'size-7 text-[11px]' : 'size-9 text-sm'
       )}
+      style={{
+        background: vars['code-bg'],
+        borderColor: vars.border,
+        color: vars.primary
+      }}
+      aria-hidden="true"
     >
-      <ThemePreview theme={theme} />
-      <div className="flex items-center gap-1.5 px-1 pt-1.5 pb-0.5">
-        {theme.appearance === 'dark' ? (
-          <Moon className="size-3 text-muted-foreground" />
-        ) : (
-          <Sun className="size-3 text-muted-foreground" />
-        )}
-        <span className="text-xs font-medium">{theme.name}</span>
-        {selected && <Check className="ml-auto size-3.5 text-primary" strokeWidth={2.5} />}
-      </div>
-    </button>
+      Aa
+    </span>
   )
 }
 
-function ThemeGroup({
-  label,
-  themes,
-  current,
+function ThemePicker({
+  theme,
+  appearance,
   onSelect
 }: {
-  label: string
-  themes: ThemeDef[]
-  current: string
+  theme: ThemeDef
+  appearance: ResolvedAppearance
   onSelect: (id: string) => void
 }): React.JSX.Element {
   return (
-    <div>
-      <div className="mb-2 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
-        {label}
-      </div>
-      <div className="grid grid-cols-2 gap-3">
-        {themes.map((t) => (
-          <ThemeCard key={t.id} theme={t} selected={t.id === current} onSelect={() => onSelect(t.id)} />
-        ))}
-      </div>
-    </div>
+    <Select.Root
+      items={THEMES.map((candidate) => ({ value: candidate.id, label: candidate.name }))}
+      value={theme.id}
+      onValueChange={(value) => onSelect(value as string)}
+    >
+      <Select.Trigger
+        data-theme-picker
+        className="flex h-11 w-56 items-center gap-2 rounded-xl border border-input bg-card px-2.5 text-left outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring data-[popup-open]:bg-accent"
+      >
+        <ThemeSwatch theme={theme} appearance={appearance} compact />
+        <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{theme.name}</span>
+        <Select.Icon>
+          <ChevronDown className="size-4 text-muted-foreground" />
+        </Select.Icon>
+      </Select.Trigger>
+      <Select.Portal>
+        <Select.Positioner
+          side="bottom"
+          align="end"
+          sideOffset={6}
+          collisionPadding={12}
+          className="z-50 outline-none"
+          alignItemWithTrigger={false}
+        >
+          <Select.Popup className="max-h-[min(440px,var(--available-height))] w-72 overflow-y-auto overscroll-contain rounded-2xl border border-border bg-popover p-2 text-popover-foreground shadow-2xl outline-none transition-all duration-150 data-[ending-style]:scale-95 data-[ending-style]:opacity-0 data-[starting-style]:scale-95 data-[starting-style]:opacity-0">
+            {THEMES.map((candidate) => (
+              <Select.Item
+                key={candidate.id}
+                value={candidate.id}
+                className="grid cursor-default grid-cols-[2.25rem_1fr_1rem] items-center gap-2 rounded-xl px-2 py-1.5 text-sm outline-none data-[highlighted]:bg-accent"
+              >
+                <ThemeSwatch theme={candidate} appearance={appearance} compact />
+                <Select.ItemText>{candidate.name}</Select.ItemText>
+                <Select.ItemIndicator>
+                  <Check className="size-4" strokeWidth={2.5} />
+                </Select.ItemIndicator>
+              </Select.Item>
+            ))}
+          </Select.Popup>
+        </Select.Positioner>
+      </Select.Portal>
+    </Select.Root>
   )
 }
 
 export function Settings(): React.JSX.Element {
   const theme = useApp((s) => s.theme)
   const setTheme = useApp((s) => s.setTheme)
+  const themeMode = useApp((s) => s.themeMode)
+  const setThemeMode = useApp((s) => s.setThemeMode)
+  const resolvedAppearance = useApp((s) => s.resolvedAppearance)
   const closeSettings = useApp((s) => s.closeSettings)
   const notifyPrefs = useApp((s) => s.notifyPrefs)
   const setNotifyPrefs = useApp((s) => s.setNotifyPrefs)
@@ -268,6 +364,7 @@ export function Settings(): React.JSX.Element {
   const setTranslucentSidebar = useApp((s) => s.setTranslucentSidebar)
   const chatsPerProject = useApp((s) => s.chatsPerProject)
   const setChatsPerProject = useApp((s) => s.setChatsPerProject)
+  const selectedTheme = THEMES.find((candidate) => candidate.id === theme) ?? THEMES[0]
 
   const [section, setSection] = React.useState<SectionId>('appearance')
 
@@ -325,21 +422,35 @@ export function Settings(): React.JSX.Element {
                 <SectionHeader
                   icon={Palette}
                   title="Appearance"
-                  description="Pick a theme for the whole app. Changes apply instantly."
+                  description="Choose a color mode and theme. Changes apply instantly."
                 />
-                <div className="space-y-6 px-2">
-                  <ThemeGroup
-                    label="Dark"
-                    themes={THEMES.filter((t) => t.appearance === 'dark')}
-                    current={theme}
-                    onSelect={setTheme}
-                  />
-                  <ThemeGroup
-                    label="Light"
-                    themes={THEMES.filter((t) => t.appearance === 'light')}
-                    current={theme}
-                    onSelect={setTheme}
-                  />
+                <div className="mx-2 rounded-2xl border border-border bg-card/35 p-3">
+                  <div className="flex items-center gap-4">
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[13px] font-medium">Color mode</div>
+                      <div className="mt-0.5 text-xs text-muted-foreground">
+                        System follows your device appearance
+                      </div>
+                    </div>
+                    <ThemeModePicker value={themeMode} onChange={setThemeMode} />
+                  </div>
+                  <div className="my-3 h-px bg-border" />
+                  <div className="flex items-center gap-4">
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[13px] font-medium">App theme</div>
+                      <div className="mt-0.5 text-xs text-muted-foreground">
+                        Carbon plus 27 Codex-inspired palettes
+                      </div>
+                    </div>
+                    <ThemePicker
+                      theme={selectedTheme}
+                      appearance={resolvedAppearance}
+                      onSelect={setTheme}
+                    />
+                  </div>
+                  <div className="mt-3">
+                    <ThemePreview theme={selectedTheme} appearance={resolvedAppearance} />
+                  </div>
                 </div>
 
                 {window.api.platform === 'darwin' && (

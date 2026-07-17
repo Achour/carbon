@@ -5,12 +5,19 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Karbun</title>
     <script>
-      // Themes are applied in the renderer; only the dark/light class must be
-      // set before first paint. Falls back to the pre-registry 'theme' key.
-      const appearance =
-        localStorage.getItem('themeAppearance') ??
-        (localStorage.getItem('theme') === 'light' ? 'light' : 'dark')
-      if (appearance === 'dark') document.documentElement.classList.add('dark')
+      // Resolve the saved mode before first paint. The renderer installs the
+      // selected palette immediately afterward and keeps System mode live.
+      ;(() => {
+        const saved = localStorage.getItem('themeMode')
+        const mode = saved === 'light' || saved === 'system' ? saved : 'dark'
+        const dark =
+          mode === 'dark' ||
+          (mode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+        const appearance = dark ? 'dark' : 'light'
+        document.documentElement.dataset.appearance = appearance
+        document.documentElement.classList.toggle('dark', dark)
+        document.documentElement.style.colorScheme = appearance
+      })()
     </script>
   </head>
   <body>

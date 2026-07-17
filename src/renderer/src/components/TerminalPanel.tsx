@@ -39,29 +39,51 @@ function cssVarColor(name: string, fallback: string): string {
 }
 
 function themeColors(): ITheme {
+  const dark = document.documentElement.classList.contains('dark')
+  const ansi = dark
+    ? {
+        black: '#3b3b3b',
+        red: '#e06c75',
+        green: '#98c379',
+        yellow: '#e5c07b',
+        blue: '#61afef',
+        magenta: '#c678dd',
+        cyan: '#56b6c2',
+        white: '#d7dae0',
+        brightBlack: '#6b6b6b',
+        brightRed: '#e06c75',
+        brightGreen: '#98c379',
+        brightYellow: '#e5c07b',
+        brightBlue: '#61afef',
+        brightMagenta: '#c678dd',
+        brightCyan: '#56b6c2',
+        brightWhite: '#ffffff'
+      }
+    : {
+        black: '#24292f',
+        red: '#cf222e',
+        green: '#116329',
+        yellow: '#7d4e00',
+        blue: '#0969da',
+        magenta: '#8250df',
+        cyan: '#1b7c83',
+        white: '#57606a',
+        brightBlack: '#6e7781',
+        brightRed: '#a40e26',
+        brightGreen: '#1a7f37',
+        brightYellow: '#9a6700',
+        brightBlue: '#0550ae',
+        brightMagenta: '#6639ba',
+        brightCyan: '#0a6870',
+        brightWhite: '#24292f'
+      }
   return {
     background: cssVarColor('--code-bg', '#1c1c1c'),
     foreground: cssVarColor('--foreground', '#e4e4e4'),
     cursor: cssVarColor('--primary', '#e4e4e4'),
     cursorAccent: cssVarColor('--code-bg', '#1c1c1c'),
     selectionBackground: cssVarColor('--accent', '#3a3a3a'),
-    // A neutral-friendly ANSI palette (One Dark-ish) that reads on dark backgrounds.
-    black: '#3b3b3b',
-    red: '#e06c75',
-    green: '#98c379',
-    yellow: '#e5c07b',
-    blue: '#61afef',
-    magenta: '#c678dd',
-    cyan: '#56b6c2',
-    white: '#d7dae0',
-    brightBlack: '#6b6b6b',
-    brightRed: '#e06c75',
-    brightGreen: '#98c379',
-    brightYellow: '#e5c07b',
-    brightBlue: '#61afef',
-    brightMagenta: '#c678dd',
-    brightCyan: '#56b6c2',
-    brightWhite: '#ffffff'
+    ...ansi
   }
 }
 
@@ -181,7 +203,10 @@ export function TerminalPane({ id, active }: { id: string; active: boolean }): R
       term.options.theme = themeColors()
       term.options.fontSize = codeFontSize()
     })
-    mo.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
+    mo.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-theme', 'data-appearance']
+    })
 
     spawn()
     term.focus()

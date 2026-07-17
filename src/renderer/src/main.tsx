@@ -13,13 +13,17 @@ import {
   installThemes,
   storedCodeFontSize,
   storedTheme,
+  storedThemeMode,
   storedTranslucent
 } from './lib/themes'
 
 installThemes()
-applyTheme(storedTheme())
+applyTheme(storedTheme(), storedThemeMode())
 applyCodeFontSize(storedCodeFontSize())
 applyTranslucent(storedTranslucent())
+
+const systemAppearance = window.matchMedia('(prefers-color-scheme: dark)')
+systemAppearance.addEventListener('change', () => useApp.getState().syncSystemAppearance())
 
 const syncWindowActivity = (): void => {
   document.documentElement.dataset.windowActive = String(

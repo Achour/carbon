@@ -2,497 +2,529 @@
  * Theme registry — the single source of truth for app themes.
  *
  * Each theme is a full set of the CSS custom properties consumed by
- * index.css / Tailwind tokens. `installThemes` injects one
- * `:root[data-theme='…']` block per theme; the attribute selector outranks
- * the `:root` / `.dark` fallback blocks in index.css, so those only matter
- * before the first `applyTheme` call.
+ * index.css / Tailwind. `installThemes` injects one data-attribute block per
+ * theme so switching themes never requires a renderer reload.
  */
 
 export interface ThemeDef {
   id: string
   name: string
-  appearance: 'dark' | 'light'
-  /** CSS custom properties, keyed without the leading `--`. */
+  /** Dark-mode CSS custom properties, keyed without the leading `--`. */
   vars: Record<string, string>
+  /** Light-mode counterpart; keeps this theme's accent identity. */
+  lightVars: Record<string, string>
+}
+
+export type ThemeMode = 'dark' | 'light' | 'system'
+export type ResolvedAppearance = 'dark' | 'light'
+
+interface DarkThemePalette {
+  id: string
+  name: string
+  background: string
+  surface: string
+  surfaceRaised: string
+  sidebar: string
+  code: string
+  foreground: string
+  mutedForeground: string
+  primary: string
+  primaryForeground?: string
+  border?: string
 }
 
 const darkBase = {
-  destructive: 'oklch(0.62 0.19 27)',
-  'destructive-foreground': 'oklch(0.97 0.01 80)',
-  success: 'oklch(0.72 0.14 150)',
-  warning: 'oklch(0.78 0.14 75)'
+  destructive: '#ef6a67',
+  'destructive-foreground': '#fff7f2',
+  success: '#72c48f',
+  warning: '#e5b567'
 }
 
-const lightBase = {
-  destructive: 'oklch(0.55 0.21 27)',
-  'destructive-foreground': 'oklch(0.985 0.01 80)',
-  success: 'oklch(0.6 0.13 150)',
-  warning: 'oklch(0.72 0.15 75)'
+function lightThemeVars(accent: string): Record<string, string> {
+  const primary = `color-mix(in oklab, ${accent} 68%, #111827)`
+  return {
+    background: `color-mix(in oklab, ${accent} 2%, #fbfbfc)`,
+    foreground: '#202124',
+    card: '#ffffff',
+    'card-foreground': '#202124',
+    popover: '#ffffff',
+    'popover-foreground': '#202124',
+    primary,
+    'primary-foreground': '#ffffff',
+    secondary: `color-mix(in oklab, ${accent} 5%, #f1f3f5)`,
+    'secondary-foreground': '#292b2f',
+    muted: `color-mix(in oklab, ${accent} 4%, #f3f4f6)`,
+    'muted-foreground': '#666b73',
+    accent: `color-mix(in oklab, ${accent} 9%, #edf0f3)`,
+    'accent-foreground': '#202124',
+    destructive: '#cf222e',
+    'destructive-foreground': '#ffffff',
+    border: `color-mix(in oklab, ${accent} 8%, #daddE2)`,
+    input: `color-mix(in oklab, ${accent} 10%, #d4d7dc)`,
+    ring: `color-mix(in oklab, ${accent} 42%, transparent)`,
+    sidebar: `color-mix(in oklab, ${accent} 4%, #f5f6f8)`,
+    'sidebar-foreground': '#303238',
+    'sidebar-accent': `color-mix(in oklab, ${accent} 9%, #e9ecef)`,
+    'sidebar-border': `color-mix(in oklab, ${accent} 8%, #daddE2)`,
+    'code-bg': `color-mix(in oklab, ${accent} 3%, #f2f3f5)`,
+    success: '#238636',
+    warning: '#9a6700'
+  }
 }
 
-export const THEMES: ThemeDef[] = [
-  {
-    id: 'graphite',
-    name: 'Graphite',
-    appearance: 'dark',
+function darkTheme(palette: DarkThemePalette): ThemeDef {
+  const border = palette.border ?? 'rgb(255 255 255 / 9%)'
+  return {
+    id: palette.id,
+    name: palette.name,
     vars: {
-      background: 'oklch(0.221 0.004 100)',
-      foreground: 'oklch(0.923 0.006 90)',
-      card: 'oklch(0.248 0.004 100)',
-      'card-foreground': 'oklch(0.923 0.006 90)',
-      popover: 'oklch(0.26 0.004 100)',
-      'popover-foreground': 'oklch(0.923 0.006 90)',
-      primary: 'oklch(0.66 0.125 40)',
-      'primary-foreground': 'oklch(0.18 0.01 60)',
-      secondary: 'oklch(0.285 0.005 100)',
-      'secondary-foreground': 'oklch(0.9 0.006 90)',
-      muted: 'oklch(0.27 0.004 100)',
-      'muted-foreground': 'oklch(0.63 0.008 85)',
-      accent: 'oklch(0.29 0.005 100)',
-      'accent-foreground': 'oklch(0.923 0.006 90)',
-      border: 'oklch(1 0 0 / 8.5%)',
-      input: 'oklch(1 0 0 / 12%)',
-      ring: 'oklch(0.66 0.125 40 / 50%)',
-      sidebar: 'oklch(0.199 0.004 100)',
-      'sidebar-foreground': 'oklch(0.86 0.006 90)',
-      'sidebar-accent': 'oklch(0.262 0.005 100)',
-      'sidebar-border': 'oklch(1 0 0 / 7%)',
-      'code-bg': 'oklch(0.185 0.004 100)',
+      background: palette.background,
+      foreground: palette.foreground,
+      card: palette.surface,
+      'card-foreground': palette.foreground,
+      popover: palette.surfaceRaised,
+      'popover-foreground': palette.foreground,
+      primary: palette.primary,
+      'primary-foreground': palette.primaryForeground ?? palette.background,
+      secondary: palette.surfaceRaised,
+      'secondary-foreground': palette.foreground,
+      muted: palette.surface,
+      'muted-foreground': palette.mutedForeground,
+      accent: palette.surfaceRaised,
+      'accent-foreground': palette.foreground,
+      border,
+      input: 'rgb(255 255 255 / 13%)',
+      ring: `color-mix(in oklab, ${palette.primary} 52%, transparent)`,
+      sidebar: palette.sidebar,
+      'sidebar-foreground': palette.foreground,
+      'sidebar-accent': palette.surface,
+      'sidebar-border': border,
+      'code-bg': palette.code,
       ...darkBase
-    }
+    },
+    lightVars: lightThemeVars(palette.primary)
+  }
+}
+
+/**
+ * Carbon is intentionally kept byte-for-byte equivalent to the original
+ * neutral palette. It remains the default and the first item in the picker.
+ */
+const carbonTheme: ThemeDef = {
+  id: 'carbon',
+  name: 'Carbon',
+  vars: {
+    background: 'oklch(0.2 0 0)',
+    foreground: 'oklch(0.93 0 0)',
+    card: 'oklch(0.23 0 0)',
+    'card-foreground': 'oklch(0.93 0 0)',
+    popover: 'oklch(0.245 0 0)',
+    'popover-foreground': 'oklch(0.93 0 0)',
+    primary: 'oklch(0.93 0 0)',
+    'primary-foreground': 'oklch(0.2 0 0)',
+    secondary: 'oklch(0.27 0 0)',
+    'secondary-foreground': 'oklch(0.9 0 0)',
+    muted: 'oklch(0.255 0 0)',
+    'muted-foreground': 'oklch(0.62 0 0)',
+    accent: 'oklch(0.275 0 0)',
+    'accent-foreground': 'oklch(0.93 0 0)',
+    border: 'oklch(1 0 0 / 9%)',
+    input: 'oklch(1 0 0 / 12%)',
+    ring: 'oklch(0.93 0 0 / 40%)',
+    sidebar: 'oklch(0.178 0 0)',
+    'sidebar-foreground': 'oklch(0.86 0 0)',
+    'sidebar-accent': 'oklch(0.246 0 0)',
+    'sidebar-border': 'oklch(1 0 0 / 7%)',
+    'code-bg': 'oklch(0.165 0 0)',
+    destructive: 'oklch(0.62 0.19 27)',
+    'destructive-foreground': 'oklch(0.97 0.01 80)',
+    success: 'oklch(0.72 0.14 150)',
+    warning: 'oklch(0.78 0.14 75)'
   },
-  {
-    id: 'midnight',
-    name: 'Midnight',
-    appearance: 'dark',
-    vars: {
-      background: 'oklch(0.215 0.018 260)',
-      foreground: 'oklch(0.92 0.008 250)',
-      card: 'oklch(0.243 0.02 260)',
-      'card-foreground': 'oklch(0.92 0.008 250)',
-      popover: 'oklch(0.255 0.02 260)',
-      'popover-foreground': 'oklch(0.92 0.008 250)',
-      primary: 'oklch(0.69 0.115 250)',
-      'primary-foreground': 'oklch(0.16 0.02 260)',
-      secondary: 'oklch(0.28 0.022 260)',
-      'secondary-foreground': 'oklch(0.9 0.008 250)',
-      muted: 'oklch(0.265 0.02 260)',
-      'muted-foreground': 'oklch(0.63 0.015 250)',
-      accent: 'oklch(0.285 0.024 260)',
-      'accent-foreground': 'oklch(0.92 0.008 250)',
-      border: 'oklch(1 0 0 / 9%)',
-      input: 'oklch(1 0 0 / 12%)',
-      ring: 'oklch(0.69 0.115 250 / 50%)',
-      sidebar: 'oklch(0.193 0.017 260)',
-      'sidebar-foreground': 'oklch(0.86 0.008 250)',
-      'sidebar-accent': 'oklch(0.257 0.02 260)',
-      'sidebar-border': 'oklch(1 0 0 / 7%)',
-      'code-bg': 'oklch(0.18 0.016 260)',
-      ...darkBase
-    }
-  },
-  {
-    id: 'dusk',
-    name: 'Dusk',
-    appearance: 'dark',
-    vars: {
-      background: 'oklch(0.222 0.014 325)',
-      foreground: 'oklch(0.92 0.01 340)',
-      card: 'oklch(0.25 0.016 325)',
-      'card-foreground': 'oklch(0.92 0.01 340)',
-      popover: 'oklch(0.262 0.016 325)',
-      'popover-foreground': 'oklch(0.92 0.01 340)',
-      primary: 'oklch(0.71 0.105 15)',
-      'primary-foreground': 'oklch(0.17 0.015 340)',
-      secondary: 'oklch(0.287 0.018 325)',
-      'secondary-foreground': 'oklch(0.9 0.01 340)',
-      muted: 'oklch(0.27 0.015 325)',
-      'muted-foreground': 'oklch(0.635 0.015 330)',
-      accent: 'oklch(0.292 0.019 325)',
-      'accent-foreground': 'oklch(0.92 0.01 340)',
-      border: 'oklch(1 0 0 / 8.5%)',
-      input: 'oklch(1 0 0 / 12%)',
-      ring: 'oklch(0.71 0.105 15 / 50%)',
-      sidebar: 'oklch(0.2 0.013 325)',
-      'sidebar-foreground': 'oklch(0.86 0.01 340)',
-      'sidebar-accent': 'oklch(0.263 0.017 325)',
-      'sidebar-border': 'oklch(1 0 0 / 7%)',
-      'code-bg': 'oklch(0.186 0.013 325)',
-      ...darkBase
-    }
-  },
-  {
-    id: 'carbon',
-    name: 'Carbon',
-    appearance: 'dark',
-    vars: {
-      background: 'oklch(0.2 0 0)',
-      foreground: 'oklch(0.93 0 0)',
-      card: 'oklch(0.23 0 0)',
-      'card-foreground': 'oklch(0.93 0 0)',
-      popover: 'oklch(0.245 0 0)',
-      'popover-foreground': 'oklch(0.93 0 0)',
-      primary: 'oklch(0.93 0 0)',
-      'primary-foreground': 'oklch(0.2 0 0)',
-      secondary: 'oklch(0.27 0 0)',
-      'secondary-foreground': 'oklch(0.9 0 0)',
-      muted: 'oklch(0.255 0 0)',
-      'muted-foreground': 'oklch(0.62 0 0)',
-      accent: 'oklch(0.275 0 0)',
-      'accent-foreground': 'oklch(0.93 0 0)',
-      border: 'oklch(1 0 0 / 9%)',
-      input: 'oklch(1 0 0 / 12%)',
-      ring: 'oklch(0.93 0 0 / 40%)',
-      sidebar: 'oklch(0.178 0 0)',
-      'sidebar-foreground': 'oklch(0.86 0 0)',
-      'sidebar-accent': 'oklch(0.246 0 0)',
-      'sidebar-border': 'oklch(1 0 0 / 7%)',
-      'code-bg': 'oklch(0.165 0 0)',
-      ...darkBase
-    }
-  },
-  // Carbon color variants — the exact Carbon neutral base, only the primary
-  // accent (and matching focus ring) is swapped for a vibrant hue.
-  ...(
-    [
-      { id: 'carbon-blue', name: 'Carbon Blue', primary: 'oklch(0.62 0.2 258)', onPrimary: 'oklch(0.98 0 0)' },
-      { id: 'carbon-violet', name: 'Carbon Violet', primary: 'oklch(0.58 0.22 292)', onPrimary: 'oklch(0.98 0 0)' },
-      { id: 'carbon-pink', name: 'Carbon Pink', primary: 'oklch(0.65 0.24 340)', onPrimary: 'oklch(0.98 0 0)' },
-      { id: 'carbon-rose', name: 'Carbon Rose', primary: 'oklch(0.64 0.22 18)', onPrimary: 'oklch(0.98 0 0)' },
-      { id: 'carbon-amber', name: 'Carbon Amber', primary: 'oklch(0.77 0.15 72)', onPrimary: 'oklch(0.2 0 0)' },
-      { id: 'carbon-lime', name: 'Carbon Lime', primary: 'oklch(0.82 0.19 128)', onPrimary: 'oklch(0.2 0 0)' },
-      { id: 'carbon-emerald', name: 'Carbon Emerald', primary: 'oklch(0.7 0.16 160)', onPrimary: 'oklch(0.2 0 0)' },
-      { id: 'carbon-cyan', name: 'Carbon Cyan', primary: 'oklch(0.74 0.13 205)', onPrimary: 'oklch(0.2 0 0)' }
-    ] as const
-  ).map(
-    (c): ThemeDef => ({
-      id: c.id,
-      name: c.name,
-      appearance: 'dark',
-      vars: {
-        background: 'oklch(0.2 0 0)',
-        foreground: 'oklch(0.93 0 0)',
-        card: 'oklch(0.23 0 0)',
-        'card-foreground': 'oklch(0.93 0 0)',
-        popover: 'oklch(0.245 0 0)',
-        'popover-foreground': 'oklch(0.93 0 0)',
-        primary: c.primary,
-        'primary-foreground': c.onPrimary,
-        secondary: 'oklch(0.27 0 0)',
-        'secondary-foreground': 'oklch(0.9 0 0)',
-        muted: 'oklch(0.255 0 0)',
-        'muted-foreground': 'oklch(0.62 0 0)',
-        accent: 'oklch(0.275 0 0)',
-        'accent-foreground': 'oklch(0.93 0 0)',
-        border: 'oklch(1 0 0 / 9%)',
-        input: 'oklch(1 0 0 / 12%)',
-        ring: c.primary.replace(')', ' / 45%)'),
-        sidebar: 'oklch(0.178 0 0)',
-        'sidebar-foreground': 'oklch(0.86 0 0)',
-        'sidebar-accent': 'oklch(0.246 0 0)',
-        'sidebar-border': 'oklch(1 0 0 / 7%)',
-        'code-bg': 'oklch(0.165 0 0)',
-        ...darkBase
-      }
-    })
-  ),
-  {
+  lightVars: lightThemeVars('#5f6368')
+}
+
+const codexThemes: ThemeDef[] = [
+  darkTheme({
+    id: 'absolutely',
+    name: 'Absolutely',
+    background: '#1f1f1e',
+    surface: '#2a2927',
+    surfaceRaised: '#373431',
+    sidebar: '#191918',
+    code: '#151514',
+    foreground: '#f4f1ed',
+    mutedForeground: '#aaa39b',
+    primary: '#db8b70'
+  }),
+  darkTheme({
+    id: 'ayu',
+    name: 'Ayu',
+    background: '#0b0e14',
+    surface: '#11151c',
+    surfaceRaised: '#1b202a',
+    sidebar: '#070a0f',
+    code: '#080b10',
+    foreground: '#bfbdb6',
+    mutedForeground: '#6c7380',
+    primary: '#e6b450'
+  }),
+  darkTheme({
+    id: 'catppuccin',
+    name: 'Catppuccin',
+    background: '#1e1e2e',
+    surface: '#313244',
+    surfaceRaised: '#45475a',
+    sidebar: '#181825',
+    code: '#11111b',
+    foreground: '#cdd6f4',
+    mutedForeground: '#7f849c',
+    primary: '#cba6f7'
+  }),
+  darkTheme({
+    id: 'codex',
+    name: 'Codex',
+    background: '#111214',
+    surface: '#1c1e22',
+    surfaceRaised: '#292c31',
+    sidebar: '#0c0d0f',
+    code: '#08090b',
+    foreground: '#f3f4f6',
+    mutedForeground: '#8b9099',
+    primary: '#3b82f6',
+    primaryForeground: '#ffffff'
+  }),
+  darkTheme({
+    id: 'dracula',
+    name: 'Dracula',
+    background: '#282a36',
+    surface: '#343746',
+    surfaceRaised: '#44475a',
+    sidebar: '#21222c',
+    code: '#191a21',
+    foreground: '#f8f8f2',
+    mutedForeground: '#9da0b3',
+    primary: '#ff79c6'
+  }),
+  darkTheme({
+    id: 'everforest',
+    name: 'Everforest',
+    background: '#2d353b',
+    surface: '#343f44',
+    surfaceRaised: '#3d484d',
+    sidebar: '#272e33',
+    code: '#232a2e',
+    foreground: '#d3c6aa',
+    mutedForeground: '#859289',
+    primary: '#a7c080'
+  }),
+  darkTheme({
+    id: 'github',
+    name: 'GitHub',
+    background: '#0d1117',
+    surface: '#161b22',
+    surfaceRaised: '#21262d',
+    sidebar: '#010409',
+    code: '#090c10',
+    foreground: '#e6edf3',
+    mutedForeground: '#7d8590',
+    primary: '#2f81f7',
+    primaryForeground: '#ffffff',
+    border: '#30363d'
+  }),
+  darkTheme({
+    id: 'gruvbox',
+    name: 'Gruvbox',
+    background: '#282828',
+    surface: '#3c3836',
+    surfaceRaised: '#504945',
+    sidebar: '#1d2021',
+    code: '#1d2021',
+    foreground: '#ebdbb2',
+    mutedForeground: '#a89984',
+    primary: '#83a598'
+  }),
+  darkTheme({
+    id: 'linear',
+    name: 'Linear',
+    background: '#111113',
+    surface: '#1b1b1f',
+    surfaceRaised: '#28282f',
+    sidebar: '#0b0b0d',
+    code: '#09090b',
+    foreground: '#f5f5f6',
+    mutedForeground: '#8b8b95',
+    primary: '#7c6df2',
+    primaryForeground: '#ffffff'
+  }),
+  darkTheme({
+    id: 'lobster',
+    name: 'Lobster',
+    background: '#111827',
+    surface: '#1f2937',
+    surfaceRaised: '#303b4e',
+    sidebar: '#0b1220',
+    code: '#080e19',
+    foreground: '#f8fafc',
+    mutedForeground: '#8d99ab',
+    primary: '#ff6b6b'
+  }),
+  darkTheme({
+    id: 'material',
+    name: 'Material',
+    background: '#212121',
+    surface: '#2b2b2b',
+    surfaceRaised: '#383838',
+    sidebar: '#191919',
+    code: '#151515',
+    foreground: '#eeffff',
+    mutedForeground: '#9e9e9e',
+    primary: '#80cbc4'
+  }),
+  darkTheme({
+    id: 'matrix',
+    name: 'Matrix',
+    background: '#020806',
+    surface: '#07120d',
+    surfaceRaised: '#0b1d13',
+    sidebar: '#000302',
+    code: '#000000',
+    foreground: '#b9ffd1',
+    mutedForeground: '#4f8b63',
+    primary: '#63ff87'
+  }),
+  darkTheme({
+    id: 'monokai',
+    name: 'Monokai',
+    background: '#272822',
+    surface: '#34352d',
+    surfaceRaised: '#41423a',
+    sidebar: '#1e1f1a',
+    code: '#181915',
+    foreground: '#f8f8f2',
+    mutedForeground: '#a5a58d',
+    primary: '#e6db74'
+  }),
+  darkTheme({
+    id: 'night-owl',
+    name: 'Night Owl',
+    background: '#011627',
+    surface: '#0b253a',
+    surfaceRaised: '#12344b',
+    sidebar: '#01111d',
+    code: '#00101b',
+    foreground: '#d6deeb',
+    mutedForeground: '#637777',
+    primary: '#82aaff'
+  }),
+  darkTheme({
     id: 'nord',
     name: 'Nord',
-    appearance: 'dark',
-    vars: {
-      background: 'oklch(0.223 0.012 255)',
-      foreground: 'oklch(0.925 0.008 250)',
-      card: 'oklch(0.252 0.013 255)',
-      'card-foreground': 'oklch(0.925 0.008 250)',
-      popover: 'oklch(0.264 0.013 255)',
-      'popover-foreground': 'oklch(0.925 0.008 250)',
-      primary: 'oklch(0.74 0.09 225)',
-      'primary-foreground': 'oklch(0.18 0.02 255)',
-      secondary: 'oklch(0.29 0.014 255)',
-      'secondary-foreground': 'oklch(0.9 0.008 250)',
-      muted: 'oklch(0.272 0.013 255)',
-      'muted-foreground': 'oklch(0.66 0.012 250)',
-      accent: 'oklch(0.3 0.015 255)',
-      'accent-foreground': 'oklch(0.925 0.008 250)',
-      border: 'oklch(1 0 0 / 9%)',
-      input: 'oklch(1 0 0 / 12%)',
-      ring: 'oklch(0.74 0.09 225 / 50%)',
-      sidebar: 'oklch(0.2 0.011 255)',
-      'sidebar-foreground': 'oklch(0.86 0.008 250)',
-      'sidebar-accent': 'oklch(0.264 0.013 255)',
-      'sidebar-border': 'oklch(1 0 0 / 7%)',
-      'code-bg': 'oklch(0.188 0.011 255)',
-      ...darkBase
-    }
-  },
-  {
-    id: 'forest',
-    name: 'Forest',
-    appearance: 'dark',
-    vars: {
-      background: 'oklch(0.222 0.012 155)',
-      foreground: 'oklch(0.92 0.01 140)',
-      card: 'oklch(0.25 0.013 155)',
-      'card-foreground': 'oklch(0.92 0.01 140)',
-      popover: 'oklch(0.262 0.013 155)',
-      'popover-foreground': 'oklch(0.92 0.01 140)',
-      primary: 'oklch(0.75 0.115 145)',
-      'primary-foreground': 'oklch(0.17 0.02 150)',
-      secondary: 'oklch(0.287 0.015 155)',
-      'secondary-foreground': 'oklch(0.9 0.01 140)',
-      muted: 'oklch(0.27 0.013 155)',
-      'muted-foreground': 'oklch(0.64 0.015 150)',
-      accent: 'oklch(0.293 0.016 155)',
-      'accent-foreground': 'oklch(0.92 0.01 140)',
-      border: 'oklch(1 0 0 / 8.5%)',
-      input: 'oklch(1 0 0 / 12%)',
-      ring: 'oklch(0.75 0.115 145 / 50%)',
-      sidebar: 'oklch(0.2 0.011 155)',
-      'sidebar-foreground': 'oklch(0.86 0.01 140)',
-      'sidebar-accent': 'oklch(0.262 0.014 155)',
-      'sidebar-border': 'oklch(1 0 0 / 7%)',
-      'code-bg': 'oklch(0.187 0.011 155)',
-      ...darkBase
-    }
-  },
-  {
-    id: 'rose',
-    name: 'Rosé',
-    appearance: 'dark',
-    vars: {
-      background: 'oklch(0.21 0.018 305)',
-      foreground: 'oklch(0.9 0.012 310)',
-      card: 'oklch(0.238 0.02 305)',
-      'card-foreground': 'oklch(0.9 0.012 310)',
-      popover: 'oklch(0.25 0.02 305)',
-      'popover-foreground': 'oklch(0.9 0.012 310)',
-      primary: 'oklch(0.77 0.07 25)',
-      'primary-foreground': 'oklch(0.18 0.015 305)',
-      secondary: 'oklch(0.278 0.022 305)',
-      'secondary-foreground': 'oklch(0.88 0.012 310)',
-      muted: 'oklch(0.262 0.02 305)',
-      'muted-foreground': 'oklch(0.63 0.016 305)',
-      accent: 'oklch(0.285 0.024 305)',
-      'accent-foreground': 'oklch(0.9 0.012 310)',
-      border: 'oklch(1 0 0 / 8.5%)',
-      input: 'oklch(1 0 0 / 12%)',
-      ring: 'oklch(0.77 0.07 25 / 50%)',
-      sidebar: 'oklch(0.186 0.016 305)',
-      'sidebar-foreground': 'oklch(0.85 0.012 310)',
-      'sidebar-accent': 'oklch(0.252 0.02 305)',
-      'sidebar-border': 'oklch(1 0 0 / 7%)',
-      'code-bg': 'oklch(0.175 0.015 305)',
-      ...darkBase
-    }
-  },
-  {
-    id: 'solar',
-    name: 'Solar',
-    appearance: 'dark',
-    vars: {
-      background: 'oklch(0.235 0.03 210)',
-      foreground: 'oklch(0.87 0.018 195)',
-      card: 'oklch(0.262 0.032 210)',
-      'card-foreground': 'oklch(0.87 0.018 195)',
-      popover: 'oklch(0.274 0.032 210)',
-      'popover-foreground': 'oklch(0.87 0.018 195)',
-      primary: 'oklch(0.68 0.13 245)',
-      'primary-foreground': 'oklch(0.16 0.02 210)',
-      secondary: 'oklch(0.3 0.03 210)',
-      'secondary-foreground': 'oklch(0.86 0.018 195)',
-      muted: 'oklch(0.28 0.03 210)',
-      'muted-foreground': 'oklch(0.66 0.025 205)',
-      accent: 'oklch(0.305 0.032 210)',
-      'accent-foreground': 'oklch(0.87 0.018 195)',
-      border: 'oklch(1 0 0 / 9%)',
-      input: 'oklch(1 0 0 / 12%)',
-      ring: 'oklch(0.68 0.13 245 / 50%)',
-      sidebar: 'oklch(0.21 0.028 210)',
-      'sidebar-foreground': 'oklch(0.82 0.018 195)',
-      'sidebar-accent': 'oklch(0.272 0.032 210)',
-      'sidebar-border': 'oklch(1 0 0 / 7%)',
-      'code-bg': 'oklch(0.2 0.028 210)',
-      ...darkBase
-    }
-  },
-  {
-    id: 'ember',
-    name: 'Ember',
-    appearance: 'dark',
-    vars: {
-      background: 'oklch(0.215 0.008 45)',
-      foreground: 'oklch(0.92 0.01 60)',
-      card: 'oklch(0.244 0.009 45)',
-      'card-foreground': 'oklch(0.92 0.01 60)',
-      popover: 'oklch(0.256 0.009 45)',
-      'popover-foreground': 'oklch(0.92 0.01 60)',
-      primary: 'oklch(0.7 0.15 45)',
-      'primary-foreground': 'oklch(0.17 0.02 45)',
-      secondary: 'oklch(0.283 0.01 45)',
-      'secondary-foreground': 'oklch(0.9 0.01 60)',
-      muted: 'oklch(0.266 0.009 45)',
-      'muted-foreground': 'oklch(0.64 0.012 50)',
-      accent: 'oklch(0.29 0.011 45)',
-      'accent-foreground': 'oklch(0.92 0.01 60)',
-      border: 'oklch(1 0 0 / 8.5%)',
-      input: 'oklch(1 0 0 / 12%)',
-      ring: 'oklch(0.7 0.15 45 / 50%)',
-      sidebar: 'oklch(0.194 0.007 45)',
-      'sidebar-foreground': 'oklch(0.86 0.01 60)',
-      'sidebar-accent': 'oklch(0.258 0.01 45)',
-      'sidebar-border': 'oklch(1 0 0 / 7%)',
-      'code-bg': 'oklch(0.18 0.007 45)',
-      ...darkBase
-    }
-  },
-  {
-    id: 'paper',
-    name: 'Paper',
-    appearance: 'light',
-    vars: {
-      background: 'oklch(0.984 0.003 90)',
-      foreground: 'oklch(0.27 0.012 60)',
-      card: 'oklch(1 0 0)',
-      'card-foreground': 'oklch(0.27 0.012 60)',
-      popover: 'oklch(1 0 0)',
-      'popover-foreground': 'oklch(0.27 0.012 60)',
-      primary: 'oklch(0.6 0.127 40)',
-      'primary-foreground': 'oklch(0.985 0.01 80)',
-      secondary: 'oklch(0.945 0.005 90)',
-      'secondary-foreground': 'oklch(0.32 0.012 60)',
-      muted: 'oklch(0.955 0.005 90)',
-      'muted-foreground': 'oklch(0.54 0.012 75)',
-      accent: 'oklch(0.938 0.006 90)',
-      'accent-foreground': 'oklch(0.27 0.012 60)',
-      border: 'oklch(0.9 0.006 90)',
-      input: 'oklch(0.9 0.006 90)',
-      ring: 'oklch(0.6 0.127 40 / 45%)',
-      sidebar: 'oklch(0.962 0.004 90)',
-      'sidebar-foreground': 'oklch(0.32 0.012 60)',
-      'sidebar-accent': 'oklch(0.922 0.006 90)',
-      'sidebar-border': 'oklch(0.9 0.006 90)',
-      'code-bg': 'oklch(0.955 0.005 90)',
-      ...lightBase
-    }
-  },
-  {
-    id: 'mist',
-    name: 'Mist',
-    appearance: 'light',
-    vars: {
-      background: 'oklch(0.978 0.003 240)',
-      foreground: 'oklch(0.27 0.015 255)',
-      card: 'oklch(1 0 0)',
-      'card-foreground': 'oklch(0.27 0.015 255)',
-      popover: 'oklch(1 0 0)',
-      'popover-foreground': 'oklch(0.27 0.015 255)',
-      primary: 'oklch(0.55 0.14 255)',
-      'primary-foreground': 'oklch(0.985 0.005 240)',
-      secondary: 'oklch(0.942 0.006 240)',
-      'secondary-foreground': 'oklch(0.32 0.015 255)',
-      muted: 'oklch(0.952 0.005 240)',
-      'muted-foreground': 'oklch(0.53 0.02 250)',
-      accent: 'oklch(0.934 0.008 240)',
-      'accent-foreground': 'oklch(0.27 0.015 255)',
-      border: 'oklch(0.898 0.008 240)',
-      input: 'oklch(0.898 0.008 240)',
-      ring: 'oklch(0.55 0.14 255 / 45%)',
-      sidebar: 'oklch(0.958 0.005 240)',
-      'sidebar-foreground': 'oklch(0.32 0.015 255)',
-      'sidebar-accent': 'oklch(0.916 0.008 240)',
-      'sidebar-border': 'oklch(0.898 0.008 240)',
-      'code-bg': 'oklch(0.952 0.005 240)',
-      ...lightBase
-    }
-  },
-  {
-    id: 'sepia',
-    name: 'Sepia',
-    appearance: 'light',
-    vars: {
-      background: 'oklch(0.96 0.012 75)',
-      foreground: 'oklch(0.3 0.02 55)',
-      card: 'oklch(0.985 0.008 75)',
-      'card-foreground': 'oklch(0.3 0.02 55)',
-      popover: 'oklch(0.985 0.008 75)',
-      'popover-foreground': 'oklch(0.3 0.02 55)',
-      primary: 'oklch(0.52 0.1 50)',
-      'primary-foreground': 'oklch(0.98 0.01 80)',
-      secondary: 'oklch(0.93 0.014 75)',
-      'secondary-foreground': 'oklch(0.34 0.02 55)',
-      muted: 'oklch(0.938 0.012 75)',
-      'muted-foreground': 'oklch(0.5 0.02 60)',
-      accent: 'oklch(0.922 0.016 75)',
-      'accent-foreground': 'oklch(0.3 0.02 55)',
-      border: 'oklch(0.88 0.014 75)',
-      input: 'oklch(0.88 0.014 75)',
-      ring: 'oklch(0.52 0.1 50 / 45%)',
-      sidebar: 'oklch(0.942 0.012 75)',
-      'sidebar-foreground': 'oklch(0.34 0.02 55)',
-      'sidebar-accent': 'oklch(0.9 0.016 75)',
-      'sidebar-border': 'oklch(0.88 0.014 75)',
-      'code-bg': 'oklch(0.938 0.012 75)',
-      ...lightBase
-    }
-  },
-  {
-    id: 'meadow',
-    name: 'Meadow',
-    appearance: 'light',
-    vars: {
-      background: 'oklch(0.976 0.008 150)',
-      foreground: 'oklch(0.28 0.02 160)',
-      card: 'oklch(1 0 0)',
-      'card-foreground': 'oklch(0.28 0.02 160)',
-      popover: 'oklch(1 0 0)',
-      'popover-foreground': 'oklch(0.28 0.02 160)',
-      primary: 'oklch(0.52 0.12 155)',
-      'primary-foreground': 'oklch(0.985 0.01 150)',
-      secondary: 'oklch(0.94 0.01 150)',
-      'secondary-foreground': 'oklch(0.32 0.02 160)',
-      muted: 'oklch(0.95 0.008 150)',
-      'muted-foreground': 'oklch(0.5 0.02 155)',
-      accent: 'oklch(0.93 0.012 150)',
-      'accent-foreground': 'oklch(0.28 0.02 160)',
-      border: 'oklch(0.9 0.012 150)',
-      input: 'oklch(0.9 0.012 150)',
-      ring: 'oklch(0.52 0.12 155 / 45%)',
-      sidebar: 'oklch(0.956 0.008 150)',
-      'sidebar-foreground': 'oklch(0.32 0.02 160)',
-      'sidebar-accent': 'oklch(0.914 0.012 150)',
-      'sidebar-border': 'oklch(0.9 0.012 150)',
-      'code-bg': 'oklch(0.95 0.008 150)',
-      ...lightBase
-    }
-  }
+    background: '#2e3440',
+    surface: '#3b4252',
+    surfaceRaised: '#434c5e',
+    sidebar: '#272c36',
+    code: '#242933',
+    foreground: '#eceff4',
+    mutedForeground: '#8b96ad',
+    primary: '#88c0d0'
+  }),
+  darkTheme({
+    id: 'notion',
+    name: 'Notion',
+    background: '#191919',
+    surface: '#242424',
+    surfaceRaised: '#303030',
+    sidebar: '#121212',
+    code: '#101010',
+    foreground: '#f7f7f5',
+    mutedForeground: '#9b9a97',
+    primary: '#529cca'
+  }),
+  darkTheme({
+    id: 'one',
+    name: 'One',
+    background: '#282c34',
+    surface: '#323842',
+    surfaceRaised: '#3e4451',
+    sidebar: '#21252b',
+    code: '#1e2227',
+    foreground: '#abb2bf',
+    mutedForeground: '#7f848e',
+    primary: '#61afef'
+  }),
+  darkTheme({
+    id: 'oscorange',
+    name: 'Oscorange',
+    background: '#0c0c0d',
+    surface: '#181719',
+    surfaceRaised: '#272429',
+    sidebar: '#060607',
+    code: '#030304',
+    foreground: '#f3eee9',
+    mutedForeground: '#8f8580',
+    primary: '#ff9b5e'
+  }),
+  darkTheme({
+    id: 'raycast',
+    name: 'Raycast',
+    background: '#171719',
+    surface: '#222225',
+    surfaceRaised: '#303034',
+    sidebar: '#101012',
+    code: '#0c0c0e',
+    foreground: '#f8f8f8',
+    mutedForeground: '#96969f',
+    primary: '#ff6363'
+  }),
+  darkTheme({
+    id: 'rose-pine',
+    name: 'Rose Pine',
+    background: '#191724',
+    surface: '#26233a',
+    surfaceRaised: '#393552',
+    sidebar: '#12101c',
+    code: '#0f0e17',
+    foreground: '#e0def4',
+    mutedForeground: '#908caa',
+    primary: '#ebbcba'
+  }),
+  darkTheme({
+    id: 'sentry',
+    name: 'Sentry',
+    background: '#181225',
+    surface: '#241b35',
+    surfaceRaised: '#34264a',
+    sidebar: '#100b19',
+    code: '#0d0915',
+    foreground: '#f5f3f7',
+    mutedForeground: '#9587a6',
+    primary: '#7553ff',
+    primaryForeground: '#ffffff'
+  }),
+  darkTheme({
+    id: 'solarized',
+    name: 'Solarized',
+    background: '#002b36',
+    surface: '#073642',
+    surfaceRaised: '#124754',
+    sidebar: '#00212a',
+    code: '#001e26',
+    foreground: '#eee8d5',
+    mutedForeground: '#839496',
+    primary: '#dc322f'
+  }),
+  darkTheme({
+    id: 'temple',
+    name: 'Temple',
+    background: '#06100c',
+    surface: '#0d1d16',
+    surfaceRaised: '#173226',
+    sidebar: '#030806',
+    code: '#010403',
+    foreground: '#e4f2c0',
+    mutedForeground: '#7f9d78',
+    primary: '#d4f542'
+  }),
+  darkTheme({
+    id: 'tokyo-night',
+    name: 'Tokyo Night',
+    background: '#1a1b26',
+    surface: '#24283b',
+    surfaceRaised: '#32364d',
+    sidebar: '#13141c',
+    code: '#101117',
+    foreground: '#c0caf5',
+    mutedForeground: '#737aa2',
+    primary: '#7aa2f7'
+  }),
+  darkTheme({
+    id: 'vercel',
+    name: 'Vercel',
+    background: '#000000',
+    surface: '#111111',
+    surfaceRaised: '#1f1f1f',
+    sidebar: '#000000',
+    code: '#000000',
+    foreground: '#ededed',
+    mutedForeground: '#888888',
+    primary: '#0070f3',
+    primaryForeground: '#ffffff',
+    border: '#2e2e2e'
+  }),
+  darkTheme({
+    id: 'vs-code-plus',
+    name: 'VS Code Plus',
+    background: '#1e1e1e',
+    surface: '#252526',
+    surfaceRaised: '#333333',
+    sidebar: '#181818',
+    code: '#151515',
+    foreground: '#d4d4d4',
+    mutedForeground: '#858585',
+    primary: '#3794ff',
+    primaryForeground: '#ffffff'
+  }),
+  darkTheme({
+    id: 'xcode',
+    name: 'Xcode',
+    background: '#1f2430',
+    surface: '#292e3a',
+    surfaceRaised: '#343b49',
+    sidebar: '#191d27',
+    code: '#151820',
+    foreground: '#d7dae0',
+    mutedForeground: '#7f8799',
+    primary: '#4da6ff'
+  })
 ]
 
+export const THEMES: ThemeDef[] = [carbonTheme, ...codexThemes]
+
 export const DEFAULT_THEME = 'carbon'
+export const DEFAULT_THEME_MODE: ThemeMode = 'dark'
 
 export function storedTheme(): string {
-  // One-time: move installs still on the previous default ('graphite') to the
-  // new default. A deliberate choice of any other theme is left untouched.
-  if (!localStorage.getItem('themeDefaultV2')) {
-    localStorage.setItem('themeDefaultV2', '1')
-    if ((localStorage.getItem('theme') ?? 'graphite') === 'graphite') {
-      localStorage.removeItem('theme')
-      localStorage.removeItem('themeAppearance')
-    }
-  }
   const raw = localStorage.getItem('theme') ?? DEFAULT_THEME
-  // Builds before the theme registry stored just 'dark' / 'light'.
-  const id = raw === 'dark' ? 'graphite' : raw === 'light' ? 'paper' : raw
-  return THEMES.some((t) => t.id === id) ? id : DEFAULT_THEME
+  // Builds before the registry stored appearance names instead of theme IDs.
+  const id = raw === 'dark' || raw === 'light' ? DEFAULT_THEME : raw
+  return THEMES.some((theme) => theme.id === id) ? id : DEFAULT_THEME
 }
 
-export function applyTheme(id: string): void {
-  const theme = THEMES.find((t) => t.id === id) ?? THEMES[0]
+export function storedThemeMode(): ThemeMode {
+  const raw = localStorage.getItem('themeMode')
+  return raw === 'dark' || raw === 'light' || raw === 'system' ? raw : DEFAULT_THEME_MODE
+}
+
+export function resolveAppearance(
+  mode: ThemeMode,
+  systemDark?: boolean
+): ResolvedAppearance {
+  if (mode !== 'system') return mode
+  const dark =
+    systemDark ?? window.matchMedia('(prefers-color-scheme: dark)').matches
+  return dark ? 'dark' : 'light'
+}
+
+export function varsForAppearance(
+  theme: ThemeDef,
+  appearance: ResolvedAppearance
+): Record<string, string> {
+  return appearance === 'dark' ? theme.vars : theme.lightVars
+}
+
+export function applyTheme(id: string, mode: ThemeMode): ResolvedAppearance {
+  const theme =
+    THEMES.find((candidate) => candidate.id === id) ??
+    THEMES.find((candidate) => candidate.id === DEFAULT_THEME)!
+  const appearance = resolveAppearance(mode)
   document.documentElement.dataset.theme = theme.id
-  document.documentElement.classList.toggle('dark', theme.appearance === 'dark')
+  document.documentElement.dataset.appearance = appearance
+  document.documentElement.classList.toggle('dark', appearance === 'dark')
+  document.documentElement.style.colorScheme = appearance
   localStorage.setItem('theme', theme.id)
-  // index.html reads this before first paint to set the `dark` class early.
-  localStorage.setItem('themeAppearance', theme.appearance)
+  localStorage.setItem('themeMode', mode)
+  return appearance
 }
 
 // Translucent sidebar (macOS vibrancy). Renderer-owned like the other
@@ -529,15 +561,21 @@ export function applyCodeFontSize(px: number): void {
   document.documentElement.style.setProperty('--code-font-size', `${px}px`)
 }
 
-/** Injects a stylesheet with one `:root[data-theme='…']` block per theme. */
+/** Injects dark and light variable blocks for every theme. */
 export function installThemes(): void {
   if (document.getElementById('theme-vars')) return
-  const css = THEMES.map(
-    (t) =>
-      `:root[data-theme='${t.id}'] {\n${Object.entries(t.vars)
-        .map(([k, v]) => `  --${k}: ${v};`)
-        .join('\n')}\n}`
-  ).join('\n')
+  const block = (
+    theme: ThemeDef,
+    appearance: ResolvedAppearance,
+    vars: Record<string, string>
+  ): string =>
+    `:root[data-theme='${theme.id}'][data-appearance='${appearance}'] {\n${Object.entries(vars)
+      .map(([key, value]) => `  --${key}: ${value};`)
+      .join('\n')}\n}`
+  const css = THEMES.flatMap((theme) => [
+    block(theme, 'dark', theme.vars),
+    block(theme, 'light', theme.lightVars)
+  ]).join('\n')
   const style = document.createElement('style')
   style.id = 'theme-vars'
   style.textContent = css

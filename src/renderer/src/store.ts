@@ -5,10 +5,13 @@ import {
   applyTranslucent,
   CODE_FONT_MAX,
   CODE_FONT_MIN,
+  resolveAppearance,
   storedCodeFontSize,
   storedTheme,
+  storedThemeMode,
   storedTranslucent
 } from '@/lib/themes'
+import type { ResolvedAppearance, ThemeMode } from '@/lib/themes'
 import { loadNotifyPrefs, notify, playChime, saveNotifyPrefs, type NotifyPrefs } from '@/lib/notify'
 import { formatCost, formatDuration } from '@/lib/format'
 import { invalidateLocalImages } from '@/lib/imageCache'
@@ -214,6 +217,8 @@ interface AppState {
   /** When true the main area shows the settings page instead of a chat. */
   settingsOpen: boolean
   theme: string
+  themeMode: ThemeMode
+  resolvedAppearance: ResolvedAppearance
   /** macOS-only: blur the desktop behind a translucent sidebar (native vibrancy). */
   translucentSidebar: boolean
   setTranslucentSidebar(on: boolean): void
@@ -222,6 +227,9 @@ interface AppState {
   openSettings(): void
   closeSettings(): void
   setTheme(id: string): void
+  setThemeMode(mode: ThemeMode): void
+  /** Re-resolve System mode after an OS appearance change. */
+  syncSystemAppearance(): void
   setCodeFontSize(px: number): void
   setNotifyPrefs(patch: Partial<NotifyPrefs>): void
   /** How many recent chats each project shows in the sidebar before search. */
@@ -487,6 +495,8 @@ export function scopedChanges(
   return changes
 }
 
+const initialThemeMode = storedThemeMode()
+
 export const useApp = create<AppState>((set, get) => ({
   chats: [],
   activeId: null,
@@ -688,6 +698,8 @@ export const useApp = create<AppState>((set, get) => ({
 
   settingsOpen: false,
   theme: storedTheme(),
+  themeMode: initialThemeMode,
+  resolvedAppearance: resolveAppearance(initialThemeMode),
 
   openSettings() {
     set({ settingsOpen: true })
@@ -698,12 +710,22 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   setTheme(id) {
-    applyTheme(id)
-    set({ theme: id })
-    // Keep the native vibrancy material aligned with the new theme's appearance.
-    if (get().translucentSidebar) {
-      void window.api.setWindowVibrancy(true, document.documentElement.classList.contains('dark'))
-    }
+    const appearance = applyTheme(id, get().themeMode)
+    set({ theme: id, resolvedAppearance: appearance })
+    void window.api.setWindowAppearance(get().themeMode, appearance === 'dark')
+  },
+
+  setThemeMode(mode) {
+    const appearance = applyTheme(get().theme, mode)
+    set({ themeMode: mode, resolvedAppearance: appearance })
+    void window.api.setWindowAppearance(mode, appearance === 'dark')
+  },
+
+  syncSystemAppearance() {
+    if (get().themeMode !== 'system') return
+    const appearance = applyTheme(get().theme, 'system')
+    set({ resolvedAppearance: appearance })
+    void window.api.setWindowAppearance('system', appearance === 'dark')
   },
 
   translucentSidebar: storedTranslucent(),
@@ -711,7 +733,6 @@ export const useApp = create<AppState>((set, get) => ({
   setTranslucentSidebar(on) {
     applyTranslucent(on)
     localStorage.setItem('translucentSidebar', String(on))
-    void window.api.setWindowVibrancy(on, document.documentElement.classList.contains('dark'))
     set({ translucentSidebar: on })
   },
 
@@ -787,10 +808,7 @@ export const useApp = create<AppState>((set, get) => ({
   async init() {
     // Sync the native window vibrancy with the stored appearance preference
     // (the CSS flag was already applied pre-paint in main.tsx).
-    void window.api.setWindowVibrancy(
-      get().translucentSidebar,
-      document.documentElement.classList.contains('dark')
-    )
+    void window.api.setWindowAppearance(get().themeMode, get().resolvedAppearance === 'dark')
     const [chats, defaults] = await Promise.all([window.api.listChats(), window.api.getDefaults()])
     set({
       chats,
