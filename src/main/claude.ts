@@ -39,6 +39,7 @@ import type { Store } from './store'
 import type { PreviewManager } from './preview'
 import { CodexSession } from './codex'
 import type { AgentSession, Emit } from './session'
+import { DeltaCoalescer } from './deltaCoalescer'
 import { TITLE_SYSTEM, buildTitlePrompt, cleanTitle, deriveTitle, firstUserText } from './titles'
 
 /**
@@ -236,6 +237,12 @@ class ClaudeSession implements AgentSession {
   private input = createInputQueue()
   private current: AssistantMessage | null = null
   private jsonAcc = new Map<number, string>()
+  // Route a tool's result (which lands on a later `user` message, matched by
+  // toolUseId) back to its streamed part. Entries are pruned the moment a result
+  // is applied (see handleToolResults) so these stay ~O(in-flight tools) instead
+  // of growing for the whole session; MAX_TOOL_LOC is a backstop for the residue
+  // of tools that never resolve (e.g. an interrupted turn's 'running' parts).
+  private static readonly MAX_TOOL_LOC = 2000
   private toolLoc = new Map<string, { message: AssistantMessage; index: number }>()
   // Sub-agent tool calls live inside a parent Task tool's `children`, not a
   // message's parts — so they need their own location map for result matching.
@@ -244,8 +251,14 @@ class ClaudeSession implements AgentSession {
   private initModel?: string
   /** Exact model name of the most recent assistant turn; keys into modelUsage. */
   private lastTurnModel?: string
-  private deltaBuf = new Map<string, { messageId: string; partIndex: number; text: string }>()
-  private flushTimer: NodeJS.Timeout | null = null
+  // Coalesces streaming deltas (~80ms) before IPC. Deps are read lazily so this
+  // field initializer doesn't depend on when `emit`/`chat`/`store` are assigned.
+  private readonly deltas = new DeltaCoalescer(
+    (ev) => this.emit(ev),
+    () => this.chat.id,
+    () => this.store.saveChatSoon(this.chat.id),
+    () => this.disposed
+  )
   // Resolves once the SDK `init` message arrives (or the session dies), so
   // control requests (mcp status, models, account, usage) issued right after a
   // lazily-started session wait for the CLI to be ready instead of racing it.
@@ -357,36 +370,8 @@ class ClaudeSession implements AgentSession {
     this.onCommands(commands)
   }
 
-  /**
-   * Streaming deltas are coalesced for ~80ms before being sent over IPC —
-   * per-token renders make long thinking phases feel like the UI hangs.
-   */
-  private queueDelta(messageId: string, partIndex: number, delta: string): void {
-    const key = `${messageId}:${partIndex}`
-    const buffered = this.deltaBuf.get(key)
-    if (buffered) buffered.text += delta
-    else this.deltaBuf.set(key, { messageId, partIndex, text: delta })
-    this.flushTimer ??= setTimeout(() => this.flushDeltas(), 80)
-    this.store.saveChatSoon(this.chat.id)
-  }
-
-  private flushDeltas(): void {
-    if (this.flushTimer) {
-      clearTimeout(this.flushTimer)
-      this.flushTimer = null
-    }
-    if (this.disposed) {
-      this.deltaBuf.clear()
-      return
-    }
-    for (const { messageId, partIndex, text } of this.deltaBuf.values()) {
-      this.emit({ type: 'part-delta', chatId: this.chat.id, messageId, partIndex, delta: text })
-    }
-    this.deltaBuf.clear()
-  }
-
   private pushMessage(message: ChatData['messages'][number]): void {
-    this.flushDeltas()
+    this.deltas.flush()
     this.chat.messages.push(message)
     this.chat.updatedAt = Date.now()
     this.emit({ type: 'message', chatId: this.chat.id, message })
@@ -762,7 +747,7 @@ class ClaudeSession implements AgentSession {
     this.resolveReady()
     // Background tasks are per-process; the next session starts with none.
     this.emitBackgroundJobs([])
-    this.flushDeltas()
+    this.deltas.flush()
     this.denyAllPending(true)
     this.input.end()
     try {
@@ -1060,7 +1045,7 @@ class ClaudeSession implements AgentSession {
   }
 
   private emitPart(message: AssistantMessage, index: number): void {
-    this.flushDeltas()
+    this.deltas.flush()
     this.emit({
       type: 'part',
       chatId: this.chat.id,
@@ -1133,6 +1118,7 @@ class ClaudeSession implements AgentSession {
         message.parts[index] = part
         if (part.type === 'tool') {
           this.toolLoc.set(part.toolUseId, { message, index })
+          this.capMap(this.toolLoc)
         }
         this.emitPart(message, index)
         break
@@ -1152,10 +1138,10 @@ class ClaudeSession implements AgentSession {
         }
         if (delta.type === 'text_delta' && part.type === 'text') {
           part.text += delta.text ?? ''
-          this.queueDelta(message.id, index, delta.text ?? '')
+          this.deltas.queue(message.id, index, delta.text ?? '')
         } else if (delta.type === 'thinking_delta' && part.type === 'thinking') {
           part.text += delta.thinking ?? ''
-          this.queueDelta(message.id, index, delta.thinking ?? '')
+          this.deltas.queue(message.id, index, delta.thinking ?? '')
         } else if (delta.type === 'input_json_delta') {
           this.jsonAcc.set(index, (this.jsonAcc.get(index) ?? '') + (delta.partial_json ?? ''))
         }
@@ -1215,6 +1201,15 @@ class ClaudeSession implements AgentSession {
     if (typeof model === 'string' && model) this.lastTurnModel = model
     this.updateContext((msg.message as { usage?: unknown }).usage)
     const message = this.ensureCurrent()
+    // Index the already-streamed tool parts of THIS message by id, so a result
+    // that somehow landed before the final assistant message is carried across
+    // the wholesale replace below. Read them from the message's own parts rather
+    // than toolLoc — whose entries are pruned as results land — so pruning can't
+    // strand this lookup.
+    const priorTools = new Map<string, ToolPart>()
+    for (const part of message.parts) {
+      if (part?.type === 'tool') priorTools.set(part.toolUseId, part)
+    }
     const parts: AssistantPart[] = []
     for (const block of msg.message.content as unknown as Array<Record<string, unknown>>) {
       const type = block.type as string
@@ -1226,9 +1221,7 @@ class ClaudeSession implements AgentSession {
         parts.push({ type: 'thinking', text: '[Thinking redacted]' })
       } else if (type === 'tool_use' || type === 'server_tool_use') {
         const toolUseId = block.id as string
-        const existing = this.toolLoc.get(toolUseId)?.message.parts[
-          this.toolLoc.get(toolUseId)!.index
-        ] as ToolPart | undefined
+        const existing = priorTools.get(toolUseId)
         parts.push({
           type: 'tool',
           toolUseId,
@@ -1252,7 +1245,8 @@ class ClaudeSession implements AgentSession {
         const part = parts[i]
         if (part.type === 'tool') this.toolLoc.set(part.toolUseId, { message, index: i })
       }
-      this.flushDeltas()
+      this.capMap(this.toolLoc)
+      this.deltas.flush()
       this.emit({ type: 'message', chatId: this.chat.id, message })
     }
     this.chat.updatedAt = Date.now()
@@ -1281,7 +1275,7 @@ class ClaudeSession implements AgentSession {
       part.output = output.length > 100_000 ? `${output.slice(0, 100_000)}\n… (truncated)` : output
       part.outputImages = extractImages(block.content)
       if (!part.denied) part.status = block.is_error ? 'error' : 'success'
-      this.flushDeltas()
+      this.deltas.flush()
       this.emit({
         type: 'tool-update',
         chatId: this.chat.id,
@@ -1295,6 +1289,11 @@ class ClaudeSession implements AgentSession {
         }
       })
       this.store.saveChatSoon(this.chat.id)
+      // Result applied — the routing entry is dead weight now. A tool's result
+      // arrives exactly once, after the assistant message that declared it (and
+      // for a Task tool, after all its sub-agent traffic), so nothing reads this
+      // id again. The stored ToolPart keeps its output; only the map entry goes.
+      this.toolLoc.delete(block.tool_use_id)
     }
   }
 
@@ -1308,7 +1307,7 @@ class ClaudeSession implements AgentSession {
   }
 
   private emitChildUpdate(messageId: string, parent: ToolPart): void {
-    this.flushDeltas()
+    this.deltas.flush()
     this.emit({
       type: 'tool-update',
       chatId: this.chat.id,
@@ -1351,6 +1350,7 @@ class ClaudeSession implements AgentSession {
           children[existing.index] = { ...children[existing.index], ...childPart }
         } else {
           this.childToolLoc.set(toolUseId, { parent: parent.part, index: children.length })
+          this.capMap(this.childToolLoc)
           children.push(childPart)
         }
       }
@@ -1387,6 +1387,9 @@ class ClaudeSession implements AgentSession {
         status: block.is_error ? 'error' : 'success'
       }
       changed = true
+      // A sub-agent tool's result arrives once, after its assistant block; the
+      // child part now holds the output, so the routing entry is dead weight.
+      this.childToolLoc.delete(block.tool_use_id)
     }
     if (changed) this.emitChildUpdate(parent.messageId, parent.part)
   }
@@ -1406,6 +1409,20 @@ class ClaudeSession implements AgentSession {
       patch: { status: 'error', denied: true }
     })
     this.store.saveChatSoon(this.chat.id)
+  }
+
+  /**
+   * Backstop bound on a toolUseId→location map. Entries are normally deleted the
+   * instant a tool's result is applied, so this only trims the residue from
+   * tools that never resolve. Evicts oldest-first (Map preserves insertion
+   * order), so a still-pending recent entry is never the one dropped.
+   */
+  private capMap<V>(map: Map<string, V>): void {
+    while (map.size > ClaudeSession.MAX_TOOL_LOC) {
+      const oldest = map.keys().next().value
+      if (oldest === undefined) break
+      map.delete(oldest)
+    }
   }
 }
 

@@ -40,6 +40,7 @@ import type {
 } from '@shared/types'
 import type { Store } from './store'
 import type { AgentSession, Emit } from './session'
+import { DeltaCoalescer } from './deltaCoalescer.ts'
 import { IMAGE_EXT, pickTurnImages } from './imageScan.ts'
 import { isMissingCodexThreadError } from './codexResume.ts'
 import { parseCodexPlan, promptForCodexMode } from './codexMode.ts'
@@ -76,7 +77,7 @@ interface PendingTurn {
 }
 
 /**
- * Karbun's permission modes map onto Codex's sandbox policy. The Codex SDK runs
+ * Carbon's permission modes map onto Codex's sandbox policy. The Codex SDK runs
  * `codex exec` non-interactively — it exposes no per-tool approval callback (see
  * ThreadEvent, which has no approval event) — so we pick a sandbox up front
  * rather than prompting mid-turn, and always run with `approvalPolicy: 'never'`.
@@ -233,11 +234,26 @@ export class CodexSession implements AgentSession {
   // the before/after diff is the reliable fallback when the final message is
   // empty and no shell command mentions the saved path.
   private generatedBeforeTurn = new Map<string, number>()
-  /** Synthetic ExitPlanMode request used to reuse Karbun's plan-review UI. */
+  /** Synthetic ExitPlanMode request used to reuse Carbon's plan-review UI. */
   private planReview: PersistedPlanReview | null = null
   private activeTurn: PendingTurn | null = null
   private interrupted = false
   private lastEmittedStatus: ChatStatus | null = null
+  // ---- Streaming text coalescing (mirrors ClaudeSession) ----
+  // reasoning/agent_message items arrive as the full accumulated text on every
+  // SDK update. Emit the part once, then only the appended suffix as coalesced
+  // `part-delta`s, so a k-chunk block costs O(k) IPC bytes instead of O(k²).
+  // Coalesces the appended suffixes (~80ms) into `part-delta`s. Deps are read
+  // lazily so this field initializer is independent of constructor ordering.
+  private readonly deltas = new DeltaCoalescer(
+    (ev) => this.emit(ev),
+    () => this.chat.id,
+    () => this.store.saveChatSoon(this.chat.id),
+    () => this.disposed
+  )
+  // Last full text emitted per streaming slot (`${messageId}:${partIndex}`), so
+  // the next update can be diffed down to its appended suffix.
+  private lastText = new Map<string, string>()
   dead = false
   private disposed = false
   // One-shot AI title guards — see ClaudeSession for the rationale. `titledResumed`
@@ -293,6 +309,7 @@ export class CodexSession implements AgentSession {
   }
 
   private pushMessage(message: ChatData['messages'][number]): void {
+    this.deltas.flush()
     this.chat.messages.push(message)
     this.chat.updatedAt = Date.now()
     this.emit({ type: 'message', chatId: this.chat.id, message })
@@ -314,14 +331,29 @@ export class CodexSession implements AgentSession {
   }
 
   private emitPart(message: AssistantMessage, index: number): void {
+    const part = message.parts[index]
+    // A full-part emit is authoritative: drop any buffered streaming delta for
+    // this slot and re-baseline its text so later deltas append onto exactly this
+    // part (not onto a suffix the renderer never received).
+    this.deltas.drop(message.id, index)
+    const key = this.deltaKey(message.id, index)
+    if (part && (part.type === 'text' || part.type === 'thinking')) {
+      this.lastText.set(key, part.text)
+    } else {
+      this.lastText.delete(key)
+    }
     this.emit({
       type: 'part',
       chatId: this.chat.id,
       messageId: message.id,
       partIndex: index,
-      part: message.parts[index]
+      part
     })
     this.store.saveChatSoon(this.chat.id)
+  }
+
+  private deltaKey(messageId: string, index: number): string {
+    return `${messageId}:${index}`
   }
 
   // ---------- Sending ----------
@@ -380,7 +412,7 @@ export class CodexSession implements AgentSession {
     for (const a of attachments) {
       if ((a.kind === 'image' || a.kind === 'element') && a.data && a.mediaType) {
         // Codex takes images by file path, so materialize base64 blobs to temp
-        // files (Karbun's dropped/pasted images have no path of their own). The
+        // files (Carbon's dropped/pasted images have no path of their own). The
         // copy is deleted once the turn that consumes it finishes (see runTurn).
         const path = writeTempImage(a.mediaType, a.data)
         if (path) {
@@ -425,7 +457,7 @@ export class CodexSession implements AgentSession {
     return {
       model,
       workingDirectory: this.chat.cwd,
-      // Karbun opens arbitrary folders (not always git repos); don't block on it.
+      // Carbon opens arbitrary folders (not always git repos); don't block on it.
       skipGitRepoCheck: true,
       sandboxMode: sandboxForMode(permissionMode),
       approvalPolicy: 'never',
@@ -512,6 +544,7 @@ export class CodexSession implements AgentSession {
     this.activeUserMessageId = turn.userMessageId
     this.activeTurn = turn
     this.itemLoc.clear()
+    this.lastText.clear()
     this.codexAgents.clear()
     this.codexChildTools.clear()
     this.clearCodexJobs()
@@ -535,7 +568,7 @@ export class CodexSession implements AgentSession {
           }
           break
         } catch (err) {
-          // Karbun persists the Codex thread id, while the corresponding rollout
+          // Carbon persists the Codex thread id, while the corresponding rollout
           // lives separately under ~/.codex/sessions. If that file was cleaned or
           // moved, retry this same prompt once in a fresh thread rather than
           // permanently poisoning the chat with an unusable resume id.
@@ -560,6 +593,9 @@ export class CodexSession implements AgentSession {
       // Event handlers called above populate `current`; TS cannot see mutation
       // through those method calls, so retain the runtime value explicitly.
       const completedMessage = this.current as AssistantMessage | null
+      // Emit any trailing streaming text before the turn winds down; item.completed
+      // usually reconciles each slot already, but an interrupt can end mid-stream.
+      this.deltas.flush()
       // Consume records flushed immediately before turn.completed, then detach
       // before `current` is cleared so no late poll can target the next turn.
       await this.rolloutWatcher.flush()
@@ -570,6 +606,7 @@ export class CodexSession implements AgentSession {
       this.activeUserMessageId = null
       this.activeTurn = null
       this.itemLoc.clear()
+      this.lastText.clear()
       this.abort = null
       // The SDK consumed any temp attachment copies at turn start — drop them now
       // rather than holding them for the session's lifetime.
@@ -669,7 +706,7 @@ export class CodexSession implements AgentSession {
       id: randomUUID(),
       role: 'event',
       kind: 'info',
-      text: 'The saved Codex thread was unavailable, so Karbun started a fresh Codex session.',
+      text: 'The saved Codex thread was unavailable, so Carbon started a fresh Codex session.',
       ts: Date.now()
     })
     this.setStatus('starting')
@@ -876,13 +913,42 @@ export class CodexSession implements AgentSession {
     const loc = this.itemLoc.get(item.id)
     if (loc) {
       loc.message.parts[loc.index] = part
+      // reasoning/agent_message blocks re-send the full accumulated text on every
+      // update; while streaming, emit only the appended suffix as a delta. Any
+      // non-streaming or diverged update falls through to an authoritative part.
+      if (!terminal && this.emitStreamingDelta(loc.message, loc.index, item, part)) return
       this.emitPart(loc.message, loc.index)
     } else {
       const index = message.parts.length
       message.parts[index] = part
       this.itemLoc.set(item.id, { message, index })
+      // First sighting sends a full part so the renderer has a slot to append into.
       this.emitPart(message, index)
     }
+  }
+
+  /**
+   * If `item` is a still-streaming reasoning/agent_message block, emit only the
+   * text appended since the last emit as a coalesced `part-delta` and return true.
+   * Returns false when a full-part emit is required — a non-text item, or text
+   * that did not grow as a pure suffix (e.g. a rewrite) — so the caller reconciles
+   * the slot with an authoritative `part`.
+   */
+  private emitStreamingDelta(
+    message: AssistantMessage,
+    index: number,
+    item: ThreadItem,
+    part: AssistantPart
+  ): boolean {
+    if (item.type !== 'agent_message' && item.type !== 'reasoning') return false
+    if (part.type !== 'text' && part.type !== 'thinking') return false
+    const key = this.deltaKey(message.id, index)
+    const prev = this.lastText.get(key)
+    if (prev == null || !part.text.startsWith(prev)) return false
+    const delta = part.text.slice(prev.length)
+    this.lastText.set(key, part.text)
+    if (delta) this.deltas.queue(message.id, index, delta)
+    return true
   }
 
   private ensureCodexAgent(
@@ -1404,6 +1470,9 @@ export class CodexSession implements AgentSession {
     this.disposed = true
     this.dead = true
     this.abort?.abort()
+    // disposed is now set, so this clears the coalescing timer + buffer without
+    // emitting — no leaked timer after the session is superseded.
+    this.deltas.flush()
     this.rolloutWatcher.stop()
     this.clearCodexJobs()
     // Preserve an unresolved plan in ChatData; a recreated session can continue

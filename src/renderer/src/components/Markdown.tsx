@@ -496,6 +496,13 @@ const components = {
   }
 }
 
+// Stable plugin arrays — hoisted so they aren't re-created on every render.
+// Typed via ReactMarkdown's own prop types to stay exactly compatible.
+const REMARK_PLUGINS: React.ComponentProps<typeof ReactMarkdown>['remarkPlugins'] = [remarkGfm]
+const REHYPE_PLUGINS: React.ComponentProps<typeof ReactMarkdown>['rehypePlugins'] = [
+  [rehypeHighlight, { ignoreMissing: true, detect: false }]
+]
+
 export const Markdown = React.memo(function Markdown({
   text,
   cwd = null,
@@ -509,8 +516,8 @@ export const Markdown = React.memo(function Markdown({
     <div className={cn('markdown text-[14px] leading-[1.6]', className)}>
       <MarkdownCwd.Provider value={cwd}>
         <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          rehypePlugins={[[rehypeHighlight, { ignoreMissing: true, detect: false }]]}
+          remarkPlugins={REMARK_PLUGINS}
+          rehypePlugins={REHYPE_PLUGINS}
           components={components}
         >
           {text}

@@ -254,7 +254,6 @@
   background-clip: text;
   -webkit-background-clip: text;
   color: transparent;
-  filter: blur(3px);
   animation: var(--animate-shimmer);
   user-select: none;
 }
@@ -472,6 +471,7 @@
    spinners and shimmer gradients. They resume when the app is focused. */
 :root[data-window-active='false'] .animate-spin,
 :root[data-window-active='false'] .animate-pulse,
+:root[data-window-active='false'] .animate-pulse-soft,
 :root[data-window-active='false'] .shimmer-text,
 :root[data-window-active='false'] .title-forming {
   animation-play-state: paused !important;
@@ -480,6 +480,7 @@
 @media (prefers-reduced-motion: reduce) {
   .animate-spin,
   .animate-pulse,
+  .animate-pulse-soft,
   .shimmer-text,
   .title-forming {
     animation: none !important;

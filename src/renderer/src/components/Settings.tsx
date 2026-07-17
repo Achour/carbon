@@ -542,7 +542,7 @@ export function Settings(): React.JSX.Element {
                 <SectionHeader
                   icon={Info}
                   title="About"
-                  description="Karbun — a desktop GUI for coding agents."
+                  description="Carbon — a desktop GUI for coding agents."
                 />
                 <div className="space-y-2 px-2 text-[13px] text-muted-foreground">
                   <p>

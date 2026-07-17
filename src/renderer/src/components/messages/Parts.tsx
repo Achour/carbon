@@ -19,6 +19,22 @@ import { WithTooltip } from '@/components/ui/tooltip'
 import { useApp } from '@/store'
 import { FILE_MUTATION_TOOLS, GROUPABLE_TOOLS, ToolCard, ToolGroup } from './ToolCard'
 import { TodoCard } from './TodoCard'
+import { useLatestTodo } from '@/latestTodoStore'
+
+/**
+ * Wraps `TodoCard` with an equality-selector subscription to the latest-todo
+ * store. Only this leaf re-renders when the live task list changes — the id
+ * never crosses the `AssistantBlock`/`MessageHistory` memo boundary, so history
+ * rows are untouched while an agent flips todos mid-turn.
+ */
+const LiveTodoCard = React.memo(function LiveTodoCard({
+  part
+}: {
+  part: ToolPart
+}): React.JSX.Element {
+  const live = useLatestTodo((s) => s.latestTodoId === part.toolUseId)
+  return <TodoCard part={part} live={live} />
+})
 
 /**
  * Rewind affordance on a user message: reverts the working tree to the file
@@ -212,15 +228,12 @@ export const AssistantBlock = React.memo(function AssistantBlock({
   cwd,
   streaming,
   onOpenPlan,
-  latestTodoId,
   summarizeEdits = false
 }: {
   message: AssistantMessage
   cwd: string
   streaming: boolean
   onOpenPlan?: (plan: string) => void
-  /** toolUseId of the chat's most recent TodoWrite; that card stays expanded. */
-  latestTodoId?: string | null
   /** Hide completed edit rows when the turn-level summary represents them. */
   summarizeEdits?: boolean
 }): React.JSX.Element {
@@ -288,7 +301,7 @@ export const AssistantBlock = React.memo(function AssistantBlock({
           return <ThinkingBlock key={i} text={part.text} active={streaming && isLast} />
         }
         if (part.name === 'TodoWrite') {
-          return <TodoCard key={part.toolUseId} part={part} live={part.toolUseId === latestTodoId} />
+          return <LiveTodoCard key={part.toolUseId} part={part} />
         }
         return <ToolCard key={part.toolUseId} part={part} cwd={cwd} onOpenPlan={onOpenPlan} />
       })}

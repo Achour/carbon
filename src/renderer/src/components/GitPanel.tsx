@@ -26,6 +26,7 @@ import type { GitFileChange, PrChecks, PrInfo } from '@shared/types'
 import { cn } from '@/lib/utils'
 import { handleTreeKeyDown } from '@/lib/treeKeyNav'
 import { resolveGitActions, type GitActionId } from '@/lib/gitActions'
+import { useStableChanges } from '@/lib/useStableChanges'
 import { scopedChanges, useApp } from '@/store'
 import { Button } from '@/components/ui/button'
 import {
@@ -488,10 +489,11 @@ export function GitPanel(): React.JSX.Element {
   const messages = useApp((s) => s.messages)
   const [refreshing, setRefreshing] = React.useState(false)
 
-  const changes = React.useMemo(
+  const rawChanges = React.useMemo(
     () => scopedChanges({ changeScope, git, branchChanges, activeId, chats, messages }, cwd ?? ''),
     [changeScope, git, branchChanges, activeId, chats, messages, cwd]
   )
+  const changes = useStableChanges(rawChanges)
 
   React.useEffect(() => {
     if (cwd) {

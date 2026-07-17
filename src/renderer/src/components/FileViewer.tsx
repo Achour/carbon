@@ -76,7 +76,7 @@ export const FileViewer = React.memo(function FileViewer({
       return (
         <div className="h-full select-text overflow-auto font-mono text-[length:var(--code-font-size)] leading-[1.65]">
           <div className="flex min-w-max">
-            <pre className="sticky left-0 shrink-0 border-r border-border bg-card/60 px-2.5 py-3 text-right text-muted-foreground/50 backdrop-blur">
+            <pre className="sticky left-0 shrink-0 border-r border-border bg-card px-2.5 py-3 text-right text-muted-foreground/50">
               {lines.map((_, i) => `${i + 1}\n`).join('')}
             </pre>
             {highlighted ? (

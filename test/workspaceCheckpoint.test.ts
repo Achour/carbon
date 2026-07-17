@@ -20,7 +20,7 @@ test('Codex workspace checkpoint previews, detects drift, and restores one turn'
   const cwd = await mkdtemp(join(tmpdir(), 'karbun-checkpoint-test-'))
   try {
     await git(cwd, ['init', '-q'])
-    await git(cwd, ['config', 'user.name', 'Karbun Test'])
+    await git(cwd, ['config', 'user.name', 'Carbon Test'])
     await git(cwd, ['config', 'user.email', 'karbun@example.test'])
     await writeFile(join(cwd, 'existing.txt'), 'before\n')
     await git(cwd, ['add', 'existing.txt'])

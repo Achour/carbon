@@ -1,7 +1,7 @@
 # Codex Integration — Final Verification
 
 **Review date:** 2026-07-13
-**Repository:** Karbun (`ai-gui`)
+**Repository:** Carbon (`ai-gui`)
 **Branch:** `sdk-integration-features`
 
 ## Verdict
@@ -67,7 +67,7 @@ The production dependency tree contains only main-process runtime dependencies:
 
 ## Notes
 
-- The Codex SDK does not currently expose the interactive client's collaboration-mode switch or per-tool approval callback. Karbun supplies equivalent Plan/Default turn instructions, enforces Plan mode with the read-only sandbox, and maps completed Codex proposals into the existing provider-neutral plan-review UI.
+- The Codex SDK does not currently expose the interactive client's collaboration-mode switch or per-tool approval callback. Carbon supplies equivalent Plan/Default turn instructions, enforces Plan mode with the read-only sandbox, and maps completed Codex proposals into the existing provider-neutral plan-review UI.
 - Electron Builder warns because ASAR is intentionally disabled. Both agent SDKs launch subprocess runtimes that must remain unpacked; packaged Codex, Claude, and node-pty operation were verified.
 - Chromium development cache and insecure-development-CSP messages are development-only warnings and are not Codex integration failures.
 

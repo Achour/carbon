@@ -39,7 +39,7 @@ export function promptForCodexMode(prompt: string, planMode: boolean): string {
 }
 
 export interface ParsedCodexPlan {
-  /** Markdown shown in Karbun's plan-review panel. */
+  /** Markdown shown in Carbon's plan-review panel. */
   plan: string
   /** Final assistant text with the transport-only tags removed. */
   displayText: string

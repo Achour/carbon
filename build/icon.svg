@@ -27,16 +27,13 @@
           stroke="#ffffff" stroke-opacity="0.08" stroke-width="3"/>
   </g>
 
-  <!-- carbon hex node behind the K -->
+  <!-- carbon hex node behind the C -->
   <path d="M512 302 L654 384 L654 550 L512 632 L370 550 L370 384 Z"
         fill="none" stroke="url(#mark)" stroke-opacity="0.13" stroke-width="18"
         stroke-linejoin="round"/>
 
-  <!-- K monogram: dominant vertical stem + two diagonals branching right -->
-  <g fill="url(#mark)" stroke="url(#mark)" stroke-width="84"
-     stroke-linecap="round" stroke-linejoin="round">
-    <rect x="350" y="322" width="84" height="390" rx="42" stroke="none"/>
-    <path d="M452 517 L622 344" fill="none"/>
-    <path d="M452 517 L640 712" fill="none"/>
-  </g>
+  <!-- C monogram -->
+  <path d="M652 385 A205 205 0 1 0 652 641"
+        fill="none" stroke="url(#mark)" stroke-width="92"
+        stroke-linecap="round"/>
 </svg>

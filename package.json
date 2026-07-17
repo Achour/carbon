@@ -1,7 +1,7 @@
 {
-  "name": "karbun",
+  "name": "carbon",
   "version": "0.1.0",
-  "description": "Karbun — a beautiful desktop GUI for Claude Code and Codex",
+  "description": "Carbon — a beautiful desktop GUI for Claude Code and Codex",
   "type": "module",
   "main": "out/main/index.js",
   "author": "achour",

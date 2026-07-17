@@ -5,7 +5,7 @@ import {
   parseCodexSlashCommand
 } from '../src/shared/codexCommands.ts'
 
-test('publishes only the Codex commands Karbun implements', () => {
+test('publishes only the Codex commands Carbon implements', () => {
   assert.deepEqual(
     CODEX_SLASH_COMMANDS.map((command) => command.name),
     ['plan', 'model', 'reasoning', 'permissions', 'status', 'init', 'review']

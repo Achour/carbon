@@ -12,6 +12,7 @@ import {
 } from 'lucide-react'
 import type { GitFileChange } from '@shared/types'
 import { cn } from '@/lib/utils'
+import { useStableChanges } from '@/lib/useStableChanges'
 import { scopedChanges, useApp, type ChangeScope } from '@/store'
 import { Button } from '@/components/ui/button'
 import { WithTooltip } from '@/components/ui/tooltip'
@@ -67,11 +68,12 @@ export function MultiDiffView({ cwd }: { cwd: string }): React.JSX.Element {
   const setChangeScope = useApp((s) => s.setChangeScope)
   const isBranch = changeScope === 'branch'
   const branchBase = isBranch ? (branchChanges?.base ?? undefined) : undefined
-  const changes = React.useMemo(
+  const rawChanges = React.useMemo(
     () =>
       scopedChanges({ changeScope, git, branchChanges, activeId, chats, messages }, cwd) ?? NO_CHANGES,
     [changeScope, git, branchChanges, activeId, chats, messages, cwd]
   )
+  const changes = useStableChanges(rawChanges)
   const scopeMeta = SCOPES.find((s) => s.id === changeScope) ?? SCOPES[1]
   const totalAdd = changes.reduce((n, c) => n + (c.additions ?? 0), 0)
   const totalDel = changes.reduce((n, c) => n + (c.deletions ?? 0), 0)
@@ -239,7 +241,7 @@ export function MultiDiffView({ cwd }: { cwd: string }): React.JSX.Element {
               }}
               className="border-b border-border/40 last:border-b-0"
             >
-              <div className="sticky top-0 z-10 flex items-center gap-1.5 border-b border-border/40 bg-card/95 px-2 py-1.5 backdrop-blur supports-[backdrop-filter]:bg-card/80">
+              <div className="sticky top-0 z-10 flex items-center gap-1.5 border-b border-border/40 bg-card px-2 py-1.5">
                 <button
                   type="button"
                   onClick={() => setCollapsed((p) => ({ ...p, [k]: open }))}

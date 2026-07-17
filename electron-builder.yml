@@ -1,5 +1,5 @@
-appId: com.achour.karbun
-productName: Karbun
+appId: com.achour.carbon
+productName: Carbon
 directories:
   output: dist
   buildResources: build

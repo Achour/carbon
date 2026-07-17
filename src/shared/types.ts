@@ -668,6 +668,12 @@ export interface Api {
     mode: 'dark' | 'light' | 'system',
     resolvedDark: boolean
   ): Promise<void>
+  /**
+   * Reveal native macOS window vibrancy to match the translucency preference.
+   * `true` uses a translucent backing; `false` restores an opaque backing that
+   * covers the constructor-created material. No-op off macOS.
+   */
+  setWindowTranslucent(on: boolean): Promise<void>
   /** Host platform (e.g. 'darwin'); gates macOS-only appearance options. */
   readonly platform: string
   // ---- Terminal ----

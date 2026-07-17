@@ -1,7 +1,7 @@
 import type { SlashCommand } from './types'
 
 /**
- * Codex slash commands Karbun can implement through the non-interactive SDK.
+ * Codex slash commands Carbon can implement through the non-interactive SDK.
  *
  * The Codex TUI has more commands, but advertising those here would be
  * misleading: `@openai/codex-sdk` runs `codex exec`, so TUI-only actions such as
@@ -62,7 +62,7 @@ const CODEX_COMMAND_NAMES = new Set<CodexSlashCommandName>(
   CODEX_SLASH_COMMANDS.map((command) => command.name as CodexSlashCommandName)
 )
 
-/** Parse only commands Karbun owns; unknown `/foo` text remains a normal prompt. */
+/** Parse only commands Carbon owns; unknown `/foo` text remains a normal prompt. */
 export function parseCodexSlashCommand(text: string): CodexSlashRequest | null {
   const match = /^\s*\/([\w-]+)(?:\s+([\s\S]*?))?\s*$/.exec(text)
   if (!match) return null

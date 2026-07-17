@@ -38,6 +38,12 @@ let manager: ChatManager
 let terminals: TerminalManager
 let preview: PreviewManager
 
+// Native macOS vibrancy is created once in a stable active state. The renderer's
+// localStorage preference controls whether the window backing reveals it.
+// `resolvedDark` keeps that backing correct across appearance changes.
+let translucentEnabled = false
+let resolvedDark = true
+
 function emit(ev: ChatEvent): void {
   win?.webContents.send('chat:event', ev)
   if (ev.type === 'status') notifyOnStatus(ev.chatId, ev.status)
@@ -57,7 +63,7 @@ function notifyOnStatus(chatId: string, status: string): void {
         ? 'Waiting for your approval'
         : null
   if (!body) return
-  const title = store.getChat(chatId)?.title?.trim() || 'Karbun'
+  const title = store.getChat(chatId)?.title?.trim() || 'Carbon'
   const n = new Notification({ title, body })
   n.on('click', () => {
     if (!win) return
@@ -113,10 +119,10 @@ function sendPreviewCommand(cmd: Omit<PreviewCommand, 'id'>): Promise<PreviewCom
 
 function createWindow(): void {
   const bounds = store.getWindowBounds()
-  // Cursor's macOS glass windows use the native "sidebar" material with an active
-  // visual-effect state. Keeping the effect active matters: followWindow flattens
-  // the material whenever the app loses focus, which makes the translucent sidebar
-  // look like an opaque slab. The renderer decides where this backing is visible.
+  // Create the native material once and keep its effect state active. Runtime
+  // setVibrancy() can only create a followWindow material; that briefly flattens
+  // to an opaque-looking slab when Chromium replaces the focused chat's layer
+  // tree. CSS and the window backing decide whether the material is visible.
   const mac = process.platform === 'darwin'
   win = new BrowserWindow({
     width: bounds?.width ?? 1280,
@@ -128,13 +134,13 @@ function createWindow(): void {
     show: false,
     titleBarStyle: 'hidden',
     trafficLightPosition: { x: 13, y: 12 },
-    // Cursor uses a 25% black backing for its dark glass theme. The renderer
-    // switches this to transparent white when it resolves a light appearance.
-    backgroundColor: mac ? '#40000000' : '#1c1c1c',
+    // Start opaque; renderer init reveals the already-stable native material
+    // only when the saved translucent-sidebar preference is enabled.
+    backgroundColor: '#1c1c1c',
     ...(mac
       ? { vibrancy: 'sidebar' as const, visualEffectState: 'active' as const }
       : {}),
-    title: 'Karbun',
+    title: 'Carbon',
     webPreferences: {
       preload: join(__dirname, '../preload/index.mjs'),
       contextIsolation: true,
@@ -231,19 +237,37 @@ function createWindow(): void {
   }
 }
 
+// The window backing color for the current translucency + appearance state.
+// Translucent: Cursor's glass backing (25% black for dark, transparent white
+// for light) so the native "sidebar" material shows through. Opaque: solid app
+// colors, so the renderer fully covers the material when glass is off.
+function windowBackgroundColor(): string {
+  if (translucentEnabled) return resolvedDark ? '#40000000' : '#00FFFFFF'
+  return resolvedDark ? '#1c1c1c' : '#ffffff'
+}
+
 // Align native chrome and dialogs with the renderer's resolved appearance.
-// The vibrancy material is created with the window and revealed through CSS;
 // keeping nativeTheme aligned also prevents the wrong material tone bleeding
-// through the translucent sidebar.
+// through the translucent sidebar. The backing color follows the current
+// translucency state — only translucent when glass is actually on.
 function applyWindowAppearance(
   mode: 'dark' | 'light' | 'system',
-  resolvedDark: boolean
+  dark: boolean
 ): void {
   if (process.platform !== 'darwin') return
   nativeTheme.themeSource = mode
-  // Match Cursor's native glass backing. The opaque renderer layer covers this
-  // everywhere except the sidebar, so changing it cannot tint the work area.
-  win?.setBackgroundColor(resolvedDark ? '#40000000' : '#00FFFFFF')
+  resolvedDark = dark
+  win?.setBackgroundColor(windowBackgroundColor())
+}
+
+// Reveal/hide the constructor-created native material to match the renderer's
+// translucency preference. Do not call setVibrancy() here: a material created at
+// runtime always follows window activity and flashes solid during chat switches.
+// When disabled, the opaque backing and renderer paint fully cover the material.
+function setWindowTranslucent(on: boolean): void {
+  if (process.platform !== 'darwin') return
+  translucentEnabled = on
+  win?.setBackgroundColor(windowBackgroundColor())
 }
 
 function buildMenu(): void {
@@ -406,9 +430,10 @@ function registerIpc(): void {
 
   ipcMain.handle(
     'window:set-appearance',
-    (_e, mode: 'dark' | 'light' | 'system', resolvedDark: boolean) =>
-      applyWindowAppearance(mode, resolvedDark)
+    (_e, mode: 'dark' | 'light' | 'system', dark: boolean) => applyWindowAppearance(mode, dark)
   )
+
+  ipcMain.handle('window:set-translucent', (_e, on: boolean) => setWindowTranslucent(on))
 
   ipcMain.handle('app:focus-window', () => {
     if (!win) return
@@ -490,7 +515,7 @@ function registerIpc(): void {
 }
 
 app.whenReady().then(() => {
-  app.setName('Karbun')
+  app.setName('Carbon')
   // Finder/Dock launches do not inherit the user's shell PATH. Hydrate it
   // before constructing managers so Claude, Codex, previews, Git, and terminal
   // sessions all see the same command-line tools as an interactive shell.

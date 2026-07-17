@@ -17,6 +17,7 @@ import type { AssistantMessage, ChatMessage, ChatMeta, ToolPart } from '@shared/
 import { cn } from '@/lib/utils'
 import { basename } from '@/lib/format'
 import { useApp } from '@/store'
+import { useLatestTodo } from '@/latestTodoStore'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -73,7 +74,29 @@ interface RenderCtx {
   busy: boolean
   lastAssistantId?: string
   onOpenPlan?: (plan: string) => void
-  latestTodoId?: string | null
+}
+
+/**
+ * Most-recent TodoWrite in `messages[from, to)`, scanning backward. Returns its
+ * `toolUseId` and array index, or null. Pulled out so the id can be recomputed
+ * incrementally (see the `latestTodoId` memo) instead of re-walking the whole
+ * conversation on every stream token.
+ */
+function findLatestTodo(
+  messages: ChatMessage[],
+  from: number,
+  to: number
+): { id: string; index: number } | null {
+  for (let i = to - 1; i >= from; i--) {
+    const m = messages[i]
+    if (m.role !== 'assistant') continue
+    for (let j = m.parts.length - 1; j >= 0; j--) {
+      // Streamed part arrays can be sparse — indexes may arrive out of order.
+      const p = m.parts[j]
+      if (p?.type === 'tool' && p.name === 'TodoWrite') return { id: p.toolUseId, index: i }
+    }
+  }
+  return null
 }
 
 /**
@@ -97,7 +120,6 @@ function renderMessages(messages: ChatMessage[], ctx: RenderCtx): React.ReactNod
           cwd={ctx.cwd}
           streaming={ctx.busy && m.id === ctx.lastAssistantId}
           onOpenPlan={ctx.onOpenPlan}
-          latestTodoId={ctx.latestTodoId}
           summarizeEdits={turn?.hasChanges ?? false}
         />
         {showSummary && turn?.summary && (
@@ -185,8 +207,7 @@ const MessageHistory = React.memo(
       prev.ctx.cwd !== next.ctx.cwd ||
       prev.ctx.busy !== next.ctx.busy ||
       prev.ctx.lastAssistantId !== next.ctx.lastAssistantId ||
-      prev.ctx.onOpenPlan !== next.ctx.onOpenPlan ||
-      prev.ctx.latestTodoId !== next.ctx.latestTodoId
+      prev.ctx.onOpenPlan !== next.ctx.onOpenPlan
     ) {
       return false
     }
@@ -286,18 +307,47 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
   const pendingPlanRequest = permissions.find((r) => r.toolName === 'ExitPlanMode')
 
   // The most recent TodoWrite is the live task list; earlier ones collapse.
-  const latestTodoId = React.useMemo(() => {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const m = messages[i]
-      if (m.role !== 'assistant') continue
-      for (let j = m.parts.length - 1; j >= 0; j--) {
-        // Streamed part arrays can be sparse — indexes may arrive out of order.
-        const p = m.parts[j]
-        if (p?.type === 'tool' && p.name === 'TodoWrite') return p.toolUseId
-      }
+  // A full backward scan per stream token is wasteful — a chat with no todos
+  // would re-walk its whole history on every token. Streaming keeps earlier
+  // message objects by reference (only the live message mutates / new ones
+  // append — the same assumption MessageHistory's memo relies on), so we scan
+  // parts only in the suffix that changed since the last render and reuse the
+  // cached answer for the untouched prefix.
+  const todoScanCache = React.useRef<{
+    messages: ChatMessage[]
+    id: string | null
+    index: number
+  } | null>(null)
+  const latestTodoId = React.useMemo<string | null>(() => {
+    const cache = todoScanCache.current
+    // First index at which this render's messages diverge from the last scan.
+    let diverge = 0
+    if (cache) {
+      const min = Math.min(cache.messages.length, messages.length)
+      while (diverge < min && cache.messages[diverge] === messages[diverge]) diverge++
     }
-    return null
+    // A newer TodoWrite can only be in the changed/appended suffix.
+    let found = findLatestTodo(messages, diverge, messages.length)
+    if (!found && cache && cache.index >= 0 && cache.index < diverge) {
+      // Nothing newer, and the cached answer still lives in the untouched prefix.
+      found = { id: cache.id as string, index: cache.index }
+    } else if (!found) {
+      // The prefix changed under the cached answer (rewind / chat switch, or no
+      // cache yet) — scan it too. `diverge` is 0 on a chat switch, so the suffix
+      // scan above already covered everything and this range is empty.
+      found = findLatestTodo(messages, 0, diverge)
+    }
+    const next = found ?? { id: null, index: -1 }
+    todoScanCache.current = { messages, id: next.id, index: next.index }
+    return next.id
   }, [messages])
+
+  // Publish the live-todo id to its own store so only the affected TodoCards
+  // re-render — see latestTodoStore. Kept out of the history render path.
+  const setLatestTodoId = useLatestTodo((s) => s.setLatestTodoId)
+  React.useEffect(() => {
+    setLatestTodoId(latestTodoId)
+  }, [latestTodoId, setLatestTodoId])
 
   const openPlan = React.useCallback(
     (plan: string) => {
@@ -310,10 +360,9 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
     () => ({
       cwd: chat.cwd,
       busy,
-      onOpenPlan: openPlan,
-      latestTodoId
+      onOpenPlan: openPlan
     }),
-    [chat.cwd, busy, openPlan, latestTodoId]
+    [chat.cwd, busy, openPlan]
   )
 
   return (
@@ -386,7 +435,6 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
               cwd={chat.cwd}
               streaming
               onOpenPlan={openPlan}
-              latestTodoId={latestTodoId}
             />
           )}
           {permissions.map((request) => {

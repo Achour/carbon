@@ -83,6 +83,7 @@ const api: Api = {
   focusWindow: () => ipcRenderer.invoke('app:focus-window'),
   setWindowAppearance: (mode: 'dark' | 'light' | 'system', resolvedDark: boolean) =>
     ipcRenderer.invoke('window:set-appearance', mode, resolvedDark),
+  setWindowTranslucent: (on: boolean) => ipcRenderer.invoke('window:set-translucent', on),
   platform: process.platform,
   terminalCreate: (opts: TerminalCreateOpts) => ipcRenderer.invoke('terminal:create', opts),
   terminalWrite: (id: string, data: string) => ipcRenderer.invoke('terminal:write', id, data),

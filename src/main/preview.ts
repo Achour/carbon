@@ -198,6 +198,11 @@ export class PreviewManager {
           })
         }
         server.proc = null
+        // URL discovery is over; free its scratch buffer. `log`/`consoleLines`
+        // are kept — the logs drawer polls previewLogs after a server exits (a
+        // crash's error output lives there) — and are already bounded + replaced
+        // wholesale on the next start() for this cwd.
+        server.sniff = ''
       })
     } catch (err) {
       this.setState(cwd, { status: 'error', error: err instanceof Error ? err.message : String(err) })
@@ -230,6 +235,7 @@ export class PreviewManager {
     if (!server) return { cwd, status: 'stopped' }
     killTree(server.proc)
     server.proc = null
+    server.sniff = ''
     this.setState(cwd, { status: 'stopped', error: undefined })
     return server.state
   }

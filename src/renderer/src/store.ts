@@ -659,7 +659,7 @@ export const useApp = create<AppState>((set, get) => ({
 
   loadCommands(cwd, provider) {
     // Commands are provider-specific. Claude discovers its SDK command list;
-    // Codex gets the subset Karbun can execute through the non-interactive SDK.
+    // Codex gets the subset Carbon can execute through the non-interactive SDK.
     const s = get()
     const prov =
       provider ??
@@ -733,6 +733,8 @@ export const useApp = create<AppState>((set, get) => ({
   setTranslucentSidebar(on) {
     applyTranslucent(on)
     localStorage.setItem('translucentSidebar', String(on))
+    // Reveal/hide the constructor-created active native material alongside CSS.
+    void window.api.setWindowTranslucent(on)
     set({ translucentSidebar: on })
   },
 
@@ -809,6 +811,9 @@ export const useApp = create<AppState>((set, get) => ({
     // Sync the native window vibrancy with the stored appearance preference
     // (the CSS flag was already applied pre-paint in main.tsx).
     void window.api.setWindowAppearance(get().themeMode, get().resolvedAppearance === 'dark')
+    // The native material already exists in a stable active state; reveal it at
+    // boot only when the user's translucency setting is on.
+    void window.api.setWindowTranslucent(get().translucentSidebar)
     const [chats, defaults] = await Promise.all([window.api.listChats(), window.api.getDefaults()])
     set({
       chats,
@@ -1610,11 +1615,13 @@ export const useApp = create<AppState>((set, get) => ({
     const s = get()
     switch (ev.type) {
       case 'message': {
-        if (ev.chatId === s.activeId) {
-          set({ messages: upsertMessage(s.messages, ev.message) })
-        }
-        // Keep sidebar ordering fresh.
+        // Single state update per message: upsert the active chat's messages
+        // (when this event is for it) and keep sidebar ordering fresh, in one
+        // set() so each message causes one render pass instead of two.
         set((st) => ({
+          ...(ev.chatId === st.activeId
+            ? { messages: upsertMessage(st.messages, ev.message) }
+            : {}),
           chats: st.chats
             .map((c) => (c.id === ev.chatId ? { ...c, updatedAt: Date.now() } : c))
             .sort((a, b) => b.updatedAt - a.updatedAt)

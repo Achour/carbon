@@ -3,7 +3,10 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 
-const POLL_MS = 500
+// The watcher exists only to surface sub-agent activity; a plain turn has none.
+// 1.5s (up from 500ms) cuts the per-turn tail+parse ticks ~3x while still
+// surfacing sub-agent text/tools promptly once they start.
+const POLL_MS = 1_500
 const FILE_SCAN_MS = 1_000
 const INITIAL_TAIL_BYTES = 1024 * 1024
 const MAX_READ_BYTES = 2 * 1024 * 1024
@@ -148,6 +151,19 @@ function failedOutput(text: string | undefined): boolean {
 function friendlyAgentName(path: string): string {
   const leaf = path.split('/').filter(Boolean).at(-1) ?? 'Codex agent'
   return leaf.replace(/[_-]+/g, ' ')
+}
+
+/**
+ * Cheap pre-filter for parent-rollout lines. The parent transcript is the main
+ * agent's own stream and grows fast, yet the only parent records that yield an
+ * event (see `parseCodexRolloutRecord`, `kind: 'parent'`) are `sub_agent_activity`
+ * event messages and child `FINAL_ANSWER` messages. Skipping the JSON.parse for
+ * every other line avoids parsing the whole main-agent transcript on each poll of
+ * an ordinary no-sub-agent turn. Child tails are never filtered — every child
+ * record type is meaningful there.
+ */
+function parentLineMayMatter(line: string): boolean {
+  return line.includes('sub_agent_activity') || line.includes('FINAL_ANSWER')
 }
 
 /** Parse one parent/child rollout record into stable, UI-oriented events. */
@@ -435,6 +451,9 @@ class RolloutWatcher implements CodexRolloutWatcher {
     if (this.parent) {
       for (const line of await readAppended(this.parent)) {
         if (this.parentThreadId !== parentThreadId) return
+        // Advance the tail past every appended line, but only parse the few that
+        // can carry a sub-agent event — not the whole main-agent transcript.
+        if (!parentLineMayMatter(line)) continue
         this.handleLine(line, { kind: 'parent' })
       }
     }

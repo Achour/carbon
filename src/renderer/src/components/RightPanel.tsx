@@ -378,13 +378,13 @@ function EmptyLauncher(): React.JSX.Element {
   const reviewChanges = useApp((s) => s.reviewChanges)
   const openPreview = useApp((s) => s.openPreview)
   const openTerminal = useApp((s) => s.openTerminal)
-  const openUntitled = useApp((s) => s.openUntitled)
+  const browseFiles = useApp((s) => s.browseFiles)
 
   const items = [
     { icon: <GitBranch />, label: 'Changes', run: () => void reviewChanges() },
     { icon: <Globe />, label: 'Browser', run: () => openPreview() },
     { icon: <SquareTerminal />, label: 'Terminal', run: () => openTerminal() },
-    { icon: <FileText />, label: 'File', run: () => openUntitled() }
+    { icon: <FolderTree />, label: 'Files', run: () => browseFiles() }
   ]
   return (
     <div className="flex h-full items-center justify-center p-6">
@@ -876,7 +876,7 @@ export function RightPanel(): React.JSX.Element | null {
                 </div>
               ))}
         </div>
-        {dockOpen && !currentIsTerminal && !currentIsPreview && (
+        {dockOpen && !isEmpty && !currentIsTerminal && !currentIsPreview && (
         <div
           data-right-dock
           style={{ width: `min(${dockWidth}px, calc(100% - ${VIEWER_RESERVED_PX}px))` }}
