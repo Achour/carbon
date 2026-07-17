@@ -368,6 +368,78 @@ interface AppState {
   }): Promise<void>
   respondPermission(requestId: string, decision: PermissionDecision): Promise<void>
   applyEvent(ev: ChatEvent): void
+  /** Replay stream events parked while the window was hidden (see applyEvent). */
+  flushHiddenEvents(): void
+}
+
+// ---- Hidden-window stream parking ----
+// While the window is hidden (minimized, fully covered, or on another Space)
+// nothing can be seen, but streaming IPC events keep arriving and each one
+// costs a React commit — Chromium's background throttling can't help because
+// the work is event-driven, not timer-driven. Streamed message events for the
+// active chat are parked here and replayed in one batch (a single React
+// commit) when the window becomes visible again.
+type ParkedEvent = Extract<ChatEvent, { type: 'message' | 'part' | 'part-delta' | 'tool-update' }>
+const hiddenStream: ParkedEvent[] = []
+let replayingHidden = false
+
+function parkHiddenEvent(ev: ParkedEvent): void {
+  if (ev.type === 'part-delta') {
+    // Coalesce consecutive deltas to the same part, so an hours-long hidden
+    // stream parks a handful of entries, not thousands.
+    const last = hiddenStream[hiddenStream.length - 1]
+    if (
+      last?.type === 'part-delta' &&
+      last.chatId === ev.chatId &&
+      last.messageId === ev.messageId &&
+      last.partIndex === ev.partIndex
+    ) {
+      last.delta += ev.delta
+      return
+    }
+  } else if (ev.type === 'message') {
+    // A full message upserts wholesale, superseding everything parked for it.
+    for (let i = hiddenStream.length - 1; i >= 0; i--) {
+      const p = hiddenStream[i]
+      if ((p.type === 'message' ? p.message.id : p.messageId) === ev.message.id) {
+        hiddenStream.splice(i, 1)
+      }
+    }
+  }
+  hiddenStream.push(ev)
+}
+
+/** Turn-finished chime + notification. Side effects only — no state writes. */
+function notifyTurnDone(
+  s: Pick<AppState, 'notifyPrefs' | 'chats'>,
+  ev: Extract<ChatEvent, { type: 'message' }>,
+  openChat: (id: string) => Promise<void>
+): void {
+  if (ev.message.role !== 'event' || (ev.message.kind !== 'turn' && ev.message.kind !== 'error')) {
+    return
+  }
+  const prefs = s.notifyPrefs
+  const failed = ev.message.kind === 'error'
+  if (prefs.sound && !failed) playChime()
+  if (prefs.finish && !document.hasFocus()) {
+    const chat = s.chats.find((c) => c.id === ev.chatId)
+    const title = chat?.title || (chat?.provider === 'codex' ? 'Codex' : 'Claude')
+    const stats = ev.message.stats
+    notify(
+      title,
+      failed
+        ? 'The turn failed'
+        : stats
+          ? `Finished in ${formatDuration(stats.durationMs)}${stats.costUsd > 0 ? ` · ${formatCost(stats.costUsd)}` : ''}`
+          : 'Finished',
+      {
+        onClick: () => {
+          void window.api.focusWindow()
+          void openChat(ev.chatId)
+        }
+      }
+    )
+  }
 }
 
 /**
@@ -1331,6 +1403,9 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   async openChat(id) {
+    // Parked hidden-stream events are superseded: the target chat refetches
+    // from main below, and events for the outgoing chat no longer apply.
+    hiddenStream.length = 0
     if (id === null) {
       set((s) => ({
         // Stash the outgoing chat's tabs; the draft/home state opens no tabs.
@@ -1611,8 +1686,43 @@ export const useApp = create<AppState>((set, get) => ({
     await window.api.respondPermission(id, requestId, decision)
   },
 
+  flushHiddenEvents() {
+    if (hiddenStream.length === 0) return
+    const parked = hiddenStream.splice(0, hiddenStream.length)
+    // Replay through the normal reducer in one synchronous batch — React
+    // coalesces the set() calls into a single commit. The flag suppresses
+    // re-parking and duplicate notifications.
+    replayingHidden = true
+    try {
+      for (const p of parked) get().applyEvent(p)
+    } finally {
+      replayingHidden = false
+    }
+  },
+
   applyEvent(ev) {
+    // A stale parked stream must replay before any live event applies, or
+    // deltas would land out of order (the visibilitychange listener usually
+    // flushes first; this is the fallback).
+    if (!replayingHidden && hiddenStream.length > 0 && document.visibilityState !== 'hidden') {
+      get().flushHiddenEvents()
+    }
     const s = get()
+    if (
+      !replayingHidden &&
+      document.visibilityState === 'hidden' &&
+      (ev.type === 'message' ||
+        ev.type === 'part' ||
+        ev.type === 'part-delta' ||
+        ev.type === 'tool-update') &&
+      ev.chatId === s.activeId
+    ) {
+      parkHiddenEvent(ev)
+      // The turn-finished chime/notification still fires in real time — a
+      // hidden window is exactly when the user needs it.
+      if (ev.type === 'message') notifyTurnDone(s, ev, (id) => get().openChat(id))
+      return
+    }
     switch (ev.type) {
       case 'message': {
         // Single state update per message: upsert the active chat's messages
@@ -1626,31 +1736,9 @@ export const useApp = create<AppState>((set, get) => ({
             .map((c) => (c.id === ev.chatId ? { ...c, updatedAt: Date.now() } : c))
             .sort((a, b) => b.updatedAt - a.updatedAt)
         }))
-        // Turn finished: chime + background notification.
-        if (ev.message.role === 'event' && (ev.message.kind === 'turn' || ev.message.kind === 'error')) {
-          const prefs = s.notifyPrefs
-          const failed = ev.message.kind === 'error'
-          if (prefs.sound && !failed) playChime()
-          if (prefs.finish && !document.hasFocus()) {
-            const chat = s.chats.find((c) => c.id === ev.chatId)
-            const title = chat?.title || (chat?.provider === 'codex' ? 'Codex' : 'Claude')
-            const stats = ev.message.stats
-            notify(
-              title,
-              failed
-                ? 'The turn failed'
-                : stats
-                  ? `Finished in ${formatDuration(stats.durationMs)}${stats.costUsd > 0 ? ` · ${formatCost(stats.costUsd)}` : ''}`
-                  : 'Finished',
-              {
-                onClick: () => {
-                  void window.api.focusWindow()
-                  void get().openChat(ev.chatId)
-                }
-              }
-            )
-          }
-        }
+        // Turn finished: chime + background notification (already fired at
+        // park time when this is a replay).
+        if (!replayingHidden) notifyTurnDone(s, ev, (id) => get().openChat(id))
         break
       }
 

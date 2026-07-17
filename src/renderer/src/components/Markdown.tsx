@@ -8,6 +8,7 @@ import { Check, Code2, Copy, Maximize2, RotateCcw, X, ZoomIn, ZoomOut } from 'lu
 import { cn } from '@/lib/utils'
 import { useApp } from '@/store'
 import { getImageEpoch, readImageOnce, subscribeImageEpoch } from '@/lib/imageCache'
+import { splitMarkdownStream } from '@/lib/markdownStream'
 
 /** Project folder used to resolve relative file paths in inline code. */
 const MarkdownCwd = React.createContext<string | null>(null)
@@ -503,6 +504,23 @@ const REHYPE_PLUGINS: React.ComponentProps<typeof ReactMarkdown>['rehypePlugins'
   [rehypeHighlight, { ignoreMissing: true, detect: false }]
 ]
 
+/** One parsed markdown fragment, no wrapper — chunks share a single wrapper div. */
+const MarkdownBody = React.memo(function MarkdownBody({
+  text
+}: {
+  text: string
+}): React.JSX.Element {
+  return (
+    <ReactMarkdown
+      remarkPlugins={REMARK_PLUGINS}
+      rehypePlugins={REHYPE_PLUGINS}
+      components={components}
+    >
+      {text}
+    </ReactMarkdown>
+  )
+})
+
 export const Markdown = React.memo(function Markdown({
   text,
   cwd = null,
@@ -515,13 +533,7 @@ export const Markdown = React.memo(function Markdown({
   return (
     <div className={cn('markdown text-[14px] leading-[1.6]', className)}>
       <MarkdownCwd.Provider value={cwd}>
-        <ReactMarkdown
-          remarkPlugins={REMARK_PLUGINS}
-          rehypePlugins={REHYPE_PLUGINS}
-          components={components}
-        >
-          {text}
-        </ReactMarkdown>
+        <MarkdownBody text={text} />
       </MarkdownCwd.Provider>
     </div>
   )
@@ -530,18 +542,11 @@ export const Markdown = React.memo(function Markdown({
 const STREAM_RENDER_MS = 120
 
 /**
- * Markdown parsing and syntax highlighting are intentionally capped while text
- * streams. The latest text is always shown immediately when streaming ends.
+ * Commit-throttles a streaming string: re-renders at most every
+ * STREAM_RENDER_MS while `streaming`, and passes the latest text straight
+ * through (cancelling any pending commit) once it ends.
  */
-export const StreamingMarkdown = React.memo(function StreamingMarkdown({
-  text,
-  cwd = null,
-  className
-}: {
-  text: string
-  cwd?: string | null
-  className?: string
-}): React.JSX.Element {
+export function useStreamText(text: string, streaming: boolean): string {
   const latestRef = React.useRef(text)
   const lastCommitRef = React.useRef(performance.now())
   const timerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -549,6 +554,14 @@ export const StreamingMarkdown = React.memo(function StreamingMarkdown({
   latestRef.current = text
 
   React.useEffect(() => {
+    if (!streaming) {
+      if (timerRef.current !== null) {
+        clearTimeout(timerRef.current)
+        timerRef.current = null
+      }
+      setShown(text)
+      return
+    }
     const elapsed = performance.now() - lastCommitRef.current
     if (elapsed >= STREAM_RENDER_MS) {
       lastCommitRef.current = performance.now()
@@ -562,7 +575,7 @@ export const StreamingMarkdown = React.memo(function StreamingMarkdown({
         setShown(latestRef.current)
       }, STREAM_RENDER_MS - elapsed)
     }
-  }, [text])
+  }, [text, streaming])
 
   React.useEffect(
     () => () => {
@@ -571,5 +584,38 @@ export const StreamingMarkdown = React.memo(function StreamingMarkdown({
     []
   )
 
-  return <Markdown text={shown} cwd={cwd} className={className} />
+  return streaming ? shown : text
+}
+
+/**
+ * Markdown parsing and syntax highlighting are intentionally capped while text
+ * streams, and the sealed prefix of the message (blocks that can no longer
+ * change) renders through memoized MarkdownBody chunks so each commit only
+ * re-parses the small live tail instead of the whole accumulated message.
+ * Everything renders into one `.markdown` wrapper, so block margins behave
+ * exactly as a single parse. The turn's end swaps in plain <Markdown> (see
+ * AssistantBlock), whose single full-text parse also resolves any link or
+ * footnote references that spanned a chunk boundary while streaming.
+ */
+export const StreamingMarkdown = React.memo(function StreamingMarkdown({
+  text,
+  cwd = null,
+  className
+}: {
+  text: string
+  cwd?: string | null
+  className?: string
+}): React.JSX.Element {
+  const shown = useStreamText(text, true)
+  const { chunks, tail } = React.useMemo(() => splitMarkdownStream(shown), [shown])
+  return (
+    <div className={cn('markdown text-[14px] leading-[1.6]', className)}>
+      <MarkdownCwd.Provider value={cwd}>
+        {chunks.map((chunk, i) => (
+          <MarkdownBody key={i} text={chunk} />
+        ))}
+        <MarkdownBody text={tail} />
+      </MarkdownCwd.Provider>
+    </div>
+  )
 })

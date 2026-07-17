@@ -12,7 +12,7 @@ import {
 import type { AssistantMessage, EventMessage, RewindResult, ToolPart, UserMessage } from '@shared/types'
 import { cn } from '@/lib/utils'
 import { formatCost, formatDuration } from '@/lib/format'
-import { Markdown, StreamingMarkdown } from '@/components/Markdown'
+import { Markdown, StreamingMarkdown, useStreamText } from '@/components/Markdown'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { WithTooltip } from '@/components/ui/tooltip'
@@ -203,6 +203,9 @@ export const ThinkingBlock = React.memo(function ThinkingBlock({
   text: string
   active: boolean
 }): React.JSX.Element {
+  // Thinking streams as raw deltas (~25/s); commit at the same throttled rate
+  // as streaming markdown so a long thought doesn't relayout on every token.
+  const shown = useStreamText(text, active)
   return (
     <Collapsible.Root className="animate-enter">
       <Collapsible.Trigger
@@ -216,7 +219,7 @@ export const ThinkingBlock = React.memo(function ThinkingBlock({
       </Collapsible.Trigger>
       <Collapsible.Panel className="h-[var(--collapsible-panel-height)] overflow-hidden transition-[height] duration-200 ease-out data-[ending-style]:h-0 data-[starting-style]:h-0">
         <div className="mt-1.5 ml-1 select-text border-l-2 border-border pl-3.5 text-[13px] leading-relaxed text-muted-foreground italic whitespace-pre-wrap">
-          {text}
+          {shown}
         </div>
       </Collapsible.Panel>
     </Collapsible.Root>
