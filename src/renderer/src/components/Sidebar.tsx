@@ -152,6 +152,7 @@ function SearchChatsDialog({
   const [q, setQ] = React.useState('')
   const [idx, setIdx] = React.useState(0)
   const inputRef = React.useRef<HTMLInputElement>(null)
+  const projectNames = useApp((s) => s.projectNames)
 
   React.useEffect(() => {
     if (!open) return
@@ -223,7 +224,7 @@ function SearchChatsDialog({
               >
                 <span className="min-w-0 flex-1 truncate text-[13px]">{c.title || 'New chat'}</span>
                 <span className="max-w-32 shrink-0 truncate text-[11px] text-muted-foreground/70">
-                  {basename(c.cwd)}
+                  {projectNames[c.cwd]?.trim() || basename(c.cwd)}
                 </span>
                 <span className="shrink-0 text-[11px] text-muted-foreground/50">
                   {relativeTime(c.updatedAt)}
@@ -254,6 +255,10 @@ export function Sidebar(): React.JSX.Element {
   // which discards the chats.
   const hiddenProjects = useApp((s) => s.hiddenProjects)
   const setProjectHidden = useApp((s) => s.setProjectHidden)
+  // Custom project display names (keyed by cwd); falls back to the folder basename.
+  const projectNames = useApp((s) => s.projectNames)
+  const setProjectName = useApp((s) => s.setProjectName)
+  const projectLabel = (cwd: string): string => projectNames[cwd]?.trim() || basename(cwd)
 
   const newChatIn = (cwd: string | null): void => {
     if (cwd) setSelectedCwd(cwd)
@@ -274,6 +279,9 @@ export function Sidebar(): React.JSX.Element {
   const [renaming, setRenaming] = React.useState<ChatMeta | null>(null)
   const [deleting, setDeleting] = React.useState<ChatMeta | null>(null)
   const [renameValue, setRenameValue] = React.useState('')
+  // Project being renamed (its cwd) and the working input value.
+  const [renamingProject, setRenamingProject] = React.useState<string | null>(null)
+  const [projectNameValue, setProjectNameValue] = React.useState('')
   const removeProject = useApp((s) => s.removeProject)
   const [removingProject, setRemovingProject] = React.useState<{
     cwd: string
@@ -573,7 +581,7 @@ export function Sidebar(): React.JSX.Element {
                           />
                         </span>
                         <span className="truncate text-[13px] font-medium text-sidebar-foreground">
-                          {basename(group.cwd)}
+                          {projectLabel(group.cwd)}
                         </span>
                         {isCollapsed && (
                           <span className="shrink-0 text-[11px] text-muted-foreground/70">
@@ -586,13 +594,13 @@ export function Sidebar(): React.JSX.Element {
                       </button>
                     </WithTooltip>
                     {!archived && (
-                      <WithTooltip label={`New chat in ${basename(group.cwd)}`}>
+                      <WithTooltip label={`New chat in ${projectLabel(group.cwd)}`}>
                         <Button
                           size="icon-sm"
                           variant="ghost"
                           className="size-5 shrink-0 opacity-0 transition-opacity group-hover/project:opacity-100"
                           onClick={() => newChatIn(group.cwd)}
-                          aria-label={`New chat in ${basename(group.cwd)}`}
+                          aria-label={`New chat in ${projectLabel(group.cwd)}`}
                         >
                           <Plus />
                         </Button>
@@ -608,6 +616,15 @@ export function Sidebar(): React.JSX.Element {
                         <ContextMenuSeparator />
                       </>
                     )}
+                    <ContextMenuItem
+                      onClick={() => {
+                        setProjectNameValue(projectLabel(group.cwd))
+                        setRenamingProject(group.cwd)
+                      }}
+                    >
+                      <Pencil /> Rename project…
+                    </ContextMenuItem>
+                    <ContextMenuSeparator />
                     {archived ? (
                       <ContextMenuItem onClick={() => setArchived(group.cwd, false)}>
                         <ArchiveRestore /> Unarchive project
@@ -702,13 +719,53 @@ export function Sidebar(): React.JSX.Element {
         </DialogContent>
       </Dialog>
 
+      {/* Rename project dialog */}
+      <Dialog
+        open={renamingProject !== null}
+        onOpenChange={(open) => !open && setRenamingProject(null)}
+      >
+        <DialogContent>
+          <DialogTitle>Rename project</DialogTitle>
+          <DialogDescription>
+            A display name for this project in the sidebar. Leave blank to use the folder name. The
+            folder on disk is not renamed.
+          </DialogDescription>
+          <form
+            className="mt-3 space-y-3"
+            onSubmit={(e) => {
+              e.preventDefault()
+              if (renamingProject) {
+                // An empty value (or one equal to the folder name) clears the override.
+                const next =
+                  projectNameValue.trim() === basename(renamingProject) ? '' : projectNameValue
+                setProjectName(renamingProject, next)
+                setRenamingProject(null)
+              }
+            }}
+          >
+            <Input
+              value={projectNameValue}
+              onChange={(e) => setProjectNameValue(e.target.value)}
+              autoFocus
+              placeholder={renamingProject ? basename(renamingProject) : 'Project name'}
+            />
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" onClick={() => setRenamingProject(null)}>
+                Cancel
+              </Button>
+              <Button type="submit">Rename</Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
+
       {/* Remove project dialog */}
       <Dialog
         open={removingProject !== null}
         onOpenChange={(open) => !open && setRemovingProject(null)}
       >
         <DialogContent>
-          <DialogTitle>Remove “{removingProject ? basename(removingProject.cwd) : ''}”?</DialogTitle>
+          <DialogTitle>Remove “{removingProject ? projectLabel(removingProject.cwd) : ''}”?</DialogTitle>
           <DialogDescription>
             The project is removed from the sidebar and its{' '}
             {removingProject?.count === 1 ? 'chat is' : `${removingProject?.count} chats are`}{' '}

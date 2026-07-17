@@ -213,6 +213,13 @@ interface AppState {
    */
   hiddenProjects: Record<string, boolean>
   setProjectHidden(cwd: string, hidden: boolean): void
+  /**
+   * Custom display names for projects (keyed by cwd). A project with no entry
+   * falls back to its folder basename. An empty/blank name clears the override.
+   * Persisted.
+   */
+  projectNames: Record<string, string>
+  setProjectName(cwd: string, name: string): void
 
   // ---- Files ----
   /** Whether the right-side workspace panel (tabs + file tree) is open. */
@@ -722,6 +729,25 @@ export const useApp = create<AppState>((set, get) => ({
       else delete hiddenProjects[cwd]
       localStorage.setItem('hiddenProjects', JSON.stringify(hiddenProjects))
       return { hiddenProjects }
+    })
+  },
+
+  projectNames: (() => {
+    try {
+      return JSON.parse(localStorage.getItem('projectNames') ?? '{}') as Record<string, string>
+    } catch {
+      return {}
+    }
+  })(),
+
+  setProjectName(cwd, name) {
+    set((s) => {
+      const projectNames = { ...s.projectNames }
+      const trimmed = name.trim()
+      if (trimmed) projectNames[cwd] = trimmed
+      else delete projectNames[cwd]
+      localStorage.setItem('projectNames', JSON.stringify(projectNames))
+      return { projectNames }
     })
   },
 
