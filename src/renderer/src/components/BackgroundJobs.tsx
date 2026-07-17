@@ -73,14 +73,16 @@ export function BackgroundJobs(): React.JSX.Element | null {
                   </div>
                   <div className="text-[11px] text-muted-foreground/70">{job.type}</div>
                 </div>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="h-6 shrink-0 px-2 text-[11px] text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:text-destructive"
-                  onClick={() => stopBackgroundJob(job.id)}
-                >
-                  Stop
-                </Button>
+                {job.stoppable !== false && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-6 shrink-0 px-2 text-[11px] text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:text-destructive"
+                    onClick={() => stopBackgroundJob(job.id)}
+                  >
+                    Stop
+                  </Button>
+                )}
               </div>
             )
           })}

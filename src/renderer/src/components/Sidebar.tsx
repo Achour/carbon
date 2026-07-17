@@ -48,6 +48,7 @@ function ChatItem({
   chat,
   active,
   streaming,
+  titling,
   onOpen,
   onRename,
   onDelete
@@ -55,6 +56,7 @@ function ChatItem({
   chat: ChatMeta
   active: boolean
   streaming: boolean
+  titling: boolean
   onOpen: () => void
   onRename: () => void
   onDelete: () => void
@@ -67,7 +69,10 @@ function ChatItem({
           <div
             className={cn(
               'group relative rounded-md transition-colors',
-              active ? 'bg-sidebar-accent' : 'hover:bg-sidebar-accent/60'
+              // Active fill is a foreground-tinted overlay, not the sidebar-accent
+              // token — the latter is barely lighter than the sidebar and vanishes
+              // over the frost. This reliably reads as a raised pill in both themes.
+              active ? 'bg-sidebar-foreground/[0.14] dark:bg-sidebar-foreground/[0.16]' : 'hover:bg-sidebar-accent/60'
             )}
           />
         }
@@ -75,9 +80,20 @@ function ChatItem({
       <button
         type="button"
         onClick={onOpen}
-        className="flex w-full min-w-0 items-center gap-1.5 px-2 py-[5px] text-left outline-none"
+        className="flex w-full min-w-0 items-center gap-1.5 px-2.5 py-1.5 text-left outline-none"
       >
-        <span className="min-w-0 flex-1 truncate text-[13px] text-sidebar-foreground">
+        <span
+          className={cn(
+            'min-w-0 flex-1 truncate text-[13px] transition-colors',
+            // Cursor-style: inactive chats are muted, the open one is bright — the
+            // brightness gap (plus the filled highlight) marks the active chat.
+            // Bright, NOT bold — Cursor keeps regular weight, which reads cleaner.
+            active
+              ? 'text-sidebar-foreground'
+              : 'text-sidebar-foreground/55 group-hover:text-sidebar-foreground/90',
+            titling && 'title-forming'
+          )}
+        >
           {chat.title || 'New chat'}
         </span>
         <span
@@ -242,6 +258,7 @@ export function Sidebar(): React.JSX.Element {
   const chats = useApp((s) => s.chats)
   const activeId = useApp((s) => s.activeId)
   const statuses = useApp((s) => s.statuses)
+  const titling = useApp((s) => s.titling)
   const openChat = useApp((s) => s.openChat)
   const renameChat = useApp((s) => s.renameChat)
   const deleteChat = useApp((s) => s.deleteChat)
@@ -654,6 +671,7 @@ export function Sidebar(): React.JSX.Element {
                         chat={chat}
                         active={chat.id === activeId}
                         streaming={(statuses[chat.id] ?? 'idle') !== 'idle'}
+                        titling={!!titling[chat.id]}
                         onOpen={() => void openChat(chat.id)}
                         onRename={() => {
                           setRenameValue(chat.title)

@@ -12,7 +12,7 @@ import {
 import type { AssistantMessage, EventMessage, RewindResult, ToolPart, UserMessage } from '@shared/types'
 import { cn } from '@/lib/utils'
 import { formatCost, formatDuration } from '@/lib/format'
-import { Markdown } from '@/components/Markdown'
+import { Markdown, StreamingMarkdown } from '@/components/Markdown'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { WithTooltip } from '@/components/ui/tooltip'
@@ -171,7 +171,7 @@ export const UserBubble = React.memo(function UserBubble({
       <div className="flex w-full items-start justify-end gap-1">
         <RewindControl messageId={message.id} />
         {message.text && (
-          <div className="max-w-[85%] select-text rounded-2xl rounded-br-md bg-secondary px-4 py-2.5 text-[14px] leading-relaxed whitespace-pre-wrap">
+          <div className="max-w-[85%] min-w-0 select-text rounded-2xl rounded-br-md bg-secondary px-4 py-2.5 text-[14px] leading-relaxed break-words whitespace-pre-wrap">
             {message.text}
           </div>
         )}
@@ -277,7 +277,11 @@ export const AssistantBlock = React.memo(function AssistantBlock({
         const isLast = i === lastIndex
         if (part.type === 'text') {
           if (!part.text) return null
-          return <Markdown key={i} text={part.text} cwd={cwd} />
+          return streaming && isLast ? (
+            <StreamingMarkdown key={i} text={part.text} cwd={cwd} />
+          ) : (
+            <Markdown key={i} text={part.text} cwd={cwd} />
+          )
         }
         if (part.type === 'thinking') {
           if (!part.text) return null

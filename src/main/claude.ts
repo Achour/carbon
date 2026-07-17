@@ -39,6 +39,7 @@ import type { Store } from './store'
 import type { PreviewManager } from './preview'
 import { CodexSession } from './codex'
 import type { AgentSession, Emit } from './session'
+import { TITLE_SYSTEM, buildTitlePrompt, cleanTitle, deriveTitle, firstUserText } from './titles'
 
 /**
  * Appended to the claude_code preset. The GUI renders ```mermaid fenced blocks
@@ -186,6 +187,50 @@ interface PendingPermission {
  */
 const isBenignTurnError = (text: string): boolean => text.includes('[ede_diagnostic]')
 
+const TITLE_MODEL = 'claude-haiku-4-5-20251001'
+
+/**
+ * One-shot, tool-less Haiku call that turns the opening exchange into a terse
+ * chat title. Deliberately bare — a custom (non-preset) system prompt, no MCP,
+ * no project settings, one turn — so it stays cheap and can't touch the repo.
+ * Returns null on any failure so the placeholder title simply stands.
+ */
+async function generateClaudeTitle(cwd: string, userText: string): Promise<string | null> {
+  const q = query({
+    prompt: buildTitlePrompt(userText),
+    options: {
+      cwd: cwd || undefined,
+      model: TITLE_MODEL,
+      systemPrompt: TITLE_SYSTEM,
+      settingSources: [],
+      allowedTools: [],
+      maxTurns: 1,
+      permissionMode: 'default'
+    }
+  })
+  try {
+    let out = ''
+    for await (const msg of q) {
+      if (msg.type === 'assistant') {
+        for (const block of msg.message.content) {
+          if (block.type === 'text') out += block.text
+        }
+      } else if (msg.type === 'result') {
+        break
+      }
+    }
+    return cleanTitle(out) || null
+  } catch {
+    return null
+  } finally {
+    try {
+      q.close()
+    } catch {
+      // already closed
+    }
+  }
+}
+
 class ClaudeSession implements AgentSession {
   private q: Query
   private input = createInputQueue()
@@ -221,6 +266,21 @@ class ClaudeSession implements AgentSession {
   // turn's `result` both emitting 'idle') collapse to one — consumers get a
   // clean level-triggered stream and don't each need to edge-detect.
   private lastEmittedStatus: ChatStatus | null = null
+  private backgroundJobCount = 0
+  // Guards the one-shot AI title: set the first time we try, so later turns in
+  // this run never re-title. `titledResumed` skips chats that already had a turn
+  // in a prior run (they had their shot; we don't retro-title on every restart).
+  private titledOnce = false
+  private titlePending = false
+  private readonly titledResumed: boolean
+
+  get idle(): boolean {
+    return (
+      this.lastEmittedStatus === 'idle' &&
+      this.pending.size === 0 &&
+      this.backgroundJobCount === 0
+    )
+  }
 
   constructor(
     private chat: ChatData,
@@ -230,6 +290,7 @@ class ClaudeSession implements AgentSession {
     private onCommands: (commands: SlashCommand[]) => void,
     private preview: PreviewManager
   ) {
+    this.titledResumed = !!chat.sessionId
     this.ready = new Promise<void>((resolve) => {
       this.resolveReady = resolve
     })
@@ -297,7 +358,7 @@ class ClaudeSession implements AgentSession {
   }
 
   /**
-   * Streaming deltas are coalesced for ~40ms before being sent over IPC —
+   * Streaming deltas are coalesced for ~80ms before being sent over IPC —
    * per-token renders make long thinking phases feel like the UI hangs.
    */
   private queueDelta(messageId: string, partIndex: number, delta: string): void {
@@ -305,7 +366,7 @@ class ClaudeSession implements AgentSession {
     const buffered = this.deltaBuf.get(key)
     if (buffered) buffered.text += delta
     else this.deltaBuf.set(key, { messageId, partIndex, text: delta })
-    this.flushTimer ??= setTimeout(() => this.flushDeltas(), 40)
+    this.flushTimer ??= setTimeout(() => this.flushDeltas(), 80)
     this.store.saveChatSoon(this.chat.id)
   }
 
@@ -332,12 +393,41 @@ class ClaudeSession implements AgentSession {
     this.store.saveChatSoon(this.chat.id)
   }
 
+  /**
+   * Replace the placeholder title with a terse AI summary of the user's opening
+   * message. Fired from send() so it runs in parallel with the first turn (not
+   * after it) — the sidebar shimmers via `title-pending` until it lands. Best-
+   * effort and fire-once: skips manually-renamed and resumed chats.
+   */
+  private async maybeGenerateTitle(): Promise<void> {
+    if (this.titledOnce || this.titledResumed || this.chat.titleManual) return
+    const userText = firstUserText(this.chat.messages)
+    if (!userText) return
+    this.titledOnce = true
+    this.setTitlePending(true)
+    try {
+      const title = await generateClaudeTitle(this.chat.cwd, userText)
+      if (title && !this.disposed && !this.chat.titleManual) {
+        this.chat.title = title
+        this.emit({ type: 'meta', chatId: this.chat.id, patch: { title } })
+        this.store.saveChatSoon(this.chat.id)
+      }
+    } finally {
+      this.setTitlePending(false)
+    }
+  }
+
+  private setTitlePending(pending: boolean): void {
+    if (this.titlePending === pending) return
+    this.titlePending = pending
+    this.emit({ type: 'title-pending', chatId: this.chat.id, pending })
+  }
+
   send(text: string, attachments: Attachment[] = [], label?: string): void {
     if (!this.chat.title) {
-      // A labelled action message (e.g. "Commit") makes a poor chat title — use
-      // the label so the sidebar reads "Commit", not the verbose prompt.
-      const title = label || text || attachments.map((a) => a.name).join(', ')
-      this.chat.title = title.replace(/\s+/g, ' ').trim().slice(0, 64)
+      // Instant placeholder from the first message; the AI title is generated in
+      // parallel with the turn below (see maybeGenerateTitle) and swaps it in.
+      this.chat.title = deriveTitle(text, label, attachments)
       this.emit({ type: 'meta', chatId: this.chat.id, patch: { title: this.chat.title } })
     }
     // The GUI message id doubles as the SDK message uuid (stamped on the input
@@ -351,6 +441,8 @@ class ClaudeSession implements AgentSession {
       ...(attachments.length ? { attachments } : {}),
       ...(label ? { label } : {})
     })
+    // Kick off the AI title now so it resolves alongside the turn, not after it.
+    void this.maybeGenerateTitle()
     this.emit({ type: 'meta', chatId: this.chat.id, patch: { updatedAt: this.chat.updatedAt } })
     this.setStatus(this.chat.sessionId ? 'streaming' : 'starting')
 
@@ -394,11 +486,23 @@ class ClaudeSession implements AgentSession {
     } catch (err) {
       console.error('interrupt failed:', err)
     }
+    this.terminalizeRunning('error')
     this.setStatus('idle')
   }
 
   private emitBackgroundJobs(jobs: BackgroundJob[]): void {
+    const hadJobs = this.backgroundJobCount > 0
+    this.backgroundJobCount = jobs.length
     this.emit({ type: 'background-jobs', chatId: this.chat.id, jobs })
+    if (
+      hadJobs &&
+      jobs.length === 0 &&
+      this.lastEmittedStatus === 'idle' &&
+      !this.disposed &&
+      !this.dead
+    ) {
+      this.terminalizeRunning('success')
+    }
   }
 
   async setModel(model?: string): Promise<void> {
@@ -651,6 +755,8 @@ class ClaudeSession implements AgentSession {
   }
 
   dispose(): void {
+    this.setTitlePending(false)
+    this.terminalizeRunning('error')
     this.disposed = true
     this.dead = true
     this.resolveReady()
@@ -743,6 +849,7 @@ class ClaudeSession implements AgentSession {
         // The process (and any background tasks it owned) is gone.
         this.emitBackgroundJobs([])
         this.denyAllPending(false)
+        this.terminalizeRunning('error')
         this.setStatus('idle')
       }
       this.store.saveChat(this.chat.id)
@@ -926,6 +1033,11 @@ class ClaudeSession implements AgentSession {
           }
         }
         this.interruptedTurn = false
+        // Background tasks can legitimately outlive the parent turn. Keep
+        // their tool cards live until the SDK reports the job set empty.
+        if (this.backgroundJobCount === 0) {
+          this.terminalizeRunning(msg.subtype === 'success' ? 'success' : 'error')
+        }
         this.current = null
         this.setStatus('idle')
         this.emit({ type: 'meta', chatId: this.chat.id, patch: { updatedAt: this.chat.updatedAt } })
@@ -957,6 +1069,29 @@ class ClaudeSession implements AgentSession {
       part: message.parts[index]
     })
     this.store.saveChatSoon(this.chat.id)
+  }
+
+  /** Ensure interrupted/disposed turns never leave infinite tool spinners behind. */
+  private terminalizeRunning(status: 'success' | 'error'): void {
+    const settle = (part: ToolPart): boolean => {
+      let changed = false
+      if (part.status === 'running' || part.status === 'pending') {
+        part.status = status
+        changed = true
+      }
+      if (part.children) {
+        for (const child of part.children) {
+          if (child?.type === 'tool' && settle(child)) changed = true
+        }
+      }
+      return changed
+    }
+    for (const message of this.chat.messages) {
+      if (message.role !== 'assistant') continue
+      message.parts.forEach((part, index) => {
+        if (part?.type === 'tool' && settle(part)) this.emitPart(message, index)
+      })
+    }
   }
 
   private handleStreamEvent(event: {
@@ -1278,6 +1413,7 @@ class ClaudeSession implements AgentSession {
 
 export class ChatManager {
   private sessions = new Map<string, AgentSession>()
+  private static readonly MAX_IDLE_SESSIONS = 2
   // Slash commands are the same for every chat in a folder, so cache them by cwd
   // — new chats in a known project can show the menu before their first turn.
   private commandsByCwd = new Map<string, SlashCommand[]>()
@@ -1292,8 +1428,22 @@ export class ChatManager {
 
   private sessionFor(chatId: string): AgentSession | null {
     const session = this.sessions.get(chatId)
-    if (session && !session.dead) return session
+    if (session && !session.dead) {
+      // Map insertion order doubles as a tiny LRU.
+      this.sessions.delete(chatId)
+      this.sessions.set(chatId, session)
+      return session
+    }
     return null
+  }
+
+  private pruneIdleSessions(): void {
+    const idle = [...this.sessions.entries()].filter(([, session]) => session.idle)
+    while (idle.length > ChatManager.MAX_IDLE_SESSIONS) {
+      const [chatId, session] = idle.shift()!
+      session.dispose()
+      this.sessions.delete(chatId)
+    }
   }
 
   /** Cached commands for a folder, warming a one-shot session on a cache miss. */
@@ -1360,18 +1510,28 @@ export class ChatManager {
     const onDead = (): void => {
       if (this.sessions.get(chat.id)?.dead) this.sessions.delete(chat.id)
     }
+    const sessionEmit: Emit = (event) => {
+      this.emit(event)
+      if (
+        (event.type === 'status' && event.status === 'idle') ||
+        (event.type === 'background-jobs' && event.jobs.length === 0)
+      ) {
+        queueMicrotask(() => this.pruneIdleSessions())
+      }
+    }
     const session: AgentSession =
       chat.provider === 'codex'
-        ? new CodexSession(chat, this.emit, this.store, onDead)
+        ? new CodexSession(chat, sessionEmit, this.store, onDead)
         : new ClaudeSession(
             chat,
-            this.emit,
+            sessionEmit,
             this.store,
             onDead,
             (commands) => this.commandsByCwd.set(chat.cwd, commands),
             this.preview
           )
     this.sessions.set(chat.id, session)
+    this.pruneIdleSessions()
     return session
   }
 
@@ -1674,7 +1834,21 @@ export class ChatManager {
   }
 
   async interrupt(chatId: string): Promise<void> {
-    await this.sessionFor(chatId)?.interrupt()
+    const session = this.sessionFor(chatId)
+    if (session) {
+      await session.interrupt()
+      return
+    }
+    // A persisted Codex plan can be waiting without a live SDK wrapper after an
+    // app restart. Stopping it should still dismiss the review cleanly.
+    const chat = this.store.getChat(chatId)
+    const review = chat?.provider === 'codex' ? chat.pendingPlanReview : undefined
+    if (!chat || !review) return
+    chat.pendingPlanReview = undefined
+    this.store.saveChat(chatId)
+    this.emit({ type: 'permission-resolved', chatId, requestId: review.requestId })
+    this.emit({ type: 'meta', chatId, patch: { pendingPlanReview: undefined } })
+    this.emit({ type: 'status', chatId, status: 'idle' })
   }
 
   async stopBackgroundJob(chatId: string, taskId: string): Promise<void> {
@@ -1682,7 +1856,17 @@ export class ChatManager {
   }
 
   respondPermission(chatId: string, requestId: string, decision: PermissionDecision): void {
-    this.sessionFor(chatId)?.respondPermission(requestId, decision)
+    const live = this.sessionFor(chatId)
+    if (live) {
+      live.respondPermission(requestId, decision)
+      return
+    }
+    // Codex plan reviews are persisted. Recreate the lightweight thread wrapper
+    // on demand so an approval made after an app restart can still continue.
+    const chat = this.store.getChat(chatId)
+    if (chat?.provider === 'codex' && chat.pendingPlanReview?.requestId === requestId) {
+      this.createSession(chat).respondPermission(requestId, decision)
+    }
   }
 
   async setOptions(
@@ -1702,11 +1886,21 @@ export class ChatManager {
         chat.provider = nextProvider
         chat.effort = effortForProvider(chat.effort, nextProvider)
         chat.sessionId = undefined
+        const review = chat.pendingPlanReview
+        chat.pendingPlanReview = undefined
         this.disposeChat(chatId)
+        if (review) {
+          this.emit({ type: 'permission-resolved', chatId, requestId: review.requestId })
+        }
         this.emit({
           type: 'meta',
           chatId,
-          patch: { provider: nextProvider, sessionId: undefined, effort: chat.effort }
+          patch: {
+            provider: nextProvider,
+            sessionId: undefined,
+            effort: chat.effort,
+            pendingPlanReview: undefined
+          }
         })
         // A disposed session emits no final status; release the renderer so a
         // switch during a live turn doesn't leave the chat stuck 'streaming'.
@@ -1724,6 +1918,11 @@ export class ChatManager {
       }
       chat.permissionMode = patch.permissionMode
       await session?.setPermissionMode(patch.permissionMode)
+      if (!session && patch.permissionMode !== 'plan' && chat.pendingPlanReview) {
+        const { requestId } = chat.pendingPlanReview
+        chat.pendingPlanReview = undefined
+        this.emit({ type: 'permission-resolved', chatId, requestId })
+      }
     }
     if (patch.effort !== undefined && (patch.effort || undefined) !== chat.effort) {
       chat.effort = effortForProvider(patch.effort || undefined, chat.provider)
@@ -1733,7 +1932,11 @@ export class ChatManager {
         this.disposeChat(chatId)
         // Same as the provider switch: the disposed session won't emit a final
         // status, so release the renderer in case the change landed mid-turn.
-        this.emit({ type: 'status', chatId, status: 'idle' })
+        this.emit({
+          type: 'status',
+          chatId,
+          status: chat.pendingPlanReview ? 'waiting-permission' : 'idle'
+        })
       }
     }
     this.store.saveChat(chatId)
@@ -1742,7 +1945,12 @@ export class ChatManager {
     this.emit({
       type: 'meta',
       chatId,
-      patch: { model: chat.model, effort: chat.effort, permissionMode: chat.permissionMode }
+      patch: {
+        model: chat.model,
+        effort: chat.effort,
+        permissionMode: chat.permissionMode,
+        pendingPlanReview: chat.pendingPlanReview
+      }
     })
   }
 

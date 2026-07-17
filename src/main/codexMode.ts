@@ -17,6 +17,14 @@ const DEFAULT_MODE = `<collaboration_mode>
 You are in Default mode. Any Plan mode instruction from an earlier turn no longer applies. Handle the user's request normally under the configured sandbox, implementing changes when the user asks for them.
 </collaboration_mode>`
 
+const MULTI_AGENT_LIFECYCLE = `<multi_agent_lifecycle>
+When you spawn sub-agents, keep this turn open until every spawned agent reaches a terminal state.
+
+- Do not send the final answer while any spawned agent is pending or running.
+- Use wait_agent repeatedly as needed, collect every agent's result, and then synthesize those results in the final answer.
+- This requirement also applies when the user asks only to launch agents: wait for them instead of returning immediately, because ending a Codex exec turn interrupts unfinished child agents.
+</multi_agent_lifecycle>`
+
 /**
  * `@openai/codex-sdk` currently exposes sandbox options but not the interactive
  * client's collaboration-mode switch. Add the mode instruction to the hidden
@@ -26,7 +34,8 @@ You are in Default mode. Any Plan mode instruction from an earlier turn no longe
  */
 export function promptForCodexMode(prompt: string, planMode: boolean): string {
   const instruction = planMode ? PLAN_MODE : DEFAULT_MODE
-  return prompt ? `${instruction}\n\n${prompt}` : instruction
+  const providerInstructions = `${instruction}\n\n${MULTI_AGENT_LIFECYCLE}`
+  return prompt ? `${providerInstructions}\n\n${prompt}` : providerInstructions
 }
 
 export interface ParsedCodexPlan {
@@ -36,16 +45,14 @@ export interface ParsedCodexPlan {
   displayText: string
 }
 
-/**
- * Pull the structured proposal out of Codex's final message. The whole message
- * is a deliberate fallback for models that omit the tags: a completed Plan-mode
- * turn should still reach review instead of silently becoming ordinary prose.
- */
+/** Pull a structured proposal out of Codex's final message. */
 export function parseCodexPlan(text: string): ParsedCodexPlan | null {
   const trimmed = text.trim()
   if (!trimmed) return null
   const tagged = /<proposed_plan>\s*([\s\S]*?)\s*<\/proposed_plan>/i.exec(trimmed)
-  if (!tagged) return { plan: trimmed, displayText: trimmed }
+  // Clarifying questions explicitly omit these tags. Requiring them prevents a
+  // question or failure explanation from becoming an approvable "plan".
+  if (!tagged) return null
   const plan = tagged[1].trim()
   if (!plan) return null
   return {

@@ -34,6 +34,7 @@ import type {
   ModelOption,
   PermissionDecision,
   PermissionRequestPayload,
+  PersistedPlanReview,
   PreviewState,
   Provider,
   RateLimitState,
@@ -52,6 +53,23 @@ export interface QueuedMessage {
   attachments?: Attachment[]
   /** Display label for an app-initiated action (e.g. "Commit"); see UserMessage.label. */
   label?: string
+}
+
+function persistedPlanRequest(
+  chatId: string,
+  review: PersistedPlanReview
+): PermissionRequestPayload {
+  return {
+    id: review.requestId,
+    chatId,
+    toolUseId: `codex-plan-${review.requestId}`,
+    toolName: 'ExitPlanMode',
+    input: { plan: review.plan },
+    title: 'Review plan',
+    displayName: 'Codex plan',
+    description: 'Approve this plan to implement it, or request a revision.',
+    hasSuggestions: false
+  }
 }
 
 export interface TerminalTab {
@@ -116,6 +134,8 @@ interface AppState {
   /** Messages of the active chat. */
   messages: ChatMessage[]
   statuses: Record<string, ChatStatus>
+  /** Chats whose AI title is being generated right now (sidebar shimmers them). */
+  titling: Record<string, boolean>
   /** Live background tasks per chat (SDK reports the full set on each change). */
   backgroundJobs: Record<string, BackgroundJob[]>
   /** Latest plan rate-limit signal per chat (from `rate_limit_event`). */
@@ -251,7 +271,7 @@ interface AppState {
   /** Pins a preview tab so the next preview doesn't replace it. */
   promoteTab(path: string): void
   setActiveTab(tab: string): void
-  refreshFiles(): Promise<void>
+  refreshFiles(options?: { invalidateImages?: boolean }): Promise<void>
 
   // ---- Git ----
   git: GitStatus | null
@@ -399,6 +419,18 @@ function upsertMessage(messages: ChatMessage[], message: ChatMessage): ChatMessa
   return next
 }
 
+function updateAssistant(
+  messages: ChatMessage[],
+  id: string,
+  update: (message: AssistantMessage) => AssistantMessage
+): ChatMessage[] {
+  const idx = messages.findIndex((message) => message.id === id && message.role === 'assistant')
+  if (idx === -1) return messages
+  const next = messages.slice()
+  next[idx] = update(messages[idx] as AssistantMessage)
+  return next
+}
+
 /** Shallow copy of a per-chat map with the given ids removed. */
 function omit<T>(map: Record<string, T>, ids: string[]): Record<string, T> {
   const next = { ...map }
@@ -461,6 +493,7 @@ export const useApp = create<AppState>((set, get) => ({
   selectedCwd: null,
   messages: [],
   statuses: {},
+  titling: {},
   backgroundJobs: {},
   rateLimits: {},
   models: [],
@@ -929,12 +962,12 @@ export const useApp = create<AppState>((set, get) => ({
     set({ activeTab: tab })
   },
 
-  async refreshFiles() {
+  async refreshFiles(options) {
     const s = get()
     // Files on disk are being re-synced (after a turn, a manual refresh, or a
     // terminal/external edit) — a displayed local image may have changed, so drop
     // the path-keyed image cache too.
-    invalidateLocalImages()
+    if (options?.invalidateImages !== false) invalidateLocalImages()
     const dirs = [
       ...(s.selectedCwd ? [s.selectedCwd] : []),
       ...Object.keys(s.expandedDirs).filter((d) => s.expandedDirs[d] && s.filesByDir[d])
@@ -1319,7 +1352,22 @@ export const useApp = create<AppState>((set, get) => ({
         const messages = s.messages.reduce(upsertMessage, chat.messages)
         // Tabs were already restored synchronously above; only the folder is
         // deferred until now (it needs the chat's cwd from disk).
-        return { messages, selectedCwd: chat.cwd }
+        const review = chat.pendingPlanReview
+        const permissions = review
+          ? {
+              ...s.permissions,
+              [id]: [
+                ...(s.permissions[id] ?? []).filter((request) => request.id !== review.requestId),
+                persistedPlanRequest(id, review)
+              ]
+            }
+          : s.permissions
+        return {
+          messages,
+          selectedCwd: chat.cwd,
+          permissions,
+          statuses: review ? { ...s.statuses, [id]: 'waiting-permission' } : s.statuses
+        }
       })
       // Keyed by provider too: switching Claude→Codex in the same folder must
       // clear Claude's commands (and Codex→Claude must restore them).
@@ -1458,6 +1506,7 @@ export const useApp = create<AppState>((set, get) => ({
         activeTab: wasActive ? null : s.activeTab,
         queued: omit(s.queued, [id]),
         statuses: omit(s.statuses, [id]),
+        titling: omit(s.titling, [id]),
         permissions: omit(s.permissions, [id]),
         backgroundJobs: omit(s.backgroundJobs, [id]),
         rateLimits: omit(s.rateLimits, [id]),
@@ -1498,6 +1547,7 @@ export const useApp = create<AppState>((set, get) => ({
         activeTab: wasActive ? null : s.activeTab,
         queued: omit(s.queued, ids),
         statuses: omit(s.statuses, ids),
+        titling: omit(s.titling, ids),
         permissions: omit(s.permissions, ids),
         backgroundJobs: omit(s.backgroundJobs, ids),
         rateLimits: omit(s.rateLimits, ids),
@@ -1510,7 +1560,9 @@ export const useApp = create<AppState>((set, get) => ({
 
   async renameChat(id, title) {
     await window.api.renameChat(id, title)
-    set((s) => ({ chats: s.chats.map((c) => (c.id === id ? { ...c, title } : c)) }))
+    set((s) => ({
+      chats: s.chats.map((c) => (c.id === id ? { ...c, title, titleManual: true } : c))
+    }))
   },
 
   async setChatOptions(patch) {
@@ -1580,8 +1632,7 @@ export const useApp = create<AppState>((set, get) => ({
       case 'part': {
         if (ev.chatId !== s.activeId) break
         set({
-          messages: s.messages.map((m) => {
-            if (m.id !== ev.messageId || m.role !== 'assistant') return m
+          messages: updateAssistant(s.messages, ev.messageId, (m) => {
             const parts = m.parts.slice()
             parts[ev.partIndex] = ev.part
             return { ...m, parts }
@@ -1593,8 +1644,7 @@ export const useApp = create<AppState>((set, get) => ({
       case 'part-delta': {
         if (ev.chatId !== s.activeId) break
         set({
-          messages: s.messages.map((m) => {
-            if (m.id !== ev.messageId || m.role !== 'assistant') return m
+          messages: updateAssistant(s.messages, ev.messageId, (m) => {
             const parts = m.parts.slice()
             const part = parts[ev.partIndex]
             if (part && (part.type === 'text' || part.type === 'thinking')) {
@@ -1609,14 +1659,12 @@ export const useApp = create<AppState>((set, get) => ({
       case 'tool-update': {
         if (ev.chatId !== s.activeId) break
         set({
-          messages: s.messages.map((m) => {
-            if (m.id !== ev.messageId || m.role !== 'assistant') return m
-            const am = m as AssistantMessage
-            const parts = am.parts.map((p) =>
+          messages: updateAssistant(s.messages, ev.messageId, (m) => {
+            const parts = m.parts.map((p) =>
               // Streamed parts arrays can be sparse — guard the holes.
               p && p.type === 'tool' && p.toolUseId === ev.toolUseId ? { ...p, ...ev.patch } : p
             )
-            return { ...am, parts }
+            return { ...m, parts }
           })
         })
         break
@@ -1643,6 +1691,11 @@ export const useApp = create<AppState>((set, get) => ({
         break
       }
 
+      case 'title-pending': {
+        set((st) => ({ titling: { ...st.titling, [ev.chatId]: ev.pending } }))
+        break
+      }
+
       case 'status': {
         set((st) => ({ statuses: { ...st.statuses, [ev.chatId]: ev.status } }))
         // Any non-idle status means a live session (a new chat's first turn is
@@ -1661,18 +1714,19 @@ export const useApp = create<AppState>((set, get) => ({
             }))
             void window.api.send(ev.chatId, next.text, next.attachments, next.label)
           }
-          // Drop cached local images after ANY chat's turn — a background chat
-          // can overwrite an image (e.g. a regenerated logo) that a foreground or
-          // later-reopened chat renders. The cache is keyed only by path, so it
-          // must be global; re-reads are cheap and don't flash unchanged images.
-          invalidateLocalImages()
           // Refresh the tree, open files and git status for the active chat so
           // the agent's edits show up.
           if (ev.chatId === s.activeId) {
+            // Invalidate once for the visible chat. Background turns are handled
+            // when that chat is opened, avoiding needless multi-megabyte image
+            // re-reads in an unrelated foreground conversation.
+            invalidateLocalImages()
             void get().refreshGit()
             // The agent may have pushed or opened a PR — pick up the new state.
             void get().refreshGithub()
-            if (s.panelOpen || s.openFiles.length > 0) void get().refreshFiles()
+            if (s.panelOpen || s.openFiles.length > 0) {
+              void get().refreshFiles({ invalidateImages: false })
+            }
           }
         }
         break

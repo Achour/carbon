@@ -38,9 +38,17 @@ export function effortForProvider(effort: EffortId | undefined, provider: Provid
 
 export type ChatStatus = 'idle' | 'starting' | 'streaming' | 'waiting-permission'
 
+export interface PersistedPlanReview {
+  requestId: string
+  plan: string
+  userMessageId: string
+}
+
 export interface ChatMeta {
   id: string
   title: string
+  /** True once the user renamed the chat; suppresses the auto-generated title. */
+  titleManual?: boolean
   cwd: string
   provider: Provider
   /** Model override; undefined means the user's default model. */
@@ -50,6 +58,8 @@ export interface ChatMeta {
   permissionMode: PermissionModeId
   /** Mode the chat was in before switching to plan; restored on plan approval. */
   modeBeforePlan?: PermissionModeId
+  /** Codex plan awaiting approval; persisted so review survives an app restart. */
+  pendingPlanReview?: PersistedPlanReview
   /** Provider-side session id, used to resume conversations. */
   sessionId?: string
   /** Tokens currently in the model's context (from the last API call). */
@@ -231,6 +241,8 @@ export interface BackgroundJob {
   /** Friendly type: 'shell' | 'subagent' | 'monitor' | 'workflow' | … */
   type: string
   description: string
+  /** Defaults to true. False when the provider exposes status but no per-job stop API. */
+  stoppable?: boolean
 }
 
 /** Generic ok/error result for main-process operations that can fail. */
@@ -320,6 +332,9 @@ export type ChatEvent =
   | { type: 'commands'; chatId: string; cwd: string; commands: SlashCommand[] }
   | { type: 'background-jobs'; chatId: string; jobs: BackgroundJob[] }
   | { type: 'rate-limit'; chatId: string; state: RateLimitState }
+  // Transient (not persisted): the AI title is being generated for this chat, so
+  // the sidebar can shimmer the placeholder until the real title arrives.
+  | { type: 'title-pending'; chatId: string; pending: boolean }
 
 // ---------- Settings ----------
 

@@ -524,3 +524,50 @@ export const Markdown = React.memo(function Markdown({
     </div>
   )
 })
+
+const STREAM_RENDER_MS = 120
+
+/**
+ * Markdown parsing and syntax highlighting are intentionally capped while text
+ * streams. The latest text is always shown immediately when streaming ends.
+ */
+export const StreamingMarkdown = React.memo(function StreamingMarkdown({
+  text,
+  cwd = null,
+  className
+}: {
+  text: string
+  cwd?: string | null
+  className?: string
+}): React.JSX.Element {
+  const latestRef = React.useRef(text)
+  const lastCommitRef = React.useRef(performance.now())
+  const timerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [shown, setShown] = React.useState(text)
+  latestRef.current = text
+
+  React.useEffect(() => {
+    const elapsed = performance.now() - lastCommitRef.current
+    if (elapsed >= STREAM_RENDER_MS) {
+      lastCommitRef.current = performance.now()
+      setShown(text)
+      return
+    }
+    if (timerRef.current === null) {
+      timerRef.current = setTimeout(() => {
+        timerRef.current = null
+        lastCommitRef.current = performance.now()
+        setShown(latestRef.current)
+      }, STREAM_RENDER_MS - elapsed)
+    }
+  }, [text])
+
+  React.useEffect(
+    () => () => {
+      if (timerRef.current !== null) clearTimeout(timerRef.current)
+    },
+    []
+  )
+
+  return <Markdown text={shown} cwd={cwd} className={className} />
+})

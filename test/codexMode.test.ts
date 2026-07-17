@@ -20,6 +20,14 @@ test('Default mode explicitly releases a resumed thread from Plan mode', () => {
   assert.ok(prompt.endsWith('Implement the plan'))
 })
 
+test('Codex keeps the parent turn alive until spawned agents finish', () => {
+  const prompt = promptForCodexMode('Use three agents', false)
+
+  assert.match(prompt, /Do not send the final answer while any spawned agent is pending or running/)
+  assert.match(prompt, /Use wait_agent repeatedly/)
+  assert.match(prompt, /ending a Codex exec turn interrupts unfinished child agents/)
+})
+
 test('an empty Plan prompt still carries the mode instruction', () => {
   const prompt = promptForCodexMode('', true)
 
@@ -37,10 +45,8 @@ test('extracts a tagged proposal and removes transport tags from displayed text'
   )
 })
 
-test('uses untagged final text as a reviewable proposal fallback', () => {
-  assert.deepEqual(parseCodexPlan('## Plan\n\n1. Verify it.'), {
-    plan: '## Plan\n\n1. Verify it.',
-    displayText: '## Plan\n\n1. Verify it.'
-  })
+test('does not turn untagged prose or clarifying questions into a plan', () => {
+  assert.equal(parseCodexPlan('## Plan\n\n1. Verify it.'), null)
+  assert.equal(parseCodexPlan('Which database should I use?'), null)
   assert.equal(parseCodexPlan('   '), null)
 })

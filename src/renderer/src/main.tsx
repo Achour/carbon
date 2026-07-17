@@ -21,6 +21,16 @@ applyTheme(storedTheme())
 applyCodeFontSize(storedCodeFontSize())
 applyTranslucent(storedTranslucent())
 
+const syncWindowActivity = (): void => {
+  document.documentElement.dataset.windowActive = String(
+    document.visibilityState === 'visible' && document.hasFocus()
+  )
+}
+syncWindowActivity()
+document.addEventListener('visibilitychange', syncWindowActivity)
+window.addEventListener('focus', syncWindowActivity)
+window.addEventListener('blur', syncWindowActivity)
+
 if (import.meta.env.DEV) {
   // Expose the store (and preview registry) for the AIGUI_E2E dev hook.
   ;(window as unknown as Record<string, unknown>).__app = useApp

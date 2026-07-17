@@ -85,6 +85,8 @@ export function TerminalPane({ id, active }: { id: string; active: boolean }): R
   const termRef = React.useRef<Terminal | null>(null)
   const fitRef = React.useRef<FitAddon | null>(null)
   const exitedRef = React.useRef(false)
+  const activeRef = React.useRef(active)
+  const pendingOutputRef = React.useRef('')
   // Timestamp of the last spawn, so an exit that lands right after one (a
   // replacement, or React StrictMode's dev remount) doesn't print a stale
   // "process exited" line — only a genuine, later exit does.
@@ -117,7 +119,7 @@ export function TerminalPane({ id, active }: { id: string; active: boolean }): R
       fontFamily: '"JetBrains Mono Variable", ui-monospace, SFMono-Regular, Menlo, monospace',
       fontSize: codeFontSize(),
       lineHeight: 1.2,
-      cursorBlink: true,
+      cursorBlink: activeRef.current,
       allowProposedApi: false,
       theme: themeColors()
     })
@@ -140,14 +142,24 @@ export function TerminalPane({ id, active }: { id: string; active: boolean }): R
     // pty output / exit → terminal.
     const offEvent = window.api.onTerminalEvent((ev: TerminalEvent) => {
       if (ev.id !== id) return
+      const write = (data: string): void => {
+        if (activeRef.current) {
+          term.write(data)
+          return
+        }
+        // Keep the pty alive without asking xterm/Chromium to render every
+        // background byte. Bound the buffer to prevent runaway memory use.
+        const next = pendingOutputRef.current + data
+        pendingOutputRef.current = next.length > 1_000_000 ? next.slice(-1_000_000) : next
+      }
       if (ev.type === 'data') {
-        term.write(ev.data)
+        write(ev.data)
       } else {
         // Ignore an exit right after a spawn (session replacement / StrictMode
         // dev remount) — the fresh shell is already taking over.
         if (performance.now() - lastSpawnRef.current < 600) return
         exitedRef.current = true
-        term.write(
+        write(
           `\r\n\x1b[90m[process exited (${ev.exitCode}) — press any key to restart]\x1b[0m\r\n`
         )
       }
@@ -188,17 +200,23 @@ export function TerminalPane({ id, active }: { id: string; active: boolean }): R
 
   // Refit + focus whenever the terminal becomes the visible tab.
   React.useEffect(() => {
+    activeRef.current = active
+    const term = termRef.current
+    if (term) term.options.cursorBlink = active
     if (!active) return
     const raf = requestAnimationFrame(() => {
+      const pending = pendingOutputRef.current
+      pendingOutputRef.current = ''
+      if (pending) termRef.current?.write(pending)
       try {
         fitRef.current?.fit()
       } catch {
         // ignore
       }
-      const term = termRef.current
-      if (term) {
-        void window.api.terminalResize(id, term.cols, term.rows)
-        term.focus()
+      const visibleTerm = termRef.current
+      if (visibleTerm) {
+        void window.api.terminalResize(id, visibleTerm.cols, visibleTerm.rows)
+        visibleTerm.focus()
       }
     })
     return () => cancelAnimationFrame(raf)

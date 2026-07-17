@@ -141,10 +141,23 @@ const WALK_MAX_DEPTH = 10
 const WALK_TTL_MS = 15_000
 
 const walkCache = new Map<string, { ts: number; rels: string[] }>()
+const walkInflight = new Map<string, Promise<string[]>>()
 
 async function walkProject(root: string): Promise<string[]> {
   const cached = walkCache.get(root)
   if (cached && Date.now() - cached.ts < WALK_TTL_MS) return cached.rels
+  const inflight = walkInflight.get(root)
+  if (inflight) return inflight
+  const scan = scanProject(root)
+  walkInflight.set(root, scan)
+  try {
+    return await scan
+  } finally {
+    if (walkInflight.get(root) === scan) walkInflight.delete(root)
+  }
+}
+
+async function scanProject(root: string): Promise<string[]> {
   const rels: string[] = []
   const queue: Array<{ dir: string; depth: number }> = [{ dir: root, depth: 0 }]
   while (queue.length > 0 && rels.length < WALK_MAX_FILES) {

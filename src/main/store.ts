@@ -5,9 +5,13 @@ import {
   readdirSync,
   readFileSync,
   renameSync,
-  rmSync,
   writeFileSync
 } from 'node:fs'
+import {
+  rename as renameAsync,
+  rm as rmAsync,
+  writeFile as writeFileAsync
+} from 'node:fs/promises'
 import { join } from 'node:path'
 import type { AppDefaults, ChatData, ChatMeta, EffortId, PermissionModeId } from '@shared/types'
 
@@ -22,6 +26,12 @@ function writeFileAtomic(path: string, data: string): void {
   renameSync(tmp, path)
 }
 
+async function writeFileAtomicAsync(path: string, data: string): Promise<void> {
+  const tmp = `${path}.tmp`
+  await writeFileAsync(tmp, data)
+  await renameAsync(tmp, path)
+}
+
 interface SettingsFile {
   defaults: AppDefaults
   windowBounds?: { x?: number; y?: number; width: number; height: number }
@@ -31,12 +41,39 @@ const DEFAULT_SETTINGS: SettingsFile = {
   defaults: { permissionMode: 'default', recentDirs: [] }
 }
 
+function settleOrphanedTools(chat: ChatData): boolean {
+  let changed = false
+  const settle = (parts: unknown): void => {
+    if (!Array.isArray(parts)) return
+    for (const raw of parts) {
+      if (!raw || typeof raw !== 'object') continue
+      const part = raw as {
+        type?: string
+        status?: string
+        children?: unknown[]
+      }
+      if (part.type === 'tool' && (part.status === 'running' || part.status === 'pending')) {
+        part.status = 'error'
+        changed = true
+      }
+      if (part.children) settle(part.children)
+    }
+  }
+  for (const message of chat.messages) {
+    if (message.role === 'assistant') settle(message.parts)
+  }
+  return changed
+}
+
 export class Store {
   private chatsDir: string
   private settingsPath: string
   private chats = new Map<string, ChatData>()
   private settings: SettingsFile
   private saveTimers = new Map<string, NodeJS.Timeout>()
+  private firstDirtyAt = new Map<string, number>()
+  private requestedWrites = new Map<string, number>()
+  private chatWrites = new Map<string, Promise<void>>()
 
   constructor() {
     const userData = app.getPath('userData')
@@ -76,7 +113,12 @@ export class Store {
       if (!file.endsWith('.json')) continue
       try {
         const data = JSON.parse(readFileSync(join(this.chatsDir, file), 'utf8')) as ChatData
-        if (data?.id) this.chats.set(data.id, data)
+        if (data?.id) {
+          this.chats.set(data.id, data)
+          // No provider process survives an application restart. Repair stale
+          // persisted running states so reopened histories cannot animate forever.
+          if (settleOrphanedTools(data)) this.saveChatSoon(data.id)
+        }
       } catch (err) {
         console.error(`Failed to load chat ${file}:`, err)
       }
@@ -103,41 +145,98 @@ export class Store {
     const timer = this.saveTimers.get(id)
     if (timer) clearTimeout(timer)
     this.saveTimers.delete(id)
-    try {
-      rmSync(join(this.chatsDir, `${id}.json`), { force: true })
-    } catch (err) {
-      console.error('Failed to delete chat file:', err)
-    }
+    this.firstDirtyAt.delete(id)
+    this.requestedWrites.delete(id)
+    // An already-running atomic write may still rename its temp file. Remove
+    // only after it settles so deletion cannot be undone by that late rename.
+    const pending = this.chatWrites.get(id) ?? Promise.resolve()
+    void pending
+      .catch(() => undefined)
+      .then(() => rmAsync(join(this.chatsDir, `${id}.json`), { force: true }))
+      .catch((err) => console.error('Failed to delete chat file:', err))
   }
 
   saveChat(id: string): void {
-    const chat = this.chats.get(id)
-    if (!chat) return
-    try {
-      writeFileAtomic(join(this.chatsDir, `${id}.json`), JSON.stringify(chat))
-    } catch (err) {
-      console.error('Failed to save chat:', err)
+    const timer = this.saveTimers.get(id)
+    if (timer) clearTimeout(timer)
+    this.saveTimers.delete(id)
+    this.firstDirtyAt.delete(id)
+    this.requestChatWrite(id)
+  }
+
+  /**
+   * Serialize writes per chat and collapse updates that arrive while disk I/O is
+   * in progress. JSON creation is yielded to a later event-loop turn, while the
+   * actual file write/rename is fully asynchronous.
+   */
+  private requestChatWrite(id: string): void {
+    if (!this.chats.has(id)) return
+    this.requestedWrites.set(id, (this.requestedWrites.get(id) ?? 0) + 1)
+    if (this.chatWrites.has(id)) return
+    const write = this.drainChatWrites(id)
+    this.chatWrites.set(id, write)
+    void write.finally(() => {
+      if (this.chatWrites.get(id) !== write) return
+      this.chatWrites.delete(id)
+      if (this.chats.has(id) && (this.requestedWrites.get(id) ?? 0) > 0) {
+        this.requestChatWrite(id)
+      }
+    })
+  }
+
+  private async drainChatWrites(id: string): Promise<void> {
+    while (this.chats.has(id)) {
+      const requested = this.requestedWrites.get(id) ?? 0
+      this.requestedWrites.set(id, 0)
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      const chat = this.chats.get(id)
+      if (!chat) return
+      try {
+        const data = JSON.stringify(chat)
+        await writeFileAtomicAsync(join(this.chatsDir, `${id}.json`), data)
+      } catch (err) {
+        console.error('Failed to save chat:', err)
+      }
+      // Nothing arrived while serializing/writing, so this snapshot is current.
+      if ((this.requestedWrites.get(id) ?? 0) === 0) return
+      // Preserve the fact that at least one write was requested even if callers
+      // happened to enqueue it before this loop read the counter.
+      if (requested === 0) this.requestedWrites.set(id, 1)
     }
   }
 
-  /** Debounced save for high-frequency streaming updates. */
+  /**
+   * Trailing debounce for streaming updates, with a five-second maximum delay
+   * so a long-running turn still gets periodic crash-recovery snapshots.
+   */
   saveChatSoon(id: string): void {
-    if (this.saveTimers.has(id)) return
+    const existing = this.saveTimers.get(id)
+    if (existing) clearTimeout(existing)
+    const now = Date.now()
+    const first = this.firstDirtyAt.get(id) ?? now
+    this.firstDirtyAt.set(id, first)
+    const delay = Math.min(1500, Math.max(0, 5000 - (now - first)))
     this.saveTimers.set(
       id,
       setTimeout(() => {
         this.saveTimers.delete(id)
+        this.firstDirtyAt.delete(id)
         this.saveChat(id)
-      }, 800)
+      }, delay)
     )
   }
 
-  flushAll(): void {
+  async flushAll(): Promise<void> {
     for (const [id, timer] of this.saveTimers) {
       clearTimeout(timer)
-      this.saveChat(id)
+      this.requestChatWrite(id)
     }
     this.saveTimers.clear()
+    this.firstDirtyAt.clear()
+    for (const id of this.chats.keys()) this.requestChatWrite(id)
+    while (this.chatWrites.size > 0) {
+      await Promise.allSettled([...this.chatWrites.values()])
+    }
   }
 
   getDefaults(): AppDefaults {

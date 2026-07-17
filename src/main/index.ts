@@ -113,12 +113,10 @@ function sendPreviewCommand(cmd: Omit<PreviewCommand, 'id'>): Promise<PreviewCom
 
 function createWindow(): void {
   const bounds = store.getWindowBounds()
-  // macOS: give the window a transparent, vibrant backing up front. The native
-  // "sidebar" material stays behind the whole window permanently; the renderer
-  // decides what shows it — an opaque body hides it entirely (effect off), a
-  // transparent body reveals it behind the sidebar (effect on). This must be set
-  // at creation: a window created opaque can't be made transparent at runtime,
-  // so toggling the CSS is what turns the frosted sidebar on and off live.
+  // Cursor's macOS glass windows use the native "sidebar" material with an active
+  // visual-effect state. Keeping the effect active matters: followWindow flattens
+  // the material whenever the app loses focus, which makes the translucent sidebar
+  // look like an opaque slab. The renderer decides where this backing is visible.
   const mac = process.platform === 'darwin'
   win = new BrowserWindow({
     width: bounds?.width ?? 1280,
@@ -130,8 +128,12 @@ function createWindow(): void {
     show: false,
     titleBarStyle: 'hidden',
     trafficLightPosition: { x: 13, y: 12 },
-    backgroundColor: mac ? '#00000000' : '#1c1c1c',
-    ...(mac ? { vibrancy: 'sidebar' as const } : {}),
+    // Cursor uses a 25% black backing for its dark glass theme. applyVibrancy
+    // switches this to transparent white when the renderer reports a light theme.
+    backgroundColor: mac ? '#40000000' : '#1c1c1c',
+    ...(mac
+      ? { vibrancy: 'sidebar' as const, visualEffectState: 'active' as const }
+      : {}),
     title: 'Karbun',
     webPreferences: {
       preload: join(__dirname, '../preload/index.mjs'),
@@ -238,6 +240,9 @@ function createWindow(): void {
 function applyVibrancy(enabled: boolean, dark: boolean): void {
   if (process.platform !== 'darwin') return
   nativeTheme.themeSource = enabled ? (dark ? 'dark' : 'light') : 'system'
+  // Match Cursor's native glass backing. The opaque renderer layer covers this
+  // everywhere except the sidebar, so changing it cannot tint the work area.
+  win?.setBackgroundColor(dark ? '#40000000' : '#00FFFFFF')
 }
 
 function buildMenu(): void {
@@ -327,8 +332,10 @@ function registerIpc(): void {
     const chat = store.getChat(id)
     if (!chat) return
     chat.title = title
+    // A manual rename pins the title — the auto-generator must never overwrite it.
+    chat.titleManual = true
     store.saveChat(id)
-    emit({ type: 'meta', chatId: id, patch: { title } })
+    emit({ type: 'meta', chatId: id, patch: { title, titleManual: true } })
   })
 
   ipcMain.handle(
@@ -507,9 +514,17 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
-app.on('before-quit', () => {
+let readyToQuit = false
+let quitting: Promise<void> | null = null
+app.on('before-quit', (event) => {
+  if (readyToQuit) return
+  event.preventDefault()
+  if (quitting) return
   manager.disposeAll()
   terminals.disposeAll()
   preview.disposeAll()
-  store.flushAll()
+  quitting = store.flushAll().finally(() => {
+    readyToQuit = true
+    app.quit()
+  })
 })

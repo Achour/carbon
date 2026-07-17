@@ -161,6 +161,42 @@ function renderMessages(messages: ChatMessage[], ctx: RenderCtx): React.ReactNod
   return out
 }
 
+/**
+ * Keep completed history out of the live-stream render loop. Zustand replaces
+ * the active assistant message for each delta but preserves earlier message
+ * objects, so a cheap reference comparison is enough to detect the uncommon
+ * case where a background tool updates an older message.
+ */
+const MessageHistory = React.memo(
+  function MessageHistory({
+    messages,
+    end,
+    ctx
+  }: {
+    messages: ChatMessage[]
+    end: number
+    ctx: RenderCtx
+  }): React.JSX.Element {
+    return <>{renderMessages(messages.slice(0, end), ctx)}</>
+  },
+  (prev, next) => {
+    if (
+      prev.end !== next.end ||
+      prev.ctx.cwd !== next.ctx.cwd ||
+      prev.ctx.busy !== next.ctx.busy ||
+      prev.ctx.lastAssistantId !== next.ctx.lastAssistantId ||
+      prev.ctx.onOpenPlan !== next.ctx.onOpenPlan ||
+      prev.ctx.latestTodoId !== next.ctx.latestTodoId
+    ) {
+      return false
+    }
+    for (let i = 0; i < prev.end; i++) {
+      if (prev.messages[i] !== next.messages[i]) return false
+    }
+    return true
+  }
+)
+
 export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
   const messages = useApp((s) => s.messages)
   const status = useApp((s) => s.statuses[chat.id] ?? 'idle')
@@ -207,9 +243,12 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
     setShowJump(!pinned)
   }
 
-  // Follow the stream while the user is pinned to the bottom.
+  // Follow the stream while the user is pinned to the bottom. One animation
+  // frame coalesces message, status and permission updates that land together.
   React.useEffect(() => {
-    if (pinnedRef.current) scrollToBottom()
+    if (!pinnedRef.current) return
+    const frame = requestAnimationFrame(() => scrollToBottom())
+    return () => cancelAnimationFrame(frame)
   }, [messages, permissions, status, scrollToBottom])
 
   // Jump to the bottom when switching chats.
@@ -218,7 +257,6 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
     requestAnimationFrame(() => scrollToBottom())
   }, [chat.id, scrollToBottom])
 
-  const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant')
   // The live turn's message — only the *last* message counts, so a just-sent user
   // message (before the reply starts) isn't mistaken for the previous reply.
   const lastMsg = messages[messages.length - 1]
@@ -266,6 +304,16 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
       openPlanPanel({ chatId: chat.id, plan, requestId: pendingPlanRequest?.id ?? null })
     },
     [openPlanPanel, chat.id, pendingPlanRequest?.id]
+  )
+  const historyEnd = liveAssistant ? messages.length - 1 : messages.length
+  const historyCtx = React.useMemo<RenderCtx>(
+    () => ({
+      cwd: chat.cwd,
+      busy,
+      onOpenPlan: openPlan,
+      latestTodoId
+    }),
+    [chat.cwd, busy, openPlan, latestTodoId]
   )
 
   return (
@@ -331,13 +379,16 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
       {/* Messages */}
       <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto flex max-w-3xl flex-col gap-4 px-6 py-6">
-          {renderMessages(messages, {
-            cwd: chat.cwd,
-            busy,
-            lastAssistantId: lastAssistant?.id,
-            onOpenPlan: openPlan,
-            latestTodoId
-          })}
+          <MessageHistory messages={messages} end={historyEnd} ctx={historyCtx} />
+          {liveAssistant && (
+            <AssistantBlock
+              message={liveAssistant}
+              cwd={chat.cwd}
+              streaming
+              onOpenPlan={openPlan}
+              latestTodoId={latestTodoId}
+            />
+          )}
           {permissions.map((request) => {
             if (request.toolName === 'AskUserQuestion')
               return <QuestionCard key={request.id} request={request} />

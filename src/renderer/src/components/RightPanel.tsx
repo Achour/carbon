@@ -865,18 +865,16 @@ export function RightPanel(): React.JSX.Element | null {
               <TerminalPane id={t.id} active={current === t.id} />
             </div>
           ))}
-          {/* Preview panes stay mounted so page state survives tab switches. */}
-          {previews.map((p) => (
-            <div
-              key={p.id}
-              className={cn(
-                'absolute inset-0',
-                current !== p.id && 'invisible pointer-events-none'
-              )}
-            >
-              <BrowserPane id={p.id} active={current === p.id} cwd={p.cwd} />
-            </div>
-          ))}
+          {/* A hidden webview remains a live Chromium renderer. Mount only the
+              selected preview so background tabs cannot run timers/WebGL. */}
+          {currentIsPreview &&
+            previews
+              .filter((p) => p.id === current)
+              .map((p) => (
+                <div key={p.id} className="absolute inset-0">
+                  <BrowserPane id={p.id} active cwd={p.cwd} />
+                </div>
+              ))}
         </div>
         {dockOpen && !currentIsTerminal && !currentIsPreview && (
         <div

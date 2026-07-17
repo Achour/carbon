@@ -14,13 +14,14 @@ import {
   type UserInput,
   type Usage
 } from '@openai/codex-sdk'
-import { CODEX_DEFAULT_MODEL, MODEL_OPTIONS } from '@shared/types'
+import { CODEX_DEFAULT_MODEL, MODEL_OPTIONS } from '../shared/types.ts'
 import type {
   AccountInfo,
   AgentInfo,
   AssistantMessage,
   AssistantPart,
   Attachment,
+  BackgroundJob,
   ChatData,
   ChatStatus,
   EffortId,
@@ -30,22 +31,33 @@ import type {
   OpResult,
   PermissionDecision,
   PermissionModeId,
+  PersistedPlanReview,
   RewindResult,
+  ToolPart,
   ToolStatus,
   TurnStats,
   UsageInfo
 } from '@shared/types'
 import type { Store } from './store'
 import type { AgentSession, Emit } from './session'
-import { IMAGE_EXT, pickTurnImages } from './imageScan'
-import { isMissingCodexThreadError } from './codexResume'
-import { parseCodexPlan, promptForCodexMode } from './codexMode'
+import { IMAGE_EXT, pickTurnImages } from './imageScan.ts'
+import { isMissingCodexThreadError } from './codexResume.ts'
+import { parseCodexPlan, promptForCodexMode } from './codexMode.ts'
+import {
+  createCodexRolloutWatcher,
+  isCodexCollabToolCallItem,
+  type CodexCollabToolCallItem,
+  type CodexRolloutEvent,
+  type CodexRolloutWatcher,
+  type CodexRolloutWatcherFactory
+} from './codexRollout.ts'
 import {
   captureWorkspaceTree,
   rewindWorkspaceCheckpoint,
   summarizeWorkspaceCheckpoint,
   type WorkspaceCheckpoint
-} from './workspaceCheckpoint'
+} from './workspaceCheckpoint.ts'
+import { TITLE_SYSTEM, buildTitlePrompt, cleanTitle, deriveTitle, firstUserText } from './titles.ts'
 
 const OUTPUT_CAP = 100_000
 
@@ -57,6 +69,10 @@ interface PendingTurn {
   input: Input
   temps: string[]
   userMessageId: string
+  permissionMode: PermissionModeId
+  model?: string
+  effort?: EffortId
+  contextWindow: number
 }
 
 /**
@@ -100,6 +116,21 @@ function effortForCodex(effort?: EffortId): ModelReasoningEffort | undefined {
 
 function cmdStatus(status: string): ToolStatus {
   return status === 'completed' ? 'success' : status === 'failed' ? 'error' : 'running'
+}
+
+function agentStatus(status: string): ToolStatus {
+  switch (status) {
+    case 'completed':
+    case 'shutdown':
+      return 'success'
+    case 'errored':
+    case 'interrupted':
+    case 'not_found':
+    case 'failed':
+      return 'error'
+    default:
+      return 'running'
+  }
 }
 
 function cap(text: string): string {
@@ -167,8 +198,13 @@ function describeElement(el: ElementRef): string {
  * nothing downstream of `ChatEvent` knows or cares that this is Codex.
  */
 export class CodexSession implements AgentSession {
-  private codex = new Codex() // reuses the user's ~/.codex (ChatGPT) login
+  private chat: ChatData
+  private emit: Emit
+  private store: Store
+  private onDead: () => void
+  private codex: Codex
   private thread: Thread | null = null
+  private threadOptionsKey: string | null = null
   private threadId: string | null
   // Rebuild the thread before the next turn — thread options (model, sandbox,
   // effort) are fixed at start/resume time and have no live setter.
@@ -182,6 +218,15 @@ export class CodexSession implements AgentSession {
   // Codex item ids (item_0, item_1, …) restart every turn, so this map — item id
   // → part location in the current assistant message — is cleared per turn.
   private itemLoc = new Map<string, { message: AssistantMessage; index: number }>()
+  /** Codex child thread id → its existing Agent card in the parent message. */
+  private codexAgents = new Map<
+    string,
+    { message: AssistantMessage; index: number; part: ToolPart }
+  >()
+  /** Child tool call id → location within its parent Agent card. */
+  private codexChildTools = new Map<string, { parent: ToolPart; index: number }>()
+  private readonly activeCodexJobs = new Map<string, BackgroundJob>()
+  private readonly rolloutWatcher: CodexRolloutWatcher
   private turnStart = 0
   // Snapshot of this thread's raw generated-image files at turn start. Built-in
   // image_gen calls are not represented in the Codex SDK ThreadItem stream, so
@@ -189,21 +234,42 @@ export class CodexSession implements AgentSession {
   // empty and no shell command mentions the saved path.
   private generatedBeforeTurn = new Map<string, number>()
   /** Synthetic ExitPlanMode request used to reuse Karbun's plan-review UI. */
-  private planReview: { requestId: string; plan: string; userMessageId: string } | null = null
+  private planReview: PersistedPlanReview | null = null
+  private activeTurn: PendingTurn | null = null
   private interrupted = false
   private lastEmittedStatus: ChatStatus | null = null
   dead = false
   private disposed = false
+  // One-shot AI title guards — see ClaudeSession for the rationale. `titledResumed`
+  // is fixed at construction from whether this chat already has a thread id.
+  private titledOnce = false
+  private titlePending = false
+  private readonly titledResumed: boolean
+
+  get idle(): boolean {
+    return !this.running && this.pending.length === 0 && this.activeTurn === null && !this.planReview
+  }
 
   constructor(
-    private chat: ChatData,
-    private emit: Emit,
-    private store: Store,
+    chat: ChatData,
+    emit: Emit,
+    store: Store,
     // Kept for signature symmetry with ClaudeSession; a Codex session is warm
     // (no per-turn process to outlive it), so it never dies on its own.
-    private onDead: () => void
+    onDead: () => void,
+    // Injectable for provider-boundary tests; production reuses ~/.codex login.
+    codex: Codex = new Codex(),
+    rolloutWatcherFactory: CodexRolloutWatcherFactory = createCodexRolloutWatcher
   ) {
+    this.chat = chat
+    this.emit = emit
+    this.store = store
+    this.onDead = onDead
+    this.codex = codex
+    this.rolloutWatcher = rolloutWatcherFactory((event) => this.handleRolloutEvent(event))
     this.threadId = chat.sessionId ?? null
+    this.planReview = chat.pendingPlanReview ?? null
+    this.titledResumed = !!chat.sessionId
     // Codex's turn.completed usage is cumulative across every model call made
     // during the turn. It is useful for turn statistics, but it is not the
     // number of tokens currently occupying the model's context window and can
@@ -263,9 +329,9 @@ export class CodexSession implements AgentSession {
   send(text: string, attachments: Attachment[] = [], label?: string): void {
     if (this.disposed) return
     if (!this.chat.title) {
-      // A labelled action ("Commit") titles the chat by its label, not the prompt.
-      const title = label || text || attachments.map((a) => a.name).join(', ')
-      this.chat.title = title.replace(/\s+/g, ' ').trim().slice(0, 64)
+      // Instant placeholder from the first message; the AI title is generated in
+      // parallel with the turn (see maybeGenerateTitle) and swaps it in.
+      this.chat.title = deriveTitle(text, label, attachments)
       this.emit({ type: 'meta', chatId: this.chat.id, patch: { title: this.chat.title } })
     }
     const messageId = randomUUID()
@@ -277,12 +343,36 @@ export class CodexSession implements AgentSession {
       ...(attachments.length ? { attachments } : {}),
       ...(label ? { label } : {})
     })
+    // Kick off the AI title now so it resolves alongside the turn, not after it.
+    void this.maybeGenerateTitle()
     this.emit({ type: 'meta', chatId: this.chat.id, patch: { updatedAt: this.chat.updatedAt } })
-    this.pending.push({ ...this.buildInput(text, attachments), userMessageId: messageId })
+    this.pending.push(this.buildPendingTurn(text, attachments, messageId))
     void this.drain()
   }
 
-  private buildInput(text: string, attachments: Attachment[]): { input: Input; temps: string[] } {
+  private buildPendingTurn(
+    text: string,
+    attachments: Attachment[],
+    userMessageId: string
+  ): PendingTurn {
+    const permissionMode = this.chat.permissionMode
+    const model = this.chat.model
+    const effort = this.chat.effort
+    return {
+      ...this.buildInput(text, attachments, permissionMode),
+      userMessageId,
+      permissionMode,
+      model,
+      effort,
+      contextWindow: this.contextWindow(model)
+    }
+  }
+
+  private buildInput(
+    text: string,
+    attachments: Attachment[],
+    permissionMode: PermissionModeId
+  ): { input: Input; temps: string[] } {
     const images: UserInput[] = []
     const temps: string[] = []
     const filePaths: string[] = []
@@ -313,39 +403,44 @@ export class CodexSession implements AgentSession {
     // The SDK exposes sandbox selection but not the interactive Codex client's
     // Plan/Default collaboration-mode switch. Keep this provider-only and hidden
     // from the rendered transcript while supplying equivalent turn semantics.
-    prompt = promptForCodexMode(prompt, this.chat.permissionMode === 'plan')
+    prompt = promptForCodexMode(prompt, permissionMode === 'plan')
     const blocks: UserInput[] = [{ type: 'text', text: prompt }, ...images]
     return { input: blocks, temps }
   }
 
   // ---------- Turn loop ----------
 
-  private contextWindow(): number {
+  private contextWindow(model = this.chat.model): number {
     return (
-      MODEL_OPTIONS.find((m) => m.id === this.chat.model)?.contextWindow ?? CODEX_CONTEXT_WINDOW
+      MODEL_OPTIONS.find((m) => m.id === model)?.contextWindow ?? CODEX_CONTEXT_WINDOW
     )
   }
 
-  private threadOptions(): ThreadOptions {
+  private threadOptions(turn?: Pick<PendingTurn, 'model' | 'permissionMode' | 'effort'>): ThreadOptions {
+    const selectedModel = turn ? turn.model : this.chat.model
+    const permissionMode = turn ? turn.permissionMode : this.chat.permissionMode
+    const effort = turn ? turn.effort : this.chat.effort
     // 'codex-default' means "no model override" — let the Codex config pick.
-    const model = this.chat.model && this.chat.model !== CODEX_DEFAULT_MODEL ? this.chat.model : undefined
+    const model = selectedModel && selectedModel !== CODEX_DEFAULT_MODEL ? selectedModel : undefined
     return {
       model,
       workingDirectory: this.chat.cwd,
       // Karbun opens arbitrary folders (not always git repos); don't block on it.
       skipGitRepoCheck: true,
-      sandboxMode: sandboxForMode(this.chat.permissionMode),
+      sandboxMode: sandboxForMode(permissionMode),
       approvalPolicy: 'never',
-      modelReasoningEffort: effortForCodex(this.chat.effort)
+      modelReasoningEffort: effortForCodex(effort)
     }
   }
 
-  private ensureThread(): Thread {
-    if (this.thread && !this.optionsDirty) return this.thread
-    const opts = this.threadOptions()
+  private ensureThread(turn: PendingTurn): Thread {
+    const opts = this.threadOptions(turn)
+    const optionsKey = JSON.stringify(opts)
+    if (this.thread && !this.optionsDirty && this.threadOptionsKey === optionsKey) return this.thread
     this.thread = this.threadId
       ? this.codex.resumeThread(this.threadId, opts)
       : this.codex.startThread(opts)
+    this.threadOptionsKey = optionsKey
     this.optionsDirty = false
     return this.thread
   }
@@ -409,27 +504,34 @@ export class CodexSession implements AgentSession {
   }
 
   private async runTurn(turn: PendingTurn): Promise<void> {
-    const before = await captureWorkspaceTree(this.chat.cwd)
     this.abort = new AbortController()
     this.interrupted = false
     this.turnStart = Date.now()
     this.generatedBeforeTurn = this.threadGeneratedImages()
     this.current = null
     this.activeUserMessageId = turn.userMessageId
+    this.activeTurn = turn
     this.itemLoc.clear()
+    this.codexAgents.clear()
+    this.codexChildTools.clear()
+    this.clearCodexJobs()
+    if (this.threadId) this.rolloutWatcher.start(this.threadId, this.turnStart)
     // 'starting' until the thread has an id (first turn / cold resume), matching
     // how a fresh Claude session reads before its init.
     this.setStatus(this.threadId ? 'streaming' : 'starting')
+    // Snapshot before launching Codex. The turn is already marked active so an
+    // option change during this potentially slow Git scan can still abort it.
+    const before = await captureWorkspaceTree(this.chat.cwd)
     try {
       let retriedMissingThread = false
       while (!this.disposed) {
         const resumedThreadId = this.threadId
-        const thread = this.ensureThread()
+        const thread = this.ensureThread(turn)
         try {
           const { events } = await thread.runStreamed(turn.input, { signal: this.abort.signal })
           for await (const event of events) {
             if (this.disposed) break
-            this.handleEvent(event)
+            this.handleEvent(event, turn)
           }
           break
         } catch (err) {
@@ -458,9 +560,15 @@ export class CodexSession implements AgentSession {
       // Event handlers called above populate `current`; TS cannot see mutation
       // through those method calls, so retain the runtime value explicitly.
       const completedMessage = this.current as AssistantMessage | null
+      // Consume records flushed immediately before turn.completed, then detach
+      // before `current` is cleared so no late poll can target the next turn.
+      await this.rolloutWatcher.flush()
+      this.rolloutWatcher.stop()
+      this.abortUnfinishedCodexAgents()
       this.terminalizeRunning()
       this.current = null
       this.activeUserMessageId = null
+      this.activeTurn = null
       this.itemLoc.clear()
       this.abort = null
       // The SDK consumed any temp attachment copies at turn start — drop them now
@@ -488,9 +596,65 @@ export class CodexSession implements AgentSession {
     }
   }
 
+  /**
+   * Replace the placeholder title with a terse AI summary of the user's opening
+   * message. Fired from send() so it runs in parallel with the first turn (not
+   * after it) — the sidebar shimmers via `title-pending` until it lands. Best-
+   * effort and fire-once: skips manually-renamed and resumed chats.
+   */
+  private async maybeGenerateTitle(): Promise<void> {
+    if (this.titledOnce || this.titledResumed || this.chat.titleManual) return
+    const userText = firstUserText(this.chat.messages)
+    if (!userText) return
+    this.titledOnce = true
+    this.setTitlePending(true)
+    try {
+      const title = await this.generateCodexTitle(userText)
+      if (title && !this.disposed && !this.chat.titleManual) {
+        this.chat.title = title
+        this.emit({ type: 'meta', chatId: this.chat.id, patch: { title } })
+        this.store.saveChatSoon(this.chat.id)
+      }
+    } finally {
+      this.setTitlePending(false)
+    }
+  }
+
+  private setTitlePending(pending: boolean): void {
+    if (this.titlePending === pending) return
+    this.titlePending = pending
+    this.emit({ type: 'title-pending', chatId: this.chat.id, pending })
+  }
+
+  /**
+   * One-shot Codex title turn on a throwaway read-only thread — low effort, no
+   * writes, separate from the conversation thread. Returns null on any error so
+   * the placeholder title simply stands.
+   *
+   * NB: 'minimal' effort 400s on some Codex models (e.g. gpt-5.6-sol only allows
+   * none/low/medium/high/xhigh), which silently killed titling — use 'low'.
+   */
+  private async generateCodexTitle(userText: string): Promise<string | null> {
+    try {
+      const thread = this.codex.startThread({
+        model: this.threadOptions().model,
+        workingDirectory: this.chat.cwd,
+        skipGitRepoCheck: true,
+        sandboxMode: 'read-only',
+        approvalPolicy: 'never',
+        modelReasoningEffort: 'low'
+      })
+      const turn = await thread.run(`${TITLE_SYSTEM}\n\n${buildTitlePrompt(userText)}`)
+      return cleanTitle(turn.finalResponse) || null
+    } catch {
+      return null
+    }
+  }
+
   /** Clear only an unusable Codex resume id; transcript and current prompt stay. */
   private recoverFromMissingThread(): void {
     this.thread = null
+    this.threadOptionsKey = null
     this.threadId = null
     this.optionsDirty = true
     this.generatedBeforeTurn.clear()
@@ -512,10 +676,11 @@ export class CodexSession implements AgentSession {
     this.store.saveChat(this.chat.id)
   }
 
-  private handleEvent(event: ThreadEvent): void {
+  private handleEvent(event: ThreadEvent, turn: PendingTurn): void {
     switch (event.type) {
       case 'thread.started':
         this.threadId = event.thread_id
+        this.rolloutWatcher.start(event.thread_id, this.turnStart)
         // First turns do not have an id when runTurn starts. thread.started is
         // emitted before tools run, so take their empty/pre-existing baseline now.
         this.generatedBeforeTurn = this.threadGeneratedImages()
@@ -535,7 +700,7 @@ export class CodexSession implements AgentSession {
       case 'turn.started':
         break
       case 'turn.completed':
-        this.onTurnCompleted(event.usage)
+        this.onTurnCompleted(event.usage, turn)
         break
       case 'turn.failed':
         if (!this.disposed && !this.interrupted) {
@@ -614,9 +779,9 @@ export class CodexSession implements AgentSession {
     this.emitPart(target, index)
   }
 
-  private onTurnCompleted(usage: Usage | null): void {
+  private onTurnCompleted(usage: Usage | null, turn: PendingTurn): void {
     this.surfaceTurnImages()
-    const window = this.contextWindow()
+    const window = turn.contextWindow
     if (this.chat.contextWindow !== window) {
       this.chat.contextWindow = window
       this.emit({ type: 'meta', chatId: this.chat.id, patch: { contextWindow: window } })
@@ -626,19 +791,25 @@ export class CodexSession implements AgentSession {
       costUsd: 0,
       durationMs: Date.now() - this.turnStart,
       numTurns: 1,
-      model: this.chat.model || 'Codex',
+      model: turn.model || 'Codex',
       inputTokens: usage?.input_tokens,
       outputTokens: usage?.output_tokens
     }
     this.pushMessage({ id: randomUUID(), role: 'event', kind: 'turn', text: '', ts: Date.now(), stats })
     this.chat.updatedAt = Date.now()
     this.store.saveChat(this.chat.id)
-    this.offerPlanForReview()
+    this.offerPlanForReview(turn)
   }
 
   /** Turn a completed Codex planning response into the same review event Claude uses. */
-  private offerPlanForReview(): void {
-    if (this.chat.permissionMode !== 'plan' || this.planReview || this.interrupted) return
+  private offerPlanForReview(turn: PendingTurn): void {
+    if (
+      turn.permissionMode !== 'plan' ||
+      this.chat.permissionMode !== 'plan' ||
+      this.planReview ||
+      this.interrupted
+    )
+      return
     const message = this.current
     if (!message) return
     for (let index = message.parts.length - 1; index >= 0; index--) {
@@ -651,11 +822,19 @@ export class CodexSession implements AgentSession {
         this.emitPart(message, index)
       }
       const requestId = randomUUID()
-      this.planReview = {
+      const review = {
         requestId,
         plan: parsed.plan,
         userMessageId: this.activeUserMessageId ?? ''
       }
+      this.planReview = review
+      this.chat.pendingPlanReview = review
+      this.emit({
+        type: 'meta',
+        chatId: this.chat.id,
+        patch: { pendingPlanReview: review }
+      })
+      this.store.saveChat(this.chat.id)
       this.emit({
         type: 'permission-request',
         chatId: this.chat.id,
@@ -679,6 +858,12 @@ export class CodexSession implements AgentSession {
   // ---------- Item → part mapping ----------
 
   private upsertItem(item: ThreadItem, terminal: boolean): void {
+    // codex exec already emits this item at runtime, but @openai/codex-sdk
+    // 0.144.x has not added it to its TypeScript ThreadItem union yet.
+    if (isCodexCollabToolCallItem(item as unknown)) {
+      this.upsertCollabItem(item as unknown as CodexCollabToolCallItem)
+      return
+    }
     // Error items go through the same id-keyed upsert as everything else, so a
     // repeated lifecycle event for one error id updates in place instead of
     // appending a duplicate notice each time.
@@ -697,6 +882,235 @@ export class CodexSession implements AgentSession {
       message.parts[index] = part
       this.itemLoc.set(item.id, { message, index })
       this.emitPart(message, index)
+    }
+  }
+
+  private ensureCodexAgent(
+    threadId: string,
+    description = 'Codex sub-agent'
+  ): { message: AssistantMessage; index: number; part: ToolPart } {
+    const existing = this.codexAgents.get(threadId)
+    if (existing) {
+      const input = (existing.part.input ?? {}) as Record<string, unknown>
+      if ((!input.description || input.description === 'Codex sub-agent') && description) {
+        this.updateCodexAgent(existing, { input: { ...input, description } })
+      }
+      return existing
+    }
+
+    const message = this.ensureCurrent()
+    const part: ToolPart = {
+      type: 'tool',
+      toolUseId: `codex-agent-${threadId}`,
+      name: 'Agent',
+      input: {
+        subagent_type: 'Codex',
+        description,
+        agent_id: threadId
+      },
+      status: 'running',
+      children: []
+    }
+    const index = message.parts.length
+    message.parts[index] = part
+    const loc = { message, index, part }
+    this.codexAgents.set(threadId, loc)
+    this.emitPart(message, index)
+    return loc
+  }
+
+  private emitCodexJobs(): void {
+    this.emit({
+      type: 'background-jobs',
+      chatId: this.chat.id,
+      jobs: [...this.activeCodexJobs.values()]
+    })
+  }
+
+  private setCodexJob(threadId: string, description: string): void {
+    const prior = this.activeCodexJobs.get(threadId)
+    if (prior?.description === description) return
+    this.activeCodexJobs.set(threadId, {
+      id: threadId,
+      type: 'subagent',
+      description,
+      // The current Codex SDK exposes child status but no per-child stop call.
+      stoppable: false
+    })
+    this.emitCodexJobs()
+  }
+
+  private finishCodexJob(threadId: string): void {
+    if (!this.activeCodexJobs.delete(threadId)) return
+    this.emitCodexJobs()
+  }
+
+  private clearCodexJobs(): void {
+    if (this.activeCodexJobs.size === 0) return
+    this.activeCodexJobs.clear()
+    this.emitCodexJobs()
+  }
+
+  private updateCodexAgent(
+    loc: { message: AssistantMessage; index: number; part: ToolPart },
+    patch: Partial<Omit<ToolPart, 'type' | 'toolUseId' | 'name'>>
+  ): void {
+    Object.assign(loc.part, patch)
+    this.emit({
+      type: 'tool-update',
+      chatId: this.chat.id,
+      messageId: loc.message.id,
+      toolUseId: loc.part.toolUseId,
+      patch
+    })
+    this.store.saveChatSoon(this.chat.id)
+  }
+
+  private emitCodexChildren(
+    loc: { message: AssistantMessage; index: number; part: ToolPart }
+  ): void {
+    this.updateCodexAgent(loc, { children: [...(loc.part.children ?? [])] })
+  }
+
+  private appendCodexAgentText(threadId: string, text: string): void {
+    const clean = text.trim()
+    if (!clean) return
+    const loc = this.ensureCodexAgent(threadId)
+    const children = loc.part.children ?? (loc.part.children = [])
+    const last = children.at(-1)
+    if (last?.type === 'text' && last.text === clean) return
+    children.push({ type: 'text', text: clean })
+    this.emitCodexChildren(loc)
+  }
+
+  private startCodexAgentTool(
+    threadId: string,
+    toolUseId: string,
+    name: string,
+    input: unknown
+  ): void {
+    const key = `${threadId}:${toolUseId}`
+    if (this.codexChildTools.has(key)) return
+    const loc = this.ensureCodexAgent(threadId)
+    const children = loc.part.children ?? (loc.part.children = [])
+    const part: ToolPart = {
+      type: 'tool',
+      toolUseId: key,
+      name,
+      input,
+      status: 'running'
+    }
+    const index = children.length
+    children.push(part)
+    this.codexChildTools.set(key, { parent: loc.part, index })
+    this.emitCodexChildren(loc)
+  }
+
+  private completeCodexAgentTool(
+    threadId: string,
+    toolUseId: string,
+    output: string | undefined,
+    failed: boolean
+  ): void {
+    const key = `${threadId}:${toolUseId}`
+    let child = this.codexChildTools.get(key)
+    if (!child) {
+      this.startCodexAgentTool(threadId, toolUseId, 'Tool', { description: 'Agent action' })
+      child = this.codexChildTools.get(key)
+    }
+    const loc = this.codexAgents.get(threadId)
+    if (!child || !loc?.part.children) return
+    const prior = loc.part.children[child.index]
+    if (prior?.type !== 'tool') return
+    loc.part.children[child.index] = {
+      ...prior,
+      status: failed ? 'error' : 'success',
+      ...(output ? { output } : {})
+    }
+    this.emitCodexChildren(loc)
+  }
+
+  private completeCodexAgent(
+    threadId: string,
+    failed: boolean,
+    result?: string
+  ): void {
+    const loc = this.ensureCodexAgent(threadId)
+    if (loc.part.children) {
+      loc.part.children = loc.part.children.map((child) =>
+        child.type === 'tool' && (child.status === 'running' || child.status === 'pending')
+          ? { ...child, status: failed ? 'error' : 'success' }
+          : child
+      )
+    }
+    this.updateCodexAgent(loc, {
+      status: failed ? 'error' : 'success',
+      children: [...(loc.part.children ?? [])],
+      ...(result ? { output: result } : {})
+    })
+    this.finishCodexJob(threadId)
+  }
+
+  private abortUnfinishedCodexAgents(): void {
+    for (const [threadId, loc] of this.codexAgents) {
+      if (loc.part.status !== 'running' && loc.part.status !== 'pending') continue
+      this.completeCodexAgent(
+        threadId,
+        true,
+        'This agent was interrupted because the parent Codex turn ended before it finished.'
+      )
+    }
+    this.clearCodexJobs()
+  }
+
+  private handleRolloutEvent(event: CodexRolloutEvent): void {
+    if (this.disposed || !this.activeTurn) return
+    switch (event.type) {
+      case 'agent-start':
+        this.ensureCodexAgent(event.threadId, event.name)
+        this.setCodexJob(event.threadId, event.name)
+        break
+      case 'agent-text':
+        this.appendCodexAgentText(event.threadId, event.text)
+        break
+      case 'agent-tool-start':
+        this.startCodexAgentTool(
+          event.threadId,
+          event.toolUseId,
+          event.name,
+          event.input
+        )
+        break
+      case 'agent-tool-complete':
+        this.completeCodexAgentTool(
+          event.threadId,
+          event.toolUseId,
+          event.output,
+          event.failed
+        )
+        break
+      case 'agent-complete':
+        this.completeCodexAgent(event.threadId, event.failed, event.result)
+        break
+    }
+  }
+
+  private upsertCollabItem(item: CodexCollabToolCallItem): void {
+    const ids = new Set([...item.receiver_thread_ids, ...Object.keys(item.agents_states)])
+
+    for (const threadId of ids) {
+      const state = item.agents_states[threadId]
+      const description = item.prompt?.trim().slice(0, 500) || state?.message || 'Codex sub-agent'
+      const loc = this.ensureCodexAgent(threadId, description)
+      const status = state ? agentStatus(state.status) : agentStatus(item.status)
+      const patch: Partial<Omit<ToolPart, 'type' | 'toolUseId' | 'name'>> = { status }
+      if (state?.message) patch.output = state.message
+      this.updateCodexAgent(loc, patch)
+      if (status === 'running' || status === 'pending') {
+        this.setCodexJob(threadId, description)
+      } else {
+        this.finishCodexJob(threadId)
+      }
     }
   }
 
@@ -809,14 +1223,28 @@ export class CodexSession implements AgentSession {
     if (!message) return
     let changed = false
     message.parts.forEach((part, index) => {
-      if (part && part.type === 'tool' && (part.status === 'running' || part.status === 'pending')) {
-        message.parts[index] = { ...part, status: 'error' }
+      if (!part || part.type !== 'tool') return
+      const children = part.children?.map((child) =>
+        child.type === 'tool' && (child.status === 'running' || child.status === 'pending')
+          ? { ...child, status: 'error' as const }
+          : child
+      )
+      const childrenChanged = children?.some(
+        (child, childIndex) => child !== part.children?.[childIndex]
+      )
+      const running = part.status === 'running' || part.status === 'pending'
+      if (running || childrenChanged) {
+        const patch: Partial<ToolPart> = {
+          ...(running ? { status: 'error' } : {}),
+          ...(childrenChanged ? { children } : {})
+        }
+        message.parts[index] = { ...part, ...patch }
         this.emit({
           type: 'tool-update',
           chatId: this.chat.id,
           messageId: message.id,
           toolUseId: part.toolUseId,
-          patch: { status: 'error' }
+          patch
         })
         changed = true
       }
@@ -828,10 +1256,12 @@ export class CodexSession implements AgentSession {
 
   async interrupt(): Promise<void> {
     this.interrupted = true
-    this.pending.length = 0
+    this.cleanupPendingTurns()
     this.abort?.abort()
     this.clearPlanReview()
-    this.setStatus('idle')
+    // An active run still has terminalization/checkpoint cleanup to finish. Let
+    // drain() publish idle afterward so the renderer cannot send into that gap.
+    if (!this.running) this.setStatus('idle')
   }
 
   async setModel(model?: string): Promise<void> {
@@ -840,6 +1270,13 @@ export class CodexSession implements AgentSession {
   }
 
   async setPermissionMode(mode: PermissionModeId): Promise<void> {
+    // Thread options are fixed for a running Codex process. Abort a turn whose
+    // sandbox no longer matches the selected mode instead of letting it continue
+    // with broader permissions under a newly restrictive UI state.
+    if (this.activeTurn && this.activeTurn.permissionMode !== mode) {
+      this.interrupted = true
+      this.abort?.abort()
+    }
     if (mode !== 'plan') this.clearPlanReview()
     this.chat.permissionMode = mode
     this.optionsDirty = true
@@ -850,10 +1287,9 @@ export class CodexSession implements AgentSession {
   async stopBackgroundJob(): Promise<void> {}
 
   respondPermission(requestId: string, decision: PermissionDecision): void {
-    const review = this.planReview
+    const review = this.planReview ?? this.chat.pendingPlanReview ?? null
     if (!review || review.requestId !== requestId) return
-    this.planReview = null
-    this.emit({ type: 'permission-resolved', chatId: this.chat.id, requestId })
+    this.clearPlanReview()
 
     if (decision.behavior === 'allow') {
       const prior = this.chat.modeBeforePlan
@@ -874,26 +1310,22 @@ export class CodexSession implements AgentSession {
         ts: Date.now()
       })
       this.pending.push(
-        {
-          ...this.buildInput(
-            `The user approved the following plan. Implement it completely now.\n\n<approved_plan>\n${review.plan}\n</approved_plan>`,
-            []
-          ),
-          userMessageId: review.userMessageId
-        }
+        this.buildPendingTurn(
+          `The user approved the following plan. Implement it completely now.\n\n<approved_plan>\n${review.plan}\n</approved_plan>`,
+          [],
+          review.userMessageId
+        )
       )
     } else {
       const feedback = decision.message?.trim() || 'Revise the plan and propose it again.'
       const feedbackId = randomUUID()
       this.pushMessage({ id: feedbackId, role: 'user', text: feedback, ts: Date.now() })
       this.pending.push(
-        {
-          ...this.buildInput(
-            `The user requested changes to the proposed plan. Stay in Plan mode and produce a revised proposal.\n\n<previous_plan>\n${review.plan}\n</previous_plan>\n\n<plan_feedback>\n${feedback}\n</plan_feedback>`,
-            []
-          ),
-          userMessageId: feedbackId
-        }
+        this.buildPendingTurn(
+          `The user requested changes to the proposed plan. Stay in Plan mode and produce a revised proposal.\n\n<previous_plan>\n${review.plan}\n</previous_plan>\n\n<plan_feedback>\n${feedback}\n</plan_feedback>`,
+          [],
+          feedbackId
+        )
       )
     }
     this.chat.updatedAt = Date.now()
@@ -902,10 +1334,31 @@ export class CodexSession implements AgentSession {
   }
 
   private clearPlanReview(): void {
-    if (!this.planReview) return
-    const { requestId } = this.planReview
+    const review = this.planReview ?? this.chat.pendingPlanReview
+    if (!review) return
+    const { requestId } = review
     this.planReview = null
+    this.chat.pendingPlanReview = undefined
+    this.emit({
+      type: 'meta',
+      chatId: this.chat.id,
+      patch: { pendingPlanReview: undefined }
+    })
     this.emit({ type: 'permission-resolved', chatId: this.chat.id, requestId })
+    this.store.saveChat(this.chat.id)
+  }
+
+  private cleanupPendingTurns(): void {
+    for (const turn of this.pending) {
+      for (const file of turn.temps) {
+        try {
+          rmSync(file, { force: true })
+        } catch {
+          // best-effort cleanup
+        }
+      }
+    }
+    this.pending.length = 0
   }
 
   async rewindFiles(userMessageId: string, dryRun: boolean): Promise<RewindResult> {
@@ -947,20 +1400,14 @@ export class CodexSession implements AgentSession {
   }
 
   dispose(): void {
+    this.setTitlePending(false)
     this.disposed = true
     this.dead = true
     this.abort?.abort()
-    this.clearPlanReview()
-    // Clean temp copies for queued turns that will now never run.
-    for (const t of this.pending) {
-      for (const f of t.temps) {
-        try {
-          rmSync(f, { force: true })
-        } catch {
-          // best-effort cleanup
-        }
-      }
-    }
-    this.pending.length = 0
+    this.rolloutWatcher.stop()
+    this.clearCodexJobs()
+    // Preserve an unresolved plan in ChatData; a recreated session can continue
+    // the same review after an option change or application restart.
+    this.cleanupPendingTurns()
   }
 }
