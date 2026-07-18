@@ -26,9 +26,9 @@ const systemAppearance = window.matchMedia('(prefers-color-scheme: dark)')
 systemAppearance.addEventListener('change', () => useApp.getState().syncSystemAppearance())
 
 const syncWindowActivity = (): void => {
-  document.documentElement.dataset.windowActive = String(
-    document.visibilityState === 'visible' && document.hasFocus()
-  )
+  const visible = document.visibilityState === 'visible'
+  document.documentElement.dataset.windowVisible = String(visible)
+  document.documentElement.dataset.windowActive = String(visible && document.hasFocus())
 }
 syncWindowActivity()
 document.addEventListener('visibilitychange', syncWindowActivity)

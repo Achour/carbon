@@ -25,11 +25,19 @@ export function saveNotifyPrefs(prefs: NotifyPrefs): void {
 }
 
 let audio: AudioContext | null = null
+let audioIdle: ReturnType<typeof setTimeout> | null = null
 
 /** Soft two-note chime for turn completion. */
 export function playChime(): void {
   try {
     audio ??= new AudioContext()
+    // A running AudioContext holds a realtime output stream open forever
+    // (~100 silent callbacks/s across the renderer and coreaudiod, and it
+    // blocks process idling). Wake it just for the chime; suspend once the
+    // tail has faded.
+    if (audio.state === 'suspended') void audio.resume()
+    if (audioIdle) clearTimeout(audioIdle)
+    audioIdle = setTimeout(() => void audio?.suspend(), 1200)
     const t0 = audio.currentTime
     for (const [freq, at] of [
       [660, 0],
