@@ -65,3 +65,35 @@ test('every theme provides the complete renderer color contract in both modes', 
     assert.notDeepEqual(theme.vars, theme.lightVars, `${theme.name} modes should differ`)
   }
 })
+
+test('overlapping light themes have distinct identities without changing dark mode', () => {
+  const byId = new Map(THEMES.map((theme) => [theme.id, theme]))
+  const signature = (id: string): string => {
+    const vars = byId.get(id)!.lightVars
+    return [
+      vars.background,
+      vars.card,
+      vars.primary,
+      vars.accent,
+      vars.sidebar,
+      vars['code-bg']
+    ].join('|')
+  }
+
+  for (const [left, right] of [
+    ['lobster', 'raycast'],
+    ['raycast', 'solarized'],
+    ['codex', 'github'],
+    ['material', 'nord'],
+    ['night-owl', 'tokyo-night'],
+    ['linear', 'sentry']
+  ]) {
+    assert.notEqual(signature(left), signature(right), `${left} and ${right} light themes`)
+  }
+
+  assert.equal(byId.get('solarized')!.lightVars.background, '#fdf6e3')
+  assert.equal(byId.get('solarized')!.lightVars.primary, '#268bd2')
+  assert.equal(byId.get('solarized')!.vars.background, '#002b36')
+  assert.equal(byId.get('solarized')!.vars.primary, '#dc322f')
+  assert.equal(byId.get('raycast')!.vars.primary, '#ff6363')
+})
