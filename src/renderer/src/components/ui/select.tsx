@@ -7,22 +7,33 @@ export interface CompactSelectOption {
   value: string
   label: string
   description?: string
+  /** Optional leading visual, useful when each option represents a distinct mode. */
+  icon?: React.ReactNode
   /** Options sharing a group render under a shared label (e.g. provider name). */
   group?: string
   disabled?: boolean
 }
 
 function Item({ option }: { option: CompactSelectOption }): React.JSX.Element {
+  const hasIcon = option.icon != null
   return (
     <Select.Item
       value={option.value}
       disabled={option.disabled}
-      className="grid cursor-default select-none grid-cols-[1rem_1fr] items-center gap-1.5 rounded-md py-1.5 pr-3 pl-1.5 text-sm outline-none data-[disabled]:opacity-45 data-[highlighted]:bg-accent"
+      className={cn(
+        'grid cursor-default select-none items-center gap-1.5 rounded-md py-1.5 pr-2 pl-1.5 text-sm outline-none data-[disabled]:opacity-45 data-[highlighted]:bg-accent',
+        hasIcon ? 'grid-cols-[1rem_minmax(0,1fr)_1rem]' : 'grid-cols-[1rem_minmax(0,1fr)]'
+      )}
     >
-      <Select.ItemIndicator className="col-start-1">
+      {hasIcon && (
+        <span className="col-start-1 row-start-1 flex size-4 items-center">{option.icon}</span>
+      )}
+      <Select.ItemIndicator
+        className={hasIcon ? 'col-start-3 row-start-1' : 'col-start-1 row-start-1'}
+      >
         <Check className="size-3.5" />
       </Select.ItemIndicator>
-      <div className="col-start-2">
+      <div className="col-start-2 row-start-1">
         <Select.ItemText>{option.label}</Select.ItemText>
         {option.description && (
           <div className="text-xs text-muted-foreground">{option.description}</div>

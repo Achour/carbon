@@ -5,6 +5,7 @@
  * index.css / Tailwind. `installThemes` injects one data-attribute block per
  * theme so switching themes never requires a renderer reload.
  */
+import type { DockIconPalette } from '@shared/types'
 
 export interface ThemeDef {
   id: string
@@ -525,6 +526,43 @@ export function applyTheme(id: string, mode: ThemeMode): ResolvedAppearance {
   localStorage.setItem('theme', theme.id)
   localStorage.setItem('themeMode', mode)
   return appearance
+}
+
+let dockColorCanvas: HTMLCanvasElement | null = null
+let dockColorProbe: HTMLSpanElement | null = null
+
+function cssVariableHex(name: string, fallback: string): string {
+  dockColorCanvas ??= document.createElement('canvas')
+  dockColorCanvas.width = 1
+  dockColorCanvas.height = 1
+  const context = dockColorCanvas.getContext('2d', { willReadFrequently: true })
+  if (!context) return fallback
+
+  dockColorProbe ??= document.createElement('span')
+  if (!dockColorProbe.isConnected) {
+    dockColorProbe.style.cssText = 'position:fixed;pointer-events:none;visibility:hidden'
+    document.body.appendChild(dockColorProbe)
+  }
+  dockColorProbe.style.color = `var(--${name})`
+  const color = getComputedStyle(dockColorProbe).color
+
+  context.clearRect(0, 0, 1, 1)
+  context.fillStyle = fallback
+  context.fillStyle = color
+  context.fillRect(0, 0, 1, 1)
+  const [red, green, blue] = context.getImageData(0, 0, 1, 1).data
+  return `#${[red, green, blue].map((channel) => channel.toString(16).padStart(2, '0')).join('')}`
+}
+
+/** Concrete sRGB colors suitable for Electron's runtime SVG Dock icon. */
+export function currentDockIconPalette(): DockIconPalette {
+  return {
+    background: cssVariableHex('background', '#1c1c1c'),
+    surface: cssVariableHex('card', '#2b2b2b'),
+    code: cssVariableHex('code-bg', '#131313'),
+    foreground: cssVariableHex('foreground', '#f0f0f0'),
+    primary: cssVariableHex('primary', '#e4e4e4')
+  }
 }
 
 // Translucent sidebar (macOS vibrancy). Renderer-owned like the other

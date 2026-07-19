@@ -419,7 +419,7 @@ export const PERMISSION_MODES: { id: PermissionModeId; label: string; descriptio
   { id: 'acceptEdits', label: 'Accept edits', description: 'Auto-approves edits in the project' },
   { id: 'plan', label: 'Plan mode', description: 'Read-only, plans before acting' },
   { id: 'auto', label: 'Auto', description: 'A classifier approves safe actions for you' },
-  { id: 'bypassPermissions', label: 'Bypass permissions', description: 'Never asks — use with care' }
+  { id: 'bypassPermissions', label: 'Full access', description: 'Never asks — use with care' }
 ]
 
 // ---------- Files ----------
@@ -592,6 +592,14 @@ export interface SlashCommand {
 
 // ---------- Preload API ----------
 
+export interface DockIconPalette {
+  background: string
+  surface: string
+  code: string
+  foreground: string
+  primary: string
+}
+
 export interface Api {
   listChats(): Promise<ChatMeta[]>
   getChat(id: string): Promise<ChatData | null>
@@ -668,6 +676,8 @@ export interface Api {
     mode: 'dark' | 'light' | 'system',
     resolvedDark: boolean
   ): Promise<void>
+  /** Update the macOS Dock icon to mirror the active app theme. */
+  setDockIcon(palette: DockIconPalette): Promise<void>
   /**
    * Reveal native macOS window vibrancy to match the translucency preference.
    * `true` uses a translucent backing; `false` restores an opaque backing that
