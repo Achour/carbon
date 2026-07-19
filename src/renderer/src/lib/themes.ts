@@ -42,41 +42,39 @@ const darkBase = {
 }
 
 function lightThemeVars(accent: string): Record<string, string> {
-  const primary = `color-mix(in oklab, ${accent} 76%, #111827)`
+  const primary = `color-mix(in oklab, ${accent} 68%, #111827)`
   return {
-    background: `color-mix(in oklab, ${accent} 9%, #fbfbfc)`,
+    background: `color-mix(in oklab, ${accent} 2%, #fbfbfc)`,
     foreground: '#202124',
-    card: `color-mix(in oklab, ${accent} 3%, #ffffff)`,
+    card: '#ffffff',
     'card-foreground': '#202124',
-    popover: `color-mix(in oklab, ${accent} 5%, #ffffff)`,
+    popover: '#ffffff',
     'popover-foreground': '#202124',
     primary,
     'primary-foreground': '#ffffff',
-    secondary: `color-mix(in oklab, ${accent} 13%, #f1f3f5)`,
+    secondary: `color-mix(in oklab, ${accent} 5%, #f1f3f5)`,
     'secondary-foreground': '#292b2f',
-    muted: `color-mix(in oklab, ${accent} 8%, #f3f4f6)`,
+    muted: `color-mix(in oklab, ${accent} 4%, #f3f4f6)`,
     'muted-foreground': '#666b73',
-    accent: `color-mix(in oklab, ${accent} 20%, #edf0f3)`,
+    accent: `color-mix(in oklab, ${accent} 9%, #edf0f3)`,
     'accent-foreground': '#202124',
     destructive: '#cf222e',
     'destructive-foreground': '#ffffff',
-    border: `color-mix(in oklab, ${accent} 16%, #daddE2)`,
-    input: `color-mix(in oklab, ${accent} 20%, #d4d7dc)`,
-    ring: `color-mix(in oklab, ${accent} 52%, transparent)`,
-    sidebar: `color-mix(in oklab, ${accent} 14%, #f5f6f8)`,
+    border: `color-mix(in oklab, ${accent} 8%, #daddE2)`,
+    input: `color-mix(in oklab, ${accent} 10%, #d4d7dc)`,
+    ring: `color-mix(in oklab, ${accent} 42%, transparent)`,
+    sidebar: `color-mix(in oklab, ${accent} 4%, #f5f6f8)`,
     'sidebar-foreground': '#303238',
-    'sidebar-accent': `color-mix(in oklab, ${accent} 24%, #e9ecef)`,
-    'sidebar-border': `color-mix(in oklab, ${accent} 17%, #daddE2)`,
-    'code-bg': `color-mix(in oklab, ${accent} 12%, #f2f3f5)`,
+    'sidebar-accent': `color-mix(in oklab, ${accent} 9%, #e9ecef)`,
+    'sidebar-border': `color-mix(in oklab, ${accent} 8%, #daddE2)`,
+    'code-bg': `color-mix(in oklab, ${accent} 3%, #f2f3f5)`,
     success: '#238636',
     warning: '#9a6700'
   }
 }
 
 function darkTheme(palette: DarkThemePalette): ThemeDef {
-  const border =
-    palette.border ??
-    `color-mix(in oklab, ${palette.primary} 18%, rgb(255 255 255 / 10%))`
+  const border = palette.border ?? 'rgb(255 255 255 / 9%)'
   return {
     id: palette.id,
     name: palette.name,
@@ -89,18 +87,18 @@ function darkTheme(palette: DarkThemePalette): ThemeDef {
       'popover-foreground': palette.foreground,
       primary: palette.primary,
       'primary-foreground': palette.primaryForeground ?? palette.background,
-      secondary: `color-mix(in oklab, ${palette.primary} 7%, ${palette.surfaceRaised})`,
+      secondary: palette.surfaceRaised,
       'secondary-foreground': palette.foreground,
-      muted: `color-mix(in oklab, ${palette.primary} 4%, ${palette.surface})`,
+      muted: palette.surface,
       'muted-foreground': palette.mutedForeground,
-      accent: `color-mix(in oklab, ${palette.primary} 16%, ${palette.surfaceRaised})`,
+      accent: palette.surfaceRaised,
       'accent-foreground': palette.foreground,
       border,
-      input: `color-mix(in oklab, ${palette.primary} 14%, rgb(255 255 255 / 13%))`,
+      input: 'rgb(255 255 255 / 13%)',
       ring: `color-mix(in oklab, ${palette.primary} 52%, transparent)`,
       sidebar: palette.sidebar,
       'sidebar-foreground': palette.foreground,
-      'sidebar-accent': `color-mix(in oklab, ${palette.primary} 12%, ${palette.surface})`,
+      'sidebar-accent': palette.surface,
       'sidebar-border': border,
       'code-bg': palette.code,
       ...darkBase
@@ -151,11 +149,11 @@ const codexThemes: ThemeDef[] = [
   darkTheme({
     id: 'absolutely',
     name: 'Absolutely',
-    background: '#211a18',
-    surface: '#302522',
-    surfaceRaised: '#44322d',
-    sidebar: '#171210',
-    code: '#120e0d',
+    background: '#1f1f1e',
+    surface: '#2a2927',
+    surfaceRaised: '#373431',
+    sidebar: '#191918',
+    code: '#151514',
     foreground: '#f4f1ed',
     mutedForeground: '#aaa39b',
     primary: '#db8b70'
@@ -187,14 +185,14 @@ const codexThemes: ThemeDef[] = [
   darkTheme({
     id: 'codex',
     name: 'Codex',
-    background: '#10151d',
-    surface: '#192231',
-    surfaceRaised: '#24334a',
-    sidebar: '#0a0e14',
-    code: '#070a0f',
+    background: '#111214',
+    surface: '#1c1e22',
+    surfaceRaised: '#292c31',
+    sidebar: '#0c0d0f',
+    code: '#08090b',
     foreground: '#f3f4f6',
     mutedForeground: '#8b9099',
-    primary: '#2f7cf6',
+    primary: '#3b82f6',
     primaryForeground: '#ffffff'
   }),
   darkTheme({
@@ -231,7 +229,7 @@ const codexThemes: ThemeDef[] = [
     code: '#090c10',
     foreground: '#e6edf3',
     mutedForeground: '#7d8590',
-    primary: '#3fb950',
+    primary: '#2f81f7',
     primaryForeground: '#ffffff',
     border: '#30363d'
   }),
@@ -245,19 +243,19 @@ const codexThemes: ThemeDef[] = [
     code: '#1d2021',
     foreground: '#ebdbb2',
     mutedForeground: '#a89984',
-    primary: '#d79921'
+    primary: '#83a598'
   }),
   darkTheme({
     id: 'linear',
     name: 'Linear',
-    background: '#12131b',
-    surface: '#1c1e2b',
-    surfaceRaised: '#2a2e43',
-    sidebar: '#0b0c12',
-    code: '#08090d',
+    background: '#111113',
+    surface: '#1b1b1f',
+    surfaceRaised: '#28282f',
+    sidebar: '#0b0b0d',
+    code: '#09090b',
     foreground: '#f5f5f6',
     mutedForeground: '#8b8b95',
-    primary: '#6c5ce7',
+    primary: '#7c6df2',
     primaryForeground: '#ffffff'
   }),
   darkTheme({
@@ -270,19 +268,19 @@ const codexThemes: ThemeDef[] = [
     code: '#080e19',
     foreground: '#f8fafc',
     mutedForeground: '#8d99ab',
-    primary: '#ff7a5c'
+    primary: '#ff6b6b'
   }),
   darkTheme({
     id: 'material',
     name: 'Material',
-    background: '#172326',
-    surface: '#203137',
-    surfaceRaised: '#2b444b',
-    sidebar: '#10191b',
-    code: '#0c1315',
+    background: '#212121',
+    surface: '#2b2b2b',
+    surfaceRaised: '#383838',
+    sidebar: '#191919',
+    code: '#151515',
     foreground: '#eeffff',
     mutedForeground: '#9e9e9e',
-    primary: '#89ddff'
+    primary: '#80cbc4'
   }),
   darkTheme({
     id: 'matrix',
@@ -318,7 +316,7 @@ const codexThemes: ThemeDef[] = [
     code: '#00101b',
     foreground: '#d6deeb',
     mutedForeground: '#637777',
-    primary: '#7fdbca'
+    primary: '#82aaff'
   }),
   darkTheme({
     id: 'nord',
@@ -337,21 +335,21 @@ const codexThemes: ThemeDef[] = [
     name: 'Notion',
     background: '#191919',
     surface: '#242424',
-    surfaceRaised: '#323232',
+    surfaceRaised: '#303030',
     sidebar: '#121212',
-    code: '#0f0f0f',
+    code: '#101010',
     foreground: '#f7f7f5',
     mutedForeground: '#9b9a97',
-    primary: '#e7e1d9'
+    primary: '#529cca'
   }),
   darkTheme({
     id: 'one',
     name: 'One',
-    background: '#20252f',
-    surface: '#2b323e',
-    surfaceRaised: '#384353',
-    sidebar: '#181d25',
-    code: '#141820',
+    background: '#282c34',
+    surface: '#323842',
+    surfaceRaised: '#3e4451',
+    sidebar: '#21252b',
+    code: '#1e2227',
     foreground: '#abb2bf',
     mutedForeground: '#7f848e',
     primary: '#61afef'
@@ -359,11 +357,11 @@ const codexThemes: ThemeDef[] = [
   darkTheme({
     id: 'oscorange',
     name: 'Oscorange',
-    background: '#1b110b',
-    surface: '#2c1b11',
-    surfaceRaised: '#432819',
-    sidebar: '#100904',
-    code: '#0b0603',
+    background: '#0c0c0d',
+    surface: '#181719',
+    surfaceRaised: '#272429',
+    sidebar: '#060607',
+    code: '#030304',
     foreground: '#f3eee9',
     mutedForeground: '#8f8580',
     primary: '#ff9b5e'
@@ -371,14 +369,14 @@ const codexThemes: ThemeDef[] = [
   darkTheme({
     id: 'raycast',
     name: 'Raycast',
-    background: '#211417',
-    surface: '#301c21',
-    surfaceRaised: '#46272e',
-    sidebar: '#160d0f',
-    code: '#10090b',
+    background: '#171719',
+    surface: '#222225',
+    surfaceRaised: '#303034',
+    sidebar: '#101012',
+    code: '#0c0c0e',
     foreground: '#f8f8f8',
     mutedForeground: '#96969f',
-    primary: '#ff4d5e'
+    primary: '#ff6363'
   }),
   darkTheme({
     id: 'rose-pine',
@@ -395,14 +393,14 @@ const codexThemes: ThemeDef[] = [
   darkTheme({
     id: 'sentry',
     name: 'Sentry',
-    background: '#1c1029',
-    surface: '#2c183e',
-    surfaceRaised: '#42225d',
-    sidebar: '#12091b',
-    code: '#0d0613',
+    background: '#181225',
+    surface: '#241b35',
+    surfaceRaised: '#34264a',
+    sidebar: '#100b19',
+    code: '#0d0915',
     foreground: '#f5f3f7',
     mutedForeground: '#9587a6',
-    primary: '#a674ff',
+    primary: '#7553ff',
     primaryForeground: '#ffffff'
   }),
   darkTheme({
@@ -439,7 +437,7 @@ const codexThemes: ThemeDef[] = [
     code: '#101117',
     foreground: '#c0caf5',
     mutedForeground: '#737aa2',
-    primary: '#f7768e'
+    primary: '#7aa2f7'
   }),
   darkTheme({
     id: 'vercel',
@@ -458,14 +456,14 @@ const codexThemes: ThemeDef[] = [
   darkTheme({
     id: 'vs-code-plus',
     name: 'VS Code Plus',
-    background: '#181d22',
-    surface: '#20272e',
-    surfaceRaised: '#2b3540',
-    sidebar: '#11161b',
-    code: '#0e1216',
+    background: '#1e1e1e',
+    surface: '#252526',
+    surfaceRaised: '#333333',
+    sidebar: '#181818',
+    code: '#151515',
     foreground: '#d4d4d4',
     mutedForeground: '#858585',
-    primary: '#00a4ef',
+    primary: '#3794ff',
     primaryForeground: '#ffffff'
   }),
   darkTheme({
@@ -478,7 +476,7 @@ const codexThemes: ThemeDef[] = [
     code: '#151820',
     foreground: '#d7dae0',
     mutedForeground: '#7f8799',
-    primary: '#bf5af2'
+    primary: '#4da6ff'
   })
 ]
 
