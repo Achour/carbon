@@ -31,6 +31,8 @@ interface DarkThemePalette {
   primary: string
   primaryForeground?: string
   border?: string
+  /** Targeted overrides for light themes that would otherwise look alike. */
+  lightOverrides?: Record<string, string>
 }
 
 const darkBase = {
@@ -40,7 +42,10 @@ const darkBase = {
   warning: '#e5b567'
 }
 
-function lightThemeVars(accent: string): Record<string, string> {
+function lightThemeVars(
+  accent: string,
+  overrides: Record<string, string> = {}
+): Record<string, string> {
   const primary = `color-mix(in oklab, ${accent} 68%, #111827)`
   return {
     background: `color-mix(in oklab, ${accent} 2%, #fbfbfc)`,
@@ -68,7 +73,8 @@ function lightThemeVars(accent: string): Record<string, string> {
     'sidebar-border': `color-mix(in oklab, ${accent} 8%, #daddE2)`,
     'code-bg': `color-mix(in oklab, ${accent} 3%, #f2f3f5)`,
     success: '#238636',
-    warning: '#9a6700'
+    warning: '#9a6700',
+    ...overrides
   }
 }
 
@@ -102,7 +108,7 @@ function darkTheme(palette: DarkThemePalette): ThemeDef {
       'code-bg': palette.code,
       ...darkBase
     },
-    lightVars: lightThemeVars(palette.primary)
+    lightVars: lightThemeVars(palette.primary, palette.lightOverrides)
   }
 }
 
@@ -230,7 +236,23 @@ const codexThemes: ThemeDef[] = [
     mutedForeground: '#7d8590',
     primary: '#2f81f7',
     primaryForeground: '#ffffff',
-    border: '#30363d'
+    border: '#30363d',
+    lightOverrides: {
+      background: '#ffffff',
+      card: '#f6f8fa',
+      popover: '#ffffff',
+      primary: '#0969da',
+      secondary: '#f6f8fa',
+      muted: '#f6f8fa',
+      accent: '#ddf4ff',
+      border: '#d0d7de',
+      input: '#d0d7de',
+      ring: 'rgb(9 105 218 / 35%)',
+      sidebar: '#f6f8fa',
+      'sidebar-accent': '#eaeef2',
+      'sidebar-border': '#d0d7de',
+      'code-bg': '#f6f8fa'
+    }
   }),
   darkTheme({
     id: 'gruvbox',
@@ -255,7 +277,22 @@ const codexThemes: ThemeDef[] = [
     foreground: '#f5f5f6',
     mutedForeground: '#8b8b95',
     primary: '#7c6df2',
-    primaryForeground: '#ffffff'
+    primaryForeground: '#ffffff',
+    lightOverrides: {
+      background: '#f7f7f8',
+      card: '#ffffff',
+      popover: '#ffffff',
+      primary: '#5e6ad2',
+      secondary: '#efeff2',
+      muted: '#f0f0f2',
+      accent: '#e7e5fb',
+      border: '#d8d8de',
+      input: '#d1d1d8',
+      sidebar: '#efeff2',
+      'sidebar-accent': '#e2e2e8',
+      'sidebar-border': '#d8d8de',
+      'code-bg': '#eeeef1'
+    }
   }),
   darkTheme({
     id: 'lobster',
@@ -267,7 +304,22 @@ const codexThemes: ThemeDef[] = [
     code: '#080e19',
     foreground: '#f8fafc',
     mutedForeground: '#8d99ab',
-    primary: '#ff6b6b'
+    primary: '#ff6b6b',
+    lightOverrides: {
+      background: '#fff8f5',
+      card: '#fffdfc',
+      popover: '#fffdfc',
+      primary: '#d94b4b',
+      secondary: '#fbe9e5',
+      muted: '#f9eeeb',
+      accent: '#f7ddd7',
+      border: '#e7cbc4',
+      input: '#dfc2ba',
+      sidebar: '#fceeea',
+      'sidebar-accent': '#f5dcd5',
+      'sidebar-border': '#e7cbc4',
+      'code-bg': '#f7e5df'
+    }
   }),
   darkTheme({
     id: 'material',
@@ -279,7 +331,22 @@ const codexThemes: ThemeDef[] = [
     code: '#151515',
     foreground: '#eeffff',
     mutedForeground: '#9e9e9e',
-    primary: '#80cbc4'
+    primary: '#80cbc4',
+    lightOverrides: {
+      background: '#f5fbfa',
+      card: '#ffffff',
+      popover: '#ffffff',
+      primary: '#00796b',
+      secondary: '#e0f2f1',
+      muted: '#edf5f4',
+      accent: '#cce9e6',
+      border: '#c6dad8',
+      input: '#b8cfcc',
+      sidebar: '#edf7f6',
+      'sidebar-accent': '#d7ecea',
+      'sidebar-border': '#c6dad8',
+      'code-bg': '#e8f3f2'
+    }
   }),
   darkTheme({
     id: 'matrix',
@@ -315,7 +382,28 @@ const codexThemes: ThemeDef[] = [
     code: '#00101b',
     foreground: '#d6deeb',
     mutedForeground: '#637777',
-    primary: '#82aaff'
+    primary: '#82aaff',
+    lightOverrides: {
+      background: '#fbfbfd',
+      foreground: '#403f53',
+      card: '#ffffff',
+      'card-foreground': '#403f53',
+      popover: '#ffffff',
+      'popover-foreground': '#403f53',
+      primary: '#994cc3',
+      secondary: '#f0f0f7',
+      muted: '#f2f2f8',
+      'muted-foreground': '#76758a',
+      accent: '#ece8f3',
+      'accent-foreground': '#403f53',
+      border: '#d9d8e5',
+      input: '#cfcedd',
+      sidebar: '#f0f0f7',
+      'sidebar-foreground': '#403f53',
+      'sidebar-accent': '#e5e4ef',
+      'sidebar-border': '#d9d8e5',
+      'code-bg': '#ededf5'
+    }
   }),
   darkTheme({
     id: 'nord',
@@ -412,7 +500,33 @@ const codexThemes: ThemeDef[] = [
     code: '#001e26',
     foreground: '#eee8d5',
     mutedForeground: '#839496',
-    primary: '#dc322f'
+    primary: '#dc322f',
+    lightOverrides: {
+      background: '#fdf6e3',
+      foreground: '#586e75',
+      card: '#fffaf0',
+      'card-foreground': '#586e75',
+      popover: '#eee8d5',
+      'popover-foreground': '#586e75',
+      primary: '#268bd2',
+      'primary-foreground': '#ffffff',
+      secondary: '#eee8d5',
+      'secondary-foreground': '#586e75',
+      muted: '#eee8d5',
+      'muted-foreground': '#839496',
+      accent: '#e7dfc8',
+      'accent-foreground': '#586e75',
+      border: '#d8cfb8',
+      input: '#cec4aa',
+      ring: 'rgb(38 139 210 / 35%)',
+      sidebar: '#eee8d5',
+      'sidebar-foreground': '#586e75',
+      'sidebar-accent': '#e3dbc4',
+      'sidebar-border': '#d8cfb8',
+      'code-bg': '#eee8d5',
+      success: '#859900',
+      warning: '#b58900'
+    }
   }),
   darkTheme({
     id: 'temple',
