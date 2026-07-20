@@ -453,8 +453,22 @@ function registerIpc(): void {
       manager.disposeChat(chatId)
       chat.cwd = res.cwd
       chat.worktree = undefined
+      // Claude files each conversation under a directory derived from its cwd,
+      // so a resume id earned inside the worktree is unfindable from the main
+      // checkout: every later send fails with "No conversation found with
+      // session ID", permanently. Drop it — the next send starts fresh, which
+      // is what the hand-off dialog already promises. Codex keeps its id: it
+      // resumes by thread id and files rollouts by date, not by cwd.
+      const staleSession = chat.provider !== 'codex' && chat.sessionId !== undefined
+      if (staleSession) chat.sessionId = undefined
       store.saveChat(chatId)
-      emit({ type: 'meta', chatId, patch: { cwd: res.cwd, worktree: undefined } })
+      emit({
+        type: 'meta',
+        chatId,
+        patch: staleSession
+          ? { cwd: res.cwd, worktree: undefined, sessionId: undefined }
+          : { cwd: res.cwd, worktree: undefined }
+      })
     }
     return res.ok ? { ok: true } : { ok: false, error: res.error ?? 'Hand-off failed.' }
   })

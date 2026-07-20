@@ -938,7 +938,10 @@ export const useApp = create<AppState>((set, get) => ({
       chats,
       defaults,
       loading: false,
-      selectedCwd: chats[0]?.cwd ?? defaults.recentDirs[0] ?? null
+      // The most recent chat may run in a worktree; the home screen means the
+      // *project*, so seed from its repo root — otherwise a new "This Mac" chat
+      // would start inside that worktree.
+      selectedCwd: (chats[0] ? projectRoot(chats[0]) : undefined) ?? defaults.recentDirs[0] ?? null
     })
     const cwd = get().selectedCwd
     if (cwd) {
@@ -1457,6 +1460,14 @@ export const useApp = create<AppState>((set, get) => ({
       set((s) => ({
         // Stash the outgoing chat's tabs; the draft/home state opens no tabs.
         ...chatSwitchPatch(s, null),
+        // While a worktree chat was open `selectedCwd` pointed at its worktree,
+        // which is right for that chat's git and file tree but wrong for the
+        // home screen — leaving it would show the worktree as the project and
+        // start the next chat inside it.
+        selectedCwd: ((): string | null => {
+          const outgoing = s.chats.find((c) => c.id === s.activeId)
+          return outgoing ? projectRoot(outgoing) : s.selectedCwd
+        })(),
         activeId: null,
         messages: [],
         planPanel: null,

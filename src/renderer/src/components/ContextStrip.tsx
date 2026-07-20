@@ -16,6 +16,7 @@ export function ContextStrip({
   cwd,
   git,
   branch,
+  project,
   onReviewChanges,
   children
 }: {
@@ -23,6 +24,12 @@ export function ContextStrip({
   git: GitStatus | null
   /** Overrides the working tree's own branch. Defaults to `git.branch`. */
   branch?: string
+  /**
+   * Repo the chat belongs to, when that isn't `cwd` itself. A worktree's
+   * directory is named after its branch, so labelling the pill with `cwd`
+   * would print the branch twice and drop the project name entirely.
+   */
+  project?: string
   onReviewChanges: () => void
   children?: React.ReactNode
 }): React.JSX.Element {
@@ -33,7 +40,7 @@ export function ContextStrip({
       <WithTooltip label={cwd}>
         <div className={contextPill}>
           <Folder className="size-3 shrink-0" />
-          <span className="max-w-44 truncate">{basename(cwd)}</span>
+          <span className="max-w-44 truncate">{basename(project ?? cwd)}</span>
           {git?.isRepo && shown && (
             <>
               <span className="text-border">/</span>

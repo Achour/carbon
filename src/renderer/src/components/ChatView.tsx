@@ -14,6 +14,7 @@ import {
   X
 } from 'lucide-react'
 import type { AssistantMessage, ChatMessage, ChatMeta, ToolPart } from '@shared/types'
+import { projectRoot } from '@shared/types'
 import { cn } from '@/lib/utils'
 import { basename } from '@/lib/format'
 import { useApp } from '@/store'
@@ -489,7 +490,12 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
       {/* Composer */}
       <div className="shrink-0 px-6 pb-5">
         <div className="mx-auto max-w-3xl">
-          <ContextStrip cwd={chat.cwd} git={git} onReviewChanges={() => void reviewChanges()}>
+          <ContextStrip
+            cwd={chat.cwd}
+            project={projectRoot(chat)}
+            git={git}
+            onReviewChanges={() => void reviewChanges()}
+          >
             {git?.isRepo && <EnvironmentMenu chat={chat} />}
           </ContextStrip>
           {queued.length > 0 && (
