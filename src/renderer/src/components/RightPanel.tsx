@@ -86,6 +86,7 @@ function Tab({
 // tree can bear, never so wide the chat column becomes unusable.
 const PANEL_MIN_PX = 448
 const CHAT_RESERVED_PX = 480
+const PANEL_TRANSITION_MS = 200
 
 // File-tree dock bounds: never below a readable tree, never so wide the
 // viewer disappears.
@@ -533,6 +534,18 @@ export function RightPanel(): React.JSX.Element | null {
       (r) => r.id === s.planPanel!.requestId && r.hasSuggestions
     )
   })
+  // Keep terminals and previews mounted until the closing width transition
+  // finishes, then release them just as the previous conditional render did.
+  const [contentsMounted, setContentsMounted] = React.useState(panelOpen)
+  React.useEffect(() => {
+    if (panelOpen) {
+      setContentsMounted(true)
+      return undefined
+    }
+    const timer = window.setTimeout(() => setContentsMounted(false), PANEL_TRANSITION_MS)
+    return () => window.clearTimeout(timer)
+  }, [panelOpen])
+  const showContents = panelOpen || contentsMounted
 
   // Markdown preview vs source; the choice sticks across files.
   const [mdMode, setMdMode] = React.useState<'preview' | 'source'>('preview')
@@ -582,11 +595,13 @@ export function RightPanel(): React.JSX.Element | null {
     const saved = Number(localStorage.getItem('rightPanelWidth'))
     return Number.isFinite(saved) && saved >= PANEL_MIN_PX ? saved : 0
   })
+  const [dragging, setDragging] = React.useState(false)
   const draggingRef = React.useRef(false)
 
   const onHandlePointerDown = (e: React.PointerEvent<HTMLDivElement>): void => {
     e.preventDefault()
     draggingRef.current = true
+    setDragging(true)
     try {
       e.currentTarget.setPointerCapture(e.pointerId)
     } catch {
@@ -598,8 +613,8 @@ export function RightPanel(): React.JSX.Element | null {
     if (!draggingRef.current) return
     // Reserve space for the chat column measured from where it actually
     // starts — the sidebar may be open to its left.
-    const chatLeft =
-      e.currentTarget.parentElement?.previousElementSibling?.getBoundingClientRect().left ?? 0
+    const panel = e.currentTarget.closest<HTMLElement>('[data-right-panel]')
+    const chatLeft = panel?.previousElementSibling?.getBoundingClientRect().left ?? 0
     const maxW = Math.round(window.innerWidth - chatLeft - CHAT_RESERVED_PX)
     const next = Math.round(window.innerWidth - e.clientX)
     setWidth(Math.max(PANEL_MIN_PX, Math.min(next, maxW)))
@@ -608,6 +623,7 @@ export function RightPanel(): React.JSX.Element | null {
   const onHandlePointerUp = (): void => {
     if (!draggingRef.current) return
     draggingRef.current = false
+    setDragging(false)
     setWidth((w) => {
       if (w) localStorage.setItem('rightPanelWidth', String(w))
       return w
@@ -616,11 +632,10 @@ export function RightPanel(): React.JSX.Element | null {
 
   const resetWidth = (): void => {
     draggingRef.current = false
+    setDragging(false)
     setWidth(0)
     localStorage.removeItem('rightPanelWidth')
   }
-
-  if (!panelOpen) return null
 
   const showPlan = planPanel !== null && planPanel.chatId === activeId
   const current =
@@ -649,21 +664,38 @@ export function RightPanel(): React.JSX.Element | null {
   // Nothing open at all → show the launcher (vs. `current === 'files'`, which is
   // browse mode with the tree docked).
   const isEmpty = current === null
+  const targetWidth = width
+    ? `min(${width}px, calc(100vw - ${CHAT_RESERVED_PX}px))`
+    : '52%'
 
   return (
     <aside
+      data-right-panel
+      aria-hidden={!panelOpen}
       style={
         panelMaximized
           ? undefined
-          : { width: width ? `min(${width}px, calc(100vw - ${CHAT_RESERVED_PX}px))` : '52%' }
+          : {
+              width: panelOpen ? targetWidth : 0,
+              minWidth: panelOpen ? `${PANEL_MIN_PX}px` : 0
+            }
       }
       className={cn(
-        'relative flex h-full min-w-[28rem] flex-col border-l border-border bg-card/30',
+        'relative h-full overflow-hidden',
+        !dragging && 'transition-[width,min-width] duration-200 ease-out',
+        !panelOpen && 'pointer-events-none',
         // Not shrink-0: when space runs out the panel yields before the chat
         // column (which has its own min-width) gets crushed.
-        panelMaximized && 'min-w-0 flex-1'
+        panelMaximized && 'flex-1'
       )}
     >
+      {showContents && (
+      <div
+        className={cn(
+          'relative flex h-full w-full min-w-[28rem] flex-col border-l border-border bg-card/30',
+          panelMaximized && 'min-w-0'
+        )}
+      >
       {/* Resize handle — drag to resize, double-click to reset */}
       {!panelMaximized && (
         <div
@@ -898,6 +930,8 @@ export function RightPanel(): React.JSX.Element | null {
         </div>
         )}
       </div>
+      </div>
+      )}
     </aside>
   )
 }

@@ -1,4 +1,14 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, Notification, shell } from 'electron'
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  Menu,
+  nativeImage,
+  nativeTheme,
+  Notification,
+  shell
+} from 'electron'
 import { randomUUID } from 'node:crypto'
 import { writeFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
@@ -7,6 +17,7 @@ import type {
   Attachment,
   ChatData,
   ChatEvent,
+  DockIconPalette,
   EffortId,
   GitDiffTarget,
   OpResult,
@@ -34,6 +45,7 @@ import { PreviewManager } from './preview'
 import { Store } from './store'
 import { TerminalManager } from './terminal'
 import { hydrateShellPath } from './shellEnv'
+import { dockIconSvg } from './dockIcon'
 import {
   createWorktree,
   handOffWorktree,
@@ -284,6 +296,15 @@ function setWindowTranslucent(on: boolean): void {
   win?.setBackgroundColor(windowBackgroundColor())
 }
 
+function setDockIcon(palette: DockIconPalette): void {
+  if (process.platform !== 'darwin' || !app.dock) return
+  console.log('[dock icon palette]', palette)
+  const svg = dockIconSvg(palette)
+  const dataUrl = `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`
+  const icon = nativeImage.createFromDataURL(dataUrl)
+  if (!icon.isEmpty()) app.dock.setIcon(icon)
+}
+
 function buildMenu(): void {
   const template: Electron.MenuItemConstructorOptions[] = [
     {
@@ -525,6 +546,8 @@ function registerIpc(): void {
   )
 
   ipcMain.handle('window:set-translucent', (_e, on: boolean) => setWindowTranslucent(on))
+
+  ipcMain.handle('window:set-dock-icon', (_e, palette: DockIconPalette) => setDockIcon(palette))
 
   ipcMain.handle('app:focus-window', () => {
     if (!win) return

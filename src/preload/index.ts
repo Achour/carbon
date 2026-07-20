@@ -3,6 +3,7 @@ import type {
   Api,
   Attachment,
   ChatEvent,
+  DockIconPalette,
   EffortId,
   GitDiffTarget,
   PermissionDecision,
@@ -107,6 +108,7 @@ const api: Api = {
   focusWindow: () => invoke('app:focus-window'),
   setWindowAppearance: (mode: 'dark' | 'light' | 'system', resolvedDark: boolean) =>
     invoke('window:set-appearance', mode, resolvedDark),
+  setDockIcon: (palette: DockIconPalette) => invoke('window:set-dock-icon', palette),
   setWindowTranslucent: (on: boolean) => invoke('window:set-translucent', on),
   platform: process.platform,
   terminalCreate: (opts: TerminalCreateOpts) => invoke('terminal:create', opts),

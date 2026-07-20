@@ -5,6 +5,7 @@ import {
   applyTranslucent,
   CODE_FONT_MAX,
   CODE_FONT_MIN,
+  currentDockIconPalette,
   resolveAppearance,
   storedCodeFontSize,
   storedTheme,
@@ -606,6 +607,11 @@ export function scopedChanges(
 
 const initialThemeMode = storedThemeMode()
 
+function syncDockIcon(): void {
+  if (window.api.platform !== 'darwin') return
+  void window.api.setDockIcon(currentDockIconPalette())
+}
+
 export const useApp = create<AppState>((set, get) => ({
   chats: [],
   activeId: null,
@@ -822,12 +828,14 @@ export const useApp = create<AppState>((set, get) => ({
     const appearance = applyTheme(id, get().themeMode)
     set({ theme: id, resolvedAppearance: appearance })
     void window.api.setWindowAppearance(get().themeMode, appearance === 'dark')
+    syncDockIcon()
   },
 
   setThemeMode(mode) {
     const appearance = applyTheme(get().theme, mode)
     set({ themeMode: mode, resolvedAppearance: appearance })
     void window.api.setWindowAppearance(mode, appearance === 'dark')
+    syncDockIcon()
   },
 
   syncSystemAppearance() {
@@ -835,6 +843,7 @@ export const useApp = create<AppState>((set, get) => ({
     const appearance = applyTheme(get().theme, 'system')
     set({ resolvedAppearance: appearance })
     void window.api.setWindowAppearance('system', appearance === 'dark')
+    syncDockIcon()
   },
 
   translucentSidebar: storedTranslucent(),
@@ -920,6 +929,7 @@ export const useApp = create<AppState>((set, get) => ({
     // Sync the native window vibrancy with the stored appearance preference
     // (the CSS flag was already applied pre-paint in main.tsx).
     void window.api.setWindowAppearance(get().themeMode, get().resolvedAppearance === 'dark')
+    syncDockIcon()
     // The native material already exists in a stable active state; reveal it at
     // boot only when the user's translucency setting is on.
     void window.api.setWindowTranslucent(get().translucentSidebar)

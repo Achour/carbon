@@ -2,12 +2,18 @@ import * as React from 'react'
 import {
   ArrowUp,
   Brain,
+  ClipboardList,
   FileText,
+  FileCheck2,
   MousePointerClick,
   Paperclip,
-  Shield,
+  PencilLine,
+  ShieldOff,
+  ShieldQuestion,
   Sparkles,
   Square,
+  WandSparkles,
+  type LucideIcon,
   X
 } from 'lucide-react'
 import {
@@ -45,6 +51,55 @@ const CODEX_PERMISSION_MODES: { id: PermissionModeId; label: string; description
 /** Collapse Codex's equivalent modes (accept-edits / auto) onto 'workspace write'. */
 function codexPermissionValue(mode: PermissionModeId): PermissionModeId {
   return mode === 'plan' || mode === 'bypassPermissions' ? mode : 'default'
+}
+
+type PermissionAppearance = {
+  Icon: LucideIcon
+  iconClassName: string
+  triggerClassName: string
+}
+
+/** A consistent icon and semantic accent for permission modes across providers. */
+function permissionAppearance(
+  mode: PermissionModeId,
+  isCodex: boolean
+): PermissionAppearance {
+  switch (mode) {
+    case 'plan':
+      return {
+        Icon: ClipboardList,
+        iconClassName: 'text-sky-600 dark:text-sky-400',
+        triggerClassName:
+          'text-sky-700 hover:text-sky-700 data-[popup-open]:text-sky-700 dark:text-sky-400 dark:hover:text-sky-400 dark:data-[popup-open]:text-sky-400'
+      }
+    case 'acceptEdits':
+      return {
+        Icon: FileCheck2,
+        iconClassName: 'text-emerald-600 dark:text-emerald-400',
+        triggerClassName:
+          'text-emerald-700 hover:text-emerald-700 data-[popup-open]:text-emerald-700 dark:text-emerald-400 dark:hover:text-emerald-400 dark:data-[popup-open]:text-emerald-400'
+      }
+    case 'auto':
+      return {
+        Icon: WandSparkles,
+        iconClassName: 'text-violet-600 dark:text-violet-400',
+        triggerClassName:
+          'text-violet-700 hover:text-violet-700 data-[popup-open]:text-violet-700 dark:text-violet-400 dark:hover:text-violet-400 dark:data-[popup-open]:text-violet-400'
+      }
+    case 'bypassPermissions':
+      return {
+        Icon: ShieldOff,
+        iconClassName: 'text-amber-600 dark:text-amber-400',
+        triggerClassName:
+          'text-amber-700 hover:text-amber-700 data-[popup-open]:text-amber-700 dark:text-amber-400 dark:hover:text-amber-400 dark:data-[popup-open]:text-amber-400'
+      }
+    default:
+      return {
+        Icon: isCodex ? PencilLine : ShieldQuestion,
+        iconClassName: 'text-muted-foreground',
+        triggerClassName: ''
+      }
+  }
 }
 
 function readAsBase64(file: File): Promise<string> {
@@ -331,6 +386,7 @@ export function Composer({
   }, [invalidEffort, onEffortChange])
   const permissionOptions = isCodex ? CODEX_PERMISSION_MODES : PERMISSION_MODES
   const permissionValue = isCodex ? codexPermissionValue(permissionMode) : permissionMode
+  const selectedPermissionAppearance = permissionAppearance(permissionValue, isCodex)
 
   const inbox = useApp((s) => s.attachmentInbox)
   React.useEffect(() => {
@@ -733,13 +789,17 @@ export function Composer({
           <CompactSelect
             value={permissionValue}
             onValueChange={(v) => onPermissionModeChange(v as PermissionModeId)}
-            options={permissionOptions.map((m) => ({
-              value: m.id,
-              label: m.label,
-              description: m.description
-            }))}
-            icon={<Shield className="size-3" />}
-            className="min-w-0"
+            options={permissionOptions.map((m) => {
+              const appearance = permissionAppearance(m.id, isCodex)
+              return {
+                value: m.id,
+                label: m.label,
+                description: m.description,
+                icon: <appearance.Icon className={cn('size-3.5', appearance.iconClassName)} />
+              }
+            })}
+            icon={<selectedPermissionAppearance.Icon className="size-3.5" />}
+            className={cn('min-w-0', selectedPermissionAppearance.triggerClassName)}
           />
         </div>
         <SessionPanel />
