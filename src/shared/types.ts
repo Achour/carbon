@@ -731,6 +731,8 @@ export interface Api {
   githubOpenPr(cwd: string): Promise<GitResult>
   getDefaults(): Promise<AppDefaults>
   forgetDir(dir: string): Promise<void>
+  /** Show a file or folder in the OS file manager, selected in its parent. */
+  revealPath(path: string): Promise<void>
   /** Bring the app window to the foreground (notification clicks). */
   focusWindow(): Promise<void>
   /**

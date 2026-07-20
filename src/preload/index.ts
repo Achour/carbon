@@ -105,6 +105,7 @@ const api: Api = {
   githubOpenPr: (cwd: string) => invoke('github:open-pr', cwd),
   getDefaults: () => invoke('app:get-defaults'),
   forgetDir: (dir: string) => invoke('app:forget-dir', dir),
+  revealPath: (path: string) => invoke('app:reveal-path', path),
   focusWindow: () => invoke('app:focus-window'),
   setWindowAppearance: (mode: 'dark' | 'light' | 'system', resolvedDark: boolean) =>
     invoke('window:set-appearance', mode, resolvedDark),

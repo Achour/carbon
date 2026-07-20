@@ -5,6 +5,7 @@ import {
   ChevronRight,
   EyeOff,
   Folder,
+  FolderOpen,
   GitBranch,
   Loader2,
   MessageSquarePlus,
@@ -45,6 +46,14 @@ import {
 import { Input } from '@/components/ui/input'
 import { Kbd } from '@/components/ui/kbd'
 import { WithTooltip } from '@/components/ui/tooltip'
+
+/** What the OS calls its file manager, so the menu item reads natively. */
+const REVEAL_LABEL =
+  window.api.platform === 'darwin'
+    ? 'Reveal in Finder'
+    : window.api.platform === 'win32'
+      ? 'Show in File Explorer'
+      : 'Show in file manager'
 
 /** "3 uncommitted files and 2 unmerged commits" — what a force-delete destroys, '' when nothing is. */
 function describeAtRisk({ dirtyFiles, unmergedCommits }: WorktreeStatus): string {
@@ -699,6 +708,9 @@ export function Sidebar(): React.JSX.Element {
                       }}
                     >
                       <Pencil /> Rename project…
+                    </ContextMenuItem>
+                    <ContextMenuItem onClick={() => void window.api.revealPath(group.cwd)}>
+                      <FolderOpen /> {REVEAL_LABEL}
                     </ContextMenuItem>
                     <ContextMenuSeparator />
                     {archived ? (

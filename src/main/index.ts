@@ -540,6 +540,8 @@ function registerIpc(): void {
 
   ipcMain.handle('app:forget-dir', (_e, dir: string) => store.forgetDir(dir))
 
+  ipcMain.handle('app:reveal-path', (_e, path: string) => shell.showItemInFolder(path))
+
   ipcMain.handle(
     'window:set-appearance',
     (_e, mode: 'dark' | 'light' | 'system', dark: boolean) => applyWindowAppearance(mode, dark)
