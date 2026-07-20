@@ -5,6 +5,7 @@ import {
   ChevronRight,
   EyeOff,
   Folder,
+  GitBranch,
   Loader2,
   MessageSquarePlus,
   MoreHorizontal,
@@ -15,7 +16,8 @@ import {
   Settings,
   Trash2
 } from 'lucide-react'
-import type { ChatMeta } from '@shared/types'
+import type { ChatMeta, WorktreeStatus } from '@shared/types'
+import { projectRoot } from '@shared/types'
 import { cn } from '@/lib/utils'
 import { basename, relativeTime } from '@/lib/format'
 import { useApp } from '@/store'
@@ -44,6 +46,16 @@ import { Input } from '@/components/ui/input'
 import { Kbd } from '@/components/ui/kbd'
 import { WithTooltip } from '@/components/ui/tooltip'
 
+/** "3 uncommitted files and 2 unmerged commits" — what a force-delete destroys, '' when nothing is. */
+function describeAtRisk({ dirtyFiles, unmergedCommits }: WorktreeStatus): string {
+  const parts: string[] = []
+  if (dirtyFiles > 0) parts.push(`${dirtyFiles} uncommitted file${dirtyFiles === 1 ? '' : 's'}`)
+  if (unmergedCommits && unmergedCommits > 0) {
+    parts.push(`${unmergedCommits} unmerged commit${unmergedCommits === 1 ? '' : 's'}`)
+  }
+  return parts.join(' and ')
+}
+
 function ChatItem({
   chat,
   active,
@@ -51,7 +63,8 @@ function ChatItem({
   titling,
   onOpen,
   onRename,
-  onDelete
+  onDelete,
+  onNewInWorktree
 }: {
   chat: ChatMeta
   active: boolean
@@ -60,6 +73,8 @@ function ChatItem({
   onOpen: () => void
   onRename: () => void
   onDelete: () => void
+  /** Start another chat — possibly on the other provider — in the same worktree. */
+  onNewInWorktree: () => void
 }): React.JSX.Element {
   const [menuOpen, setMenuOpen] = React.useState(false)
   return (
@@ -82,6 +97,16 @@ function ChatItem({
         onClick={onOpen}
         className="flex w-full min-w-0 items-center gap-1.5 px-2.5 py-1.5 text-left outline-none"
       >
+        {chat.worktree && (
+          <WithTooltip label={`${chat.worktree.branch} · ${chat.cwd}`}>
+            <GitBranch
+              className={cn(
+                'size-3 shrink-0 transition-colors',
+                active ? 'text-sidebar-foreground/70' : 'text-sidebar-foreground/40'
+              )}
+            />
+          </WithTooltip>
+        )}
         <span
           className={cn(
             'min-w-0 flex-1 truncate text-[13px] transition-colors',
@@ -127,6 +152,11 @@ function ChatItem({
             <DropdownMenuItem onClick={onRename}>
               <Pencil /> Rename
             </DropdownMenuItem>
+            {chat.worktree && (
+              <DropdownMenuItem onClick={onNewInWorktree}>
+                <GitBranch /> New chat in this worktree
+              </DropdownMenuItem>
+            )}
             <DropdownMenuSeparator />
             <DropdownMenuItem destructive onClick={onDelete}>
               <Trash2 /> Delete
@@ -139,6 +169,11 @@ function ChatItem({
         <ContextMenuItem onClick={onRename}>
           <Pencil /> Rename
         </ContextMenuItem>
+        {chat.worktree && (
+          <ContextMenuItem onClick={onNewInWorktree}>
+            <GitBranch /> New chat in this worktree
+          </ContextMenuItem>
+        )}
         <ContextMenuSeparator />
         <ContextMenuItem destructive onClick={onDelete}>
           <Trash2 /> Delete
@@ -240,7 +275,7 @@ function SearchChatsDialog({
               >
                 <span className="min-w-0 flex-1 truncate text-[13px]">{c.title || 'New chat'}</span>
                 <span className="max-w-32 shrink-0 truncate text-[11px] text-muted-foreground/70">
-                  {projectNames[c.cwd]?.trim() || basename(c.cwd)}
+                  {projectNames[projectRoot(c)]?.trim() || basename(projectRoot(c))}
                 </span>
                 <span className="shrink-0 text-[11px] text-muted-foreground/50">
                   {relativeTime(c.updatedAt)}
@@ -295,11 +330,34 @@ export function Sidebar(): React.JSX.Element {
   const setSearchOpen = useApp((s) => s.setSearchOpen)
   const [renaming, setRenaming] = React.useState<ChatMeta | null>(null)
   const [deleting, setDeleting] = React.useState<ChatMeta | null>(null)
+  const [deletingWt, setDeletingWt] = React.useState<WorktreeStatus | null>(null)
+  // git's refusal when worktree cleanup failed, shown after the dialog closes.
+  const [deleteError, setDeleteError] = React.useState<string | null>(null)
+
+  // Fetch the dirty/unmerged report when a worktree chat's delete dialog opens,
+  // so the confirm can say what would actually be lost.
+  React.useEffect(() => {
+    setDeletingWt(null)
+    if (!deleting?.worktree) return
+    let cancelled = false
+    void window.api.worktreeStatus(deleting.id).then((s) => {
+      if (!cancelled) setDeletingWt(s)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [deleting])
+
+  // What a force-delete would destroy ('' when nothing), and whether the report
+  // is still in flight — both derived, so the predicate lives in one place.
+  const atRisk = deletingWt ? describeAtRisk(deletingWt) : ''
+  const wtLoading = !!deleting?.worktree && !deletingWt
   const [renameValue, setRenameValue] = React.useState('')
   // Project being renamed (its cwd) and the working input value.
   const [renamingProject, setRenamingProject] = React.useState<string | null>(null)
   const [projectNameValue, setProjectNameValue] = React.useState('')
   const removeProject = useApp((s) => s.removeProject)
+  const startInWorktree = useApp((s) => s.startInWorktree)
   const [removingProject, setRemovingProject] = React.useState<{
     cwd: string
     count: number
@@ -410,9 +468,10 @@ export function Sidebar(): React.JSX.Element {
   // top. Projects not yet in the saved order keep their discovery order.
   const groups: { cwd: string; chats: ChatMeta[] }[] = []
   for (const chat of chats) {
-    const group = groups.find((g) => g.cwd === chat.cwd)
+    const key = projectRoot(chat)
+    const group = groups.find((g) => g.cwd === key)
     if (group) group.chats.push(chat)
-    else groups.push({ cwd: chat.cwd, chats: [chat] })
+    else groups.push({ cwd: key, chats: [chat] })
   }
   const orderRank = (cwd: string): number => {
     const i = projectOrder.indexOf(cwd)
@@ -678,6 +737,12 @@ export function Sidebar(): React.JSX.Element {
                           setRenaming(chat)
                         }}
                         onDelete={() => setDeleting(chat)}
+                        onNewInWorktree={() => {
+                          // Drops to the composer with the worktree preselected;
+                          // the model picker there chooses the provider, so a
+                          // Codex chat can pick up a worktree Claude started.
+                          if (chat.worktree) void startInWorktree(chat.cwd, chat.worktree)
+                        }}
                       />
                     ))}
                   </div>
@@ -806,25 +871,77 @@ export function Sidebar(): React.JSX.Element {
         </DialogContent>
       </Dialog>
 
+      {/* Worktree cleanup failed — the chat is already gone, so this reports
+          what was left behind rather than blocking anything. */}
+      <Dialog open={deleteError !== null} onOpenChange={(open) => !open && setDeleteError(null)}>
+        <DialogContent>
+          <DialogTitle>The worktree couldn’t be removed</DialogTitle>
+          <DialogDescription>
+            The chat was deleted, but its worktree is still on disk. Git said:
+          </DialogDescription>
+          <p className="mt-3 rounded-md bg-secondary/50 p-2 font-mono text-[11px] break-words text-destructive">
+            {deleteError}
+          </p>
+          <div className="mt-4 flex justify-end">
+            <Button variant="ghost" onClick={() => setDeleteError(null)}>
+              Dismiss
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* Delete dialog */}
       <Dialog open={deleting !== null} onOpenChange={(open) => !open && setDeleting(null)}>
         <DialogContent>
           <DialogTitle>Delete this chat?</DialogTitle>
           <DialogDescription>
             “{deleting?.title || 'New chat'}” and its history will be removed permanently.
+            {deleting?.worktree && (
+              <>
+                {' '}
+                It runs in the worktree{' '}
+                <span className="font-medium text-foreground">{deleting.worktree.branch}</span>.
+                {deletingWt
+                  ? atRisk
+                    ? ` It has ${atRisk} that deleting the worktree would destroy.`
+                    : ' The worktree is clean and safe to delete.'
+                  : ' Checking for uncommitted work…'}
+              </>
+            )}
           </DialogDescription>
           <div className="mt-4 flex justify-end gap-2">
             <Button variant="ghost" onClick={() => setDeleting(null)}>
               Cancel
             </Button>
+            {deleting?.worktree && (
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  if (deleting) void deleteChat(deleting.id, 'keep')
+                  setDeleting(null)
+                }}
+              >
+                Keep worktree
+              </Button>
+            )}
             <Button
               variant="destructive"
+              // Deleting is blocked only while we don't yet know what's at risk.
+              disabled={wtLoading}
               onClick={() => {
-                if (deleting) void deleteChat(deleting.id)
+                if (!deleting) return
+                // Nothing at risk → a plain remove (git still refuses if it
+                // disagrees). Otherwise the user has read the warning and forces.
+                const disposition = !deleting.worktree ? undefined : atRisk ? 'force' : 'remove'
+                void deleteChat(deleting.id, disposition).then((res) => {
+                  // The chat is gone either way; a worktree git refused to
+                  // remove is reported here, where the user asked for it.
+                  if (!res.ok) setDeleteError(res.error)
+                })
                 setDeleting(null)
               }}
             >
-              Delete
+              {!deleting?.worktree ? 'Delete' : atRisk ? 'Delete anyway' : 'Delete with worktree'}
             </Button>
           </div>
         </DialogContent>

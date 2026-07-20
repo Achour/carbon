@@ -16,11 +16,13 @@ export class TerminalManager {
 
   constructor(private emit: (ev: TerminalEvent) => void) {}
 
-  create({ id, cwd, cols, rows }: TerminalCreateOpts): void {
+  create({ id, cwd, cols, rows, command }: TerminalCreateOpts): void {
     // Replacing an existing session (e.g. "restart") kills the old shell first.
     this.kill(id)
     const shell = process.env.SHELL || '/bin/zsh'
-    const proc = pty.spawn(shell, ['-l'], {
+    // A one-shot command (worktree setup) still runs in a pty so its output
+    // streams into a normal terminal tab and the user can watch it work.
+    const proc = pty.spawn(shell, command ? ['-lc', command] : ['-l'], {
       name: 'xterm-256color',
       cols: Math.max(cols, 1),
       rows: Math.max(rows, 1),

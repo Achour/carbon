@@ -10,11 +10,16 @@ import { Button } from '@/components/ui/button'
 import { WithTooltip } from '@/components/ui/tooltip'
 import { basename } from '@/lib/format'
 
-/** cwd for a new shell: the active chat's folder, else the selected project. */
-function currentCwd(): string {
+/**
+ * How a tab's shell should spawn. A tab may pin its own folder and a one-shot
+ * command (worktree setup); otherwise it follows the active chat's folder, else
+ * the selected project.
+ */
+function spawnFor(id: string): { cwd: string; command?: string } {
   const s = useApp.getState()
+  const tab = s.terminals.find((t) => t.id === id)
   const chat = s.chats.find((c) => c.id === s.activeId)
-  return chat?.cwd ?? s.selectedCwd ?? ''
+  return { cwd: tab?.cwd ?? chat?.cwd ?? s.selectedCwd ?? '', command: tab?.command }
 }
 
 // Resolve a CSS custom property to a concrete color xterm can parse (hex/rgb),
@@ -117,11 +122,11 @@ export function TerminalPane({ id, active }: { id: string; active: boolean }): R
   const spawn = React.useCallback((): void => {
     const term = termRef.current
     if (!term) return
-    const cwd = currentCwd()
+    const { cwd, command } = spawnFor(id)
     setSpawnCwd(cwd)
     lastSpawnRef.current = performance.now()
     exitedRef.current = false
-    void window.api.terminalCreate({ id, cwd, cols: term.cols, rows: term.rows })
+    void window.api.terminalCreate({ id, cwd, cols: term.cols, rows: term.rows, command })
   }, [id])
 
   const restart = React.useCallback((): void => {

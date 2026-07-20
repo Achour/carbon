@@ -17,7 +17,7 @@ const execFileP = promisify(execFile)
 // over the index while an agent is running git in the same repo.
 const GIT_ENV = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' }
 
-async function git(cwd: string, args: string[], timeout = 15_000): Promise<string> {
+export async function git(cwd: string, args: string[], timeout = 15_000): Promise<string> {
   const { stdout } = await execFileP('git', args, {
     cwd,
     env: GIT_ENV,
@@ -27,7 +27,7 @@ async function git(cwd: string, args: string[], timeout = 15_000): Promise<strin
   return stdout
 }
 
-function errText(err: unknown): string {
+export function errText(err: unknown): string {
   const e = err as { stderr?: string; stdout?: string; message?: string; killed?: boolean }
   if (e.killed) return 'Git timed out — check your network or credentials.'
   const msg = (e.stderr || e.stdout || e.message || 'git failed').trim()

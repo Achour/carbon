@@ -135,6 +135,15 @@ export class Store {
     return this.chats.get(id) ?? null
   }
 
+  /**
+   * Is any chat other than `exceptId` working in `cwd`? Used before removing a
+   * worktree, so a directory another chat still occupies is left alone.
+   */
+  hasOtherChatIn(cwd: string, exceptId: string): boolean {
+    for (const c of this.chats.values()) if (c.id !== exceptId && c.cwd === cwd) return true
+    return false
+  }
+
   addChat(chat: ChatData): void {
     this.chats.set(chat.id, chat)
     this.saveChat(chat.id)

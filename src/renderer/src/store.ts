@@ -17,7 +17,7 @@ import { formatCost, formatDuration } from '@/lib/format'
 import { invalidateLocalImages } from '@/lib/imageCache'
 import { gitAction, gitActionPrompt, type GitActionId } from '@/lib/gitActions'
 import { changedPathsFromParts } from '@/lib/turnChanges'
-import { providerForModel } from '@shared/types'
+import { projectRoot, providerForModel } from '@shared/types'
 import type {
   AppDefaults,
   AssistantMessage,
@@ -35,6 +35,7 @@ import type {
   GitHubState,
   GitStatus,
   ModelOption,
+  OpResult,
   PermissionDecision,
   PermissionRequestPayload,
   PersistedPlanReview,
@@ -42,7 +43,10 @@ import type {
   Provider,
   RateLimitState,
   RewindResult,
-  SlashCommand
+  SlashCommand,
+  WorktreeDisposition,
+  WorktreeInfo,
+  WorktreeTarget
 } from '@shared/types'
 
 /** Bounds for the sidebar "recent chats per project" setting. */
@@ -80,6 +84,12 @@ export interface TerminalTab {
   id: string
   /** Stable ordinal for the "Terminal N" label. */
   n: number
+  /** Overrides the chat's cwd for this tab's shell. */
+  cwd?: string
+  /** One-shot command to run instead of an interactive shell (worktree setup). */
+  command?: string
+  /** Tab label override, e.g. "Setup". */
+  label?: string
 }
 
 export interface PreviewTab {
@@ -165,7 +175,8 @@ interface AppState {
   /** Monotonic counter for stable "Terminal N" labels. */
   terminalSeq: number
   /** Opens a new terminal tab and focuses it. */
-  openTerminal(): void
+  /** Opens a terminal tab; `command` runs one-shot instead of an interactive shell. */
+  openTerminal(opts?: { cwd?: string; command?: string; label?: string }): void
   closeTerminal(id: string): void
   toggleTerminal(): void
 
@@ -349,6 +360,8 @@ interface AppState {
       attachments?: Attachment[]
       /** Display label for an app-initiated first message (e.g. "Commit"). */
       label?: string
+      /** Where the chat runs; omitted or `local` means `cwd` itself. */
+      worktree?: WorktreeTarget
     }
   ): Promise<void>
   sendMessage(text: string, attachments?: Attachment[], label?: string): Promise<void>
@@ -357,7 +370,31 @@ interface AppState {
   removeQueued(chatId: string, id: string): void
   interrupt(): Promise<void>
   stopBackgroundJob(taskId: string): void
-  deleteChat(id: string): Promise<void>
+  /**
+   * `worktree` decides the fate of a worktree chat's directory; default 'keep'.
+   * Returns git's refusal when cleanup fails, so the caller can show it where
+   * the user acted — the chat row is always removed either way.
+   */
+  deleteChat(id: string, worktree?: WorktreeDisposition): Promise<OpResult>
+  /** Opens a terminal tab running the project's worktree setup script, if any. */
+  runWorktreeSetup(chatId: string): Promise<void>
+  /**
+   * Move the active chat out of its worktree and into the main checkout, with
+   * its branch checked out there. Returns git's refusal when it can't.
+   */
+  handOffToLocal(chatId: string): Promise<OpResult>
+  /**
+   * Drop to the new-chat composer with an existing worktree preselected, so the
+   * next chat joins it. The composer's model picker still chooses the provider —
+   * this is how a Codex chat picks up a worktree a Claude chat created.
+   */
+  startInWorktree(path: string, worktree: WorktreeInfo): Promise<void>
+  /**
+   * Target the next new chat should adopt. NewChat isn't mounted when the
+   * sidebar picks a worktree, so the selection waits here until it is.
+   */
+  pendingTarget: WorktreeTarget | null
+  clearPendingTarget(): void
   /** Deletes every chat in the project and drops it from recent folders. */
   removeProject(cwd: string): Promise<void>
   renameChat(id: string, title: string): Promise<void>
@@ -602,12 +639,12 @@ export const useApp = create<AppState>((set, get) => ({
   terminals: [],
   terminalSeq: 0,
 
-  openTerminal() {
+  openTerminal(opts) {
     set((s) => {
       const n = s.terminalSeq + 1
       const id = `terminal:${n}`
       return {
-        terminals: [...s.terminals, { id, n }],
+        terminals: [...s.terminals, { id, n, ...opts }],
         terminalSeq: n,
         activeTab: id,
         ...panelPatch(s, true)
@@ -1487,13 +1524,16 @@ export const useApp = create<AppState>((set, get) => ({
   async newChat(cwd, firstMessage, opts) {
     const { attachments, label, ...createOpts } = opts ?? {}
     const meta = await window.api.createChat({ cwd, ...createOpts })
+    // A worktree chat's cwd is the worktree, not the picked project folder —
+    // the panel, git status and file tree all follow it.
+    const chatCwd = meta.cwd
     // Starting a chat in a hidden project brings it back into the sidebar.
     if (get().hiddenProjects[cwd]) get().setProjectHidden(cwd, false)
     set((s) => ({
       // A brand-new chat has no saved tabs, so this stashes the outgoing chat's
       // and opens an empty tab set.
       ...chatSwitchPatch(s, meta.id),
-      selectedCwd: cwd,
+      selectedCwd: chatCwd,
       chats: [meta, ...s.chats],
       activeId: meta.id,
       messages: [],
@@ -1512,10 +1552,47 @@ export const useApp = create<AppState>((set, get) => ({
     }))
     // The new chat keeps whatever panel state was showing when it was created.
     set((s) => panelPatch(s, s.panelOpen))
-    get().loadCommands(cwd, meta.provider)
+    get().loadCommands(chatCwd, meta.provider)
     void get().refreshGit()
-    if (get().panelOpen && !get().filesByDir[cwd]) void get().loadDir(cwd)
+    if (get().panelOpen && !get().filesByDir[chatCwd]) void get().loadDir(chatCwd)
+    // A fresh worktree has no gitignored files — no node_modules, no .env — so
+    // run the project's setup script in a visible terminal tab. Deliberately not
+    // awaited: the agent starts now and the install races alongside it.
+    if (meta.worktree) void get().runWorktreeSetup(meta.id)
     await window.api.send(meta.id, firstMessage, attachments, label)
+  },
+
+  pendingTarget: null,
+
+  clearPendingTarget() {
+    set({ pendingTarget: null })
+  },
+
+  async startInWorktree(path, { repoRoot, branch }) {
+    set({ pendingTarget: { kind: 'existing', path, branch, repoRoot } })
+    // The composer works against the worktree itself (@-mentions, file tree),
+    // not the project root it branched from.
+    get().setSelectedCwd(path)
+    await get().openChat(null)
+  },
+
+  async handOffToLocal(chatId) {
+    const res = await window.api.worktreeHandoff(chatId)
+    // Main emits a `meta` patch with the new cwd, which applyEvent folds into
+    // the chat list — but the panel follows selectedCwd, so move that too.
+    const moved = get().chats.find((c) => c.id === chatId)
+    if (moved && !moved.worktree && get().activeId === chatId) {
+      get().setSelectedCwd(moved.cwd)
+      void get().refreshGit()
+    }
+    return res
+  },
+
+  async runWorktreeSetup(chatId) {
+    const command = await window.api.worktreeSetupCommand(chatId)
+    if (!command) return
+    const chat = get().chats.find((c) => c.id === chatId)
+    if (chat) get().openTerminal({ cwd: chat.cwd, command, label: 'Setup' })
   },
 
   async sendMessage(text, attachments, label) {
@@ -1590,8 +1667,11 @@ export const useApp = create<AppState>((set, get) => ({
     return res
   },
 
-  async deleteChat(id) {
-    await window.api.deleteChat(id)
+  async deleteChat(id, worktree) {
+    // The chat row always goes; a worktree we failed to clean up stays on disk
+    // and is handed back so the caller can surface it (gitError would only show
+    // inside GitPanel, which the user may not have open).
+    const res = await window.api.deleteChat(id, worktree)
     set((s) => {
       const wasActive = s.activeId === id
       return {
@@ -1612,16 +1692,18 @@ export const useApp = create<AppState>((set, get) => ({
         tabsByChat: pruneTabsByChat(s, [id])
       }
     })
+    return res
   },
 
   async removeProject(cwd) {
-    const ids = get()
-      .chats.filter((c) => c.cwd === cwd)
-      .map((c) => c.id)
-    await Promise.all(ids.map((id) => window.api.deleteChat(id)))
+    const inProject = (c: ChatMeta): boolean => projectRoot(c) === cwd
+    const ids = get().chats.filter(inProject).map((c) => c.id)
+    // 'remove' never forces: a worktree with uncommitted work survives the
+    // project being dropped from the sidebar rather than being destroyed.
+    await Promise.all(ids.map((id) => window.api.deleteChat(id, 'remove')))
     await window.api.forgetDir(cwd)
     set((s) => {
-      const chats = s.chats.filter((c) => c.cwd !== cwd)
+      const chats = s.chats.filter((c) => !inProject(c))
       const wasActive = s.activeId !== null && ids.includes(s.activeId)
       const recentDirs = s.defaults?.recentDirs.filter((d) => d !== cwd) ?? []
       // Drop any stale hidden flag so re-adding the folder later isn't hidden.

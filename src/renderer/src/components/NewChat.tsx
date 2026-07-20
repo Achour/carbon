@@ -6,18 +6,26 @@ import {
   FolderTree,
   GitBranch,
   Globe,
+  Loader2,
   PanelLeft,
   PanelRight,
   SquareTerminal
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { providerForModel } from '@shared/types'
-import type { Attachment, EffortId, PermissionModeId } from '@shared/types'
+import type {
+  Attachment,
+  EffortId,
+  PermissionModeId,
+  WorktreeTarget
+} from '@shared/types'
 import { basename, greeting } from '@/lib/format'
 import { useApp } from '@/store'
 import { Button } from '@/components/ui/button'
 import { WithTooltip } from '@/components/ui/tooltip'
 import { Composer } from '@/components/Composer'
+import { ContextStrip } from '@/components/ContextStrip'
+import { WorktreePicker } from '@/components/WorktreePicker'
 
 /** One row in the home-screen quick-launch rail. */
 function RailAction({
@@ -73,6 +81,25 @@ export function NewChat(): React.JSX.Element {
   const [permissionMode, setPermissionMode] = React.useState<PermissionModeId>(
     defaults?.permissionMode ?? 'default'
   )
+  const [target, setTarget] = React.useState<WorktreeTarget>({ kind: 'local' })
+  // Creating a worktree is a full checkout — it can take seconds on a big repo,
+  // and it can fail. Both need to be visible or sending looks like a no-op.
+  const [starting, setStarting] = React.useState(false)
+  const [startError, setStartError] = React.useState<string | null>(null)
+  const pendingTarget = useApp((s) => s.pendingTarget)
+  const clearPendingTarget = useApp((s) => s.clearPendingTarget)
+
+  // "New chat in this worktree" (sidebar) preselects the worktree in the picker,
+  // so both entry points run through the same target state. Consume-and-clear:
+  // the target owns the selection from here on.
+  React.useEffect(() => {
+    if (!pendingTarget) return
+    setTarget(pendingTarget)
+    clearPendingTarget()
+  }, [pendingTarget, clearPendingTarget])
+
+  // The rail shows its own compact changes affordance, separate from the strip.
+  const hasChanges = !!git?.isRepo && git.changes.length > 0
 
   const browse = async (): Promise<void> => {
     const dir = await window.api.pickDirectory()
@@ -81,59 +108,33 @@ export function NewChat(): React.JSX.Element {
 
   const start = async (text: string, attachments: Attachment[]): Promise<void> => {
     if (!cwd) return
-    await newChat(cwd, text, {
-      provider: providerForModel(model),
-      model: model || undefined,
-      effort: effort || undefined,
-      permissionMode,
-      attachments: attachments.length ? attachments : undefined
-    })
+    // The picker's target decides the chat's directory; branch names for new
+    // worktrees are generated main-side. Creation is scoped to the project the
+    // worktree branched from, so recents and sidebar grouping track the project
+    // rather than the worktree — which matters when the selected cwd IS a
+    // worktree (arrived from the sidebar).
+    const root = target.kind === 'existing' ? target.repoRoot : cwd
+    setStartError(null)
+    setStarting(true)
+    try {
+      await newChat(root, text, {
+        provider: providerForModel(model),
+        model: model || undefined,
+        effort: effort || undefined,
+        permissionMode,
+        attachments: attachments.length ? attachments : undefined,
+        worktree: target.kind === 'local' ? undefined : target
+      })
+    } catch (err) {
+      // The preload bridge already unwraps Electron's IPC error envelope, so
+      // this is git's own message.
+      setStartError((err as Error)?.message || String(err))
+      // Rethrow so the composer restores the draft instead of losing it.
+      throw err
+    } finally {
+      setStarting(false)
+    }
   }
-
-  const hasChanges = !!git?.isRepo && git.changes.length > 0
-
-  // Repo · branch · changes — the same context strip ChatView keeps above the
-  // composer. On the home screen it only appears when the quick-launch rail is
-  // hidden (narrow window); when the rail shows, that info lives there instead.
-  const contextStrip = (
-    <>
-      <WithTooltip label={cwd ?? ''}>
-        <div className="flex min-w-0 items-center gap-1.5 rounded-md border border-border/70 bg-secondary/40 px-2 py-1 text-xs text-muted-foreground">
-          <Folder className="size-3 shrink-0" />
-          <span className="max-w-44 truncate">{cwd ? basename(cwd) : ''}</span>
-          {git?.isRepo && git.branch && (
-            <>
-              <span className="text-border">/</span>
-              <GitBranch className="size-3 shrink-0" />
-              <span className="max-w-32 truncate">{git.branch}</span>
-            </>
-          )}
-        </div>
-      </WithTooltip>
-      {hasChanges && (
-        <WithTooltip
-          label={`Review changes — ${git!.changes.length} file${git!.changes.length === 1 ? '' : 's'}`}
-        >
-          <button
-            type="button"
-            onClick={() => void reviewChanges()}
-            aria-label="Review changes"
-            className="flex items-center gap-1.5 rounded-md border border-border/70 bg-secondary/40 px-2 py-1 text-xs tabular-nums transition-colors hover:bg-accent hover:text-foreground"
-          >
-            <FileDiff className="size-3 text-muted-foreground" />
-            {git!.additions === 0 && git!.deletions === 0 ? (
-              <span className="text-muted-foreground">{git!.changes.length}</span>
-            ) : (
-              <>
-                <span className="text-success">+{git!.additions}</span>
-                <span className="text-destructive">−{git!.deletions}</span>
-              </>
-            )}
-          </button>
-        </WithTooltip>
-      )}
-    </>
-  )
 
   return (
     <div data-newchat className="@container relative flex h-full min-w-[420px] flex-1 flex-col">
@@ -178,16 +179,29 @@ export function NewChat(): React.JSX.Element {
 
             {cwd ? (
               <>
-                {/* Context strip — only when the rail is hidden (narrow window),
-                    so the repo/branch/changes info is never lost. */}
-                <div
-                  data-context-strip
-                  className="mb-2 flex items-center gap-2 @min-[62rem]:hidden"
+                {/* Always shown, like ChatView's — the project you're about to
+                    work in shouldn't disappear just because the quick-launch
+                    rail also names it. */}
+                <ContextStrip
+                  cwd={cwd}
+                  git={git}
+                  // A worktree target shows its own branch, not the checkout's.
+                  branch={target.kind === 'existing' ? target.branch : undefined}
+                  onReviewChanges={() => void reviewChanges()}
                 >
-                  {contextStrip}
-                </div>
+                  {git?.isRepo && (
+                    <WorktreePicker
+                      cwd={cwd}
+                      value={target}
+                      onChange={setTarget}
+                      disabled={starting}
+                    />
+                  )}
+                </ContextStrip>
                 <Composer
-                  onSend={(text, attachments) => void start(text, attachments)}
+                  // Returned, not voided: the composer needs the promise so it
+                  // can put the draft back if starting the chat fails.
+                  onSend={(text, attachments) => start(text, attachments)}
                   model={model}
                   onModelChange={setModel}
                   effort={effort}
@@ -198,7 +212,17 @@ export function NewChat(): React.JSX.Element {
                   cwd={cwd}
                   commands={commands}
                   placeholder={`Start working in ${basename(cwd)}…`}
+                  disabled={starting}
                 />
+                {starting && target.kind === 'new' && (
+                  <p className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <Loader2 className="size-3 animate-spin" />
+                    Creating worktree…
+                  </p>
+                )}
+                {startError && (
+                  <p className="mt-2 text-xs break-words text-destructive">{startError}</p>
+                )}
               </>
             ) : (
               <div className="flex justify-center">
@@ -250,7 +274,7 @@ export function NewChat(): React.JSX.Element {
               )}
             </RailAction>
             <RailAction icon={<FolderTree />} label="Files" onClick={browseFiles} />
-            <RailAction icon={<SquareTerminal />} label="Terminal" onClick={openTerminal} />
+            <RailAction icon={<SquareTerminal />} label="Terminal" onClick={() => openTerminal()} />
             <RailAction icon={<Globe />} label="Browser preview" onClick={() => openPreview()} />
           </aside>
         )}

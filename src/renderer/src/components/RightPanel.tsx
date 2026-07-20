@@ -731,7 +731,7 @@ export function RightPanel(): React.JSX.Element | null {
             <Tab
               key={t.id}
               icon={<SquareTerminal className="size-3.5" />}
-              label={`Terminal ${t.n}`}
+              label={t.label ?? `Terminal ${t.n}`}
               active={current === t.id}
               onSelect={() => setActiveTab(t.id)}
               onClose={() => closeTerminal(t.id)}

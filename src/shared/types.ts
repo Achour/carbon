@@ -44,6 +44,45 @@ export interface PersistedPlanReview {
   userMessageId: string
 }
 
+/** A chat running in an isolated git worktree the app created (or attached to). */
+export interface WorktreeInfo {
+  /** Main checkout root the worktree belongs to. The sidebar groups by this. */
+  repoRoot: string
+  /** Branch checked out in the worktree. */
+  branch: string
+}
+
+/**
+ * Where a chat runs: the main checkout, a fresh worktree, or one that already
+ * exists. Doubles as the picker's UI selection and the `chats:create` payload —
+ * `local` simply means "no worktree". Main re-derives `repoRoot` authoritatively
+ * from the path, so the extra fields on `existing` are only for the renderer.
+ */
+export type WorktreeTarget =
+  | { kind: 'local' }
+  | { kind: 'new' }
+  | { kind: 'existing'; path: string; branch: string; repoRoot: string }
+
+/** Pre-removal safety report for a worktree. */
+export interface WorktreeStatus {
+  /** Files with uncommitted changes (staged + unstaged + untracked). */
+  dirtyFiles: number
+  /** Commits on the branch not reachable from the default branch; null when unknown. */
+  unmergedCommits: number | null
+}
+
+/** What to do with the worktree when its chat is deleted. */
+export type WorktreeDisposition = 'keep' | 'remove' | 'force'
+
+/** One entry from `git worktree list` — the main checkout or a linked worktree. */
+export interface WorktreeRef {
+  path: string
+  branch: string
+  /** True for the repo's main checkout ("Local" in the picker). */
+  isMain: boolean
+}
+
+
 export interface ChatMeta {
   id: string
   title: string
@@ -66,12 +105,23 @@ export interface ChatMeta {
   contextTokens?: number
   /** Context window size of the model in use. */
   contextWindow?: number
+  /** Present when `cwd` is a git worktree the app manages or attached to. */
+  worktree?: WorktreeInfo
   createdAt: number
   updatedAt: number
 }
 
 export interface ChatData extends ChatMeta {
   messages: ChatMessage[]
+}
+
+/**
+ * The project a chat belongs to. A worktree chat lives in its own directory but
+ * groups under the project it branched from — the single definition of that
+ * rule, so sidebar grouping, search labels and project removal can't drift.
+ */
+export function projectRoot(chat: Pick<ChatMeta, 'cwd' | 'worktree'>): string {
+  return chat.worktree?.repoRoot ?? chat.cwd
 }
 
 // ---------- Messages ----------
@@ -537,6 +587,8 @@ export interface TerminalCreateOpts {
   cwd: string
   cols: number
   rows: number
+  /** Run this command via `$SHELL -lc` instead of an interactive login shell. */
+  command?: string
 }
 
 export type TerminalEvent =
@@ -601,8 +653,22 @@ export interface Api {
     model?: string
     effort?: EffortId
     permissionMode?: PermissionModeId
+    /** Where the chat runs; omitted or `local` means `cwd` itself. */
+    worktree?: WorktreeTarget
   }): Promise<ChatMeta>
-  deleteChat(id: string): Promise<void>
+  /** `worktree` decides the fate of a worktree chat's directory; default 'keep'. */
+  deleteChat(id: string, worktree?: WorktreeDisposition): Promise<OpResult>
+  /** Dirty/unmerged report for a worktree chat; null when the chat has no worktree. */
+  worktreeStatus(chatId: string): Promise<WorktreeStatus | null>
+  /** Shell command that provisions a fresh worktree (deps, .env), or null. */
+  worktreeSetupCommand(chatId: string): Promise<string | null>
+  /** Every worktree of the repo `cwd` belongs to, main checkout first. */
+  listWorktrees(cwd: string): Promise<WorktreeRef[]>
+  /**
+   * Move a worktree chat back to the main checkout: drop the worktree and check
+   * its branch out there. Refuses while the worktree has uncommitted work.
+   */
+  worktreeHandoff(chatId: string): Promise<OpResult>
   renameChat(id: string, title: string): Promise<void>
   send(chatId: string, text: string, attachments?: Attachment[], label?: string): Promise<void>
   /** Absolute path of a dragged/picked File (empty string for in-memory files). */

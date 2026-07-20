@@ -9,6 +9,7 @@ import type {
   ChatEvent,
   EffortId,
   GitDiffTarget,
+  OpResult,
   PermissionDecision,
   PermissionModeId,
   PermissionRule,
@@ -17,7 +18,11 @@ import type {
   PreviewEvent,
   Provider,
   TerminalCreateOpts,
-  TerminalEvent
+  TerminalEvent,
+  WorktreeTarget,
+  WorktreeDisposition,
+  WorktreeInfo,
+  WorktreeStatus
 } from '@shared/types'
 import { effortForProvider } from '@shared/types'
 import { ChatManager } from './claude'
@@ -29,6 +34,15 @@ import { PreviewManager } from './preview'
 import { Store } from './store'
 import { TerminalManager } from './terminal'
 import { hydrateShellPath } from './shellEnv'
+import {
+  createWorktree,
+  handOffWorktree,
+  listWorktrees,
+  removeWorktree,
+  resolveWorktree,
+  setupCommandFor,
+  worktreeStatus
+} from './worktree'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -310,7 +324,7 @@ function registerIpc(): void {
 
   ipcMain.handle(
     'chats:create',
-    (
+    async (
       _e,
       opts: {
         cwd: string
@@ -318,25 +332,45 @@ function registerIpc(): void {
         model?: string
         effort?: EffortId
         permissionMode?: PermissionModeId
+        worktree?: WorktreeTarget
       }
     ) => {
     const now = Date.now()
     const provider = opts.provider ?? 'claude'
     const effort = effortForProvider(opts.effort, provider)
+
+    // A worktree chat lives in its own directory; everything downstream
+    // (providers, git/fs IPC, preview, checkpoints) is cwd-driven and needs no
+    // further awareness. Failure throws — better no chat than an orphaned one.
+    let cwd = opts.cwd
+    let worktree: WorktreeInfo | undefined
+    if (opts.worktree?.kind === 'new') {
+      const created = await createWorktree(opts.cwd)
+      cwd = created.path
+      worktree = { repoRoot: created.repoRoot, branch: created.branch }
+    } else if (opts.worktree?.kind === 'existing') {
+      const resolved = await resolveWorktree(opts.worktree.path)
+      if (!resolved) throw new Error(`Not a git worktree: ${opts.worktree.path}`)
+      cwd = opts.worktree.path
+      worktree = resolved
+    }
+
     const chat: ChatData = {
       id: randomUUID(),
       title: '',
-      cwd: opts.cwd,
+      cwd,
       provider,
       model: opts.model || undefined,
       effort,
       permissionMode: opts.permissionMode ?? store.getDefaults().permissionMode,
+      worktree,
       createdAt: now,
       updatedAt: now,
       messages: []
     }
     store.addChat(chat)
-    store.rememberDir(opts.cwd)
+    // Recents track the project the user picked, never the worktree we derived.
+    store.rememberDir(worktree?.repoRoot ?? opts.cwd)
     store.rememberOptions({
       model: opts.model ?? '',
       effort: effort ?? '',
@@ -347,10 +381,67 @@ function registerIpc(): void {
     }
   )
 
-  ipcMain.handle('chats:delete', (_e, id: string) => {
-    manager.disposeChat(id)
-    store.deleteChat(id)
-    lastStatus.delete(id)
+  ipcMain.handle(
+    'chats:delete',
+    async (_e, id: string, disposition: WorktreeDisposition = 'keep'): Promise<OpResult> => {
+      const chat = store.getChat(id)
+      const wt = chat?.worktree
+      // Release the directory before git touches it — a live provider process
+      // holding the cwd makes `git worktree remove` fail on some platforms.
+      manager.disposeChat(id)
+
+      let result: OpResult = { ok: true }
+      if (wt && chat && disposition !== 'keep') {
+        // Another chat may be working in the same worktree (the "new chat in
+        // this worktree" path); removing it would pull the rug out from under it.
+        if (!store.hasOtherChatIn(chat.cwd, id)) {
+          result = await removeWorktree(wt.repoRoot, chat.cwd, wt.branch, disposition === 'force')
+        }
+      }
+
+      // The chat record goes regardless — a failed cleanup leaves the worktree
+      // on disk, which is recoverable; a stuck chat row is not.
+      store.deleteChat(id)
+      lastStatus.delete(id)
+      return result
+    }
+  )
+
+  ipcMain.handle('worktree:status', async (_e, chatId: string): Promise<WorktreeStatus | null> => {
+    const chat = store.getChat(chatId)
+    if (!chat?.worktree) return null
+    return worktreeStatus(chat.cwd, chat.worktree.branch)
+  })
+
+  ipcMain.handle('worktree:list', (_e, cwd: string) => listWorktrees(cwd))
+
+  ipcMain.handle('worktree:handoff', async (_e, chatId: string): Promise<OpResult> => {
+    const chat = store.getChat(chatId)
+    if (!chat?.worktree) return { ok: false, error: 'This chat is not running in a worktree.' }
+    // Another chat still working here would lose its directory underneath it.
+    if (store.hasOtherChatIn(chat.cwd, chatId)) {
+      return { ok: false, error: 'Another chat is working in this worktree.' }
+    }
+
+    const res = await handOffWorktree(chat.cwd, chat.worktree)
+    // `cwd` is set whenever the worktree is gone — even on a failed checkout,
+    // where the chat must move or it would point at a deleted directory.
+    if (res.cwd) {
+      // The session has its cwd baked in; dispose so the next send respawns in
+      // the main checkout (same mechanism an effort change uses).
+      manager.disposeChat(chatId)
+      chat.cwd = res.cwd
+      chat.worktree = undefined
+      store.saveChat(chatId)
+      emit({ type: 'meta', chatId, patch: { cwd: res.cwd, worktree: undefined } })
+    }
+    return res.ok ? { ok: true } : { ok: false, error: res.error ?? 'Hand-off failed.' }
+  })
+
+  ipcMain.handle('worktree:setup-command', (_e, chatId: string): string | null => {
+    const chat = store.getChat(chatId)
+    if (!chat?.worktree) return null
+    return setupCommandFor(chat.worktree.repoRoot, chat.cwd)
   })
 
   ipcMain.handle('chats:rename', (_e, id: string, title: string) => {

@@ -241,7 +241,8 @@ export function Composer({
   placeholder = 'Ask Claude Code anything…',
   autoFocus = true
 }: {
-  onSend: (text: string, attachments: Attachment[]) => void
+  /** May be async; if it rejects, the composer restores the draft. */
+  onSend: (text: string, attachments: Attachment[]) => void | Promise<void>
   streaming?: boolean
   onStop?: () => void
   model: string
@@ -462,10 +463,17 @@ export function Composer({
 
   const submit = (): void => {
     if (!canSend) return
-    onSend(text.trim(), attachments)
+    const sentText = text.trim()
+    const sentAttachments = attachments
     setText('')
     setAttachments([])
     setAttachError(null)
+    // Starting a chat can fail (e.g. creating its worktree) — put the draft back
+    // rather than silently swallowing what the user typed.
+    void Promise.resolve(onSend(sentText, sentAttachments)).catch(() => {
+      setText(sentText)
+      setAttachments(sentAttachments)
+    })
   }
 
   const hasFileDrag = (e: React.DragEvent): boolean =>
