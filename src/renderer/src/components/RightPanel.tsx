@@ -658,12 +658,22 @@ export function RightPanel(): React.JSX.Element | null {
   const currentIsTerminal = terminals.some((t) => t.id === current)
   const currentIsPreview = previews.some((p) => p.id === current)
   const currentIsChanges = typeof current === 'string' && current.startsWith('changes:')
+  const currentIsPlan = current === 'plan'
   const activeEntry = openFiles.find((f) => f.path === current)
   const activeIsMarkdown = !!activeEntry && !activeEntry.diff && MARKDOWN_RE.test(activeEntry.name)
   const isUntitled = !!activeEntry?.untitled
   // Nothing open at all → show the launcher (vs. `current === 'files'`, which is
   // browse mode with the tree docked).
   const isEmpty = current === null
+  // Terminal, preview and the stacked-changes tab each carry their own toolbar;
+  // the plan has no path to show and docks no tree to toggle.
+  const showBreadcrumb =
+    !currentIsPlan &&
+    !currentIsTerminal &&
+    !currentIsPreview &&
+    !currentIsChanges &&
+    !isEmpty &&
+    !isUntitled
   const targetWidth = width
     ? `min(${width}px, calc(100vw - ${CHAT_RESERVED_PX}px))`
     : '52%'
@@ -808,10 +818,8 @@ export function RightPanel(): React.JSX.Element | null {
         </WithTooltip>
       </header>
 
-      {/* Breadcrumb row with the file-tree toggle at its right, Cursor-style.
-          Hidden for terminal, preview and the stacked-changes tab, which each
-          carry their own toolbar. */}
-      {!currentIsTerminal && !currentIsPreview && !currentIsChanges && !isEmpty && !isUntitled && (
+      {/* Breadcrumb row with the file-tree toggle at its right, Cursor-style. */}
+      {showBreadcrumb && (
         <div className="flex h-8 shrink-0 items-center gap-2 border-b border-border/60 pr-1.5 pl-3">
           <div className="min-w-0 flex-1">
             {activeEntry && <PathBar entry={activeEntry} cwd={selectedCwd} />}
@@ -908,7 +916,7 @@ export function RightPanel(): React.JSX.Element | null {
                 </div>
               ))}
         </div>
-        {dockOpen && !isEmpty && !currentIsTerminal && !currentIsPreview && (
+        {dockOpen && !isEmpty && !currentIsPlan && !currentIsTerminal && !currentIsPreview && (
         <div
           data-right-dock
           style={{ width: `min(${dockWidth}px, calc(100% - ${VIEWER_RESERVED_PX}px))` }}

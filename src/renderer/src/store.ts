@@ -491,6 +491,19 @@ function homeCwd(chats: ChatMeta[], recentDirs: string[]): string | null {
 }
 
 /**
+ * The folder the home screen should show after leaving `outgoing`. Same rule as
+ * `homeCwd`: a worktree is not a project, so normalize the outgoing chat's cwd
+ * to its repo root. But callers that mean to *move* — "New chat" on another
+ * project, "New chat in this worktree" — set `selectedCwd` before leaving, and
+ * that pick has to survive, so only rewrite while the selection is still the
+ * outgoing chat's own cwd.
+ */
+function homeCwdLeaving(outgoing: ChatMeta | undefined, selectedCwd: string | null): string | null {
+  if (!outgoing) return selectedCwd
+  return selectedCwd === outgoing.cwd ? projectRoot(outgoing) : selectedCwd
+}
+
+/**
  * Tabs belong to a chat. Switching chats stashes the current tab set under the
  * outgoing chat and restores whatever the target chat had open — empty for a
  * fresh or never-visited chat, and for the draft/home state (`nextId` null).
@@ -1467,12 +1480,12 @@ export const useApp = create<AppState>((set, get) => ({
       // While a worktree chat was open `selectedCwd` pointed at its worktree,
       // which is right for that chat's git and file tree but wrong for the home
       // screen — leaving it would show the worktree as the project and start
-      // the next chat inside it.
+      // the next chat inside it. A folder picked on the way out wins, though.
       const outgoing = get().chats.find((c) => c.id === get().activeId)
       set((s) => ({
         // Stash the outgoing chat's tabs; the draft/home state opens no tabs.
         ...chatSwitchPatch(s, null),
-        selectedCwd: outgoing ? projectRoot(outgoing) : s.selectedCwd,
+        selectedCwd: homeCwdLeaving(outgoing, s.selectedCwd),
         activeId: null,
         messages: [],
         planPanel: null,
