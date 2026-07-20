@@ -481,6 +481,16 @@ function notifyTurnDone(
 }
 
 /**
+ * With no chat open, `selectedCwd` means the *project* — it's what the home
+ * screen labels and where the next chat starts. A chat may run in a worktree,
+ * so falling back to one's raw `cwd` would offer a worktree as if it were a
+ * project; every such fallback goes through here.
+ */
+function homeCwd(chats: ChatMeta[], recentDirs: string[]): string | null {
+  return chats[0] ? projectRoot(chats[0]) : (recentDirs[0] ?? null)
+}
+
+/**
  * Tabs belong to a chat. Switching chats stashes the current tab set under the
  * outgoing chat and restores whatever the target chat had open — empty for a
  * fresh or never-visited chat, and for the draft/home state (`nextId` null).
@@ -938,10 +948,7 @@ export const useApp = create<AppState>((set, get) => ({
       chats,
       defaults,
       loading: false,
-      // The most recent chat may run in a worktree; the home screen means the
-      // *project*, so seed from its repo root — otherwise a new "This Mac" chat
-      // would start inside that worktree.
-      selectedCwd: (chats[0] ? projectRoot(chats[0]) : undefined) ?? defaults.recentDirs[0] ?? null
+      selectedCwd: homeCwd(chats, defaults.recentDirs)
     })
     const cwd = get().selectedCwd
     if (cwd) {
@@ -1457,17 +1464,15 @@ export const useApp = create<AppState>((set, get) => ({
     // from main below, and events for the outgoing chat no longer apply.
     hiddenStream.length = 0
     if (id === null) {
+      // While a worktree chat was open `selectedCwd` pointed at its worktree,
+      // which is right for that chat's git and file tree but wrong for the home
+      // screen — leaving it would show the worktree as the project and start
+      // the next chat inside it.
+      const outgoing = get().chats.find((c) => c.id === get().activeId)
       set((s) => ({
         // Stash the outgoing chat's tabs; the draft/home state opens no tabs.
         ...chatSwitchPatch(s, null),
-        // While a worktree chat was open `selectedCwd` pointed at its worktree,
-        // which is right for that chat's git and file tree but wrong for the
-        // home screen — leaving it would show the worktree as the project and
-        // start the next chat inside it.
-        selectedCwd: ((): string | null => {
-          const outgoing = s.chats.find((c) => c.id === s.activeId)
-          return outgoing ? projectRoot(outgoing) : s.selectedCwd
-        })(),
+        selectedCwd: outgoing ? projectRoot(outgoing) : s.selectedCwd,
         activeId: null,
         messages: [],
         planPanel: null,
@@ -1736,8 +1741,7 @@ export const useApp = create<AppState>((set, get) => ({
       }
       return {
         // If the removed folder was selected, fall back to another one.
-        selectedCwd:
-          s.selectedCwd === cwd ? (chats[0]?.cwd ?? recentDirs[0] ?? null) : s.selectedCwd,
+        selectedCwd: s.selectedCwd === cwd ? homeCwd(chats, recentDirs) : s.selectedCwd,
         chats,
         hiddenProjects,
         activeId: wasActive ? null : s.activeId,

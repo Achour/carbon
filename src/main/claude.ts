@@ -1971,6 +1971,36 @@ export class ChatManager {
     })
   }
 
+  /**
+   * Move a chat to a new working directory (the worktree hand-off). The live
+   * session has its cwd baked in, so it's dropped and the next send respawns
+   * there — the same mechanism an effort change uses.
+   *
+   * Whether the resume id survives the move is provider knowledge, so it's
+   * decided here rather than at the IPC handler: Claude files each conversation
+   * under a directory derived from its cwd, so an id earned in the worktree is
+   * unfindable from the main checkout and every later send would fail with
+   * "No conversation found with session ID". Codex resumes by thread id and
+   * files rollouts by date, so its id stays valid.
+   */
+  relocateChat(chatId: string, cwd: string): void {
+    const chat = this.store.getChat(chatId)
+    if (!chat) return
+    this.disposeChat(chatId)
+    chat.cwd = cwd
+    chat.worktree = undefined
+    if (chat.provider !== 'codex') chat.sessionId = undefined
+    this.store.saveChat(chatId)
+    this.emit({
+      type: 'meta',
+      chatId,
+      patch: { cwd, worktree: undefined, sessionId: chat.sessionId }
+    })
+    // A disposed session emits no final status; release the renderer so a
+    // hand-off during a live turn doesn't leave the chat stuck 'streaming'.
+    this.emit({ type: 'status', chatId, status: 'idle' })
+  }
+
   disposeChat(chatId: string): void {
     this.sessions.get(chatId)?.dispose()
     this.sessions.delete(chatId)
