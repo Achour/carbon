@@ -21,6 +21,7 @@ import type { ChatMeta, WorktreeStatus } from '@shared/types'
 import { projectRoot } from '@shared/types'
 import { cn } from '@/lib/utils'
 import { basename, relativeTime } from '@/lib/format'
+import { REVEAL_LABEL } from '@/lib/platform'
 import { useApp } from '@/store'
 import { Button } from '@/components/ui/button'
 import {
@@ -46,14 +47,6 @@ import {
 import { Input } from '@/components/ui/input'
 import { Kbd } from '@/components/ui/kbd'
 import { WithTooltip } from '@/components/ui/tooltip'
-
-/** What the OS calls its file manager, so the menu item reads natively. */
-const REVEAL_LABEL =
-  window.api.platform === 'darwin'
-    ? 'Reveal in Finder'
-    : window.api.platform === 'win32'
-      ? 'Show in File Explorer'
-      : 'Show in file manager'
 
 /** "3 uncommitted files and 2 unmerged commits" — what a force-delete destroys, '' when nothing is. */
 function describeAtRisk({ dirtyFiles, unmergedCommits }: WorktreeStatus): string {

@@ -392,8 +392,18 @@ export function Composer({
   React.useEffect(() => {
     if (inbox.length === 0) return
     setAttachments((prev) => {
+      // Dedupe on path as well as id: the same file can be sent here more than
+      // once (tree menu, repeatedly) and should stay a single chip.
       const seen = new Set(prev.map((a) => a.id))
-      return [...prev, ...inbox.filter((a) => !seen.has(a.id))]
+      const paths = new Set(prev.flatMap((a) => (a.path ? [a.path] : [])))
+      const fresh: Attachment[] = []
+      for (const att of inbox) {
+        if (seen.has(att.id) || (att.path && paths.has(att.path))) continue
+        seen.add(att.id)
+        if (att.path) paths.add(att.path)
+        fresh.push(att)
+      }
+      return fresh.length === 0 ? prev : [...prev, ...fresh]
     })
     useApp.getState().clearAttachmentInbox()
     ref.current?.focus()
