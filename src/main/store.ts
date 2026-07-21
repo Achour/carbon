@@ -13,7 +13,14 @@ import {
   writeFile as writeFileAsync
 } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { AppDefaults, ChatData, ChatMeta, EffortId, PermissionModeId } from '@shared/types'
+import type {
+  AppDefaults,
+  ChatData,
+  ChatMeta,
+  EffortId,
+  PermissionModeId,
+  ServiceTier
+} from '@shared/types'
 
 /**
  * Write via a temp file + atomic rename so a crash or force-quit mid-write can't
@@ -256,12 +263,14 @@ export class Store {
   rememberOptions(patch: {
     model?: string
     effort?: EffortId | ''
+    serviceTier?: ServiceTier
     permissionMode?: PermissionModeId
   }): void {
     const defaults = this.settings.defaults
     if (patch.permissionMode !== undefined) defaults.permissionMode = patch.permissionMode
     if (patch.model !== undefined) defaults.model = patch.model || undefined
     if (patch.effort !== undefined) defaults.effort = patch.effort || undefined
+    if (patch.serviceTier !== undefined) defaults.serviceTier = patch.serviceTier
     this.writeSettings()
   }
 

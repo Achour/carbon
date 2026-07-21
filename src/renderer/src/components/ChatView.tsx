@@ -373,7 +373,9 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
       {/* Header */}
       <header
         className={cn(
-          'drag flex h-[38px] shrink-0 items-center gap-2 border-b border-border px-4',
+          // pr matches the panel header's px-2.5 so the panel toggle sits at the
+          // same inset whether it renders here or over there.
+          'drag flex h-[38px] shrink-0 items-center gap-2 border-b border-border pl-4 pr-2.5',
           !sidebarOpen && 'pl-[84px]'
         )}
       >
@@ -390,19 +392,6 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
           </div>
         </div>
         <BackgroundJobs />
-        {/* When the panel is open its own header hosts the collapse button. */}
-        {!panelOpen && (
-          <WithTooltip label="Show files">
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              onClick={togglePanel}
-              aria-label="Show file panel"
-            >
-              <PanelRight />
-            </Button>
-          </WithTooltip>
-        )}
         <DropdownMenu>
           <DropdownMenuTrigger
             render={
@@ -426,6 +415,21 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+        {/* Last icon, deliberately: when the panel is open its own header hosts
+            the collapse button at the same inset, so open and close are one
+            unmoving target rather than two positions with the ⋯ menu between. */}
+        {!panelOpen && (
+          <WithTooltip label="Show files">
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              onClick={togglePanel}
+              aria-label="Show file panel"
+            >
+              <PanelRight />
+            </Button>
+          </WithTooltip>
+        )}
       </header>
 
       {/* Messages */}
@@ -542,7 +546,11 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
             model={chat.model ?? ''}
             onModelChange={(model) => void setChatOptions({ model })}
             effort={chat.effort ?? ''}
-            onEffortChange={(effort) => void setChatOptions({ effort })}
+            onEffortChange={(effort, opts) => void setChatOptions({ effort, ...opts })}
+            serviceTier={chat.serviceTier ?? 'standard'}
+            onServiceTierChange={(serviceTier, opts) =>
+              void setChatOptions({ serviceTier, ...opts })
+            }
             permissionMode={chat.permissionMode}
             onPermissionModeChange={(permissionMode) => void setChatOptions({ permissionMode })}
             contextTokens={chat.contextTokens}

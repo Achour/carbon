@@ -327,6 +327,30 @@ function statOnce(path: string): Promise<'file' | 'dir' | null> {
   return pending
 }
 
+/**
+ * Agents usually name a file by its basename alone (`Sidebar.tsx`), which doesn't
+ * exist at `<cwd>/Sidebar.tsx`. Fall back to the project file index and link only
+ * when exactly one file carries that name — opening the wrong `index.ts` is worse
+ * than leaving it unlinked. Cached like `statOnce`, so a transcript repeating a
+ * filename costs one round trip rather than one per span.
+ */
+const lookupCache = new Map<string, Promise<string | null>>()
+function lookupOnce(cwd: string, name: string): Promise<string | null> {
+  const key = `${cwd}\0${name}`
+  let pending = lookupCache.get(key)
+  if (!pending) {
+    pending = window.api
+      .searchFiles(cwd, name)
+      .then((res) => {
+        const exact = res.filter((r) => r.rel.slice(r.rel.lastIndexOf('/') + 1) === name)
+        return exact.length === 1 ? exact[0].path : null
+      })
+      .catch(() => null)
+    lookupCache.set(key, pending)
+  }
+  return pending
+}
+
 function InlineCode({
   children,
   className,
@@ -354,9 +378,16 @@ function InlineCode({
     const abs = clean.startsWith('/') ? clean : cwd ? `${cwd}/${clean}` : null
     if (!abs) return undefined
     let alive = true
-    void statOnce(abs).then((kind) => {
-      if (alive && kind === 'file') setTarget(abs)
-    })
+    void statOnce(abs)
+      .then((kind) => {
+        if (kind === 'file') return abs
+        // A bare basename that isn't at the project root — search for it.
+        if (kind === null && cwd && !clean.includes('/')) return lookupOnce(cwd, clean)
+        return null
+      })
+      .then((found) => {
+        if (alive && found) setTarget(found)
+      })
     return () => {
       alive = false
     }

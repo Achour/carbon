@@ -17,6 +17,7 @@ import type {
   Attachment,
   EffortId,
   PermissionModeId,
+  ServiceTier,
   WorktreeTarget
 } from '@shared/types'
 import { basename, greeting } from '@/lib/format'
@@ -78,6 +79,18 @@ export function NewChat(): React.JSX.Element {
 
   const [model, setModel] = React.useState(defaults?.model ?? '')
   const [effort, setEffort] = React.useState<EffortId | ''>(defaults?.effort ?? '')
+  const [serviceTier, setServiceTier] = React.useState<ServiceTier>(
+    defaults?.serviceTier ?? 'standard'
+  )
+  // Creating a chat also records its options as the defaults. A tier the
+  // composer *corrected* (Fast on a model that lacks it) isn't a user choice, so
+  // it's sent as undefined — the chat still starts Standard, but the stored
+  // preference survives for the next chat on a model that does support Fast.
+  const tierCorrected = React.useRef(false)
+  const changeServiceTier = (next: ServiceTier, opts?: { remember?: boolean }): void => {
+    tierCorrected.current = opts?.remember === false
+    setServiceTier(next)
+  }
   const [permissionMode, setPermissionMode] = React.useState<PermissionModeId>(
     defaults?.permissionMode ?? 'default'
   )
@@ -121,6 +134,7 @@ export function NewChat(): React.JSX.Element {
         provider: providerForModel(model),
         model: model || undefined,
         effort: effort || undefined,
+        serviceTier: tierCorrected.current ? undefined : serviceTier,
         permissionMode,
         attachments: attachments.length ? attachments : undefined,
         worktree: target.kind === 'local' ? undefined : target
@@ -206,6 +220,8 @@ export function NewChat(): React.JSX.Element {
                   onModelChange={setModel}
                   effort={effort}
                   onEffortChange={setEffort}
+                  serviceTier={serviceTier}
+                  onServiceTierChange={changeServiceTier}
                   permissionMode={permissionMode}
                   onPermissionModeChange={setPermissionMode}
                   provider={providerForModel(model)}

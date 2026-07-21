@@ -41,9 +41,11 @@ import type {
   PermissionRequestPayload,
   PersistedPlanReview,
   PreviewState,
+  ChatOptionsPatch,
   Provider,
   RateLimitState,
   RewindResult,
+  ServiceTier,
   SlashCommand,
   WorktreeDisposition,
   WorktreeInfo,
@@ -158,6 +160,9 @@ interface AppState {
   models: ModelOption[]
   /** Fetches the session's model list once and caches it (feeds the composer picker). */
   loadModels(chatId?: string): Promise<void>
+  /** User-level Codex default, kept separate from Claude's dynamic model rows. */
+  codexConfigModel: string | null | undefined
+  loadCodexConfigModel(): Promise<void>
   /** Revert the working tree to a user message's checkpoint (dryRun previews only). */
   rewindFiles(userMessageId: string, dryRun: boolean): Promise<RewindResult>
   /** Pending permission requests, keyed by chat id. */
@@ -357,6 +362,7 @@ interface AppState {
       provider?: Provider
       model?: string
       effort?: EffortId
+      serviceTier?: ServiceTier
       permissionMode?: ChatMeta['permissionMode']
       attachments?: Attachment[]
       /** Display label for an app-initiated first message (e.g. "Commit"). */
@@ -399,11 +405,7 @@ interface AppState {
   /** Deletes every chat in the project and drops it from recent folders. */
   removeProject(cwd: string): Promise<void>
   renameChat(id: string, title: string): Promise<void>
-  setChatOptions(patch: {
-    model?: string
-    effort?: EffortId | ''
-    permissionMode?: ChatMeta['permissionMode']
-  }): Promise<void>
+  setChatOptions(patch: ChatOptionsPatch): Promise<void>
   respondPermission(requestId: string, decision: PermissionDecision): Promise<void>
   applyEvent(ev: ChatEvent): void
   /** Replay stream events parked while the window was hidden (see applyEvent). */
@@ -629,6 +631,7 @@ export function scopedChanges(
 }
 
 const initialThemeMode = storedThemeMode()
+let codexConfigModelLoad: Promise<string | null> | null = null
 
 function syncDockIcon(): void {
   if (window.api.platform !== 'darwin') return
@@ -645,6 +648,7 @@ export const useApp = create<AppState>((set, get) => ({
   backgroundJobs: {},
   rateLimits: {},
   models: [],
+  codexConfigModel: undefined,
   permissions: {},
   queued: {},
   planPanel: null,
@@ -1584,6 +1588,7 @@ export const useApp = create<AppState>((set, get) => ({
             ...s.defaults,
             model: opts?.model,
             effort: opts?.effort,
+            serviceTier: opts?.serviceTier,
             permissionMode: opts?.permissionMode ?? s.defaults.permissionMode,
             recentDirs: [cwd, ...s.defaults.recentDirs.filter((d) => d !== cwd)].slice(0, 8)
           }
@@ -1694,6 +1699,17 @@ export const useApp = create<AppState>((set, get) => ({
     if (models.length) set({ models })
   },
 
+  async loadCodexConfigModel() {
+    if (get().codexConfigModel !== undefined) return
+    codexConfigModelLoad ??= window.api.codexConfigModel()
+    try {
+      set({ codexConfigModel: await codexConfigModelLoad })
+    } catch {
+      // The chip can safely retain "Codex (default)" when config is unavailable.
+      set({ codexConfigModel: null })
+    }
+  },
+
   async rewindFiles(userMessageId, dryRun) {
     const id = get().activeId
     if (!id) return { canRewind: false, error: 'No active chat.' }
@@ -1787,13 +1803,16 @@ export const useApp = create<AppState>((set, get) => ({
     const id = get().activeId
     if (!id) return
     await window.api.setChatOptions(id, patch)
-    // Mirror the new defaults locally so the next New-chat screen uses them.
+    // Mirror the new defaults locally so the next New-chat screen uses them —
+    // skipping the same corrections main leaves out of `rememberOptions`.
+    if (patch.remember === false) return
     set((s) => ({
       defaults: s.defaults
         ? {
             ...s.defaults,
             ...(patch.model !== undefined ? { model: patch.model || undefined } : {}),
             ...(patch.effort !== undefined ? { effort: patch.effort || undefined } : {}),
+            ...(patch.serviceTier !== undefined ? { serviceTier: patch.serviceTier } : {}),
             ...(patch.permissionMode ? { permissionMode: patch.permissionMode } : {})
           }
         : s.defaults

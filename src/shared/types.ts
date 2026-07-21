@@ -1,5 +1,16 @@
 export type Provider = 'claude' | 'codex'
 
+export type ServiceTier = 'standard' | 'fast'
+
+export const SERVICE_TIER_OPTIONS: {
+  id: ServiceTier
+  label: string
+  description: string
+}[] = [
+  { id: 'standard', label: 'Standard', description: 'Standard speed and usage' },
+  { id: 'fast', label: 'Fast', description: 'Faster responses with increased usage' }
+]
+
 export type PermissionModeId = 'default' | 'acceptEdits' | 'plan' | 'auto' | 'bypassPermissions'
 
 export type EffortId = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra'
@@ -94,6 +105,8 @@ export interface ChatMeta {
   model?: string
   /** Reasoning effort; undefined means the default (high). */
   effort?: EffortId
+  /** Provider processing tier; older chats without this field use Standard. */
+  serviceTier?: ServiceTier
   permissionMode: PermissionModeId
   /** Mode the chat was in before switching to plan; restored on plan approval. */
   modeBeforePlan?: PermissionModeId
@@ -391,8 +404,26 @@ export type ChatEvent =
 export interface AppDefaults {
   model?: string
   effort?: EffortId
+  serviceTier?: ServiceTier
   permissionMode: PermissionModeId
   recentDirs: string[]
+}
+
+/** A live change to a chat's inference options. */
+export interface ChatOptionsPatch {
+  model?: string
+  effort?: EffortId | ''
+  serviceTier?: ServiceTier
+  permissionMode?: PermissionModeId
+  /**
+   * Whether the change also becomes the default for future chats. Defaults to
+   * true, since a change is normally something the user picked. The composer
+   * passes `false` when it is *correcting* a value the user never chose — Fast
+   * on a model that doesn't support it, or an effort that doesn't exist on the
+   * provider just switched to — so an automatic normalization in one chat can't
+   * quietly overwrite a real preference everywhere else.
+   */
+  remember?: boolean
 }
 
 export interface ModelOption {
@@ -402,15 +433,17 @@ export interface ModelOption {
   provider: Provider
   disabled?: boolean
   /**
-   * Canonical wire model id this option resolves to (from the SDK, e.g. 'sonnet'
-   * → 'claude-sonnet-5'). Lets the picker highlight a chat pinned to an older
-   * explicit model id against the alias row that now covers it.
+   * Canonical wire model id this option resolves to (for example an SDK alias,
+   * or the configured model behind a provider's Default row). Lets the picker
+   * show the real model while preserving the provider-default selection.
    */
   resolvedModel?: string
   /** Context window in tokens, when known — feeds the composer's context ring. */
   contextWindow?: number
   /** Reasoning levels advertised by this exact model, when known. */
   supportedEfforts?: EffortId[]
+  /** Whether this model advertises provider Fast mode; undefined means unknown. */
+  supportsFastMode?: boolean
 }
 
 /** Sentinel model id: use Codex without pinning a model (defer to ~/.codex config). */
@@ -457,6 +490,56 @@ export const MODEL_OPTIONS: ModelOption[] = [
  */
 export function providerForModel(id: string): Provider {
   return MODEL_OPTIONS.find((m) => m.id === id)?.provider ?? 'claude'
+}
+
+/**
+ * Human name for a resolved wire id: 'claude-opus-4-8[1m]' → 'Opus 4.8'.
+ * Undefined when the id isn't in a shape we recognize, so callers can fall back.
+ */
+export function claudeModelName(resolvedModel?: string): string | undefined {
+  if (!resolvedModel) return undefined
+  const clean = resolvedModel.replace(/\[[^\]]+\]$/i, '').replace(/^claude-/i, '')
+  const match = /^(opus|fable|sonnet|haiku)-(\d+)(?:-(\d+))?/i.exec(clean)
+  if (!match) return undefined
+  const family = match[1][0].toUpperCase() + match[1].slice(1).toLowerCase()
+  const version = match[3] ? `${match[2]}.${match[3]}` : match[2]
+  return `${family} ${version}`
+}
+
+/** Human label for either provider's resolved wire model id. */
+export function resolvedModelName(resolvedModel?: string): string | undefined {
+  if (!resolvedModel) return undefined
+  const claudeName = claudeModelName(resolvedModel)
+  if (claudeName) return claudeName
+  // Preserve the existing Claude fallback for legacy ids the helper does not
+  // recognize; the SDK's displayName is more useful than a raw wire id.
+  if (/^claude-/i.test(resolvedModel)) return undefined
+  return (
+    MODEL_OPTIONS.find(
+      (option) => option.id === resolvedModel && option.id !== CODEX_DEFAULT_MODEL
+    )?.label ??
+    resolvedModel
+  )
+}
+
+/**
+ * Expand an SDK alias label ("Opus") using its resolved wire id. The "Default"
+ * row keeps its own name — which model it points at is shown alongside it
+ * instead, since that row's whole purpose is *not* naming a specific model.
+ */
+export function claudeModelLabel(displayName: string, resolvedModel?: string): string {
+  if (/^default\b/i.test(displayName)) return displayName
+  return claudeModelName(resolvedModel) ?? displayName
+}
+
+/** Context size advertised through the SDK's model id/description metadata. */
+export function claudeModelContextWindow(
+  description: string,
+  resolvedModel?: string
+): number | undefined {
+  return /\[1m\]$/i.test(resolvedModel ?? '') || /\b1m\s+context\b/i.test(description)
+    ? 1_000_000
+    : undefined
 }
 
 export const PROVIDER_LABELS: Record<Provider, string> = {
@@ -660,6 +743,7 @@ export interface Api {
     provider?: Provider
     model?: string
     effort?: EffortId
+    serviceTier?: ServiceTier
     permissionMode?: PermissionModeId
     /** Where the chat runs; omitted or `local` means `cwd` itself. */
     worktree?: WorktreeTarget
@@ -685,10 +769,7 @@ export interface Api {
   /** Stop a single background task by its id. */
   stopBackgroundJob(chatId: string, taskId: string): Promise<void>
   respondPermission(chatId: string, requestId: string, decision: PermissionDecision): Promise<void>
-  setChatOptions(
-    chatId: string,
-    patch: { model?: string; effort?: EffortId | ''; permissionMode?: PermissionModeId }
-  ): Promise<void>
+  setChatOptions(chatId: string, patch: ChatOptionsPatch): Promise<void>
   // ---- Checkpoint / rewind ----
   /** Revert the working tree to its state at a user message. dryRun previews only. */
   rewindFiles(chatId: string, userMessageId: string, dryRun: boolean): Promise<RewindResult>
@@ -701,6 +782,8 @@ export interface Api {
   mcpToggle(chatId: string, name: string, enabled: boolean): Promise<OpResult>
   /** Models the session reports; empty if unavailable (renderer falls back to the static list). */
   listModels(chatId: string): Promise<ModelOption[]>
+  /** User-level Codex model from $CODEX_HOME/config.toml; separate from Claude's model list. */
+  codexConfigModel(): Promise<string | null>
   listAgents(chatId: string): Promise<AgentInfo[]>
   accountInfo(chatId: string): Promise<AccountInfo | null>
   usageInfo(chatId: string): Promise<UsageInfo | null>

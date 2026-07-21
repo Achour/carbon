@@ -4,6 +4,7 @@ import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   Codex,
+  type CodexOptions,
   type Input,
   type ModelReasoningEffort,
   type SandboxMode,
@@ -33,6 +34,7 @@ import type {
   PermissionModeId,
   PersistedPlanReview,
   RewindResult,
+  ServiceTier,
   ToolPart,
   ToolStatus,
   TurnStats,
@@ -65,6 +67,26 @@ const OUTPUT_CAP = 100_000
 // Used only for an unknown/config-selected model. Explicit models carry their
 // advertised window in MODEL_OPTIONS.
 const CODEX_CONTEXT_WINDOW = 272_000
+
+/**
+ * Fast is a catalog alias enabled by the CLI feature flag. `default` explicitly
+ * clears an inherited Fast preference and is omitted from model requests by the
+ * CLI, yielding normal Standard processing.
+ */
+export function codexOptionsForServiceTier(
+  serviceTier: ServiceTier = 'standard'
+): CodexOptions {
+  return {
+    config: {
+      service_tier: serviceTier === 'fast' ? 'fast' : 'default',
+      features: { fast_mode: true }
+    }
+  }
+}
+
+function createCodex(serviceTier?: ServiceTier): Codex {
+  return new Codex(codexOptionsForServiceTier(serviceTier))
+}
 
 interface PendingTurn {
   input: Input
@@ -274,7 +296,7 @@ export class CodexSession implements AgentSession {
     // (no per-turn process to outlive it), so it never dies on its own.
     onDead: () => void,
     // Injectable for provider-boundary tests; production reuses ~/.codex login.
-    codex: Codex = new Codex(),
+    codex: Codex = createCodex(chat.serviceTier),
     rolloutWatcherFactory: CodexRolloutWatcherFactory = createCodexRolloutWatcher
   ) {
     this.chat = chat

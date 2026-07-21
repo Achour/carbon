@@ -13,6 +13,8 @@ import type {
   PreviewCommandResult,
   PreviewEvent,
   Provider,
+  ChatOptionsPatch,
+  ServiceTier,
   TerminalCreateOpts,
   TerminalEvent,
   WorktreeTarget,
@@ -43,6 +45,7 @@ const api: Api = {
     provider?: Provider
     model?: string
     effort?: EffortId
+    serviceTier?: ServiceTier
     permissionMode?: PermissionModeId
     worktree?: WorktreeTarget
   }) => invoke('chats:create', opts),
@@ -67,10 +70,8 @@ const api: Api = {
     invoke('chat:stop-background-job', chatId, taskId),
   respondPermission: (chatId: string, requestId: string, decision: PermissionDecision) =>
     invoke('chat:respond-permission', chatId, requestId, decision),
-  setChatOptions: (
-    chatId: string,
-    patch: { model?: string; effort?: EffortId | ''; permissionMode?: PermissionModeId }
-  ) => invoke('chat:set-options', chatId, patch),
+  setChatOptions: (chatId: string, patch: ChatOptionsPatch) =>
+    invoke('chat:set-options', chatId, patch),
   rewindFiles: (chatId: string, userMessageId: string, dryRun: boolean) =>
     invoke('chat:rewind-files', chatId, userMessageId, dryRun),
   sessionLive: (chatId: string) => invoke('session:live', chatId),
@@ -79,6 +80,7 @@ const api: Api = {
   mcpToggle: (chatId: string, name: string, enabled: boolean) =>
     invoke('mcp:toggle', chatId, name, enabled),
   listModels: (chatId: string) => invoke('session:models', chatId),
+  codexConfigModel: () => invoke('codex:config-model'),
   listAgents: (chatId: string) => invoke('session:agents', chatId),
   accountInfo: (chatId: string) => invoke('session:account', chatId),
   usageInfo: (chatId: string) => invoke('session:usage', chatId),

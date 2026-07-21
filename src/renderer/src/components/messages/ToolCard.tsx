@@ -22,11 +22,14 @@ import type { AssistantPart, ToolPart } from '@shared/types'
 import { cn } from '@/lib/utils'
 import { humanizeShellCommand } from '@/lib/toolLabels'
 import { Markdown } from '@/components/Markdown'
+import { useApp } from '@/store'
 
 interface ToolMeta {
   icon: React.ComponentType<{ className?: string }>
   label: string
   summary?: string
+  /** Absolute path the summary names, when the tool acts on one file — makes it openable. */
+  path?: string
 }
 
 function str(v: unknown): string | undefined {
@@ -37,6 +40,15 @@ function toolMeta(part: ToolPart, cwd: string): ToolMeta {
   const input = (part.input ?? {}) as Record<string, unknown>
   const rel = (p?: string): string | undefined =>
     p?.startsWith(cwd + '/') ? p.slice(cwd.length + 1) : p
+  // The SDKs report absolute paths, but don't rely on it — a relative one still opens.
+  const abs = (p?: string): string | undefined =>
+    p === undefined ? undefined : p.startsWith('/') ? p : `${cwd}/${p.replace(/^\.\//, '')}`
+  /** A tool acting on one file: relative path for display, absolute one to open. */
+  const file = (
+    icon: ToolMeta['icon'],
+    label: string,
+    p: string | undefined
+  ): ToolMeta => ({ icon, label, summary: rel(p), path: abs(p) })
 
   switch (part.name) {
     case 'Bash':
@@ -48,17 +60,13 @@ function toolMeta(part: ToolPart, cwd: string): ToolMeta {
     case 'BashOutput':
       return { icon: SquareTerminal, label: 'Terminal output' }
     case 'Read':
-      return { icon: FileText, label: 'Read', summary: rel(str(input.file_path)) }
+      return file(FileText, 'Read', str(input.file_path))
     case 'Write':
-      return { icon: FilePenLine, label: 'Write', summary: rel(str(input.file_path)) }
+      return file(FilePenLine, 'Write', str(input.file_path))
     case 'Edit':
     case 'MultiEdit':
     case 'NotebookEdit':
-      return {
-        icon: FilePenLine,
-        label: 'Edit',
-        summary: rel(str(input.file_path) ?? str(input.notebook_path))
-      }
+      return file(FilePenLine, 'Edit', str(input.file_path) ?? str(input.notebook_path))
     case 'Grep':
       return { icon: Search, label: 'Grep', summary: str(input.pattern) }
     case 'Glob':
@@ -83,6 +91,40 @@ function toolMeta(part: ToolPart, cwd: string): ToolMeta {
       return { icon: Wrench, label: part.name.replace(/^mcp__/, ''), summary: firstString }
     }
   }
+}
+
+/**
+ * The file path in a tool card's header, clickable. It lives inside the
+ * collapsible's trigger, so every handler stops propagation — clicking the path
+ * opens the file, clicking anywhere else on the row still expands the details.
+ * A `span[role=button]` rather than a `<button>`: nesting one button in another
+ * is invalid HTML.
+ */
+function OpenPath({ path, label }: { path: string; label: string }): React.JSX.Element {
+  const open = (): void => {
+    void useApp.getState().openFile(path, { preview: true })
+  }
+  return (
+    <span
+      role="button"
+      tabIndex={0}
+      title={`Open ${path}`}
+      className="cursor-pointer underline-offset-2 hover:text-foreground hover:underline"
+      onClick={(e) => {
+        e.stopPropagation()
+        e.preventDefault()
+        open()
+      }}
+      onKeyDown={(e) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return
+        e.stopPropagation()
+        e.preventDefault()
+        open()
+      }}
+    >
+      {label}
+    </span>
+  )
 }
 
 function StatusIcon({ part }: { part: ToolPart }): React.JSX.Element {
@@ -284,7 +326,7 @@ export const ToolCard = React.memo(function ToolCard({
           <span className="shrink-0 text-[13px] font-medium">{meta.label}</span>
           {meta.summary && (
             <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
-              {meta.summary}
+              {meta.path ? <OpenPath path={meta.path} label={meta.summary} /> : meta.summary}
             </span>
           )}
           {!meta.summary && <span className="flex-1" />}

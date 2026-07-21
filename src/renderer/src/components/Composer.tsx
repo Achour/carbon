@@ -2,6 +2,9 @@ import * as React from 'react'
 import {
   ArrowUp,
   Brain,
+  Check,
+  ChevronDown,
+  ChevronRight,
   ClipboardList,
   FileText,
   FileCheck2,
@@ -12,6 +15,7 @@ import {
   ShieldQuestion,
   Sparkles,
   Square,
+  Zap,
   WandSparkles,
   type LucideIcon,
   X
@@ -21,10 +25,14 @@ import {
   MODEL_OPTIONS,
   PERMISSION_MODES,
   PROVIDER_LABELS,
+  SERVICE_TIER_OPTIONS,
+  resolvedModelName,
   type Attachment,
   type EffortId,
+  type ModelOption,
   type PermissionModeId,
   type Provider,
+  type ServiceTier,
   type SlashCommand
 } from '@shared/types'
 import { cn } from '@/lib/utils'
@@ -205,6 +213,10 @@ function fmtTokens(n: number): string {
   return n >= 1000 ? `${Math.round(n / 1000)}k` : String(n)
 }
 
+function fmtContextWindow(n: number): string {
+  return n >= 1_000_000 ? `${n / 1_000_000}M` : `${Math.round(n / 1000)}k`
+}
+
 function ContextRing({
   used,
   window: win,
@@ -276,6 +288,200 @@ function ContextRing({
   )
 }
 
+function ModelSettingsPicker({
+  model,
+  onModelChange,
+  models,
+  effort,
+  onEffortChange,
+  efforts,
+  serviceTier,
+  onServiceTierChange,
+  serviceTiers,
+  disabled
+}: {
+  model: string
+  onModelChange: (model: string) => void
+  models: ModelOption[]
+  effort: EffortId | ''
+  onEffortChange: (effort: EffortId | '') => void
+  efforts: typeof EFFORT_OPTIONS
+  serviceTier: ServiceTier
+  onServiceTierChange?: (serviceTier: ServiceTier) => void
+  serviceTiers: typeof SERVICE_TIER_OPTIONS
+  disabled?: boolean
+}): React.JSX.Element {
+  const [open, setOpen] = React.useState(false)
+  const [effortOpen, setEffortOpen] = React.useState(false)
+  const [speedOpen, setSpeedOpen] = React.useState(false)
+  const selected = models.find((option) => option.id === model)
+  // The chip has room for one name, so show the model actually in use rather
+  // than the provider's "Default" wrapper — the menu is where that row's
+  // status is worth stating. Every explicit row already carries its real name.
+  const selectedName = resolvedModelName(selected?.resolvedModel) ?? selected?.label ?? model
+  const selectedEffort = efforts.find((option) => option.id === effort)
+  const selectedTier = serviceTiers.find((option) => option.id === serviceTier)
+  const groups = (['claude', 'codex'] as Provider[])
+    .map((group) => ({ group, models: models.filter((option) => option.provider === group) }))
+    .filter(({ models: options }) => options.length > 0)
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(nextOpen) => {
+        setOpen(nextOpen)
+        if (!nextOpen) {
+          setEffortOpen(false)
+          setSpeedOpen(false)
+        }
+      }}
+    >
+      <PopoverTrigger
+        disabled={disabled}
+        aria-label={`${selectedName}, ${selectedEffort?.label ?? effort}${serviceTier === 'fast' ? ', Fast' : ''}`}
+        className="no-drag inline-flex h-7 min-w-0 max-w-full select-none items-center gap-1 rounded-md px-2 text-xs font-medium text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[popup-open]:bg-accent data-[popup-open]:text-foreground disabled:opacity-50"
+      >
+        <Sparkles className="size-3 shrink-0" />
+        <span className="max-w-32 truncate">{selectedName}</span>
+        <span className="shrink-0 text-muted-foreground/50">·</span>
+        <span className="shrink-0">{selectedEffort?.label ?? effort}</span>
+        {serviceTier === 'fast' && (
+          <>
+            <span className="shrink-0 text-muted-foreground/50">·</span>
+            <span className="shrink-0 text-violet-400">Fast</span>
+          </>
+        )}
+        <ChevronDown className="size-3 shrink-0 opacity-60" />
+      </PopoverTrigger>
+      {/* w-80, not w-72: the Default row carries a label, the model it resolves
+          to, and a context badge, which truncates the label at the narrower width. */}
+      <PopoverContent side="top" align="start" className="w-80 overflow-hidden p-0">
+        <div className="max-h-72 overflow-y-auto p-1">
+          {groups.map(({ group, models: options }) => (
+            <div key={group}>
+              <div className="px-2 pt-2 pb-1 text-[10px] font-semibold tracking-wider text-muted-foreground/70 uppercase">
+                {PROVIDER_LABELS[group]}
+              </div>
+              {options.map((option) => {
+                // Only ever set on the "Default" row: every other row's label
+                // already *is* its resolved name, so this stays out of the way.
+                const resolved = resolvedModelName(option.resolvedModel)
+                return (
+                  <button
+                    key={option.id}
+                    type="button"
+                    disabled={option.disabled}
+                    title={option.description}
+                    aria-pressed={option.id === model}
+                    onMouseEnter={() => {
+                      setEffortOpen(false)
+                      setSpeedOpen(false)
+                    }}
+                    onClick={() => {
+                      onModelChange(option.id)
+                      setOpen(false)
+                    }}
+                    className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-sm outline-none transition-colors hover:bg-accent focus-visible:bg-accent disabled:opacity-45"
+                  >
+                    <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                    {resolved && resolved !== option.label && (
+                      <span className="shrink-0 text-[11px] text-muted-foreground/70">
+                        {resolved}
+                      </span>
+                    )}
+                    {option.contextWindow && (
+                      <span className="shrink-0 text-[10px] text-muted-foreground">
+                        {fmtContextWindow(option.contextWindow)}
+                      </span>
+                    )}
+                    {option.id === model && <Check className="size-3.5 shrink-0" />}
+                  </button>
+                )
+              })}
+            </div>
+          ))}
+        </div>
+
+        <div className="border-t border-border p-1">
+          <Popover open={effortOpen} onOpenChange={setEffortOpen}>
+            <PopoverTrigger
+              onMouseEnter={() => {
+                setSpeedOpen(false)
+                setEffortOpen(true)
+              }}
+              className="flex h-9 w-full items-center gap-2 rounded-md px-2 text-sm outline-none transition-colors hover:bg-accent focus-visible:bg-accent data-[popup-open]:bg-accent"
+            >
+              <Brain className="size-3.5 text-muted-foreground" />
+              <span className="flex-1 text-left">Reasoning</span>
+              <span className="text-xs text-muted-foreground">
+                {selectedEffort?.label ?? effort}
+              </span>
+              <ChevronRight className="size-3.5 text-muted-foreground" />
+            </PopoverTrigger>
+            <PopoverContent side="right" align="end" className="w-44 p-1">
+              {efforts.map((option) => (
+                <button
+                  key={option.id || 'default'}
+                  type="button"
+                  title={option.description}
+                  aria-pressed={option.id === effort}
+                  onClick={() => {
+                    onEffortChange(option.id)
+                    setEffortOpen(false)
+                    setOpen(false)
+                  }}
+                  className="flex h-9 w-full items-center gap-2 rounded-md px-2 text-sm outline-none transition-colors hover:bg-accent focus-visible:bg-accent"
+                >
+                  <span className="flex-1 text-left">{option.label}</span>
+                  {option.id === effort && <Check className="size-3.5" />}
+                </button>
+              ))}
+            </PopoverContent>
+          </Popover>
+
+          {onServiceTierChange && (
+            <Popover open={speedOpen} onOpenChange={setSpeedOpen}>
+              <PopoverTrigger
+                onMouseEnter={() => {
+                  setEffortOpen(false)
+                  setSpeedOpen(true)
+                }}
+                className="flex h-9 w-full items-center gap-2 rounded-md px-2 text-sm outline-none transition-colors hover:bg-accent focus-visible:bg-accent data-[popup-open]:bg-accent"
+              >
+                <Zap className="size-3.5 text-muted-foreground" />
+                <span className="flex-1 text-left">Speed</span>
+                <span className="text-xs text-muted-foreground">
+                  {selectedTier?.label ?? serviceTier}
+                </span>
+                <ChevronRight className="size-3.5 text-muted-foreground" />
+              </PopoverTrigger>
+              <PopoverContent side="right" align="end" className="w-44 p-1">
+                {serviceTiers.map((option) => (
+                  <button
+                    key={option.id}
+                    type="button"
+                    title={option.description}
+                    aria-pressed={option.id === serviceTier}
+                    onClick={() => {
+                      onServiceTierChange(option.id)
+                      setSpeedOpen(false)
+                      setOpen(false)
+                    }}
+                    className="flex h-9 w-full items-center gap-2 rounded-md px-2 text-sm outline-none transition-colors hover:bg-accent focus-visible:bg-accent"
+                  >
+                    <span className="flex-1 text-left">{option.label}</span>
+                    {option.id === serviceTier && <Check className="size-3.5" />}
+                  </button>
+                ))}
+              </PopoverContent>
+            </Popover>
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
 export function Composer({
   onSend,
   streaming = false,
@@ -284,6 +490,8 @@ export function Composer({
   onModelChange,
   effort,
   onEffortChange,
+  serviceTier = 'standard',
+  onServiceTierChange,
   permissionMode,
   onPermissionModeChange,
   contextTokens,
@@ -303,7 +511,10 @@ export function Composer({
   model: string
   onModelChange: (model: string) => void
   effort: EffortId | ''
-  onEffortChange: (effort: EffortId | '') => void
+  /** `remember: false` marks an app-generated correction — see `ChatOptionsPatch`. */
+  onEffortChange: (effort: EffortId | '', opts?: { remember?: boolean }) => void
+  serviceTier?: ServiceTier
+  onServiceTierChange?: (serviceTier: ServiceTier, opts?: { remember?: boolean }) => void
   permissionMode: PermissionModeId
   onPermissionModeChange: (mode: PermissionModeId) => void
   contextTokens?: number
@@ -336,10 +547,20 @@ export function Composer({
   // empty id in main), so use it as-is and just append the non-Claude (Codex)
   // placeholders the static list carries.
   const dynamicModels = useApp((s) => s.models)
+  const codexConfigModel = useApp((s) => s.codexConfigModel)
+  const loadCodexConfigModel = useApp((s) => s.loadCodexConfigModel)
+  React.useEffect(() => {
+    void loadCodexConfigModel()
+  }, [loadCodexConfigModel])
+  const codexModels = MODEL_OPTIONS.filter((option) => option.provider === 'codex').map((option) =>
+    option.id === 'codex-default' && codexConfigModel
+      ? { ...option, resolvedModel: codexConfigModel }
+      : option
+  )
   const allModelOptions =
     dynamicModels.length > 0
-      ? [...dynamicModels, ...MODEL_OPTIONS.filter((m) => m.provider !== 'claude')]
-      : MODEL_OPTIONS
+      ? [...dynamicModels, ...codexModels]
+      : [...MODEL_OPTIONS.filter((option) => option.provider === 'claude'), ...codexModels]
   // An existing chat only offers its own provider's models — provider is fixed
   // once the chat is created (see the lockProvider doc).
   const modelOptions = lockProvider
@@ -378,12 +599,29 @@ export function Composer({
       )
   const invalidEffort = effort !== '' && !effortOptions.some((option) => option.id === effort)
   const effortValue = invalidEffort ? '' : effort
+  // The SDK *omits* `supportsFastMode` on models that lack it rather than
+  // sending false, so "not true" is the real signal — but it only means
+  // anything once the SDK list has loaded. The static fallback carries no
+  // capability data, and Codex advertises none per-model; in both cases we
+  // don't know, so leave Fast on offer rather than hiding a working option.
+  const knowsFastSupport = !isCodex && dynamicModels.length > 0
+  const serviceTierOptions =
+    knowsFastSupport && selectedModelOption?.supportsFastMode !== true
+      ? SERVICE_TIER_OPTIONS.filter((tier) => tier.id === 'standard')
+      : SERVICE_TIER_OPTIONS
+  const invalidServiceTier = !serviceTierOptions.some((option) => option.id === serviceTier)
+  const serviceTierValue = invalidServiceTier ? 'standard' : serviceTier
 
-  // New-chat can switch providers with an effort already selected. Normalize
-  // immediately so the hidden stale value cannot be submitted to the other SDK.
+  // New-chat can switch providers with an effort already selected, and a model
+  // may not offer Fast. Normalize immediately so the hidden stale value cannot
+  // be submitted to the SDK — but as `remember: false`, since the user didn't
+  // pick these and they must not become the defaults for every future chat.
   React.useEffect(() => {
-    if (invalidEffort) onEffortChange('')
+    if (invalidEffort) onEffortChange('', { remember: false })
   }, [invalidEffort, onEffortChange])
+  React.useEffect(() => {
+    if (invalidServiceTier) onServiceTierChange?.('standard', { remember: false })
+  }, [invalidServiceTier, onServiceTierChange])
   const permissionOptions = isCodex ? CODEX_PERMISSION_MODES : PERMISSION_MODES
   const permissionValue = isCodex ? codexPermissionValue(permissionMode) : permissionMode
   const selectedPermissionAppearance = permissionAppearance(permissionValue, isCodex)
@@ -769,32 +1007,20 @@ export function Composer({
             <Paperclip />
           </Button>
         </WithTooltip>
-        {/* The selects share the slack and truncate first, so the ring and
-            send button never get pushed out of the box on a narrow column. */}
+        {/* Model owns its related inference controls; permissions remains a
+            separate safety decision. This keeps the footer compact. */}
         <div className="flex min-w-0 flex-1 items-center gap-1">
-          <CompactSelect
-            value={selectedModel}
-            onValueChange={onModelChange}
-            options={modelOptions.map((m) => ({
-              value: m.id,
-              label: m.label,
-              description: m.description,
-              group: PROVIDER_LABELS[m.provider],
-              disabled: m.disabled
-            }))}
-            icon={<Sparkles className="size-3" />}
-            className="min-w-0"
-          />
-          <CompactSelect
-            value={effortValue}
-            onValueChange={(v) => onEffortChange(v as EffortId | '')}
-            options={effortOptions.map((e) => ({
-              value: e.id,
-              label: e.label,
-              description: e.description
-            }))}
-            icon={<Brain className="size-3" />}
-            className="min-w-0"
+          <ModelSettingsPicker
+            model={selectedModel}
+            onModelChange={onModelChange}
+            models={modelOptions}
+            effort={effortValue}
+            onEffortChange={onEffortChange}
+            efforts={effortOptions}
+            serviceTier={serviceTierValue}
+            onServiceTierChange={onServiceTierChange}
+            serviceTiers={serviceTierOptions}
+            disabled={disabled}
           />
           <CompactSelect
             value={permissionValue}

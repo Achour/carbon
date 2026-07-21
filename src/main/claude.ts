@@ -19,6 +19,7 @@ import type {
   Attachment,
   BackgroundJob,
   ChatData,
+  ChatOptionsPatch,
   ChatStatus,
   EffortId,
   ElementRef,
@@ -29,11 +30,19 @@ import type {
   PermissionModeId,
   Provider,
   RewindResult,
+  ServiceTier,
   SlashCommand,
   ToolPart,
   UsageInfo
 } from '@shared/types'
-import { CODEX_DEFAULT_MODEL, MODEL_OPTIONS, effortForProvider, providerForModel } from '@shared/types'
+import {
+  CODEX_DEFAULT_MODEL,
+  MODEL_OPTIONS,
+  claudeModelContextWindow,
+  claudeModelLabel,
+  effortForProvider,
+  providerForModel
+} from '@shared/types'
 import { CODEX_SLASH_COMMANDS, parseCodexSlashCommand } from '@shared/codexCommands'
 import type { Store } from './store'
 import type { PreviewManager } from './preview'
@@ -314,6 +323,7 @@ class ClaudeSession implements AgentSession {
         resume: chat.sessionId,
         model: chat.model || undefined,
         effort: effortForProvider(chat.effort, 'claude'),
+        settings: { fastMode: chat.serviceTier === 'fast' },
         permissionMode: chat.permissionMode,
         allowDangerouslySkipPermissions: true,
         includePartialMessages: true,
@@ -515,6 +525,14 @@ class ClaudeSession implements AgentSession {
     }
   }
 
+  async setServiceTier(serviceTier: ServiceTier): Promise<void> {
+    await this.control(
+      () => this.q.applyFlagSettings({ fastMode: serviceTier === 'fast' }),
+      undefined,
+      'setServiceTier'
+    )
+  }
+
   /**
    * Runs an SDK control request bounded by two timeouts: one waiting for the
    * session to initialize, one on the request itself. A control request against
@@ -609,9 +627,11 @@ class ClaudeSession implements AgentSession {
         return models.map((m) => ({
           id: m.value === 'default' ? '' : m.value,
           resolvedModel: m.resolvedModel,
-          label: m.displayName,
+          label: claudeModelLabel(m.displayName, m.resolvedModel),
           description: m.description,
-          provider: 'claude' as const
+          provider: 'claude' as const,
+          contextWindow: claudeModelContextWindow(m.description, m.resolvedModel),
+          supportsFastMode: m.supportsFastMode
         }))
       },
       [],
@@ -1710,6 +1730,40 @@ export class ChatManager {
           return
         }
 
+        case 'fast': {
+          const requested = command.argument.toLowerCase()
+          if (!requested || requested === 'status') {
+            this.pushCommandResult(
+              chat,
+              command.original,
+              `Current speed: **${chat.serviceTier ?? 'standard'}**.`
+            )
+            return
+          }
+          const serviceTier =
+            requested === 'on' || requested === 'fast'
+              ? 'fast'
+              : requested === 'off' || requested === 'standard'
+                ? 'standard'
+                : null
+          if (!serviceTier) {
+            this.pushCommandResult(
+              chat,
+              command.original,
+              'Unknown speed setting. Use `on`, `off`, or `status`.',
+              'error'
+            )
+            return
+          }
+          await this.setOptions(chat.id, { serviceTier })
+          this.pushCommandResult(
+            chat,
+            command.original,
+            `Codex speed changed to **${serviceTier}**.`
+          )
+          return
+        }
+
         case 'permissions': {
           if (!command.argument) {
             this.pushCommandResult(
@@ -1761,6 +1815,7 @@ export class ChatManager {
               '**Codex status**',
               `- Model: ${chat.model ?? 'Codex config default'}`,
               `- Reasoning: ${chat.effort ?? 'default (Codex config)'}`,
+              `- Speed: ${chat.serviceTier ?? 'standard'}`,
               `- Permissions: ${chat.permissionMode}`,
               `- Project: ${chat.cwd}`,
               `- Thread: ${chat.sessionId ?? 'Not started'}`,
@@ -1888,7 +1943,7 @@ export class ChatManager {
 
   async setOptions(
     chatId: string,
-    patch: { model?: string; effort?: EffortId | ''; permissionMode?: PermissionModeId }
+    patch: ChatOptionsPatch
   ): Promise<void> {
     const chat = this.store.getChat(chatId)
     if (!chat) return
@@ -1956,15 +2011,33 @@ export class ChatManager {
         })
       }
     }
+    if (patch.serviceTier !== undefined && patch.serviceTier !== chat.serviceTier) {
+      chat.serviceTier = patch.serviceTier
+      // Claude can change this flag live; Codex's client-level config requires
+      // a fresh wrapper, which resumes the same provider thread on the next turn.
+      if (session && chat.provider === 'claude' && session.setServiceTier) {
+        await session.setServiceTier(patch.serviceTier)
+      } else if (session) {
+        this.disposeChat(chatId)
+        this.emit({
+          type: 'status',
+          chatId,
+          status: chat.pendingPlanReview ? 'waiting-permission' : 'idle'
+        })
+      }
+    }
     this.store.saveChat(chatId)
-    // Explicit user choices become the defaults for future chats.
-    this.store.rememberOptions(patch)
+    // Explicit user choices become the defaults for future chats — but a patch
+    // the app generated to correct an unsupported value is not one, so it stays
+    // scoped to this chat.
+    if (patch.remember !== false) this.store.rememberOptions(patch)
     this.emit({
       type: 'meta',
       chatId,
       patch: {
         model: chat.model,
         effort: chat.effort,
+        serviceTier: chat.serviceTier,
         permissionMode: chat.permissionMode,
         pendingPlanReview: chat.pendingPlanReview
       }

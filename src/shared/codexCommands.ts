@@ -24,6 +24,11 @@ export const CODEX_SLASH_COMMANDS: SlashCommand[] = [
     argumentHint: '[default|low|medium|high|xhigh|max|ultra]'
   },
   {
+    name: 'fast',
+    description: 'Show or change the Codex speed tier',
+    argumentHint: '[on|off|status]'
+  },
+  {
     name: 'permissions',
     description: 'Show or change the workspace permission mode',
     argumentHint: '[plan|ask|accept-edits|auto|full-access]'
@@ -47,6 +52,7 @@ export type CodexSlashCommandName =
   | 'plan'
   | 'model'
   | 'reasoning'
+  | 'fast'
   | 'permissions'
   | 'status'
   | 'init'

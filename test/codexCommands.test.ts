@@ -8,8 +8,16 @@ import {
 test('publishes only the Codex commands Carbon implements', () => {
   assert.deepEqual(
     CODEX_SLASH_COMMANDS.map((command) => command.name),
-    ['plan', 'model', 'reasoning', 'permissions', 'status', 'init', 'review']
+    ['plan', 'model', 'reasoning', 'fast', 'permissions', 'status', 'init', 'review']
   )
+})
+
+test('parses the Codex Fast-mode command', () => {
+  assert.deepEqual(parseCodexSlashCommand('/fast on'), {
+    name: 'fast',
+    argument: 'on',
+    original: '/fast on'
+  })
 })
 
 test('parses a supported command and keeps its multiline argument', () => {

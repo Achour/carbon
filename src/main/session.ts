@@ -9,6 +9,7 @@ import type {
   PermissionDecision,
   PermissionModeId,
   RewindResult,
+  ServiceTier,
   UsageInfo
 } from '@shared/types'
 
@@ -31,6 +32,8 @@ export interface AgentSession {
   interrupt(): Promise<void>
   setModel(model?: string): Promise<void>
   setPermissionMode(mode: PermissionModeId): Promise<void>
+  /** Optional live speed switch; providers with client-level config recreate instead. */
+  setServiceTier?(serviceTier: ServiceTier): Promise<void>
   stopBackgroundJob(taskId: string): Promise<void>
   respondPermission(requestId: string, decision: PermissionDecision): void
   rewindFiles(userMessageId: string, dryRun: boolean): Promise<RewindResult>

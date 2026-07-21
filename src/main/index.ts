@@ -28,6 +28,8 @@ import type {
   PreviewCommandResult,
   PreviewEvent,
   Provider,
+  ChatOptionsPatch,
+  ServiceTier,
   TerminalCreateOpts,
   TerminalEvent,
   WorktreeTarget,
@@ -37,6 +39,7 @@ import type {
 } from '@shared/types'
 import { effortForProvider } from '@shared/types'
 import { ChatManager } from './claude'
+import { readCodexConfigModel } from './codexConfig'
 import { listDir, readFileContent, searchFiles, statPath } from './files'
 import * as gitOps from './git'
 import * as githubOps from './github'
@@ -352,6 +355,7 @@ function registerIpc(): void {
         provider?: Provider
         model?: string
         effort?: EffortId
+        serviceTier?: ServiceTier
         permissionMode?: PermissionModeId
         worktree?: WorktreeTarget
       }
@@ -383,6 +387,7 @@ function registerIpc(): void {
       provider,
       model: opts.model || undefined,
       effort,
+      serviceTier: opts.serviceTier ?? 'standard',
       permissionMode: opts.permissionMode ?? store.getDefaults().permissionMode,
       worktree,
       createdAt: now,
@@ -395,6 +400,7 @@ function registerIpc(): void {
     store.rememberOptions({
       model: opts.model ?? '',
       effort: effort ?? '',
+      serviceTier: opts.serviceTier,
       permissionMode: chat.permissionMode
     })
     const { messages: _messages, ...meta } = chat
@@ -491,11 +497,7 @@ function registerIpc(): void {
 
   ipcMain.handle(
     'chat:set-options',
-    (
-      _e,
-      chatId: string,
-      patch: { model?: string; effort?: EffortId | ''; permissionMode?: PermissionModeId }
-    ) => manager.setOptions(chatId, patch)
+    (_e, chatId: string, patch: ChatOptionsPatch) => manager.setOptions(chatId, patch)
   )
 
   ipcMain.handle('chat:rewind-files', (_e, chatId: string, userMessageId: string, dryRun: boolean) =>
@@ -512,6 +514,7 @@ function registerIpc(): void {
   )
 
   ipcMain.handle('session:models', (_e, chatId: string) => manager.listModels(chatId))
+  ipcMain.handle('codex:config-model', () => readCodexConfigModel())
   ipcMain.handle('session:agents', (_e, chatId: string) => manager.listAgents(chatId))
   ipcMain.handle('session:account', (_e, chatId: string) => manager.accountInfo(chatId))
   ipcMain.handle('session:usage', (_e, chatId: string) => manager.usageInfo(chatId))
