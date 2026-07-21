@@ -159,7 +159,7 @@ interface AppState {
   /** Models reported by the live session; empty until loaded (falls back to the static list). */
   models: ModelOption[]
   /** Fetches the session's model list once and caches it (feeds the composer picker). */
-  loadModels(chatId?: string): Promise<void>
+  loadModels(chatId?: string, cwd?: string): Promise<void>
   /** User-level Codex default, kept separate from Claude's dynamic model rows. */
   codexConfigModel: string | null | undefined
   loadCodexConfigModel(): Promise<void>
@@ -1691,11 +1691,13 @@ export const useApp = create<AppState>((set, get) => ({
     void window.api.stopBackgroundJob(id, taskId)
   },
 
-  async loadModels(chatId) {
+  async loadModels(chatId, cwd) {
     if (get().models.length) return // the list is stable per app run (account-level)
     const id = chatId ?? get().activeId
-    if (!id) return
-    const models = await window.api.listModels(id)
+    // Either identifies a folder to read the list from — a chat via its cwd, or
+    // the new-chat screen's picked folder directly.
+    if (!id && !cwd) return
+    const models = await window.api.listModels(id ?? '', cwd)
     if (models.length) set({ models })
   },
 

@@ -79,7 +79,7 @@ const api: Api = {
   mcpReconnect: (chatId: string, name: string) => invoke('mcp:reconnect', chatId, name),
   mcpToggle: (chatId: string, name: string, enabled: boolean) =>
     invoke('mcp:toggle', chatId, name, enabled),
-  listModels: (chatId: string) => invoke('session:models', chatId),
+  listModels: (chatId: string, cwd?: string) => invoke('session:models', chatId, cwd),
   codexConfigModel: () => invoke('codex:config-model'),
   listAgents: (chatId: string) => invoke('session:agents', chatId),
   accountInfo: (chatId: string) => invoke('session:account', chatId),

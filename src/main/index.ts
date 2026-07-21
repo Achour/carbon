@@ -513,7 +513,9 @@ function registerIpc(): void {
     manager.mcpToggle(chatId, name, enabled)
   )
 
-  ipcMain.handle('session:models', (_e, chatId: string) => manager.listModels(chatId))
+  ipcMain.handle('session:models', (_e, chatId: string, cwd?: string) =>
+    manager.listModels(chatId, cwd)
+  )
   ipcMain.handle('codex:config-model', () => readCodexConfigModel())
   ipcMain.handle('session:agents', (_e, chatId: string) => manager.listAgents(chatId))
   ipcMain.handle('session:account', (_e, chatId: string) => manager.accountInfo(chatId))

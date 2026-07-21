@@ -781,7 +781,8 @@ export interface Api {
   mcpReconnect(chatId: string, name: string): Promise<OpResult>
   mcpToggle(chatId: string, name: string, enabled: boolean): Promise<OpResult>
   /** Models the session reports; empty if unavailable (renderer falls back to the static list). */
-  listModels(chatId: string): Promise<ModelOption[]>
+  /** `cwd` lets the new-chat screen, which has no chat yet, still get the list. */
+  listModels(chatId: string, cwd?: string): Promise<ModelOption[]>
   /** User-level Codex model from $CODEX_HOME/config.toml; separate from Claude's model list. */
   codexConfigModel(): Promise<string | null>
   listAgents(chatId: string): Promise<AgentInfo[]>

@@ -549,9 +549,18 @@ export function Composer({
   const dynamicModels = useApp((s) => s.models)
   const codexConfigModel = useApp((s) => s.codexConfigModel)
   const loadCodexConfigModel = useApp((s) => s.loadCodexConfigModel)
+  const loadModels = useApp((s) => s.loadModels)
   React.useEffect(() => {
     void loadCodexConfigModel()
   }, [loadCodexConfigModel])
+  // Fetch the real Claude list up front rather than waiting for a first turn:
+  // the static fallback's "Default" row can't name the model it resolves to, so
+  // the chip would read "Default" where Codex's already reads its real model.
+  // Skipped for a Codex-locked chat, whose picker never shows a Claude row.
+  const wantsClaudeModels = !lockProvider || provider === 'claude'
+  React.useEffect(() => {
+    if (wantsClaudeModels) void loadModels(undefined, cwd ?? undefined)
+  }, [loadModels, wantsClaudeModels, cwd])
   const codexModels = MODEL_OPTIONS.filter((option) => option.provider === 'codex').map((option) =>
     option.id === 'codex-default' && codexConfigModel
       ? { ...option, resolvedModel: codexConfigModel }

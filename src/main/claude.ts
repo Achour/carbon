@@ -3,6 +3,7 @@ import {
   createSdkMcpServer,
   query,
   tool,
+  type ModelInfo,
   type PermissionResult,
   type PermissionUpdate,
   type Query,
@@ -196,6 +197,26 @@ interface PendingPermission {
  * They aren't real failures, so they must not render as scary error cards.
  */
 const isBenignTurnError = (text: string): boolean => text.includes('[ede_diagnostic]')
+
+/**
+ * The SDK's default row is `value: 'default'`; the app uses '' to mean "no model
+ * override", so normalize it — otherwise the picker shows two Defaults (this one
+ * plus the app's own '' entry) and a chat left on the app default ('') wouldn't
+ * match this row. `resolvedModel` (e.g. 'sonnet' → 'claude-sonnet-5') lets the
+ * picker match chats pinned to the older static model ids against the alias row
+ * that now covers them, and lets the composer chip name the model behind Default.
+ */
+function toModelOption(m: ModelInfo): ModelOption {
+  return {
+    id: m.value === 'default' ? '' : m.value,
+    resolvedModel: m.resolvedModel,
+    label: claudeModelLabel(m.displayName, m.resolvedModel),
+    description: m.description,
+    provider: 'claude',
+    contextWindow: claudeModelContextWindow(m.description, m.resolvedModel),
+    supportsFastMode: m.supportsFastMode
+  }
+}
 
 const TITLE_MODEL = 'claude-haiku-4-5-20251001'
 
@@ -616,24 +637,7 @@ class ClaudeSession implements AgentSession {
 
   async listModels(): Promise<ModelOption[]> {
     return this.control(
-      async () => {
-        const models = await this.q.supportedModels()
-        // The SDK's default row is `value: 'default'`; the app uses '' to mean
-        // "no model override", so normalize it — otherwise the picker shows two
-        // Defaults (this one plus the app's own '' entry) and a chat left on the
-        // app default ('') wouldn't match this row. `resolvedModel` (e.g. 'sonnet'
-        // → 'claude-sonnet-5') lets the picker match chats pinned to the older
-        // static model ids against the alias row that now covers them.
-        return models.map((m) => ({
-          id: m.value === 'default' ? '' : m.value,
-          resolvedModel: m.resolvedModel,
-          label: claudeModelLabel(m.displayName, m.resolvedModel),
-          description: m.description,
-          provider: 'claude' as const,
-          contextWindow: claudeModelContextWindow(m.description, m.resolvedModel),
-          supportsFastMode: m.supportsFastMode
-        }))
-      },
+      async () => (await this.q.supportedModels()).map(toModelOption),
       [],
       'supportedModels'
     )
@@ -1456,6 +1460,10 @@ export class ChatManager {
   private commandsByCwd = new Map<string, SlashCommand[]>()
   // In-flight warmups, deduped per cwd.
   private warmups = new Map<string, Promise<SlashCommand[]>>()
+  // The model list is account-level, not per chat or folder, so it's cached once
+  // for the app run — same lifetime the renderer's store assumes.
+  private models: ModelOption[] | null = null
+  private modelWarmup: Promise<ModelOption[]> | null = null
 
   constructor(
     private store: Store,
@@ -1541,6 +1549,30 @@ export class ChatManager {
     this.warmups.set(cwd, run)
     void run.finally(() => this.warmups.delete(cwd))
     return run
+  }
+
+  /**
+   * Reads the model list off a throwaway agent process. `supportedModels` is a
+   * control request the SDK answers without a turn, so unlike warmCommands this
+   * never waits for the `init` message — and deliberately loads no setting
+   * sources: the list is account-level, and skipping settings keeps the project's
+   * SessionStart hooks (which can be slow, or stall) out of the path.
+   */
+  private async warmModels(cwd: string): Promise<ModelOption[]> {
+    const input = createInputQueue()
+    const q = query({ prompt: input.iterate(), options: { cwd } })
+    try {
+      return (await q.supportedModels()).map(toModelOption)
+    } catch {
+      return []
+    } finally {
+      input.end()
+      try {
+        q.close()
+      } catch {
+        // already closed
+      }
+    }
   }
 
   private createSession(chat: ChatData): AgentSession {
@@ -1889,8 +1921,32 @@ export class ChatManager {
     return session ? session.mcpToggle(name, enabled) : { ok: false, error: 'No running session.' }
   }
 
-  async listModels(chatId: string): Promise<ModelOption[]> {
-    return (await this.sessionFor(chatId)?.listModels()) ?? []
+  /**
+   * The account's models. Prefers the chat's live session; otherwise warms a
+   * throwaway one, so a chat that hasn't had a turn yet still gets the real list
+   * — without it the renderer falls back to the static MODEL_OPTIONS, whose
+   * "Default" row carries no `resolvedModel` and so leaves the composer chip
+   * reading "Default" instead of naming the model behind it. The list is
+   * account-level, so one warm-up serves every chat and every cwd; `cwd` covers
+   * the new-chat screen, which has a folder but no chat yet.
+   */
+  async listModels(chatId: string, cwd?: string): Promise<ModelOption[]> {
+    const live = await this.sessionFor(chatId)?.listModels()
+    if (live?.length) return live
+    if (this.models) return this.models
+    const folder = this.store.getChat(chatId)?.cwd || cwd
+    if (!folder) return []
+    this.modelWarmup ??= this.warmModels(folder)
+      .then((options) => {
+        // An empty list means the agent never started, not an account with no
+        // models — leave the cache unset so the next caller retries.
+        if (options.length) this.models = options
+        return options
+      })
+      .finally(() => {
+        this.modelWarmup = null
+      })
+    return this.modelWarmup
   }
 
   async listAgents(chatId: string): Promise<AgentInfo[]> {
