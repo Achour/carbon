@@ -262,7 +262,18 @@ export interface PermissionRequestPayload {
 }
 
 export type PermissionDecision =
-  | { behavior: 'allow'; always?: boolean; updatedInput?: Record<string, unknown> }
+  | {
+      behavior: 'allow'
+      always?: boolean
+      updatedInput?: Record<string, unknown>
+      /**
+       * Plan approvals only: switch the chat to this model before implementation
+       * starts, so a plan written by one model can be built by another. Must stay
+       * within the chat's provider (sessions aren't portable across backends).
+       * Undefined keeps the model the plan was written with.
+       */
+      model?: string
+    }
   | { behavior: 'deny'; message?: string }
 
 /** Result of a file-checkpoint rewind (`rewindFiles`). */

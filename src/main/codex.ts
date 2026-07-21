@@ -24,6 +24,7 @@ import type {
   Attachment,
   BackgroundJob,
   ChatData,
+  ChatMeta,
   ChatStatus,
   EffortId,
   ElementRef,
@@ -1385,11 +1386,25 @@ export class CodexSession implements AgentSession {
       this.chat.modeBeforePlan = undefined
       this.chat.permissionMode = restore
       this.optionsDirty = true
-      this.emit({
-        type: 'meta',
-        chatId: this.chat.id,
-        patch: { permissionMode: restore, modeBeforePlan: undefined }
-      })
+      const patch: Partial<ChatMeta> = { permissionMode: restore, modeBeforePlan: undefined }
+      // A plan approval may carry the model to implement with ("Build with" in
+      // the plan review). Apply it before the implementation turn is built —
+      // the turn snapshots chat.model, so this is what makes it take effect.
+      if (decision.model !== undefined) {
+        const next = decision.model || undefined
+        if (next !== this.chat.model) {
+          this.chat.model = next
+          // The new model may not advertise the chat's reasoning effort — drop
+          // the override rather than send a value Codex will reject.
+          const supported = MODEL_OPTIONS.find((m) => m.id === next)?.supportedEfforts
+          if (supported && this.chat.effort && !supported.includes(this.chat.effort)) {
+            this.chat.effort = undefined
+          }
+          patch.model = next
+          patch.effort = this.chat.effort
+        }
+      }
+      this.emit({ type: 'meta', chatId: this.chat.id, patch })
       this.pushMessage({
         id: randomUUID(),
         role: 'event',

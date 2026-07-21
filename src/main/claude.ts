@@ -721,6 +721,18 @@ class ClaudeSession implements AgentSession {
                 : s
             )
           : undefined
+      // A plan approval may carry the model to implement with ("Build with" in
+      // the plan review). Fire the switch before resolving the approval: both
+      // ride the CLI's stdin, so this ordering has the implementation turn
+      // start on the new model rather than one API call late.
+      if (pending.toolName === 'ExitPlanMode' && decision.model !== undefined) {
+        const next = decision.model || undefined
+        if (next !== this.chat.model) {
+          this.chat.model = next
+          void this.setModel(next)
+          this.emit({ type: 'meta', chatId: this.chat.id, patch: { model: next } })
+        }
+      }
       pending.resolve({
         behavior: 'allow',
         updatedInput: decision.updatedInput ?? pending.input,

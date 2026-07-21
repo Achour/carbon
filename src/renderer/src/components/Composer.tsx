@@ -22,7 +22,6 @@ import {
 } from 'lucide-react'
 import {
   EFFORT_OPTIONS,
-  MODEL_OPTIONS,
   PERMISSION_MODES,
   PROVIDER_LABELS,
   SERVICE_TIER_OPTIONS,
@@ -36,6 +35,7 @@ import {
   type SlashCommand
 } from '@shared/types'
 import { cn } from '@/lib/utils'
+import { assembleModelOptions, canonicalModelId } from '@/lib/models'
 import { useApp } from '@/store'
 import { Button } from '@/components/ui/button'
 import { CompactSelect } from '@/components/ui/select'
@@ -561,35 +561,17 @@ export function Composer({
   React.useEffect(() => {
     if (wantsClaudeModels) void loadModels(undefined, cwd ?? undefined)
   }, [loadModels, wantsClaudeModels, cwd])
-  const codexModels = MODEL_OPTIONS.filter((option) => option.provider === 'codex').map((option) =>
-    option.id === 'codex-default' && codexConfigModel
-      ? { ...option, resolvedModel: codexConfigModel }
-      : option
-  )
-  const allModelOptions =
-    dynamicModels.length > 0
-      ? [...dynamicModels, ...codexModels]
-      : [...MODEL_OPTIONS.filter((option) => option.provider === 'claude'), ...codexModels]
+  const allModelOptions = assembleModelOptions(dynamicModels, codexConfigModel)
   // An existing chat only offers its own provider's models — provider is fixed
   // once the chat is created (see the lockProvider doc).
   const modelOptions = lockProvider
     ? allModelOptions.filter((m) => m.provider === provider)
     : allModelOptions
 
-  // A chat pinned to an older static id (e.g. 'claude-sonnet-5') won't equal the
-  // SDK's alias value ('sonnet'), so resolve it to the covering row (matching on
-  // `resolvedModel`, ignoring the '[1m]' suffix) to keep the picker highlighted.
-  const canonModel = (s?: string): string => (s ?? '').replace(/\[1m\]$/i, '')
-  const selectedModel = React.useMemo(() => {
-    if (modelOptions.some((o) => o.id === model)) return model
-    const match = modelOptions.find(
-      (o) =>
-        o.id !== '' &&
-        (canonModel(o.id) === canonModel(model) ||
-          canonModel(o.resolvedModel) === canonModel(model))
-    )
-    return match ? match.id : model
-  }, [modelOptions, model])
+  const selectedModel = React.useMemo(
+    () => canonicalModelId(model, modelOptions),
+    [modelOptions, model]
+  )
 
   // Codex effort support is model-specific. The CLI's global config accepts
   // more values than any one model necessarily advertises, so do not build this

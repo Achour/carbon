@@ -1,7 +1,9 @@
 import * as React from 'react'
-import { Check } from 'lucide-react'
+import { Check, Sparkles } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { assembleModelOptions, canonicalModelId } from '@/lib/models'
 import { Button } from '@/components/ui/button'
+import { CompactSelect } from '@/components/ui/select'
 import { Markdown } from '@/components/Markdown'
 import { useApp, type PlanPanelState } from '@/store'
 
@@ -15,18 +17,39 @@ export function PlanContent({
 }): React.JSX.Element {
   const respondPermission = useApp((s) => s.respondPermission)
   const selectedCwd = useApp((s) => s.selectedCwd)
+  const chat = useApp((s) => s.chats.find((c) => c.id === s.activeId) ?? null)
+  const dynamicModels = useApp((s) => s.models)
+  const codexConfigModel = useApp((s) => s.codexConfigModel)
   const [feedback, setFeedback] = React.useState('')
   const [autoAccept, setAutoAccept] = React.useState(false)
   const [busy, setBusy] = React.useState(false)
+  // The "Build with" pick; null follows the chat's current model ("same model").
+  const [buildPick, setBuildPick] = React.useState<string | null>(null)
 
   const pending = panel.requestId !== null
+
+  // Approving can hand implementation to a different model than the one that
+  // wrote the plan — Cursor-style. Sessions aren't portable across backends,
+  // so the picker only offers the chat's own provider.
+  const buildOptions = React.useMemo(
+    () =>
+      chat
+        ? assembleModelOptions(dynamicModels, codexConfigModel).filter(
+            (option) => option.provider === chat.provider && !option.disabled
+          )
+        : [],
+    [chat, dynamicModels, codexConfigModel]
+  )
+  const currentModel = chat ? canonicalModelId(chat.model ?? '', buildOptions) : ''
+  const buildModel = buildPick ?? currentModel
 
   const approve = (): void => {
     if (!panel.requestId) return
     setBusy(true)
     void respondPermission(panel.requestId, {
       behavior: 'allow',
-      always: autoAccept && hasSuggestions
+      always: autoAccept && hasSuggestions,
+      ...(buildModel !== currentModel ? { model: buildModel } : {})
     })
   }
 
@@ -56,7 +79,25 @@ export function PlanContent({
             placeholder="Optional feedback — what should change?"
             className="no-drag block w-full resize-none rounded-lg border border-input bg-transparent px-2.5 py-2 text-[13px] outline-none select-text placeholder:text-muted-foreground/60 focus-visible:border-ring"
           />
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {buildOptions.length > 1 && (
+              <div
+                className="flex items-center gap-1"
+                title="Model that implements the approved plan"
+              >
+                <span className="text-xs text-muted-foreground/80">Build with</span>
+                <CompactSelect
+                  value={buildModel}
+                  onValueChange={setBuildPick}
+                  options={buildOptions.map((option) => ({
+                    value: option.id,
+                    label: option.label,
+                    description: option.description
+                  }))}
+                  icon={<Sparkles className="size-3" />}
+                />
+              </div>
+            )}
             {hasSuggestions && (
               <button
                 type="button"
