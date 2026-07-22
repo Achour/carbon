@@ -374,6 +374,7 @@ export function Sidebar(): React.JSX.Element {
       return {}
     }
   })
+  const [revealedChatBatches, setRevealedChatBatches] = React.useState<Record<string, number>>({})
 
   // Stored value: true = collapsed, false = expanded. Archived projects
   // default to collapsed, active ones to expanded.
@@ -570,16 +571,17 @@ export function Sidebar(): React.JSX.Element {
           const firstArchived = archived && i === activeGroups.length
           // Cap to the most-recent chats (search shows all matches). Keep the
           // open chat visible even when it's older than the cap.
-          const visibleChats =
-            group.chats.length <= chatsPerProject
-              ? group.chats
-              : (() => {
-                  const top = group.chats.slice(0, chatsPerProject)
-                  const activeInGroup = group.chats.find((c) => c.id === activeId)
-                  return activeInGroup && !top.some((c) => c.id === activeId)
-                    ? [...top, activeInGroup]
-                    : top
-                })()
+          const revealedBatches = revealedChatBatches[group.cwd] ?? 0
+          const chatListLimit = chatsPerProject * (revealedBatches + 1)
+          const cappedChats = (() => {
+            if (group.chats.length <= chatListLimit) return group.chats
+            const top = group.chats.slice(0, chatListLimit)
+            const activeInGroup = group.chats.find((c) => c.id === activeId)
+            return activeInGroup && !top.some((c) => c.id === activeId)
+              ? [...top, activeInGroup]
+              : top
+          })()
+          const hiddenChatCount = group.chats.length - cappedChats.length
           return (
             <React.Fragment key={group.cwd}>
               {firstArchived && (
@@ -729,7 +731,7 @@ export function Sidebar(): React.JSX.Element {
                 </ContextMenu>
                 {!isCollapsed && (
                   <div className="ml-[22px] space-y-px pb-1">
-                    {visibleChats.map((chat) => (
+                    {cappedChats.map((chat) => (
                       <ChatItem
                         key={chat.id}
                         chat={chat}
@@ -750,6 +752,36 @@ export function Sidebar(): React.JSX.Element {
                         }}
                       />
                     ))}
+                    {(hiddenChatCount > 0 || revealedBatches > 0) && (
+                      <div className="flex items-center">
+                        {hiddenChatCount > 0 && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setRevealedChatBatches((prev) => ({
+                                ...prev,
+                                [group.cwd]: revealedBatches + 1
+                              }))
+                            }
+                            className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2.5 py-1.5 text-left text-[12px] text-sidebar-foreground/55 transition-colors hover:bg-sidebar-accent/60 hover:text-sidebar-foreground/90"
+                          >
+                            <ChevronRight className="size-3 shrink-0" />
+                            Show {Math.min(chatsPerProject, hiddenChatCount)} more
+                          </button>
+                        )}
+                        {revealedBatches > 0 && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setRevealedChatBatches((prev) => ({ ...prev, [group.cwd]: 0 }))
+                            }
+                            className="shrink-0 rounded-md px-2.5 py-1.5 text-[12px] text-sidebar-foreground/55 transition-colors hover:bg-sidebar-accent/60 hover:text-sidebar-foreground/90"
+                          >
+                            Show less
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

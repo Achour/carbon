@@ -55,7 +55,7 @@ import type {
 /** Bounds for the sidebar "recent chats per project" setting. */
 export const CHATS_PER_PROJECT_MIN = 3
 export const CHATS_PER_PROJECT_MAX = 20
-export const CHATS_PER_PROJECT_DEFAULT = 6
+export const CHATS_PER_PROJECT_DEFAULT = 10
 
 export interface QueuedMessage {
   id: string
