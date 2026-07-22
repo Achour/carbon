@@ -632,6 +632,19 @@ export function scopedChanges(
 
 const initialThemeMode = storedThemeMode()
 let codexConfigModelLoad: Promise<string | null> | null = null
+// GitHub reads are deduped per project, not globally. A request for project A
+// must not suppress the refresh kicked off when the user switches to project B.
+const githubRequests = new Map<string, Promise<GitHubState>>()
+
+function githubStateFor(cwd: string): Promise<GitHubState> {
+  const existing = githubRequests.get(cwd)
+  if (existing) return existing
+  const request = window.api.githubState(cwd).finally(() => {
+    if (githubRequests.get(cwd) === request) githubRequests.delete(cwd)
+  })
+  githubRequests.set(cwd, request)
+  return request
+}
 
 function syncDockIcon(): void {
   if (window.api.platform !== 'darwin') return
@@ -1208,7 +1221,9 @@ export const useApp = create<AppState>((set, get) => ({
       // Guard against a project switch happening while we awaited.
       if (get().selectedCwd === cwd) set({ git })
     } catch {
-      set({ git: null })
+      // A failed request for the project we just left must not clear the new
+      // project's result if it completed first.
+      if (get().selectedCwd === cwd) set({ git: null })
     }
     // The Branch scope compares against committed history too, so keep it fresh.
     if (get().changeScope === 'branch') void get().refreshBranchChanges()
@@ -1346,20 +1361,20 @@ export const useApp = create<AppState>((set, get) => ({
   async refreshGithub() {
     const cwd = get().selectedCwd
     if (!cwd) {
-      set({ github: null })
+      set({ github: null, githubBusy: false })
       return
     }
-    // gh calls hit the network — don't stack overlapping fetches.
-    if (get().githubBusy) return
     set({ githubBusy: true })
     try {
-      const github = await window.api.githubState(cwd)
+      const github = await githubStateFor(cwd)
       // Guard against a project switch happening while we awaited.
       if (get().selectedCwd === cwd) set({ github })
     } catch {
       if (get().selectedCwd === cwd) set({ github: null })
     } finally {
-      set({ githubBusy: false })
+      // An older project's completion must not clear the spinner for the
+      // currently selected project's still-running request.
+      if (get().selectedCwd === cwd) set({ githubBusy: false })
     }
   },
 

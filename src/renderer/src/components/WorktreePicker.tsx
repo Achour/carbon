@@ -38,7 +38,13 @@ export function WorktreePicker({
   onChange: (target: WorktreeTarget) => void
   disabled?: boolean
 }): React.JSX.Element {
-  const [worktrees, setWorktrees] = React.useState<WorktreeRef[]>([])
+  // Keep results tagged with their project so the previous project's worktrees
+  // disappear synchronously on a cwd change, before the next git read finishes.
+  const [loaded, setLoaded] = React.useState<{ cwd: string; refs: WorktreeRef[] }>({
+    cwd: '',
+    refs: []
+  })
+  const worktrees = loaded.cwd === cwd ? loaded.refs : []
   const [open, setOpen] = React.useState(false)
 
   // Only the popup reads this list, and the home screen mounts on every visit —
@@ -47,7 +53,7 @@ export function WorktreePicker({
     if (!open || !cwd) return
     let cancelled = false
     void window.api.listWorktrees(cwd).then((list) => {
-      if (!cancelled) setWorktrees(list)
+      if (!cancelled) setLoaded({ cwd, refs: list })
     })
     return () => {
       cancelled = true

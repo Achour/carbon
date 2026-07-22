@@ -94,7 +94,19 @@ export function NewChat(): React.JSX.Element {
   const [permissionMode, setPermissionMode] = React.useState<PermissionModeId>(
     defaults?.permissionMode ?? 'default'
   )
-  const [target, setTarget] = React.useState<WorktreeTarget>({ kind: 'local' })
+  // Scope the worktree choice to the project it was made in. NewChat stays
+  // mounted while the sidebar switches projects, so a bare `target` state would
+  // otherwise carry an existing worktree from project A into project B.
+  const [targetSelection, setTargetSelection] = React.useState<{
+    cwd: string | null
+    target: WorktreeTarget
+  }>({ cwd, target: { kind: 'local' } })
+  const target: WorktreeTarget =
+    targetSelection.cwd === cwd ? targetSelection.target : { kind: 'local' }
+  const setTarget = React.useCallback(
+    (next: WorktreeTarget) => setTargetSelection({ cwd, target: next }),
+    [cwd]
+  )
   // Creating a worktree is a full checkout — it can take seconds on a big repo,
   // and it can fail. Both need to be visible or sending looks like a no-op.
   const [starting, setStarting] = React.useState(false)
