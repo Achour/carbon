@@ -418,6 +418,13 @@ export interface AppDefaults {
   serviceTier?: ServiceTier
   permissionMode: PermissionModeId
   recentDirs: string[]
+  /**
+   * Last effort chosen *per model*, keyed by model id (`''` for a provider's
+   * Default row). Selecting a model restores its remembered effort, so switching
+   * back and forth doesn't force the user to re-pick effort each time. `effort`
+   * above stays the global fallback for a model with no remembered value yet.
+   */
+  modelEfforts?: Record<string, EffortId | ''>
 }
 
 /** A live change to a chat's inference options. */
@@ -455,6 +462,42 @@ export interface ModelOption {
   supportedEfforts?: EffortId[]
   /** Whether this model advertises provider Fast mode; undefined means unknown. */
   supportsFastMode?: boolean
+}
+
+const canonicalModelName = (model?: string): string =>
+  (model ?? '').replace(/\[1m\]$/i, '')
+
+/**
+ * Resolve a stored model id to the picker row that covers it. Older chats can
+ * carry a resolved wire id while the live SDK list exposes an alias.
+ */
+export function canonicalModelId(model: string, options: ModelOption[]): string {
+  if (options.some((option) => option.id === model)) return model
+  const match = options.find(
+    (option) =>
+      option.id !== '' &&
+      (canonicalModelName(option.id) === canonicalModelName(model) ||
+        canonicalModelName(option.resolvedModel) === canonicalModelName(model))
+  )
+  return match ? match.id : model
+}
+
+/**
+ * Read a per-model effort through the same alias/wire-id equivalence used by
+ * the model picker. A direct entry wins when both old and canonical keys exist.
+ */
+export function rememberedEffortForModel(
+  modelEfforts: AppDefaults['modelEfforts'],
+  model: string,
+  options: ModelOption[]
+): EffortId | '' | undefined {
+  const direct = modelEfforts?.[model]
+  if (direct !== undefined) return direct
+  const target = canonicalModelId(model, options)
+  for (const [storedModel, storedEffort] of Object.entries(modelEfforts ?? {})) {
+    if (canonicalModelId(storedModel, options) === target) return storedEffort
+  }
+  return undefined
 }
 
 /** Sentinel model id: use Codex without pinning a model (defer to ~/.codex config). */

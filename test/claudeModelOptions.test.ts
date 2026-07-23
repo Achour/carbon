@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  canonicalModelId,
   claudeModelContextWindow,
   claudeModelLabel,
   claudeModelName,
+  rememberedEffortForModel,
   resolvedModelName
 } from '../src/shared/types.ts'
 
@@ -36,4 +38,26 @@ test('provider default rows can name a resolved Codex model', () => {
   assert.equal(resolvedModelName('gpt-custom'), 'gpt-custom')
   assert.equal(resolvedModelName('claude-3-5-sonnet-20241022'), undefined)
   assert.equal(resolvedModelName(undefined), undefined)
+})
+
+test('per-model effort lookup preserves an explicit provider default', () => {
+  const options = [{ id: 'sonnet', label: 'Sonnet', provider: 'claude' as const }]
+  assert.equal(rememberedEffortForModel({ sonnet: '' }, 'sonnet', options), '')
+  assert.equal(rememberedEffortForModel({}, 'sonnet', options), undefined)
+})
+
+test('per-model effort lookup matches legacy wire ids to SDK aliases', () => {
+  const options = [
+    {
+      id: 'sonnet',
+      label: 'Sonnet',
+      provider: 'claude' as const,
+      resolvedModel: 'claude-sonnet-5[1m]'
+    }
+  ]
+  assert.equal(canonicalModelId('claude-sonnet-5', options), 'sonnet')
+  assert.equal(
+    rememberedEffortForModel({ 'claude-sonnet-5': 'high' }, 'sonnet', options),
+    'high'
+  )
 })

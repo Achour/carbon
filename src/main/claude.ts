@@ -305,6 +305,10 @@ class ClaudeSession implements AgentSession {
   // is in flight, so the error `result` the SDK emits for the aborted turn isn't
   // surfaced as a scary failure. Cleared on the first result after the interrupt.
   private interruptedTurn = false
+  // True from input enqueue until the SDK's terminal result. If the long-lived
+  // stream ends cleanly in between, surface that as a failed turn instead of
+  // silently returning to idle with only the user's message persisted.
+  private turnActive = false
   // Last status emitted, so consecutive duplicates (e.g. interrupt() then the
   // turn's `result` both emitting 'idle') collapse to one — consumers get a
   // clean level-triggered stream and don't each need to edge-detect.
@@ -411,12 +415,13 @@ class ClaudeSession implements AgentSession {
 
   /**
    * Replace the placeholder title with a terse AI summary of the user's opening
-   * message. Fired from send() so it runs in parallel with the first turn (not
-   * after it) — the sidebar shimmers via `title-pending` until it lands. Best-
-   * effort and fire-once: skips manually-renamed and resumed chats.
-   */
+   * message. Fired on the first substantive event from the conversation stream,
+   * after its long-lived process has consumed the prompt; it still overlaps the
+   * rest of the turn. Best-effort and fire-once: skips manually-renamed and
+   * resumed chats.
+  */
   private async maybeGenerateTitle(): Promise<void> {
-    if (this.titledOnce || this.titledResumed || this.chat.titleManual) return
+    if (this.disposed || this.titledOnce || this.titledResumed || this.chat.titleManual) return
     const userText = firstUserText(this.chat.messages)
     if (!userText) return
     this.titledOnce = true
@@ -457,10 +462,9 @@ class ClaudeSession implements AgentSession {
       ...(attachments.length ? { attachments } : {}),
       ...(label ? { label } : {})
     })
-    // Kick off the AI title now so it resolves alongside the turn, not after it.
-    void this.maybeGenerateTitle()
     this.emit({ type: 'meta', chatId: this.chat.id, patch: { updatedAt: this.chat.updatedAt } })
     this.setStatus(this.chat.sessionId ? 'streaming' : 'starting')
+    this.turnActive = true
 
     // Images go to the model as base64 blocks; other files are referenced by
     // path so Claude can Read them itself. Picked UI elements contribute a
@@ -860,8 +864,24 @@ class ClaudeSession implements AgentSession {
           ts: Date.now()
         })
       }
+      // The thrown error above is already the terminal failure for this turn.
+      this.turnActive = false
     } finally {
       this.dead = true
+      if (this.turnActive && !this.disposed && !this.interruptedTurn) {
+        this.pushMessage({
+          id: randomUUID(),
+          role: 'event',
+          kind: 'error',
+          text: 'Claude exited before completing your message. It may not have been processed — please send it again.',
+          ts: Date.now()
+        })
+      }
+      this.turnActive = false
+      // A process that dies before producing a normal result has stopped
+      // competing for startup state, so this is the safe fallback for a turn
+      // that never emitted assistant stream events.
+      void this.maybeGenerateTitle()
       // Unblock any introspection waiting on init if the session died first.
       this.resolveReady()
       // If a newer session already owns this chat id (dispose superseded us),
@@ -969,13 +989,17 @@ class ClaudeSession implements AgentSession {
 
       case 'stream_event': {
         if (msg.parent_tool_use_id) break
+        void this.maybeGenerateTitle()
         this.handleStreamEvent(msg.event)
         break
       }
 
       case 'assistant':
         if (msg.parent_tool_use_id) this.handleSubAgentAssistant(msg.parent_tool_use_id, msg)
-        else this.reconcileAssistant(msg)
+        else {
+          void this.maybeGenerateTitle()
+          this.reconcileAssistant(msg)
+        }
         break
 
       case 'user':
@@ -984,6 +1008,9 @@ class ClaudeSession implements AgentSession {
         break
 
       case 'result': {
+        // Covers valid itemless/silent turns and failures before assistant output.
+        void this.maybeGenerateTitle()
+        this.turnActive = false
         if ('modelUsage' in msg && msg.modelUsage) {
           // modelUsage is cumulative across the (resumed) session and keyed by
           // model name, so after switching models it holds an entry per model
@@ -2098,7 +2125,7 @@ export class ChatManager {
     // Explicit user choices become the defaults for future chats — but a patch
     // the app generated to correct an unsupported value is not one, so it stays
     // scoped to this chat.
-    if (patch.remember !== false) this.store.rememberOptions(patch)
+    if (patch.remember !== false) this.store.rememberOptions(patch, chat.model)
     this.emit({
       type: 'meta',
       chatId,

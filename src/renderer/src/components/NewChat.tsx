@@ -79,6 +79,22 @@ export function NewChat(): React.JSX.Element {
 
   const [model, setModel] = React.useState(defaults?.model ?? '')
   const [effort, setEffort] = React.useState<EffortId | ''>(defaults?.effort ?? '')
+  // Per-model effort memory for this compose session, seeded from the persisted
+  // defaults. Switching models restores each one's last effort (via the
+  // composer); a genuine pick updates the map, keyed by the current model. An
+  // app correction (`remember: false`) applies but isn't recorded.
+  const [modelEfforts, setModelEfforts] = React.useState<Record<string, EffortId | ''>>(
+    defaults?.modelEfforts ?? {}
+  )
+  const changeEffort = (next: EffortId | '', opts?: { remember?: boolean }): void => {
+    setEffort(next)
+    if (opts?.remember === false) return
+    setModelEfforts((prev) => {
+      const map = { ...prev }
+      map[model] = next
+      return map
+    })
+  }
   const [serviceTier, setServiceTier] = React.useState<ServiceTier>(
     defaults?.serviceTier ?? 'standard'
   )
@@ -231,7 +247,8 @@ export function NewChat(): React.JSX.Element {
                   model={model}
                   onModelChange={setModel}
                   effort={effort}
-                  onEffortChange={setEffort}
+                  onEffortChange={changeEffort}
+                  modelEfforts={modelEfforts}
                   serviceTier={serviceTier}
                   onServiceTierChange={changeServiceTier}
                   permissionMode={permissionMode}

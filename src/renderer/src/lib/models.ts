@@ -1,4 +1,11 @@
-import { MODEL_OPTIONS, type ModelOption } from '@shared/types'
+import {
+  MODEL_OPTIONS,
+  canonicalModelId,
+  rememberedEffortForModel,
+  type ModelOption
+} from '@shared/types'
+
+export { canonicalModelId, rememberedEffortForModel }
 
 /**
  * The full model picker list: the SDK-reported Claude models when loaded
@@ -18,22 +25,4 @@ export function assembleModelOptions(
   return dynamicModels.length > 0
     ? [...dynamicModels, ...codexModels]
     : [...MODEL_OPTIONS.filter((option) => option.provider === 'claude'), ...codexModels]
-}
-
-const canonModel = (s?: string): string => (s ?? '').replace(/\[1m\]$/i, '')
-
-/**
- * Resolve a chat's stored model id to the picker row that covers it. A chat
- * pinned to an older static id (e.g. 'claude-sonnet-5') won't equal the SDK's
- * alias value ('sonnet'), so match on `resolvedModel` (ignoring the '[1m]'
- * suffix) to keep the picker highlighted.
- */
-export function canonicalModelId(model: string, options: ModelOption[]): string {
-  if (options.some((o) => o.id === model)) return model
-  const match = options.find(
-    (o) =>
-      o.id !== '' &&
-      (canonModel(o.id) === canonModel(model) || canonModel(o.resolvedModel) === canonModel(model))
-  )
-  return match ? match.id : model
 }

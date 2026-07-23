@@ -241,6 +241,7 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
   const sendMessage = useApp((s) => s.sendMessage)
   const interrupt = useApp((s) => s.interrupt)
   const setChatOptions = useApp((s) => s.setChatOptions)
+  const modelEfforts = useApp((s) => s.defaults?.modelEfforts)
   const renameChat = useApp((s) => s.renameChat)
   const deleteChat = useApp((s) => s.deleteChat)
 
@@ -547,6 +548,7 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
             onModelChange={(model) => void setChatOptions({ model })}
             effort={chat.effort ?? ''}
             onEffortChange={(effort, opts) => void setChatOptions({ effort, ...opts })}
+            modelEfforts={modelEfforts}
             serviceTier={chat.serviceTier ?? 'standard'}
             onServiceTierChange={(serviceTier, opts) =>
               void setChatOptions({ serviceTier, ...opts })

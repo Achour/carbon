@@ -51,30 +51,40 @@ async function waitFor(predicate: () => boolean): Promise<void> {
 class FakeCodex {
   readonly resumeCalls: { id: string; options?: ThreadOptions }[] = []
   readonly startCalls: { options?: ThreadOptions }[] = []
+  runStreamedCalls = 0
   private readonly turns: TurnFactory[]
 
   constructor(turns: TurnFactory[]) {
     this.turns = turns
   }
 
-  private thread(): Thread {
+  private thread(options?: ThreadOptions): Thread {
     return {
       runStreamed: async (input: Input, options?: TurnOptions) => {
+        this.runStreamedCalls += 1
         const turn = this.turns.shift()
         assert.ok(turn, 'Unexpected Codex turn')
         return { events: turn(input, options) }
-      }
+      },
+      // Title generation uses a separate read-only thread. Keep it independent
+      // from the queued conversation factories so tests can assert its timing.
+      run: async () => ({
+        items: [],
+        finalResponse:
+          options?.sandboxMode === 'read-only' ? 'Generated Chat Title' : '',
+        usage: null
+      })
     } as unknown as Thread
   }
 
   resumeThread(id: string, options?: ThreadOptions): Thread {
     this.resumeCalls.push({ id, options })
-    return this.thread()
+    return this.thread(options)
   }
 
   startThread(options?: ThreadOptions): Thread {
     this.startCalls.push({ options })
-    return this.thread()
+    return this.thread(options)
   }
 }
 
@@ -341,6 +351,172 @@ test('missing persisted threads retry the same turn once on a fresh thread', asy
     ),
     true
   )
+  cleanup(h)
+})
+
+test('a terminal-event-less stream retries the same prompt once before any item', async () => {
+  const h = harness(
+    [
+      async function* () {
+        yield { type: 'thread.started', thread_id: 'thread-fresh' }
+      },
+      async function* () {
+        yield {
+          type: 'item.completed',
+          item: { id: 'answer', type: 'agent_message', text: 'Recovered.' }
+        }
+        yield { type: 'turn.completed', usage }
+      }
+    ],
+    { sessionId: undefined, title: '' }
+  )
+
+  h.session.send('Do not lose me')
+  await waitFor(() => h.events.some((event) => event.type === 'status' && event.status === 'idle'))
+
+  assert.equal(h.codex.runStreamedCalls, 2)
+  assert.equal(h.chat.messages.filter((message) => message.role === 'user').length, 1)
+  assert.equal(
+    h.chat.messages.some(
+      (message) =>
+        message.role === 'assistant' &&
+        message.parts.some((part) => part?.type === 'text' && part.text === 'Recovered.')
+    ),
+    true
+  )
+  assert.equal(
+    h.chat.messages.some((message) => message.role === 'event' && message.kind === 'error'),
+    false
+  )
+  cleanup(h)
+})
+
+test('a truncated stream after an item fails loudly without retrying side effects', async () => {
+  const h = harness([
+    async function* () {
+      yield { type: 'thread.started', thread_id: 'thread-1' }
+      yield {
+        type: 'item.started',
+        item: {
+          id: 'cmd-1',
+          type: 'command_execution',
+          command: 'touch changed.txt',
+          aggregated_output: '',
+          status: 'in_progress'
+        }
+      }
+    }
+  ])
+
+  h.session.send('Make a change')
+  await waitFor(() => h.events.some((event) => event.type === 'status' && event.status === 'idle'))
+
+  assert.equal(h.codex.runStreamedCalls, 1)
+  assert.equal(
+    h.chat.messages.some(
+      (message) =>
+        message.role === 'event' &&
+        message.kind === 'error' &&
+        message.text.includes('output above may be incomplete')
+    ),
+    true
+  )
+  const assistant = h.chat.messages.find((message) => message.role === 'assistant')
+  const tool = assistant?.parts.find((part) => part?.type === 'tool')
+  assert.equal(tool?.type === 'tool' ? tool.status : undefined, 'error')
+  cleanup(h)
+})
+
+test('two pre-item truncations report that the prompt was not processed', async () => {
+  const h = harness([
+    async function* () {
+      yield { type: 'thread.started', thread_id: 'thread-1' }
+    },
+    async function* () {}
+  ])
+
+  h.session.send('Retry only once')
+  await waitFor(() => h.events.some((event) => event.type === 'status' && event.status === 'idle'))
+
+  assert.equal(h.codex.runStreamedCalls, 2)
+  assert.equal(
+    h.chat.messages.some(
+      (message) =>
+        message.role === 'event' &&
+        message.kind === 'error' &&
+        message.text.includes('It was not processed')
+    ),
+    true
+  )
+  cleanup(h)
+})
+
+test('AI title generation waits for the first substantive conversation item', async () => {
+  const beforeItem = deferred()
+  const afterItem = deferred()
+  const h = harness(
+    [
+      async function* () {
+        yield { type: 'thread.started', thread_id: 'thread-fresh' }
+        yield { type: 'turn.started' }
+        await beforeItem.promise
+        yield {
+          type: 'item.started',
+          item: {
+            id: 'cmd-1',
+            type: 'command_execution',
+            command: 'git status',
+            aggregated_output: '',
+            status: 'in_progress'
+          }
+        }
+        await afterItem.promise
+        yield {
+          type: 'item.completed',
+          item: {
+            id: 'cmd-1',
+            type: 'command_execution',
+            command: 'git status',
+            aggregated_output: '',
+            exit_code: 0,
+            status: 'completed'
+          }
+        }
+        yield { type: 'turn.completed', usage }
+      }
+    ],
+    { sessionId: undefined, title: '' }
+  )
+
+  h.session.send('Inspect the repository')
+  await waitFor(() => h.codex.runStreamedCalls === 1)
+  assert.equal(h.codex.startCalls.some((call) => call.options?.sandboxMode === 'read-only'), false)
+
+  beforeItem.resolve()
+  await waitFor(() =>
+    h.codex.startCalls.some((call) => call.options?.sandboxMode === 'read-only')
+  )
+  afterItem.resolve()
+  await waitFor(() => h.events.some((event) => event.type === 'status' && event.status === 'idle'))
+  cleanup(h)
+})
+
+test('an itemless completed turn still starts AI title generation', async () => {
+  const h = harness(
+    [
+      async function* () {
+        yield { type: 'thread.started', thread_id: 'thread-fresh' }
+        yield { type: 'turn.completed', usage }
+      }
+    ],
+    { sessionId: undefined, title: '' }
+  )
+
+  h.session.send('A silent request')
+  await waitFor(() =>
+    h.codex.startCalls.some((call) => call.options?.sandboxMode === 'read-only')
+  )
+  await waitFor(() => h.events.some((event) => event.type === 'status' && event.status === 'idle'))
   cleanup(h)
 })
 

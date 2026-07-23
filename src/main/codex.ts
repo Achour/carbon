@@ -284,6 +284,10 @@ export class CodexSession implements AgentSession {
   private titledOnce = false
   private titlePending = false
   private readonly titledResumed: boolean
+  // Per-attempt stream evidence. A clean EOF without a terminal event used to
+  // turn a vanished Codex child into a successful empty turn.
+  private sawItem = false
+  private sawTerminal = false
 
   get idle(): boolean {
     return !this.running && this.pending.length === 0 && this.activeTurn === null && !this.planReview
@@ -398,8 +402,6 @@ export class CodexSession implements AgentSession {
       ...(attachments.length ? { attachments } : {}),
       ...(label ? { label } : {})
     })
-    // Kick off the AI title now so it resolves alongside the turn, not after it.
-    void this.maybeGenerateTitle()
     this.emit({ type: 'meta', chatId: this.chat.id, patch: { updatedAt: this.chat.updatedAt } })
     this.pending.push(this.buildPendingTurn(text, attachments, messageId))
     void this.drain()
@@ -580,7 +582,10 @@ export class CodexSession implements AgentSession {
     const before = await captureWorkspaceTree(this.chat.cwd)
     try {
       let retriedMissingThread = false
+      let retriedTruncatedStream = false
       while (!this.disposed) {
+        this.sawItem = false
+        this.sawTerminal = false
         const resumedThreadId = this.threadId
         const thread = this.ensureThread(turn)
         try {
@@ -588,6 +593,26 @@ export class CodexSession implements AgentSession {
           for await (const event of events) {
             if (this.disposed) break
             this.handleEvent(event, turn)
+          }
+          const truncated =
+            !this.sawTerminal &&
+            !this.disposed &&
+            !this.interrupted &&
+            !this.abort.signal.aborted
+          if (truncated && !this.sawItem && !retriedTruncatedStream) {
+            retriedTruncatedStream = true
+            // Give any contending cold-start process a moment to finish before
+            // resuming this same thread. Recheck cancellation after the wait.
+            await new Promise((resolve) => setTimeout(resolve, 350))
+            if (this.disposed || this.interrupted || this.abort.signal.aborted) break
+            continue
+          }
+          if (truncated) {
+            this.pushError(
+              this.sawItem
+                ? 'Codex ended the turn unexpectedly; the output above may be incomplete.'
+                : 'Codex exited before reading your message. It was not processed — please send it again.'
+            )
           }
           break
         } catch (err) {
@@ -613,6 +638,11 @@ export class CodexSession implements AgentSession {
         }
       }
     } finally {
+      // Normal turns start titling at their first substantive event. This
+      // fallback covers itemless turns, interrupts, and final startup failures
+      // after the conversation process is no longer competing for cold-start
+      // state. It deliberately sits outside the retry loop.
+      void this.maybeGenerateTitle()
       // Event handlers called above populate `current`; TS cannot see mutation
       // through those method calls, so retain the runtime value explicitly.
       const completedMessage = this.current as AssistantMessage | null
@@ -658,12 +688,13 @@ export class CodexSession implements AgentSession {
 
   /**
    * Replace the placeholder title with a terse AI summary of the user's opening
-   * message. Fired from send() so it runs in parallel with the first turn (not
-   * after it) — the sidebar shimmers via `title-pending` until it lands. Best-
-   * effort and fire-once: skips manually-renamed and resumed chats.
-   */
+   * message. Fired once the conversation produces its first substantive event,
+   * proving the prompt made it past cold-start initialization; it still overlaps
+   * the rest of the turn. Best-effort and fire-once: skips manually-renamed and
+   * resumed chats.
+  */
   private async maybeGenerateTitle(): Promise<void> {
-    if (this.titledOnce || this.titledResumed || this.chat.titleManual) return
+    if (this.disposed || this.titledOnce || this.titledResumed || this.chat.titleManual) return
     const userText = firstUserText(this.chat.messages)
     if (!userText) return
     this.titledOnce = true
@@ -752,22 +783,34 @@ export class CodexSession implements AgentSession {
         break
       case 'item.started':
       case 'item.updated':
+        this.sawItem = true
+        void this.maybeGenerateTitle()
         this.upsertItem(event.item, false)
         break
       case 'item.completed':
+        this.sawItem = true
+        void this.maybeGenerateTitle()
         this.upsertItem(event.item, true)
         break
       case 'turn.started':
         break
       case 'turn.completed':
+        this.sawTerminal = true
+        void this.maybeGenerateTitle()
         this.onTurnCompleted(event.usage, turn)
         break
       case 'turn.failed':
+        this.sawTerminal = true
+        void this.maybeGenerateTitle()
         if (!this.disposed && !this.interrupted) {
           this.pushError(event.error?.message ?? 'The turn failed.')
         }
         break
       case 'error':
+        // The SDK defines this as an unrecoverable stream error. Treat it as a
+        // terminal event so the EOF guard does not retry a possibly-consumed turn.
+        this.sawTerminal = true
+        void this.maybeGenerateTitle()
         if (!this.disposed && !this.interrupted) this.pushError(event.message ?? 'Codex error.')
         break
       default:

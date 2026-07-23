@@ -35,7 +35,11 @@ import {
   type SlashCommand
 } from '@shared/types'
 import { cn } from '@/lib/utils'
-import { assembleModelOptions, canonicalModelId } from '@/lib/models'
+import {
+  assembleModelOptions,
+  canonicalModelId,
+  rememberedEffortForModel
+} from '@/lib/models'
 import { useApp } from '@/store'
 import { Button } from '@/components/ui/button'
 import { CompactSelect } from '@/components/ui/select'
@@ -490,6 +494,7 @@ export function Composer({
   onModelChange,
   effort,
   onEffortChange,
+  modelEfforts,
   serviceTier = 'standard',
   onServiceTierChange,
   permissionMode,
@@ -513,6 +518,8 @@ export function Composer({
   effort: EffortId | ''
   /** `remember: false` marks an app-generated correction — see `ChatOptionsPatch`. */
   onEffortChange: (effort: EffortId | '', opts?: { remember?: boolean }) => void
+  /** Last effort chosen per model; selecting a model restores its value. */
+  modelEfforts?: Record<string, EffortId | ''>
   serviceTier?: ServiceTier
   onServiceTierChange?: (serviceTier: ServiceTier, opts?: { remember?: boolean }) => void
   permissionMode: PermissionModeId
@@ -590,6 +597,21 @@ export function Composer({
       )
   const invalidEffort = effort !== '' && !effortOptions.some((option) => option.id === effort)
   const effortValue = invalidEffort ? '' : effort
+  // Selecting a model also restores the effort last used with it, so flipping
+  // between models doesn't force the user to re-pick effort every time. Falls
+  // back to leaving effort as-is when the target model has no remembered value.
+  const handleModelChange = React.useCallback(
+    (next: string) => {
+      onModelChange(next)
+      // `remember: false`: the value is already stored for this model — replaying
+      // it only applies it to the chat, and must not be re-keyed to the model we
+      // just switched away from.
+      const remembered = rememberedEffortForModel(modelEfforts, next, modelOptions)
+      if (remembered !== undefined && remembered !== effort)
+        onEffortChange(remembered, { remember: false })
+    },
+    [onModelChange, onEffortChange, modelEfforts, modelOptions, effort]
+  )
   // The SDK *omits* `supportsFastMode` on models that lack it rather than
   // sending false, so "not true" is the real signal — but it only means
   // anything once the SDK list has loaded. The static fallback carries no
@@ -1003,7 +1025,7 @@ export function Composer({
         <div className="flex min-w-0 flex-1 items-center gap-1">
           <ModelSettingsPicker
             model={selectedModel}
-            onModelChange={onModelChange}
+            onModelChange={handleModelChange}
             models={modelOptions}
             effort={effortValue}
             onEffortChange={onEffortChange}

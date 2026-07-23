@@ -1587,28 +1587,35 @@ export const useApp = create<AppState>((set, get) => ({
     const chatCwd = meta.cwd
     // Starting a chat in a hidden project brings it back into the sidebar.
     if (get().hiddenProjects[cwd]) get().setProjectHidden(cwd, false)
-    set((s) => ({
-      // A brand-new chat has no saved tabs, so this stashes the outgoing chat's
-      // and opens an empty tab set.
-      ...chatSwitchPatch(s, meta.id),
-      selectedCwd: chatCwd,
-      chats: [meta, ...s.chats],
-      activeId: meta.id,
-      messages: [],
-      planPanel: null,
-      settingsOpen: false,
-      panelMaximized: false,
-      defaults: s.defaults
-        ? {
-            ...s.defaults,
-            model: opts?.model,
-            effort: opts?.effort,
-            serviceTier: opts?.serviceTier,
-            permissionMode: opts?.permissionMode ?? s.defaults.permissionMode,
-            recentDirs: [cwd, ...s.defaults.recentDirs.filter((d) => d !== cwd)].slice(0, 8)
-          }
-        : s.defaults
-    }))
+    set((s) => {
+      const modelEfforts = { ...(s.defaults?.modelEfforts ?? {}) }
+      // Main persists the normalized chat model/effort during creation. Mirror
+      // that exact pair so the live renderer cannot restore an older value.
+      modelEfforts[meta.model ?? ''] = meta.effort ?? ''
+      return {
+        // A brand-new chat has no saved tabs, so this stashes the outgoing chat's
+        // and opens an empty tab set.
+        ...chatSwitchPatch(s, meta.id),
+        selectedCwd: chatCwd,
+        chats: [meta, ...s.chats],
+        activeId: meta.id,
+        messages: [],
+        planPanel: null,
+        settingsOpen: false,
+        panelMaximized: false,
+        defaults: s.defaults
+          ? {
+              ...s.defaults,
+              model: meta.model,
+              effort: meta.effort,
+              serviceTier: opts?.serviceTier,
+              permissionMode: opts?.permissionMode ?? s.defaults.permissionMode,
+              recentDirs: [cwd, ...s.defaults.recentDirs.filter((d) => d !== cwd)].slice(0, 8),
+              modelEfforts
+            }
+          : s.defaults
+      }
+    })
     // The new chat keeps whatever panel state was showing when it was created.
     set((s) => panelPatch(s, s.panelOpen))
     get().loadCommands(chatCwd, meta.provider)
@@ -1823,17 +1830,28 @@ export const useApp = create<AppState>((set, get) => ({
     // Mirror the new defaults locally so the next New-chat screen uses them —
     // skipping the same corrections main leaves out of `rememberOptions`.
     if (patch.remember === false) return
-    set((s) => ({
-      defaults: s.defaults
-        ? {
-            ...s.defaults,
-            ...(patch.model !== undefined ? { model: patch.model || undefined } : {}),
-            ...(patch.effort !== undefined ? { effort: patch.effort || undefined } : {}),
-            ...(patch.serviceTier !== undefined ? { serviceTier: patch.serviceTier } : {}),
-            ...(patch.permissionMode ? { permissionMode: patch.permissionMode } : {})
-          }
-        : s.defaults
-    }))
+    set((s) => {
+      if (!s.defaults) return {}
+      // Effort is also remembered per-model (keyed by the model the change
+      // applied to — the patch's own model, or the active chat's) so switching
+      // models can restore each one's last effort. Mirror what main persists.
+      let modelEfforts = s.defaults.modelEfforts
+      if (patch.effort !== undefined) {
+        const key = patch.model ?? s.chats.find((c) => c.id === id)?.model ?? ''
+        modelEfforts = { ...(modelEfforts ?? {}) }
+        modelEfforts[key] = patch.effort
+      }
+      return {
+        defaults: {
+          ...s.defaults,
+          ...(patch.model !== undefined ? { model: patch.model || undefined } : {}),
+          ...(patch.effort !== undefined ? { effort: patch.effort || undefined } : {}),
+          ...(patch.serviceTier !== undefined ? { serviceTier: patch.serviceTier } : {}),
+          ...(patch.permissionMode ? { permissionMode: patch.permissionMode } : {}),
+          modelEfforts
+        }
+      }
+    })
   },
 
   async respondPermission(requestId, decision) {

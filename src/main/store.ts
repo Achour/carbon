@@ -259,18 +259,34 @@ export class Store {
     return this.settings.defaults
   }
 
-  /** Remember the user's last chosen options as the defaults for new chats. */
-  rememberOptions(patch: {
-    model?: string
-    effort?: EffortId | ''
-    serviceTier?: ServiceTier
-    permissionMode?: PermissionModeId
-  }): void {
+  /**
+   * Remember the user's last chosen options as the defaults for new chats.
+   * `currentModel` is the model the effort was chosen under (the chat's model
+   * when the patch itself carries none), so effort can also be remembered
+   * per-model — see `AppDefaults.modelEfforts`.
+   */
+  rememberOptions(
+    patch: {
+      model?: string
+      effort?: EffortId | ''
+      serviceTier?: ServiceTier
+      permissionMode?: PermissionModeId
+    },
+    currentModel?: string
+  ): void {
     const defaults = this.settings.defaults
     if (patch.permissionMode !== undefined) defaults.permissionMode = patch.permissionMode
     if (patch.model !== undefined) defaults.model = patch.model || undefined
     if (patch.effort !== undefined) defaults.effort = patch.effort || undefined
     if (patch.serviceTier !== undefined) defaults.serviceTier = patch.serviceTier
+    if (patch.effort !== undefined) {
+      const key = patch.model !== undefined ? patch.model || '' : currentModel || ''
+      const map = { ...(defaults.modelEfforts ?? {}) }
+      // Empty string is an explicit "use provider default" choice, distinct
+      // from this model having no remembered effort yet.
+      map[key] = patch.effort
+      defaults.modelEfforts = map
+    }
     this.writeSettings()
   }
 
