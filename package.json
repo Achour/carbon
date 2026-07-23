@@ -56,8 +56,8 @@
   },
   "//dependencies": "Only packages the Electron MAIN process require()s at runtime belong here — electron-builder ships exactly the production-dependency tree into the app. The renderer's libraries (react, mermaid, lucide, base-ui, xterm, markdown, fonts, …) are bundled into out/renderer by vite at build time, so they live in devDependencies and are pruned from the package (~200MB). See electron-builder.yml.",
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.215",
-    "@openai/codex-sdk": "^0.144.6",
+    "@anthropic-ai/claude-agent-sdk": "0.3.218",
+    "@openai/codex-sdk": "0.145.0",
     "node-pty": "^1.1.0"
   }
 }
