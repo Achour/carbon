@@ -309,11 +309,19 @@ test('a pending plan is persisted and can be approved by a recreated session', a
     () => {},
     codex as unknown as Codex
   )
-  resumed.respondPermission(review!.requestId, { behavior: 'allow' })
+  resumed.respondPermission(review!.requestId, {
+    behavior: 'allow',
+    model: 'gpt-5.6-terra',
+    effort: 'ultra'
+  })
   await waitFor(() => events.some((event) => event.type === 'status' && event.status === 'idle'))
 
   assert.equal(first.chat.pendingPlanReview, undefined)
   assert.equal(first.chat.permissionMode, 'default')
+  assert.equal(first.chat.model, 'gpt-5.6-terra')
+  assert.equal(first.chat.effort, 'ultra')
+  assert.equal(codex.resumeCalls[0]?.options?.model, 'gpt-5.6-terra')
+  assert.equal(codex.resumeCalls[0]?.options?.modelReasoningEffort, 'ultra')
   resumed.dispose()
   rmSync(first.cwd, { recursive: true, force: true })
 })

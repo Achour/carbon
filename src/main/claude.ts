@@ -20,6 +20,7 @@ import type {
   Attachment,
   BackgroundJob,
   ChatData,
+  ChatMeta,
   ChatOptionsPatch,
   ChatStatus,
   EffortId,
@@ -533,6 +534,17 @@ class ClaudeSession implements AgentSession {
     }
   }
 
+  /** Change reasoning effort for subsequent responses in this live session. */
+  private async setEffort(effort?: EffortId): Promise<void> {
+    try {
+      await this.q.applyFlagSettings({
+        effortLevel: effortForProvider(effort, 'claude') ?? null
+      })
+    } catch (err) {
+      console.error('setEffort failed:', err)
+    }
+  }
+
   /** Stop a single background task; the SDK emits an updated set afterward. */
   async stopBackgroundJob(taskId: string): Promise<void> {
     try {
@@ -725,17 +737,29 @@ class ClaudeSession implements AgentSession {
                 : s
             )
           : undefined
-      // A plan approval may carry the model to implement with ("Build with" in
-      // the plan review). Fire the switch before resolving the approval: both
-      // ride the CLI's stdin, so this ordering has the implementation turn
-      // start on the new model rather than one API call late.
-      if (pending.toolName === 'ExitPlanMode' && decision.model !== undefined) {
-        const next = decision.model || undefined
-        if (next !== this.chat.model) {
-          this.chat.model = next
-          void this.setModel(next)
-          this.emit({ type: 'meta', chatId: this.chat.id, patch: { model: next } })
+      // A plan approval may carry the model and reasoning effort to implement
+      // with. Send both live control requests before resolving approval: they
+      // share the CLI transport, so the continuation starts with these values.
+      if (pending.toolName === 'ExitPlanMode') {
+        const patch: Partial<ChatMeta> = {}
+        if (decision.model !== undefined) {
+          const next = decision.model || undefined
+          if (next !== this.chat.model) {
+            this.chat.model = next
+            void this.setModel(next)
+            patch.model = next
+          }
         }
+        if (decision.effort !== undefined) {
+          const effort = effortForProvider(decision.effort || undefined, 'claude')
+          if (effort !== this.chat.effort) {
+            this.chat.effort = effort
+            void this.setEffort(effort)
+            patch.effort = effort
+          }
+        }
+        if (Object.keys(patch).length > 0)
+          this.emit({ type: 'meta', chatId: this.chat.id, patch })
       }
       pending.resolve({
         behavior: 'allow',

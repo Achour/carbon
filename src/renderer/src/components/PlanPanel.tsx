@@ -1,7 +1,12 @@
 import * as React from 'react'
-import { Check, Sparkles } from 'lucide-react'
+import { Brain, Check, Sparkles } from 'lucide-react'
+import { EFFORT_OPTIONS, type EffortId } from '@shared/types'
 import { cn } from '@/lib/utils'
-import { assembleModelOptions, canonicalModelId } from '@/lib/models'
+import {
+  assembleModelOptions,
+  canonicalModelId,
+  rememberedEffortForModel
+} from '@/lib/models'
 import { Button } from '@/components/ui/button'
 import { CompactSelect } from '@/components/ui/select'
 import { Markdown } from '@/components/Markdown'
@@ -20,11 +25,15 @@ export function PlanContent({
   const chat = useApp((s) => s.chats.find((c) => c.id === s.activeId) ?? null)
   const dynamicModels = useApp((s) => s.models)
   const codexConfigModel = useApp((s) => s.codexConfigModel)
+  const modelEfforts = useApp((s) => s.defaults?.modelEfforts)
   const [feedback, setFeedback] = React.useState('')
   const [autoAccept, setAutoAccept] = React.useState(false)
   const [busy, setBusy] = React.useState(false)
   // The "Build with" pick; null follows the chat's current model ("same model").
   const [buildPick, setBuildPick] = React.useState<string | null>(null)
+  // Null follows the current/per-model remembered effort until the user makes
+  // an explicit implementation-only choice.
+  const [buildEffortPick, setBuildEffortPick] = React.useState<EffortId | '' | null>(null)
 
   const pending = panel.requestId !== null
 
@@ -42,6 +51,55 @@ export function PlanContent({
   )
   const currentModel = chat ? canonicalModelId(chat.model ?? '', buildOptions) : ''
   const buildModel = buildPick ?? currentModel
+  const buildModelOption = buildOptions.find((option) => option.id === buildModel)
+  const resolvedBuildModelOption = buildOptions.find(
+    (option) => option.id === buildModelOption?.resolvedModel
+  )
+  const supportedBuildEfforts = new Set(
+    buildModelOption?.supportedEfforts ??
+      resolvedBuildModelOption?.supportedEfforts ??
+      (chat?.provider === 'codex'
+        ? ['low', 'medium', 'high', 'xhigh']
+        : ['low', 'medium', 'high', 'xhigh', 'max'])
+  )
+  const buildEffortOptions = chat
+    ? EFFORT_OPTIONS.filter(
+        (option) => option.id === '' || supportedBuildEfforts.has(option.id as EffortId)
+      ).map((option) =>
+        option.id === ''
+          ? {
+              ...option,
+              description:
+                chat.provider === 'codex'
+                  ? 'Uses your Codex config'
+                  : 'Uses your Claude Code config'
+            }
+          : option
+      )
+    : []
+  const currentEffort = chat?.effort ?? ''
+  const rememberedBuildEffort = rememberedEffortForModel(
+    modelEfforts,
+    buildModel,
+    buildOptions
+  )
+  const inheritedBuildEffort =
+    buildModel === currentModel ? currentEffort : (rememberedBuildEffort ?? currentEffort)
+  const validInheritedEffort = buildEffortOptions.some(
+    (option) => option.id === inheritedBuildEffort
+  )
+    ? inheritedBuildEffort
+    : ''
+  const buildEffort = buildEffortPick ?? validInheritedEffort
+  const shouldOverrideBuildEffort =
+    chat !== null &&
+    (buildModel !== currentModel || buildEffortPick !== null) &&
+    buildEffort !== currentEffort
+
+  const changeBuildModel = (model: string): void => {
+    setBuildPick(model)
+    setBuildEffortPick(null)
+  }
 
   const approve = (): void => {
     if (!panel.requestId) return
@@ -49,7 +107,8 @@ export function PlanContent({
     void respondPermission(panel.requestId, {
       behavior: 'allow',
       always: autoAccept && hasSuggestions,
-      ...(buildModel !== currentModel ? { model: buildModel } : {})
+      ...(buildModel !== currentModel ? { model: buildModel } : {}),
+      ...(shouldOverrideBuildEffort ? { effort: buildEffort } : {})
     })
   }
 
@@ -88,13 +147,31 @@ export function PlanContent({
                 <span className="text-xs text-muted-foreground/80">Build with</span>
                 <CompactSelect
                   value={buildModel}
-                  onValueChange={setBuildPick}
+                  onValueChange={changeBuildModel}
                   options={buildOptions.map((option) => ({
                     value: option.id,
                     label: option.label,
                     description: option.description
                   }))}
                   icon={<Sparkles className="size-3" />}
+                />
+              </div>
+            )}
+            {chat && (
+              <div
+                className="flex items-center gap-1"
+                title="Reasoning effort used to implement the approved plan"
+              >
+                <span className="text-xs text-muted-foreground/80">Effort</span>
+                <CompactSelect
+                  value={buildEffort}
+                  onValueChange={(effort) => setBuildEffortPick(effort as EffortId | '')}
+                  options={buildEffortOptions.map((option) => ({
+                    value: option.id,
+                    label: option.label,
+                    description: option.description
+                  }))}
+                  icon={<Brain className="size-3" />}
                 />
               </div>
             )}

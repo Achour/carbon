@@ -1437,15 +1437,28 @@ export class CodexSession implements AgentSession {
         const next = decision.model || undefined
         if (next !== this.chat.model) {
           this.chat.model = next
-          // The new model may not advertise the chat's reasoning effort — drop
-          // the override rather than send a value Codex will reject.
-          const supported = MODEL_OPTIONS.find((m) => m.id === next)?.supportedEfforts
-          if (supported && this.chat.effort && !supported.includes(this.chat.effort)) {
-            this.chat.effort = undefined
-          }
           patch.model = next
-          patch.effort = this.chat.effort
         }
+      }
+      // The implementation can use a different reasoning level than planning.
+      // Validate against the selected model even though the renderer already
+      // constrains the menu, since permission decisions cross the IPC boundary.
+      const supported = MODEL_OPTIONS.find((m) => m.id === this.chat.model)?.supportedEfforts
+      if (decision.effort !== undefined) {
+        const requested = decision.effort || undefined
+        this.chat.effort =
+          requested && supported && !supported.includes(requested) ? undefined : requested
+        patch.effort = this.chat.effort
+      } else if (
+        decision.model !== undefined &&
+        supported &&
+        this.chat.effort &&
+        !supported.includes(this.chat.effort)
+      ) {
+        // With no explicit implementation effort, retain the planning effort
+        // when possible and otherwise fall back to the provider configuration.
+        this.chat.effort = undefined
+        patch.effort = undefined
       }
       this.emit({ type: 'meta', chatId: this.chat.id, patch })
       this.pushMessage({

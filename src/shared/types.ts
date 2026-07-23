@@ -273,6 +273,12 @@ export type PermissionDecision =
        * Undefined keeps the model the plan was written with.
        */
       model?: string
+      /**
+       * Plan approvals only: reasoning effort for the implementation turn.
+       * An empty string uses the provider default; undefined keeps the effort
+       * used while writing the plan.
+       */
+      effort?: EffortId | ''
     }
   | { behavior: 'deny'; message?: string }
 
