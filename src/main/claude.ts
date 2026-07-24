@@ -1341,6 +1341,24 @@ class ClaudeSession implements AgentSession {
     this.current = null
   }
 
+  /**
+   * A tool result mutates the assistant message that DECLARED the tool, which is
+   * usually not the live tail — later assistant turns and their user messages have
+   * been appended since. The store's incremental write only re-serializes the
+   * tail, freshly-appended messages, and ones holding a live tool; a tool that was
+   * snapshotted absent (a message persisted mid-stream as thinking-only) and then
+   * streamed in and terminalized while buried matches none of those, so its output
+   * would not reach disk until the next full reconcile — and would be lost on a
+   * hard crash before then. Flag it, the same contract codex.ts uses for late
+   * fileChanges. The tail is always re-serialized anyway, so skip the flag (and its
+   * O(messages) id scan) for it.
+   */
+  private flagBuriedMutation(messageId: string): void {
+    const messages = this.chat.messages
+    const tail = messages[messages.length - 1]
+    if (tail && tail.id !== messageId) this.store.markMessageDirty(this.chat.id, messageId)
+  }
+
   private handleToolResults(message: { content?: unknown }): void {
     const content = message.content
     if (!Array.isArray(content)) return
@@ -1375,6 +1393,7 @@ class ClaudeSession implements AgentSession {
           denied: part.denied
         }
       })
+      this.flagBuriedMutation(loc.message.id)
       this.store.saveChatSoon(this.chat.id)
       // Result applied — the routing entry is dead weight now. A tool's result
       // arrives exactly once, after the assistant message that declared it (and
@@ -1403,6 +1422,7 @@ class ClaudeSession implements AgentSession {
       // Fresh array so the renderer's shallow compare re-renders the card.
       patch: { children: parent.children ? [...parent.children] : [] }
     })
+    this.flagBuriedMutation(messageId)
     this.store.saveChatSoon(this.chat.id)
   }
 
@@ -1495,6 +1515,7 @@ class ClaudeSession implements AgentSession {
       toolUseId,
       patch: { status: 'error', denied: true }
     })
+    this.flagBuriedMutation(loc.message.id)
     this.store.saveChatSoon(this.chat.id)
   }
 
@@ -1997,7 +2018,7 @@ export class ChatManager {
     const live = await this.sessionFor(chatId)?.listModels()
     if (live?.length) return live
     if (this.models) return this.models
-    const folder = this.store.getChat(chatId)?.cwd || cwd
+    const folder = this.store.getMeta(chatId)?.cwd || cwd
     if (!folder) return []
     this.modelWarmup ??= this.warmModels(folder)
       .then((options) => {

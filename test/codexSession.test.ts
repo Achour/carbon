@@ -146,7 +146,8 @@ function harness(
   const saved: string[] = []
   const store = {
     saveChat: (id: string) => saved.push(id),
-    saveChatSoon: (id: string) => saved.push(id)
+    saveChatSoon: (id: string) => saved.push(id),
+    markMessageDirty: () => {}
   } as unknown as Store
   const codex = new FakeCodex(turns)
   let watcher!: FakeRolloutWatcher
@@ -290,7 +291,8 @@ test('a pending plan is persisted and can be approved by a recreated session', a
   const events: ChatEvent[] = []
   const store = {
     saveChat: () => {},
-    saveChatSoon: () => {}
+    saveChatSoon: () => {},
+    markMessageDirty: () => {}
   } as unknown as Store
   const codex = new FakeCodex([
     async function* () {

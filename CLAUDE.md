@@ -52,7 +52,15 @@ Path aliases: `@` → `src/renderer/src`, `@shared` → `src/shared` (renderer a
 
 ### Persistence (`src/main/store.ts`)
 
-JSON files, no database: one file per chat in `userData/chats/<id>.json` plus `settings.json` (defaults, recent dirs, window bounds). `userData` is pinned to `ai-gui` so dev and packaged builds share history (`~/Library/Application Support/ai-gui/`). High-frequency streaming writes go through `saveChatSoon` (800ms debounce); `flushAll` runs on quit. The last explicitly chosen model/effort/permission-mode become the defaults for new chats (`rememberOptions`).
+SQLite (`node:sqlite`, no native dep) in `userData/chats.db`: a `chats` table of metadata, a `messages` table keyed `(chat_id, seq)` where `seq` is the message's index in `chat.messages`, and a `kv` table (migration marker, deletion tombstones). `settings.json` stays a plain file. `userData` is pinned to `ai-gui` so dev and packaged builds share history (`~/Library/Application Support/ai-gui/`); `AIGUI_USERDATA` overrides it for an isolated instance.
+
+**Chats load lazily.** Startup opens the database and reads nothing else — `listChats` is one indexed query over `chats`, and message bodies are hydrated only when a chat is opened. Resident chats are held under a byte budget (`RESIDENT_BUDGET`) with an LRU; evicted ones are tracked by `WeakRef` so **there is at most one `ChatData` per id alive in the process** and `getChat` always returns it. That invariant is load-bearing: provider sessions hold `this.chat` for their whole lifetime and mutate it in place.
+
+The last explicitly chosen model/effort/permission-mode become the defaults for new chats (`rememberOptions`).
+
+**Writes are incremental.** `saveChatSoon` (1.5s trailing debounce, 5s cap) re-serializes only the rows that can have changed — appended-since-last-write, the tail, anything holding a live tool, and anything flagged via `markMessageDirty`. `saveChat` (turn boundaries) and a 30s floor run a full reconcile against what the database actually holds; that pass never DELETEs rows it lacks in memory. `flushAll` on quit writes only chats that were actually mutated.
+
+The legacy `chats/<id>.json` files are imported once and then **never written, moved, or deleted** — so `rm chats.db` rolls back to the pre-migration corpus. They are an *archive, not a live backup*: they stop tracking reality the moment the migration lands. See `store.ts` for the corruption path (salvage the readable rows first, fall back to the archive only if nothing survives).
 
 ### Renderer state (`src/renderer/src/store.ts`)
 

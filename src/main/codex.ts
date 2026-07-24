@@ -679,6 +679,10 @@ export class CodexSession implements AgentSession {
             const fileChanges = await summarizeWorkspaceCheckpoint(checkpoint)
             completedMessage.fileChanges = fileChanges
             this.emit({ type: 'message', chatId: this.chat.id, message: completedMessage })
+            // terminalizeRunning() above already drove every part of this message
+            // terminal, and a later turn can push past it — so the store's
+            // incremental write pass has no way to see this assignment. Flag it.
+            this.store.markMessageDirty(this.chat.id, completedMessage.id)
             this.store.saveChatSoon(this.chat.id)
           }
         }

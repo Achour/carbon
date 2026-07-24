@@ -226,6 +226,7 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
   const status = useApp((s) => s.statuses[chat.id] ?? 'idle')
   // Fall back to a stable constant — a fresh `[]` per render makes zustand's
   // snapshot comparison always fail and loops React into a crash.
+  const lockedElsewhere = useApp((s) => !!s.lockedChats[chat.id])
   const permissions = useApp((s) => s.permissions[chat.id] ?? NO_PERMISSIONS)
   const queued = useApp((s) => s.queued[chat.id] ?? NO_QUEUED)
   const removeQueued = useApp((s) => s.removeQueued)
@@ -432,6 +433,16 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
           </WithTooltip>
         )}
       </header>
+
+      {/* userData is shared between the dev and packaged builds on purpose, so
+          the same chat can be open twice. The other instance owns the write
+          lock; this one still works, it just is not persisting. */}
+      {lockedElsewhere && (
+        <div className="border-b border-amber-500/25 bg-amber-500/10 px-4 py-2 text-xs text-amber-200/90">
+          This chat is open in another Carbon instance, which owns it. Changes made here
+          are <span className="font-medium">not being saved</span>. Close it there, then reopen this chat.
+        </div>
+      )}
 
       {/* Messages */}
       <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto">

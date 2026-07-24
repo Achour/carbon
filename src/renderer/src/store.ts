@@ -150,6 +150,8 @@ interface AppState {
   /** Messages of the active chat. */
   messages: ChatMessage[]
   statuses: Record<string, ChatStatus>
+  /** Chats another Carbon instance owns; edits here are not being saved. */
+  lockedChats: Record<string, true>
   /** Chats whose AI title is being generated right now (sidebar shimmers them). */
   titling: Record<string, boolean>
   /** Live background tasks per chat (SDK reports the full set on each change). */
@@ -657,6 +659,7 @@ export const useApp = create<AppState>((set, get) => ({
   selectedCwd: null,
   messages: [],
   statuses: {},
+  lockedChats: {},
   titling: {},
   backgroundJobs: {},
   rateLimits: {},
@@ -1983,6 +1986,10 @@ export const useApp = create<AppState>((set, get) => ({
         break
       }
 
+      case 'chat-locked': {
+        set((st) => ({ lockedChats: { ...st.lockedChats, [ev.chatId]: true } }))
+        break
+      }
       case 'status': {
         set((st) => ({ statuses: { ...st.statuses, [ev.chatId]: ev.status } }))
         // Any non-idle status means a live session (a new chat's first turn is

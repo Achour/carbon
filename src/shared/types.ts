@@ -407,6 +407,9 @@ export type ChatEvent =
   | { type: 'tool-update'; chatId: string; messageId: string; toolUseId: string; patch: Partial<ToolPart> }
   | { type: 'meta'; chatId: string; patch: Partial<ChatMeta> }
   | { type: 'status'; chatId: string; status: ChatStatus }
+  // Another Carbon instance holds this chat's write lock (userData is shared
+  // between the dev and packaged builds), so edits here will not be saved.
+  | { type: 'chat-locked'; chatId: string }
   | { type: 'permission-request'; chatId: string; request: PermissionRequestPayload }
   | { type: 'permission-resolved'; chatId: string; requestId: string }
   | { type: 'commands'; chatId: string; cwd: string; commands: SlashCommand[] }

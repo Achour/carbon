@@ -92,7 +92,7 @@ function notifyOnStatus(chatId: string, status: string): void {
         ? 'Waiting for your approval'
         : null
   if (!body) return
-  const title = store.getChat(chatId)?.title?.trim() || 'Carbon'
+  const title = store.getMeta(chatId)?.title?.trim() || 'Carbon'
   const n = new Notification({ title, body })
   n.on('click', () => {
     if (!win) return
@@ -411,7 +411,7 @@ function registerIpc(): void {
   ipcMain.handle(
     'chats:delete',
     async (_e, id: string, disposition: WorktreeDisposition = 'keep'): Promise<OpResult> => {
-      const chat = store.getChat(id)
+      const chat = store.getMeta(id)
       const wt = chat?.worktree
       // Release the directory before git touches it — a live provider process
       // holding the cwd makes `git worktree remove` fail on some platforms.
@@ -435,7 +435,7 @@ function registerIpc(): void {
   )
 
   ipcMain.handle('worktree:status', async (_e, chatId: string): Promise<WorktreeStatus | null> => {
-    const chat = store.getChat(chatId)
+    const chat = store.getMeta(chatId)
     if (!chat?.worktree) return null
     return worktreeStatus(chat.cwd, chat.worktree.branch)
   })
@@ -443,7 +443,7 @@ function registerIpc(): void {
   ipcMain.handle('worktree:list', (_e, cwd: string) => listWorktrees(cwd))
 
   ipcMain.handle('worktree:handoff', async (_e, chatId: string): Promise<OpResult> => {
-    const chat = store.getChat(chatId)
+    const chat = store.getMeta(chatId)
     if (!chat?.worktree) return { ok: false, error: 'This chat is not running in a worktree.' }
     // Another chat still working here would lose its directory underneath it.
     if (store.hasOtherChatIn(chat.cwd, chatId)) {
@@ -460,7 +460,7 @@ function registerIpc(): void {
   })
 
   ipcMain.handle('worktree:setup-command', (_e, chatId: string): string | null => {
-    const chat = store.getChat(chatId)
+    const chat = store.getMeta(chatId)
     if (!chat?.worktree) return null
     return setupCommandFor(chat.worktree.repoRoot, chat.cwd)
   })
@@ -640,7 +640,12 @@ app.whenReady().then(() => {
   // AIGUI_USERDATA overrides it — used to run an isolated dev instance without
   // colliding with an installed build's store.
   app.setPath('userData', process.env.AIGUI_USERDATA || join(app.getPath('appData'), 'ai-gui'))
-  store = new Store()
+  store = new Store(app.getPath('userData'), {
+    // Surfaced rather than silently dropped: the user's turn is still in
+    // memory and on screen, it just cannot be written while the other
+    // instance owns the chat.
+    onLockDenied: (chatId) => emit({ type: 'chat-locked', chatId })
+  })
   preview = new PreviewManager(emitPreview, sendPreviewCommand)
   manager = new ChatManager(store, emit, preview)
   terminals = new TerminalManager(emitTerminal)
