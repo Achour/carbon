@@ -515,7 +515,8 @@ export const CODEX_DEFAULT_MODEL = 'codex-default'
 export const MODEL_OPTIONS: ModelOption[] = [
   { id: '', label: 'Default', description: 'Your Claude Code default', provider: 'claude' },
   { id: 'claude-fable-5', label: 'Fable 5', description: 'Most intelligent', provider: 'claude' },
-  { id: 'claude-opus-4-8', label: 'Opus 4.8', description: 'Powerful all-rounder', provider: 'claude' },
+  { id: 'claude-opus-5', label: 'Opus 5', description: 'Powerful all-rounder', provider: 'claude' },
+  { id: 'claude-opus-4-8', label: 'Opus 4.8', description: 'Previous Opus', provider: 'claude' },
   { id: 'claude-sonnet-5', label: 'Sonnet 5', description: 'Fast and capable', provider: 'claude' },
   { id: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5', description: 'Fastest', provider: 'claude' },
   { id: 'codex-default', label: 'Codex (default)', description: 'Model from your Codex config', provider: 'codex' },
