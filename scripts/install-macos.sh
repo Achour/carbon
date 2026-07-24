@@ -12,7 +12,12 @@ STAMP=$(date +%Y%m%d-%H%M%S)
 
 [ -d "$SRC" ] || { echo "No build at $SRC — run 'npm run package' first." >&2; exit 1; }
 
-if pgrep -f "$DST/Contents/MacOS/Carbon" >/dev/null 2>&1; then
+# `ps`, not `pgrep`. pgrep -f cannot see Carbon's main process at all — it reads
+# argv via KERN_PROCARGS2, which the hardened runtime refuses for a signed app
+# bundle, so every pattern silently returns nothing and the guard waves the
+# install straight through while the app is running. `comm` comes from the
+# kernel's proc table and is always readable.
+if ps -Ao comm | grep -qxF "$DST/Contents/MacOS/Carbon"; then
   echo "Carbon is still running. Quit it (Cmd-Q) and run this again." >&2
   echo "Quitting cleanly matters: it checkpoints the WAL and releases the chat locks." >&2
   exit 1
