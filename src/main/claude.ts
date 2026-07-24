@@ -1586,8 +1586,15 @@ export class ChatManager {
 
   /**
    * Fetches the slash-command list for a folder without a chat: it starts the
-   * agent, reads the commands at init, and closes — no user message is sent, so
+   * agent, asks for the commands, and closes — no user message is sent, so
    * there's no model turn or token cost. Result is cached and pushed to the UI.
+   *
+   * `supportedCommands` is a control request the SDK answers without a turn, so
+   * like warmModels this must NOT wait for the `init` message: the CLI only
+   * emits `init` once a turn begins, and a session that never takes one hangs
+   * here forever — leaving the composer's / menu permanently empty. The setting
+   * sources stay, unlike warmModels: project and local settings are exactly
+   * where a folder's custom commands and skills come from.
    */
   private warmCommands(cwd: string): Promise<SlashCommand[]> {
     const inflight = this.warmups.get(cwd)
@@ -1604,21 +1611,16 @@ export class ChatManager {
         }
       })
       try {
-        for await (const msg of q) {
-          if (msg.type === 'system' && msg.subtype === 'init') {
-            const raw = await q.supportedCommands()
-            const commands: SlashCommand[] = raw.map((c) => ({
-              name: c.name,
-              description: c.description,
-              argumentHint: c.argumentHint || undefined,
-              aliases: c.aliases
-            }))
-            this.commandsByCwd.set(cwd, commands)
-            this.emit({ type: 'commands', chatId: '', cwd, commands })
-            return commands
-          }
-        }
-        return []
+        const raw = await q.supportedCommands()
+        const commands: SlashCommand[] = raw.map((c) => ({
+          name: c.name,
+          description: c.description,
+          argumentHint: c.argumentHint || undefined,
+          aliases: c.aliases
+        }))
+        this.commandsByCwd.set(cwd, commands)
+        this.emit({ type: 'commands', chatId: '', cwd, commands })
+        return commands
       } catch {
         return []
       } finally {
@@ -1637,7 +1639,7 @@ export class ChatManager {
 
   /**
    * Reads the model list off a throwaway agent process. `supportedModels` is a
-   * control request the SDK answers without a turn, so unlike warmCommands this
+   * control request the SDK answers without a turn, so like warmCommands this
    * never waits for the `init` message — and deliberately loads no setting
    * sources: the list is account-level, and skipping settings keeps the project's
    * SessionStart hooks (which can be slow, or stall) out of the path.
