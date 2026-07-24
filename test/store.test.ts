@@ -629,6 +629,84 @@ test('an instance that never contended still cannot replay a stale view after ha
   rmSync(dir, { recursive: true, force: true })
 })
 
+test('a streamed message row protects itself even when the chat meta never changed', async () => {
+  // Reported repro: rev only advanced on META writes, so a streaming pass that
+  // wrote message rows alone left rev unchanged — and a stale view could then
+  // overwrite the streamed message. ["m0","streamed-after-b-opened"] became
+  // ["m0","from-b"].
+  const dir = userDir()
+  const a = new Store(dir, { instanceId: 'A', saveDelayMs: 5 })
+  const chat = makeChat({ id: 'stream1', updatedAt: 1000 })
+  a.addChat(chat)
+  chat.messages.push(userMsg('m0', 'first'))
+  a.saveChat('stream1')
+
+  const denied: string[] = []
+  const b = new Store(dir, { instanceId: 'B', onLockDenied: (id) => denied.push(id) })
+  const bView = b.getChat('stream1')!
+  assert.equal(bView.messages.length, 1)
+
+  // A streams another message WITHOUT touching updatedAt — a tool completing or
+  // a part landing looks exactly like this, so the meta JSON is byte-identical.
+  // saveChatSoon, not saveChat: the turn-boundary path always rewrites meta (and
+  // so always bumps rev), which is precisely what hides this bug.
+  chat.messages.push(userMsg('streamed-after-b-opened', 'streamed'))
+  a.saveChatSoon('stream1')
+  await new Promise((r) => setTimeout(r, 40))
+  assert.equal(rowCount(dir, 'stream1'), 2, 'the streamed row must have landed')
+
+  // A crashes: no flushAll, so the claim is orphaned. Age it past staleness.
+  const db = new DatabaseSync(join(dir, 'chats.db'))
+  db.prepare('UPDATE locks SET heartbeat = ? WHERE chat_id = ?').run(Date.now() - 120_000, 'stream1')
+  db.close()
+
+  // B takes the now-stale lock and writes its pre-stream view.
+  bView.messages.push(userMsg('from-b', 'stale replay'))
+  b.saveChat('stream1')
+
+  assert.deepEqual(denied, ['stream1'], 'B must be told its view is stale')
+  const finalIds = [0, 1].map((i) => JSON.parse(bodyAt(dir, 'stream1', i) ?? '{}').id)
+  assert.deepEqual(
+    finalIds,
+    ['m0', 'streamed-after-b-opened'],
+    'the streamed message must survive; B must not overwrite it'
+  )
+  await b.flushAll()
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('a deletion refreshes the backup, so a rebuild does not resurrect the chat', async () => {
+  // Reported repro: deleteChat did not mark the backup stale, so a clean quit
+  // skipped the snapshot and a later rebuild restored the deleted chat from a
+  // backup taken before the deletion.
+  const dir = userDir()
+  const store = new Store(dir)
+  const keep = makeChat({ id: 'keep' })
+  store.addChat(keep)
+  keep.messages.push(userMsg('k0', 'keep me'))
+  store.saveChat('keep')
+  const doomed = makeChat({ id: 'doomed' })
+  store.addChat(doomed)
+  doomed.messages.push(userMsg('d0', 'delete me'))
+  store.saveChat('doomed')
+  await store.flushAll() // backup #1 — contains 'doomed'
+
+  const second = new Store(dir)
+  second.deleteChat('doomed')
+  await second.flushAll() // must take backup #2, without 'doomed'
+
+  // Total loss of the live database.
+  writeFileSync(join(dir, 'chats.db'), Buffer.from('not a sqlite file'))
+  rmSync(join(dir, 'chats.db-wal'), { force: true })
+  rmSync(join(dir, 'chats.db-shm'), { force: true })
+
+  const rebuilt = new Store(dir)
+  assert.equal(rebuilt.getChat('doomed'), null, 'a deleted chat must stay deleted')
+  assert.ok(rebuilt.getChat('keep'), 'the surviving chat must still come back')
+  await rebuilt.flushAll()
+  rmSync(dir, { recursive: true, force: true })
+})
+
 test('a lock left behind by a crashed instance goes stale and can be taken over', async () => {
   const dir = userDir()
   const owner = new Store(dir, { instanceId: 'crashed' })
@@ -652,6 +730,209 @@ test('a lock left behind by a crashed instance goes stale and can be taken over'
   next.saveChat('orphaned')
   assert.equal(rowCount(dir, 'orphaned'), 2, 'the new instance must be able to write')
   await next.flushAll()
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('the bounded reconcile still catches an unflagged mutation, via its rotating cursor', async () => {
+  // The reconcile no longer re-serializes the whole chat on every pass (that was
+  // ~40 ms on the main thread for a big chat). It checks the tail plus a
+  // rotating window — so the safety net must still close, just over several
+  // passes rather than one. A message far from the tail, mutated with nothing to
+  // flag it, has to reach disk eventually.
+  const dir = userDir()
+  const store = new Store(dir)
+  const chat = makeChat()
+  store.addChat(chat)
+  for (let i = 0; i < 300; i++) chat.messages.push(userMsg(`m${i}`, `body ${i}`))
+  store.saveChat(chat.id)
+  await store.flushAll()
+
+  const reopened = new Store(dir)
+  const loaded = reopened.getChat(chat.id)!
+  // Index 5: far outside the tail window, and nothing marks it dirty.
+  ;(loaded.messages[5] as { text: string }).text = 'edited behind the predicate'
+  let caught = false
+  for (let pass = 0; pass < 400 && !caught; pass++) {
+    loaded.updatedAt = 5000 + pass
+    reopened.saveChat(chat.id)
+    caught = JSON.parse(bodyAt(dir, chat.id, 5) ?? '{}').text === 'edited behind the predicate'
+  }
+  assert.ok(caught, 'the rotating cursor must eventually reach every message')
+  await reopened.flushAll()
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('a thorough pass on quit verifies the whole chat in one go', async () => {
+  const dir = userDir()
+  const store = new Store(dir)
+  const chat = makeChat()
+  store.addChat(chat)
+  for (let i = 0; i < 300; i++) chat.messages.push(userMsg(`m${i}`, `body ${i}`))
+  store.saveChat(chat.id)
+  await store.flushAll()
+
+  const reopened = new Store(dir)
+  const loaded = reopened.getChat(chat.id)!
+  ;(loaded.messages[7] as { text: string }).text = 'edited before quit'
+  loaded.updatedAt = 9999
+  // The contract every session follows: mutate, then ask for a save. That
+  // incremental pass cannot see index 7 (not the tail, no live tool, unflagged),
+  // so only the thorough pass on quit can persist it.
+  reopened.saveChatSoon(chat.id)
+  assert.notEqual(
+    JSON.parse(bodyAt(dir, chat.id, 7) ?? '{}').text,
+    'edited before quit',
+    'precondition: the incremental pass must NOT have caught it'
+  )
+  await reopened.flushAll()
+  assert.equal(
+    JSON.parse(bodyAt(dir, chat.id, 7) ?? '{}').text,
+    'edited before quit',
+    'quit must not leave an unflagged mutation unwritten'
+  )
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('a mutation missed by a bounded pass is still caught at quit, and survives a restart', async () => {
+  // Reported repro: a routine reconcile misses an index outside its window but
+  // succeeds, so the chat leaves `dirty`; quit then only thorough-checked dirty
+  // chats, and index 7 reverted after restart.
+  const dir = userDir()
+  const store = new Store(dir)
+  const chat = makeChat()
+  store.addChat(chat)
+  // Big enough that RECONCILE_VERIFY_BYTES cannot cover the whole chat in one
+  // pass — otherwise the "bounded" window is the entire chat and nothing is
+  // ever missed.
+  const filler = 'x'.repeat(20_000)
+  for (let i = 0; i < 200; i++) chat.messages.push(userMsg(`m${i}`, `${i}:${filler}`))
+  store.saveChat(chat.id)
+  await store.flushAll()
+
+  const second = new Store(dir)
+  const loaded = second.getChat(chat.id)!
+  // Advance the rotating cursor past index 7 before mutating it.
+  loaded.updatedAt = 4241
+  second.saveChat(chat.id)
+
+  ;(loaded.messages[7] as { text: string }).text = 'edited behind the predicate'
+  loaded.updatedAt = 4242
+  // One routine save. It succeeds and clears `dirty` — but its bounded window
+  // does not include index 7.
+  second.saveChat(chat.id)
+  assert.notEqual(
+    JSON.parse(bodyAt(dir, chat.id, 7) ?? '{}').text,
+    'edited behind the predicate',
+    'precondition: the bounded pass must have missed it'
+  )
+  await second.flushAll()
+
+  const third = new Store(dir)
+  assert.equal(
+    (third.getChat(chat.id)!.messages[7] as { text: string }).text,
+    'edited behind the predicate',
+    'the mutation must survive the restart, not revert'
+  )
+  await third.flushAll()
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('a metadata-only change reaches the backup', async () => {
+  // Reported repro: writeMeta did not mark the backup stale, so a rename (or a
+  // resumed sessionId, or a cwd move) was restored as its old value.
+  const dir = userDir()
+  const store = new Store(dir)
+  const chat = makeChat({ id: 'meta1', title: 'original title' })
+  store.addChat(chat)
+  chat.messages.push(userMsg('m0', 'body'))
+  store.saveChat('meta1')
+  await store.flushAll() // backup #1 — holds "original title"
+
+  const second = new Store(dir)
+  const live = second.getChat('meta1')!
+  live.title = 'renamed after the first backup'
+  live.sessionId = 'resumed-session-id'
+  live.updatedAt = 8888
+  second.saveChat('meta1')
+  await second.flushAll() // must refresh the backup for a meta-only change
+
+  writeFileSync(join(dir, 'chats.db'), Buffer.from('not a sqlite file'))
+  rmSync(join(dir, 'chats.db-wal'), { force: true })
+  rmSync(join(dir, 'chats.db-shm'), { force: true })
+
+  const rebuilt = new Store(dir)
+  const meta = rebuilt.getMeta('meta1')
+  assert.equal(meta?.title, 'renamed after the first backup', 'the rename must survive')
+  assert.equal(meta?.sessionId, 'resumed-session-id', 'the sessionId must survive')
+  await rebuilt.flushAll()
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('eviction fully verifies, so a collected chat cannot lose an unflagged mutation', async () => {
+  // Reported repro: `unverified` held ids, not strong references, so an evicted
+  // chat could be garbage-collected before quit — and flushAll cannot rehydrate
+  // an in-memory mutation from an object that no longer exists. Eviction is the
+  // last moment the object is guaranteed reachable, so it must verify in full.
+  const dir = userDir()
+  const store = new Store(dir, { residentBudget: 1 })
+  const chat = makeChat({ id: 'evictee' })
+  store.addChat(chat)
+  const filler = 'x'.repeat(20_000)
+  for (let i = 0; i < 200; i++) chat.messages.push(userMsg(`m${i}`, `${i}:${filler}`))
+  store.saveChat('evictee')
+
+  // Advance the rotating cursor past index 7, then mutate it with nothing to
+  // flag it — the case a bounded pass is designed to skip.
+  chat.updatedAt = 10
+  store.saveChat('evictee')
+  ;(chat.messages[7] as { text: string }).text = 'edited behind the predicate'
+  chat.updatedAt = 11
+  store.saveChat('evictee')
+
+  // Force the eviction. The write it performs must be thorough.
+  store.addChat(makeChat())
+  await new Promise((r) => setImmediate(r))
+
+  assert.equal(
+    JSON.parse(bodyAt(dir, 'evictee', 7) ?? '{}').text,
+    'edited behind the predicate',
+    'the mutation must be durable BEFORE the strong reference is dropped'
+  )
+  await store.flushAll()
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('a real GC of an evicted chat loses nothing (forced --expose-gc)', () => {
+  // The reported reproduction, run for real: evict, drop every reference, force
+  // a collection, then quit. Anything only in memory at eviction time is gone.
+  const dir = userDir()
+  const storePath = fileURLToPath(new URL('../src/main/store.ts', import.meta.url))
+  const script = join(dir, 'gc.mjs')
+  writeFileSync(
+    script,
+    `import { Store } from ${JSON.stringify(storePath)}
+const store = new Store(${JSON.stringify(dir)}, { residentBudget: 1 })
+let chat = { id: 'gc-me', title: 'g', cwd: '/tmp', provider: 'claude', permissionMode: 'default', createdAt: 1, updatedAt: 1, messages: [] }
+store.addChat(chat)
+const filler = 'x'.repeat(20000)
+for (let i = 0; i < 200; i++) chat.messages.push({ id: 'm' + i, role: 'user', text: i + ':' + filler, ts: i })
+store.saveChat('gc-me')
+chat.updatedAt = 10; store.saveChat('gc-me')          // advance the rotating cursor
+chat.messages[7].text = 'edited behind the predicate'  // nothing flags this
+chat.updatedAt = 11; store.saveChat('gc-me')
+store.addChat({ id: 'other', title: 'o', cwd: '/tmp', provider: 'claude', permissionMode: 'default', createdAt: 1, updatedAt: 1, messages: [] })
+await new Promise((r) => setImmediate(r))              // eviction runs here
+chat = null                                            // drop the last strong ref
+global.gc(); global.gc()
+await store.flushAll()
+const check = new Store(${JSON.stringify(dir)})
+const got = check.getChat('gc-me').messages[7].text
+console.log('RESULT:' + (got === 'edited behind the predicate' ? 'persisted' : 'LOST:' + got.slice(0, 20)))
+await check.flushAll()
+`
+  )
+  const child = spawnSync(process.execPath, ['--expose-gc', script], { encoding: 'utf8' })
+  assert.match(child.stdout, /RESULT:persisted/, `expected persistence, got: ${child.stdout} ${child.stderr}`)
   rmSync(dir, { recursive: true, force: true })
 })
 

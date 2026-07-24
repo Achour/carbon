@@ -78,6 +78,15 @@ const RESIDENT_BUDGET = 64 * 1024 * 1024
 const RECONCILE_FLOOR_MS = 30_000
 
 /**
+ * How much of a chat one non-thorough reconcile may re-serialize. The tail is
+ * always checked; the rest is covered by a rotating cursor across passes, so the
+ * safety net stays sound while no single pass stalls the main thread for the
+ * size of the whole chat.
+ */
+const RECONCILE_TAIL = 8
+const RECONCILE_VERIFY_BYTES = 512 * 1024
+
+/**
  * Injected the way worktree.ts injects its clock and codex.ts its SDK factory:
  * so the residency and debounce behaviour can be exercised by `node --test`
  * without waiting seconds or allocating megabytes.
@@ -216,6 +225,8 @@ interface Resident {
   rev: number
   /** Set once writes are refused; cleared only by a fresh hydrate. */
   refused: boolean
+  /** Rotating position for the bounded reconcile's verification window. */
+  scanCursor: number
 }
 
 /** Thrown when a write would overwrite another instance's newer state. */
@@ -266,6 +277,15 @@ export class Store {
   private held = new Set<string>()
   /** Chats we have already reported as locked, so the UI is told once. */
   private denied = new Set<string>()
+  /**
+   * Chats written this session whose whole contents have NOT been verified
+   * against disk since. A bounded reconcile checks the tail plus a rotating
+   * window, and an incremental pass checks even less — so a mutation outside
+   * that window can be durable-looking (the chat leaves `dirty`) while still
+   * absent from the database. Quit thorough-checks this set as well as `dirty`,
+   * which is what stops such a mutation reverting on the next launch.
+   */
+  private unverified = new Set<string>()
   private onLockDenied?: (chatId: string) => void
   private heartbeat: NodeJS.Timeout | null = null
   private backupPath: string
@@ -286,6 +306,9 @@ export class Store {
   private upsertChat!: StatementSync
   private upsertMsg!: StatementSync
   private selRev!: StatementSync
+  private selLens!: StatementSync
+  private selSeqs!: StatementSync
+  private selBody!: StatementSync
 
   constructor(userDataDir: string, opts: StoreOptions = {}) {
     this.budget = opts.residentBudget ?? RESIDENT_BUDGET
@@ -360,7 +383,13 @@ export class Store {
     let old: DatabaseSync | null = null
     try {
       old = new DatabaseSync(fromPath, { readOnly: true })
-      const insKv = into.prepare('INSERT OR REPLACE INTO kv (k, v) VALUES (?, ?)')
+      // OR IGNORE in gap-fill mode: the newer source's kv (tombstones above all)
+      // must win, or restoring from an older backup would undo deletions.
+      const insKv = into.prepare(
+        onlyMissing
+          ? 'INSERT OR IGNORE INTO kv (k, v) VALUES (?, ?)'
+          : 'INSERT OR REPLACE INTO kv (k, v) VALUES (?, ?)'
+      )
       try {
         for (const raw of old.prepare('SELECT k, v FROM kv').all()) {
           const row = raw as unknown as { k: string; v: string }
@@ -385,6 +414,14 @@ export class Store {
         // A chat already recovered from the newer source wins; the backup only
         // fills what that source could not produce.
         if (present.has(c.id)) continue
+        // And never resurrect a chat the user deleted: the tombstone recorded at
+        // deletion outranks any backup taken before it.
+        if (onlyMissing) {
+          const tomb = into.prepare('SELECT v FROM kv WHERE k = ?').get(`tomb:${c.id}`) as
+            | { v: string }
+            | undefined
+          if (tomb) continue
+        }
         try {
           into.exec('BEGIN IMMEDIATE')
           insChat.run(c.id, c.updated_at, c.cwd, c.meta)
@@ -490,6 +527,14 @@ export class Store {
        RETURNING rev`
     )
     this.selRev = this.db.prepare('SELECT rev FROM chats WHERE id = ?')
+    this.selLens = this.db.prepare(
+      'SELECT seq, length(body) AS n FROM messages WHERE chat_id = ? ORDER BY seq'
+    )
+    // Covering: messages_pk is (chat_id, seq), so this answers "which rows
+    // exist" straight from the index without touching a single body page —
+    // the difference between a ~20 ms scan of a 34 MB chat and a ~1 ms one.
+    this.selSeqs = this.db.prepare('SELECT seq FROM messages WHERE chat_id = ? ORDER BY seq')
+    this.selBody = this.db.prepare('SELECT body FROM messages WHERE chat_id = ? AND seq = ?')
     // A true upsert, not INSERT OR REPLACE: on a rowid table the latter would
     // delete and reinsert, churning the heap on every streaming tail write.
     this.upsertMsg = this.db.prepare(
@@ -594,6 +639,7 @@ export class Store {
   }
 
   private kvSet(key: string, value: string): void {
+    this.backupDue = true
     this.db.prepare('INSERT INTO kv (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v')
       .run(key, value)
   }
@@ -778,7 +824,8 @@ export class Store {
       needsFull: false,
       corrupt,
       rev: this.diskRev(chat.id),
-      refused: false
+      refused: false,
+      scanCursor: 0
     }
     for (let i = 0; i < chat.messages.length; i++) {
       if (hasLiveTool(chat.messages[i])) entry.watched.add(i)
@@ -821,7 +868,14 @@ export class Store {
     for (const [id, entry] of order) {
       if (total <= this.budget) return
       if (this.dirty.has(id)) continue
-      this.writeChat(id, true)
+      // THOROUGH, not bounded: this is the last moment the chat is guaranteed
+      // reachable. After the strong ref goes, only a WeakRef remains, and a
+      // collected object cannot be re-verified at quit — so an older unflagged
+      // mutation that a bounded pass skipped would be lost outright.
+      if (!this.writeChat(id, true, true)) continue
+      // Still not fully on disk (a refused or failed write): keep it resident
+      // rather than trade correctness for memory.
+      if (this.unverified.has(id)) continue
       this.resident.delete(id)
       this.evicted.set(id, new WeakRef(entry.chat))
       this.stats.evictions++
@@ -995,6 +1049,7 @@ export class Store {
     this.firstDirtyAt.delete(id)
     const forget = (): void => {
       this.dirty.delete(id)
+      this.unverified.delete(id)
       this.resident.delete(id)
       this.evicted.delete(id)
       this.sizes.delete(id)
@@ -1018,6 +1073,10 @@ export class Store {
       0
     try {
       this.tx(() => {
+        // A deletion is a change the backup must capture: without this the next
+        // clean quit skips the snapshot, and a later rebuild restores the chat
+        // the user deleted from a backup that predates the deletion.
+        this.backupDue = true
         this.db.prepare('DELETE FROM messages WHERE chat_id = ?').run(id)
         this.db.prepare('DELETE FROM chats WHERE id = ?').run(id)
         this.db.prepare('DELETE FROM locks WHERE chat_id = ?').run(id)
@@ -1133,6 +1192,10 @@ export class Store {
       json
     ) as { rev?: number } | undefined
     this.stats.metaWrites++
+    // Metadata is data: a rename, a resumed sessionId, a cwd move. Without this
+    // a meta-only change never triggers a snapshot, and a rebuild restores the
+    // stale value from a backup taken before it.
+    this.backupDue = true
     return { json, rev: Number(row?.rev ?? 0) }
   }
 
@@ -1166,6 +1229,27 @@ export class Store {
     }
   }
 
+  /**
+   * Advance `rev` for a chat whose MESSAGE rows changed but whose meta did not.
+   * Streaming is exactly this shape — a tool completing, or a part landing, with
+   * `updatedAt` unchanged — and without this the row write is invisible to the
+   * stale-view check, so another instance holding an older view could overwrite
+   * it the moment it acquired the lock.
+   */
+  private bumpRev(id: string): number {
+    this.backupDue = true
+    const row = this.db
+      .prepare('UPDATE chats SET rev = rev + 1 WHERE id = ? RETURNING rev')
+      .get(id) as { rev?: number } | undefined
+    return Number(row?.rev ?? 0)
+  }
+
+  /** One stored body, fetched only for rows inside the verification window. */
+  private bodyOf(chatId: string, seq: number): string | null {
+    const row = this.selBody.get(chatId, seq) as { body: string } | undefined
+    return row?.body ?? null
+  }
+
   /** The rev currently on disk, or -1 when the chat has no row yet. */
   private diskRev(id: string): number {
     const row = this.selRev.get(id) as { rev?: number } | undefined
@@ -1178,18 +1262,21 @@ export class Store {
     this.backupDue = true
   }
 
-  private writeChat(id: string, full: boolean): void {
-    if (this.closed) return
+  private writeChat(id: string, full: boolean, thorough = false): boolean {
+    if (this.closed) return false
     const entry = this.entryFor(id)
-    if (!entry) return
+    if (!entry) return false
     // Another live instance owns this chat. Refusing is the whole point: writing
     // anyway would upsert our messages over theirs at the same (chat_id, seq).
     // The chat stays fully usable in memory — it just does not reach disk — and
     // the UI is told once so the user is not silently losing the turn.
     // Already told the user this chat is not being saved here; a fresh hydrate
     // is the only thing that clears it. Retrying would just churn.
-    if (entry.refused) return
-    if (!this.acquire(id)) return this.refuse(id, entry, 'is open in another Carbon instance')
+    if (entry.refused) return false
+    if (!this.acquire(id)) {
+      this.refuse(id, entry, 'is open in another Carbon instance')
+      return false
+    }
     this.denied.delete(id)
     if (entry.needsFull || Date.now() - entry.reconciledAt >= RECONCILE_FLOOR_MS) full = true
     try {
@@ -1201,12 +1288,14 @@ export class Store {
         // owner's changes landed, silently replacing them.
         const onDisk = this.diskRev(id)
         if (entry.rev >= 0 && onDisk >= 0 && onDisk !== entry.rev) throw new StaleView()
-        return full ? this.reconcile(entry) : this.writeIncremental(entry)
+        return full ? this.reconcile(entry, thorough) : this.writeIncremental(entry)
       })
       this.dirty.delete(id)
+      return true
     } catch (err) {
       if (err instanceof StaleView) {
-        return this.refuse(id, entry, 'changed in another Carbon instance since it was opened here')
+        this.refuse(id, entry, 'changed in another Carbon instance since it was opened here')
+        return false
       }
       // reconcile()/writeIncremental() advance the in-memory baseline (bodies,
       // persisted, reconciledAt) inside the tx body, before COMMIT. A COMMIT that
@@ -1216,7 +1305,13 @@ export class Store {
       // a full reconcile, which reads what the database actually holds and
       // rewrites anything that differs; and keep the chat in `dirty` so it retries.
       entry.needsFull = true
+      // The rollback also reverted `rev` on disk, while the in-memory copy was
+      // advanced inside the tx. Resync to disk truth, or the next write would
+      // mistake our own rolled-back bump for another instance's change and
+      // refuse to save — turning a transient I/O error into a dead chat.
+      entry.rev = this.diskRev(id)
       console.error('Failed to save chat:', err)
+      return false
     }
   }
 
@@ -1233,28 +1328,38 @@ export class Store {
 
   private writeIncremental(entry: Resident): void {
     const { chat } = entry
+    let metaWritten = false
     if (JSON.stringify(metaOf(chat)) !== entry.metaJson) {
       const written = this.writeMeta(chat)
       entry.metaJson = written.json
       entry.rev = written.rev
+      metaWritten = true
     }
     const indices = this.candidateRows(entry)
     const kept = new Map<number, string>()
+    let wroteRows = false
     for (const i of indices) {
       const body = JSON.stringify(chat.messages[i])
       const previous = entry.bodies.get(i)
       if (body !== previous) {
         this.putRow(chat.id, i, body)
         entry.bytes += body.length - (previous?.length ?? 0)
+        wroteRows = true
       }
       kept.set(i, body)
     }
+    // Rows changed but meta did not: the write still has to be visible to the
+    // stale-view check, or a streamed message is unprotected.
+    if (wroteRows && !metaWritten) entry.rev = this.bumpRev(chat.id)
     // Prune the baseline to the window, so it stays O(live window) rather than
     // growing into a second copy of the chat.
     entry.bodies = kept
     entry.forced.clear()
     entry.persisted = chat.messages.length
     this.sizes.set(chat.id, entry.bytes)
+    // An incremental pass only looks at its candidate window, so it can never
+    // establish that the rest of the chat matches disk.
+    this.unverified.add(chat.id)
   }
 
   /**
@@ -1267,42 +1372,93 @@ export class Store {
    * another process that shares this userData — and dropping them would destroy
    * real history to satisfy a stale in-memory array.
    */
-  private reconcile(entry: Resident): void {
+  private reconcile(entry: Resident, thorough = false): void {
     const { chat } = entry
     const writtenMeta = this.writeMeta(chat)
     entry.metaJson = writtenMeta.json
     entry.rev = writtenMeta.rev
     const messages = chat.messages
-    // Compare in a read-only pass and buffer only the rows that differ — usually
-    // one or two — so a reconcile of the 36 MB chat never holds a second copy of
-    // it, and no INSERT lands while the cursor over the same table is open.
-    const changed: [number, string][] = []
-    const seen = new Set<number>()
-    let bytes = 0
+    // Which rows exist, and how big they are, WITHOUT pulling 36 MB of bodies
+    // into JS. length() is computed in SQLite, so this pass costs a table scan
+    // rather than a scan plus a string allocation per row.
+    // A thorough pass recomputes exact byte totals (it is re-serializing
+    // everything anyway); a routine one only needs to know WHICH rows exist, and
+    // gets that from the covering index without reading any body.
+    const storedLen = new Map<number, number>()
+    const storedSeqs = new Set<number>()
     let stored = 0
+    if (thorough) {
+      for (const raw of this.selLens.iterate(chat.id)) {
+        const row = raw as unknown as { seq: number; n: number }
+        stored = Math.max(stored, row.seq + 1)
+        storedLen.set(row.seq, Number(row.n))
+        storedSeqs.add(row.seq)
+      }
+    } else {
+      for (const raw of this.selSeqs.iterate(chat.id)) {
+        const seq = Number((raw as unknown as { seq: number }).seq)
+        stored = Math.max(stored, seq + 1)
+        storedSeqs.add(seq)
+      }
+    }
+
+    // Verifying every message means re-serializing the whole chat, which is the
+    // single largest stall in the store (~40 ms on the 36 MB chat) and it lands
+    // on the Electron main thread at every turn boundary. Bound it: always check
+    // the live tail, then continue a rotating cursor through the rest until the
+    // byte budget is spent. Successive passes cover the whole chat, so the
+    // safety net still catches an unflagged mutation — just a few turns later
+    // rather than immediately. `thorough` (quit, or an explicit full pass)
+    // ignores the budget and checks everything.
+    const verify = new Set<number>()
+    for (let i = Math.max(0, messages.length - RECONCILE_TAIL); i < messages.length; i++) {
+      verify.add(i)
+    }
+    if (thorough) {
+      for (let i = 0; i < messages.length; i++) verify.add(i)
+    } else {
+      let budget = RECONCILE_VERIFY_BYTES
+      let cursor = entry.scanCursor
+      for (let n = 0; n < messages.length && budget > 0; n++) {
+        cursor = cursor % Math.max(1, messages.length)
+        if (!verify.has(cursor)) {
+          verify.add(cursor)
+          budget -= storedLen.get(cursor) ?? Math.ceil(entry.bytes / Math.max(1, messages.length))
+        }
+        cursor++
+      }
+      entry.scanCursor = cursor % Math.max(1, messages.length)
+    }
+
+    const changed: [number, string][] = []
+    let bytes = 0
+    let unmeasured = 0
     let tail = ''
-    for (const raw of this.selBodies.iterate(chat.id)) {
-      const row = raw as unknown as { seq: number; body: string }
-      stored = Math.max(stored, row.seq + 1)
-      if (row.seq < 0 || row.seq >= messages.length) continue
-      seen.add(row.seq)
+    for (let i = 0; i < messages.length; i++) {
       // An unreadable row keeps its stored bytes and its slot: comparing the
       // placeholder against it would "repair" real (if damaged) history away.
-      if (entry.corrupt.has(row.seq)) {
-        bytes += row.body.length
+      if (entry.corrupt.has(i)) {
+        bytes += storedLen.get(i) ?? 0
+        unmeasured++
         continue
       }
-      const body = JSON.stringify(messages[row.seq])
-      if (body !== row.body) changed.push([row.seq, body])
-      bytes += body.length
-      if (row.seq === messages.length - 1) tail = body
-    }
-    for (let i = 0; i < messages.length; i++) {
-      if (seen.has(i) || entry.corrupt.has(i)) continue
+      const has = storedSeqs.has(i)
+      if (has && !verify.has(i)) {
+        // Not in this pass's window: trust the stored row. Its exact size is
+        // only known on a thorough pass, so a routine one carries the previous
+        // total forward rather than pretending to recompute it.
+        bytes += storedLen.get(i) ?? 0
+        unmeasured++
+        continue
+      }
       const body = JSON.stringify(messages[i])
-      changed.push([i, body])
+      if (!has || body !== this.bodyOf(chat.id, i)) changed.push([i, body])
       bytes += body.length
       if (i === messages.length - 1) tail = body
+    }
+    // The tail must always have a baseline, even when it was trusted unverified.
+    if (!tail && messages.length && !entry.corrupt.has(messages.length - 1)) {
+      tail = JSON.stringify(messages[messages.length - 1])
     }
     for (const [seq, body] of changed) this.putRow(chat.id, seq, body)
     if (stored > messages.length) {
@@ -1318,10 +1474,16 @@ export class Store {
     }
     entry.forced.clear()
     entry.persisted = messages.length
-    entry.bytes = bytes
+    // A partial pass cannot produce an exact total, and a wrong one would
+    // mis-drive the RESIDENT_BUDGET LRU. Keep the last exact figure instead.
+    if (unmeasured === 0) entry.bytes = bytes
+    // Only a pass that actually compared every message can promise the chat is
+    // fully on disk; anything less leaves work for the thorough pass at quit.
+    if (unmeasured === 0) this.unverified.delete(chat.id)
+    else this.unverified.add(chat.id)
     entry.reconciledAt = Date.now()
     entry.needsFull = false
-    this.sizes.set(chat.id, bytes)
+    this.sizes.set(chat.id, entry.bytes)
   }
 
   /**
@@ -1334,7 +1496,12 @@ export class Store {
     for (const timer of this.saveTimers.values()) clearTimeout(timer)
     this.saveTimers.clear()
     this.firstDirtyAt.clear()
-    for (const id of [...this.dirty.keys()]) this.writeChat(id, true)
+    // dirty ∪ unverified: a chat can have left `dirty` after a bounded pass that
+    // silently skipped the very mutation this thorough pass exists to catch.
+    for (const id of new Set([...this.dirty.keys(), ...this.unverified])) {
+      this.writeChat(id, true, true)
+    }
+    this.unverified.clear()
     if (this.heartbeat) clearInterval(this.heartbeat)
     this.heartbeat = null
     if (this.backupTimer) clearInterval(this.backupTimer)
