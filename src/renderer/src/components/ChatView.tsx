@@ -223,6 +223,9 @@ const MessageHistory = React.memo(
 
 export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
   const messages = useApp((s) => s.messages)
+  const hiddenBefore = useApp((s) => s.hiddenBefore)
+  const loadingOlder = useApp((s) => s.loadingOlder)
+  const loadOlderMessages = useApp((s) => s.loadOlderMessages)
   const status = useApp((s) => s.statuses[chat.id] ?? 'idle')
   // Fall back to a stable constant — a fresh `[]` per render makes zustand's
   // snapshot comparison always fail and loops React into a crash.
@@ -248,6 +251,13 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
 
   const scrollRef = React.useRef<HTMLDivElement>(null)
   const pinnedRef = React.useRef(true)
+  /**
+   * Distance from the BOTTOM of the scroller, captured just before older
+   * messages are prepended. Anchoring on the bottom rather than on scrollTop is
+   * what keeps the message under the cursor still: prepending changes
+   * scrollHeight, and the gap below the viewport is the part that doesn't move.
+   */
+  const bottomAnchor = React.useRef<number | null>(null)
   const [showJump, setShowJump] = React.useState(false)
   const [renameOpen, setRenameOpen] = React.useState(false)
   const [deleteOpen, setDeleteOpen] = React.useState(false)
@@ -282,6 +292,26 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
     pinnedRef.current = true
     requestAnimationFrame(() => scrollToBottom())
   }, [chat.id, scrollToBottom])
+
+  const loadEarlier = React.useCallback((): void => {
+    const el = scrollRef.current
+    bottomAnchor.current = el ? el.scrollHeight - el.scrollTop : null
+    // Asking for older messages is a statement that you want to read up, not
+    // follow the stream — otherwise the follow-the-tail effect below would
+    // immediately undo the restore.
+    pinnedRef.current = false
+    setShowJump(true)
+    void loadOlderMessages()
+  }, [loadOlderMessages])
+
+  // Restore the reading position after a prepend, before the browser paints.
+  React.useLayoutEffect(() => {
+    const el = scrollRef.current
+    const anchor = bottomAnchor.current
+    if (!el || anchor === null) return
+    bottomAnchor.current = null
+    el.scrollTop = el.scrollHeight - anchor
+  }, [hiddenBefore])
 
   // The live turn's message — only the *last* message counts, so a just-sent user
   // message (before the reply starts) isn't mistaken for the previous reply.
@@ -447,6 +477,21 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
       {/* Messages */}
       <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto flex max-w-3xl flex-col gap-4 px-6 py-6">
+          {hiddenBefore > 0 && (
+            <div className="flex justify-center">
+              <Button
+                size="sm"
+                variant="secondary"
+                className="rounded-full"
+                onClick={loadEarlier}
+                disabled={loadingOlder}
+              >
+                {loadingOlder
+                  ? 'Loading…'
+                  : `Load earlier messages (${hiddenBefore.toLocaleString()})`}
+              </Button>
+            </div>
+          )}
           <MessageHistory messages={messages} end={historyEnd} ctx={historyCtx} />
           {liveAssistant && (
             <AssistantBlock

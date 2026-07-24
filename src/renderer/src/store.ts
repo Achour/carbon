@@ -147,8 +147,15 @@ interface AppState {
   activeId: string | null
   /** Project folder new chats start in; follows the active chat. */
   selectedCwd: string | null
-  /** Messages of the active chat. */
+  /** Messages of the active chat — the loaded window, not necessarily all of them. */
   messages: ChatMessage[]
+  /**
+   * How many older messages of the active chat are still in the database and
+   * not in `messages`. Zero means the whole chat is here. See `ChatView`.
+   */
+  hiddenBefore: number
+  /** A loadOlderMessages round-trip is in flight. */
+  loadingOlder: boolean
   statuses: Record<string, ChatStatus>
   /** Chats another Carbon instance owns; edits here are not being saved. */
   lockedChats: Record<string, true>
@@ -357,6 +364,8 @@ interface AppState {
   openPlanPanel(panel: PlanPanelState): void
   closePlanPanel(): void
   openChat(id: string | null): Promise<void>
+  /** Prepend the next window of older messages to the active chat. */
+  loadOlderMessages(): Promise<void>
   newChat(
     cwd: string,
     firstMessage: string,
@@ -658,6 +667,8 @@ export const useApp = create<AppState>((set, get) => ({
   activeId: null,
   selectedCwd: null,
   messages: [],
+  hiddenBefore: 0,
+  loadingOlder: false,
   statuses: {},
   lockedChats: {},
   titling: {},
@@ -1510,6 +1521,7 @@ export const useApp = create<AppState>((set, get) => ({
         selectedCwd: homeCwdLeaving(outgoing, s.selectedCwd),
         activeId: null,
         messages: [],
+        hiddenBefore: 0,
         planPanel: null,
         settingsOpen: false,
         panelMaximized: false,
@@ -1525,6 +1537,10 @@ export const useApp = create<AppState>((set, get) => ({
       ...chatSwitchPatch(s, id),
       activeId: id,
       messages: [],
+      // Cleared synchronously, or the outgoing chat's count would briefly offer
+      // "load earlier" on a chat that has nothing earlier to load.
+      hiddenBefore: 0,
+      loadingOlder: false,
       planPanel: null,
       settingsOpen: false,
       panelMaximized: false,
@@ -1535,9 +1551,10 @@ export const useApp = create<AppState>((set, get) => ({
     // it may have been overwritten (by a background turn or externally) since it
     // was last shown.
     invalidateLocalImages()
-    const chat = await window.api.getChat(id)
+    const view = await window.api.getChat(id)
     // Guard against a chat switch happening while we awaited.
-    if (get().activeId === id && chat) {
+    if (get().activeId === id && view) {
+      const { chat, hiddenBefore } = view
       const cwdChanged = get().selectedCwd !== chat.cwd
       set((s) => {
         // Events that streamed in for this chat *during* the getChat round-trip
@@ -1560,6 +1577,8 @@ export const useApp = create<AppState>((set, get) => ({
           : s.permissions
         return {
           messages,
+          hiddenBefore,
+          loadingOlder: false,
           selectedCwd: chat.cwd,
           permissions,
           statuses: review ? { ...s.statuses, [id]: 'waiting-permission' } : s.statuses
@@ -1579,6 +1598,22 @@ export const useApp = create<AppState>((set, get) => ({
       if (pendingPlan && typeof plan === 'string' && plan) {
         get().openPlanPanel({ chatId: id, plan, requestId: pendingPlan.id })
       }
+    }
+  },
+
+  async loadOlderMessages() {
+    const id = get().activeId
+    const before = get().hiddenBefore
+    if (!id || before <= 0 || get().loadingOlder) return
+    set({ loadingOlder: true })
+    try {
+      const older = await window.api.loadOlderMessages(id, before)
+      // A chat switch (or another load landing first) while we awaited: the
+      // window we fetched belongs to a view that no longer exists.
+      if (!older || get().activeId !== id || get().hiddenBefore !== before) return
+      set((s) => ({ messages: [...older.messages, ...s.messages], hiddenBefore: older.from }))
+    } finally {
+      set({ loadingOlder: false })
     }
   },
 
@@ -1603,6 +1638,8 @@ export const useApp = create<AppState>((set, get) => ({
         chats: [meta, ...s.chats],
         activeId: meta.id,
         messages: [],
+        hiddenBefore: 0,
+        loadingOlder: false,
         planPanel: null,
         settingsOpen: false,
         panelMaximized: false,

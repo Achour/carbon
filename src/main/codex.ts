@@ -699,6 +699,8 @@ export class CodexSession implements AgentSession {
   */
   private async maybeGenerateTitle(): Promise<void> {
     if (this.disposed || this.titledOnce || this.titledResumed || this.chat.titleManual) return
+    // See ClaudeSession: a windowed chat's opening message may not be hydrated.
+    if (this.store.hiddenBefore(this.chat.id) > 0) return
     const userText = firstUserText(this.chat.messages)
     if (!userText) return
     this.titledOnce = true

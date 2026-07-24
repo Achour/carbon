@@ -147,7 +147,9 @@ function harness(
   const store = {
     saveChat: (id: string) => saved.push(id),
     saveChatSoon: (id: string) => saved.push(id),
-    markMessageDirty: () => {}
+    markMessageDirty: () => {},
+    // Every chat these tests build is short enough to be fully hydrated.
+    hiddenBefore: () => 0
   } as unknown as Store
   const codex = new FakeCodex(turns)
   let watcher!: FakeRolloutWatcher
@@ -292,7 +294,9 @@ test('a pending plan is persisted and can be approved by a recreated session', a
   const store = {
     saveChat: () => {},
     saveChatSoon: () => {},
-    markMessageDirty: () => {}
+    markMessageDirty: () => {},
+    // Every chat these tests build is short enough to be fully hydrated.
+    hiddenBefore: () => 0
   } as unknown as Store
   const codex = new FakeCodex([
     async function* () {

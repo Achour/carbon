@@ -423,6 +423,11 @@ class ClaudeSession implements AgentSession {
   */
   private async maybeGenerateTitle(): Promise<void> {
     if (this.disposed || this.titledOnce || this.titledResumed || this.chat.titleManual) return
+    // Only the tail of a long chat is hydrated, so its opening message may not be
+    // in memory at all. `titledResumed` already covers every realistic case (a
+    // chat this long has a sessionId), but titling from the middle of someone's
+    // history is a bad enough outcome to check rather than infer.
+    if (this.store.hiddenBefore(this.chat.id) > 0) return
     const userText = firstUserText(this.chat.messages)
     if (!userText) return
     this.titledOnce = true

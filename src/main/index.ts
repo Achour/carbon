@@ -344,7 +344,13 @@ function buildMenu(): void {
 function registerIpc(): void {
   ipcMain.handle('chats:list', () => store.listChats())
 
-  ipcMain.handle('chats:get', (_e, id: string) => store.getChat(id))
+  // viewChat, not getChat: the renderer gets the loaded suffix, while every
+  // main-process caller keeps the full-length array whose index is the row's seq.
+  ipcMain.handle('chats:get', (_e, id: string) => store.viewChat(id))
+
+  ipcMain.handle('chats:load-older', (_e, id: string, before: number) =>
+    store.loadOlder(id, before)
+  )
 
   ipcMain.handle(
     'chats:create',

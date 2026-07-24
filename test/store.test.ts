@@ -749,13 +749,14 @@ test('the bounded reconcile still catches an unflagged mutation, via its rotatin
 
   const reopened = new Store(dir)
   const loaded = reopened.getChat(chat.id)!
-  // Index 5: far outside the tail window, and nothing marks it dirty.
-  ;(loaded.messages[5] as { text: string }).text = 'edited behind the predicate'
+  // Index 250: inside the hydration window (so it is a real message, not a
+  // placeholder) but far outside RECONCILE_TAIL, and nothing marks it dirty.
+  ;(loaded.messages[250] as { text: string }).text = 'edited behind the predicate'
   let caught = false
   for (let pass = 0; pass < 400 && !caught; pass++) {
     loaded.updatedAt = 5000 + pass
     reopened.saveChat(chat.id)
-    caught = JSON.parse(bodyAt(dir, chat.id, 5) ?? '{}').text === 'edited behind the predicate'
+    caught = JSON.parse(bodyAt(dir, chat.id, 250) ?? '{}').text === 'edited behind the predicate'
   }
   assert.ok(caught, 'the rotating cursor must eventually reach every message')
   await reopened.flushAll()
@@ -773,20 +774,20 @@ test('a thorough pass on quit verifies the whole chat in one go', async () => {
 
   const reopened = new Store(dir)
   const loaded = reopened.getChat(chat.id)!
-  ;(loaded.messages[7] as { text: string }).text = 'edited before quit'
+  ;(loaded.messages[250] as { text: string }).text = 'edited before quit'
   loaded.updatedAt = 9999
   // The contract every session follows: mutate, then ask for a save. That
-  // incremental pass cannot see index 7 (not the tail, no live tool, unflagged),
-  // so only the thorough pass on quit can persist it.
+  // incremental pass cannot see index 250 (hydrated, but not the tail, no live
+  // tool, unflagged), so only the thorough pass on quit can persist it.
   reopened.saveChatSoon(chat.id)
   assert.notEqual(
-    JSON.parse(bodyAt(dir, chat.id, 7) ?? '{}').text,
+    JSON.parse(bodyAt(dir, chat.id, 250) ?? '{}').text,
     'edited before quit',
     'precondition: the incremental pass must NOT have caught it'
   )
   await reopened.flushAll()
   assert.equal(
-    JSON.parse(bodyAt(dir, chat.id, 7) ?? '{}').text,
+    JSON.parse(bodyAt(dir, chat.id, 250) ?? '{}').text,
     'edited before quit',
     'quit must not leave an unflagged mutation unwritten'
   )
@@ -811,17 +812,18 @@ test('a mutation missed by a bounded pass is still caught at quit, and survives 
 
   const second = new Store(dir)
   const loaded = second.getChat(chat.id)!
-  // Advance the rotating cursor past index 7 before mutating it.
+  // Index 150: inside the hydration window (60 × 20 KB messages, so 140..199 are
+  // real) but outside RECONCILE_TAIL. Advance the rotating cursor past it first.
   loaded.updatedAt = 4241
   second.saveChat(chat.id)
 
-  ;(loaded.messages[7] as { text: string }).text = 'edited behind the predicate'
+  ;(loaded.messages[150] as { text: string }).text = 'edited behind the predicate'
   loaded.updatedAt = 4242
   // One routine save. It succeeds and clears `dirty` — but its bounded window
-  // does not include index 7.
+  // does not include index 150.
   second.saveChat(chat.id)
   assert.notEqual(
-    JSON.parse(bodyAt(dir, chat.id, 7) ?? '{}').text,
+    JSON.parse(bodyAt(dir, chat.id, 150) ?? '{}').text,
     'edited behind the predicate',
     'precondition: the bounded pass must have missed it'
   )
@@ -829,7 +831,7 @@ test('a mutation missed by a bounded pass is still caught at quit, and survives 
 
   const third = new Store(dir)
   assert.equal(
-    (third.getChat(chat.id)!.messages[7] as { text: string }).text,
+    (third.getChat(chat.id)!.messages[150] as { text: string }).text,
     'edited behind the predicate',
     'the mutation must survive the restart, not revert'
   )
@@ -925,10 +927,16 @@ await new Promise((r) => setImmediate(r))              // eviction runs here
 chat = null                                            // drop the last strong ref
 global.gc(); global.gc()
 await store.flushAll()
-const check = new Store(${JSON.stringify(dir)})
-const got = check.getChat('gc-me').messages[7].text
-console.log('RESULT:' + (got === 'edited behind the predicate' ? 'persisted' : 'LOST:' + got.slice(0, 20)))
-await check.flushAll()
+// Read the row itself rather than reopening the chat: getChat only hydrates a
+// window now, and index 7 of a 200-message chat comes back as a placeholder —
+// which says nothing about whether the mutation is durable, which is the whole
+// question here.
+const { DatabaseSync } = await import('node:sqlite')
+const db = new DatabaseSync(${JSON.stringify(join(dir, 'chats.db'))})
+const row = db.prepare('SELECT body FROM messages WHERE chat_id = ? AND seq = ?').get('gc-me', 7)
+const got = row ? JSON.parse(row.body).text : '<no row>'
+console.log('RESULT:' + (got === 'edited behind the predicate' ? 'persisted' : 'LOST:' + String(got).slice(0, 20)))
+db.close()
 `
   )
   const child = spawnSync(process.execPath, ['--expose-gc', script], { encoding: 'utf8' })
@@ -1245,5 +1253,234 @@ test('a corrupt database is set aside and rebuilt from the untouched JSON', asyn
   const rebuilt = new Store(dir)
   assert.equal(rebuilt.getChat(chat.id)?.messages.length, 1)
   await rebuilt.flushAll()
+  rmSync(dir, { recursive: true, force: true })
+})
+
+// ---------- Windowed hydration ----------
+
+/** Every stored body for a chat, ordered by seq. */
+function allBodies(dir: string, chatId: string): string[] {
+  const db = new DatabaseSync(join(dir, 'chats.db'), { readOnly: true })
+  const rows = db
+    .prepare('SELECT body FROM messages WHERE chat_id = ? ORDER BY seq')
+    .all(chatId) as { body: string }[]
+  db.close()
+  return rows.map((r) => r.body)
+}
+
+/** A chat of `n` distinct messages, already flushed to disk. */
+async function seedChat(dir: string, n: number, filler = ''): Promise<string> {
+  const store = new Store(dir)
+  const chat = makeChat()
+  store.addChat(chat)
+  for (let i = 0; i < n; i++) chat.messages.push(userMsg(`m${i}`, `${i}:${filler}`))
+  store.saveChat(chat.id)
+  await store.flushAll()
+  return chat.id
+}
+
+test('opening a chat parses only the tail window, not the whole history', async () => {
+  const dir = userDir()
+  const id = await seedChat(dir, 300)
+
+  const store = new Store(dir)
+  const chat = store.getChat(id)!
+  // The array keeps its full length: `seq` must go on meaning "index in
+  // chat.messages" or every write pass would address the wrong row.
+  assert.equal(chat.messages.length, 300, 'the array must span the whole chat')
+  assert.equal(chat.messages[299].id, 'm299', 'the tail must be real')
+  assert.equal(chat.messages[240].id, 'm240', 'the window must reach back 60 messages')
+  assert.equal(chat.messages[0].id, 'unloaded-0', 'old history must be a placeholder')
+  assert.equal(chat.messages[239].id, 'unloaded-239')
+  await store.flushAll()
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('the renderer view is the loaded suffix only, and hiddenBefore indexes it', async () => {
+  const dir = userDir()
+  const id = await seedChat(dir, 300)
+
+  const store = new Store(dir)
+  const view = store.viewChat(id)!
+  assert.equal(view.hiddenBefore, 240)
+  assert.equal(view.chat.messages.length, 60)
+  assert.equal(view.chat.messages[0].id, 'm240', 'the view must start where the window does')
+  assert.ok(
+    !view.chat.messages.some((m) => m.id.startsWith('unloaded-')),
+    'a placeholder must never reach the renderer'
+  )
+  // The live object main hands to sessions is untouched by the trimming.
+  assert.equal(store.getChat(id)!.messages.length, 300)
+  await store.flushAll()
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('NO write pass ever overwrites an unloaded row', async () => {
+  // The one way this feature can lose data. A placeholder is not the message;
+  // if any pass serializes one, the chat is flattened into "" text for every
+  // message the user had not scrolled back to.
+  const dir = userDir()
+  const id = await seedChat(dir, 300)
+  const before = allBodies(dir, id)
+
+  const store = new Store(dir)
+  const chat = store.getChat(id)!
+  // Exercise every path that writes: append + streaming debounce, turn-boundary
+  // reconciles (enough passes for the rotating cursor to wrap several times),
+  // and the thorough pass at quit.
+  chat.messages.push(userMsg('m300', 'new'))
+  store.saveChatSoon(id)
+  for (let pass = 0; pass < 40; pass++) {
+    chat.updatedAt = 2000 + pass
+    store.saveChat(id)
+  }
+  await store.flushAll()
+
+  const after = allBodies(dir, id)
+  assert.equal(after.length, 301, 'the appended message must be stored')
+  assert.deepEqual(after.slice(0, 300), before, 'not one stored row may have changed')
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('loadOlder promotes placeholders to the real messages, and is idempotent', async () => {
+  const dir = userDir()
+  const id = await seedChat(dir, 300)
+
+  const store = new Store(dir)
+  const view = store.viewChat(id)!
+  assert.equal(view.hiddenBefore, 240)
+
+  const older = store.loadOlder(id, view.hiddenBefore)!
+  assert.equal(older.from, 180, 'one more window back')
+  assert.equal(older.messages.length, 60)
+  assert.equal(older.messages[0].id, 'm180')
+  assert.equal(older.messages[59].id, 'm239')
+  assert.equal(store.getChat(id)!.messages[200].id, 'm200', 'the live object is filled in too')
+
+  // Asking again for a range that is already loaded must not replace anything —
+  // a session may be mutating one of those messages right now.
+  const again = store.loadOlder(id, view.hiddenBefore)!
+  assert.equal(again.from, 180)
+  assert.deepEqual(again.messages.map((m) => m.id), older.messages.map((m) => m.id))
+
+  // ...all the way back to the start.
+  let cursor = older.from
+  for (let guard = 0; cursor > 0 && guard < 20; guard++) cursor = store.loadOlder(id, cursor)!.from
+  assert.equal(cursor, 0)
+  const full = store.getChat(id)!
+  assert.ok(
+    full.messages.every((m, i) => m.id === `m${i}`),
+    'the whole chat must be recoverable one window at a time'
+  )
+  await store.flushAll()
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('a windowed chat is still evictable — placeholders do not pin it in memory', async () => {
+  // Regression guard for the accounting: the reconcile pass cannot verify rows
+  // it does not hold, and if that counted as "unverified" the chat would be
+  // refused eviction forever (evictOverBudget skips unverified chats), turning
+  // windowed hydration into a memory leak.
+  const dir = userDir()
+  const id = await seedChat(dir, 300)
+
+  const store = new Store(dir, { residentBudget: 1 })
+  const chat = store.getChat(id)!
+  store.saveChat(id)
+  store.addChat(makeChat())
+  await new Promise((r) => setImmediate(r))
+  assert.ok(!store.residentIds().includes(id), 'a fully-written windowed chat must evict')
+  // Identity survives: the same object comes back, not a second copy.
+  assert.equal(store.getChat(id), chat)
+  await store.flushAll()
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('placeholder slots survive eviction, so a re-admitted chat cannot overwrite them', async () => {
+  // Re-admission from the WeakRef rebuilds the write baseline from scratch and
+  // forces a full reconcile. Without the hole sets carried across, that pass
+  // sees a placeholder as an ordinary message and writes it over the real row.
+  const dir = userDir()
+  const id = await seedChat(dir, 300)
+  const before = allBodies(dir, id)
+
+  const store = new Store(dir, { residentBudget: 1 })
+  const chat = store.getChat(id)! // strong ref: keeps the WeakRef resolvable
+  store.saveChat(id)
+  store.addChat(makeChat())
+  await new Promise((r) => setImmediate(r))
+  assert.ok(!store.residentIds().includes(id), 'precondition: it must actually be evicted')
+
+  // Re-admit and force the full reconcile that eviction armed.
+  chat.updatedAt = 7777
+  store.saveChat(id)
+  await store.flushAll()
+  assert.deepEqual(allBodies(dir, id), before, 're-admission must not rewrite unloaded rows')
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('an unreadable row is still not overwritten after eviction and re-admission', async () => {
+  const dir = userDir()
+  const id = await seedChat(dir, 300)
+  const db = new DatabaseSync(join(dir, 'chats.db'))
+  db.prepare('UPDATE messages SET body = ? WHERE chat_id = ? AND seq = ?').run(
+    '{ this is not json',
+    id,
+    295
+  )
+  db.close()
+
+  const store = new Store(dir, { residentBudget: 1 })
+  const chat = store.getChat(id)!
+  assert.equal(chat.messages[295].id, 'unreadable-295', 'precondition: it must be flagged corrupt')
+  store.saveChat(id)
+  store.addChat(makeChat())
+  await new Promise((r) => setImmediate(r))
+  chat.updatedAt = 8888
+  store.saveChat(id)
+  await store.flushAll()
+  assert.equal(
+    bodyAt(dir, id, 295),
+    '{ this is not json',
+    'the damaged bytes are the only copy left; they must survive untouched'
+  )
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('a huge message still opens a readable window (MIN wins over the byte budget)', async () => {
+  const dir = userDir()
+  // 40 messages of 1 MB each: the byte budget alone would stop after two.
+  const id = await seedChat(dir, 40, 'x'.repeat(1024 * 1024))
+
+  const store = new Store(dir)
+  const view = store.viewChat(id)!
+  assert.ok(view.chat.messages.length >= 12, 'HYDRATE_MIN must floor the window')
+  assert.ok(view.chat.messages.length < 40, 'the byte budget must still bind')
+  assert.equal(view.chat.messages[view.chat.messages.length - 1].id, 'm39', 'ending at the tail')
+  await store.flushAll()
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('flagging an unloaded index dirty still cannot write the placeholder', async () => {
+  // markMessageDirty matches by message id, and a placeholder has one. Nothing
+  // in src/main flags an old message today — every caller passes the message it
+  // just finished — but the guard sits in candidateRows precisely so the API is
+  // safe for any id, and an unexercised guard is not a guard.
+  const dir = userDir()
+  const id = await seedChat(dir, 300)
+  const before = allBodies(dir, id)
+
+  const store = new Store(dir, { saveDelayMs: 1 })
+  const chat = store.getChat(id)!
+  assert.equal(chat.messages[5].id, 'unloaded-5', 'precondition: index 5 is a placeholder')
+  store.markMessageDirty(id, 'unloaded-5')
+  // Give the incremental pass something to write, so it actually runs.
+  chat.messages.push(userMsg('m300', 'new'))
+  store.saveChatSoon(id)
+  await new Promise((r) => setTimeout(r, 20))
+
+  assert.equal(bodyAt(dir, id, 5), before[5], 'the placeholder must not have been serialized')
+  await store.flushAll()
+  assert.equal(bodyAt(dir, id, 5), before[5], 'nor by the thorough pass at quit')
   rmSync(dir, { recursive: true, force: true })
 })

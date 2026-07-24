@@ -40,6 +40,7 @@ async function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
 const api: Api = {
   listChats: () => invoke('chats:list'),
   getChat: (id: string) => invoke('chats:get', id),
+  loadOlderMessages: (id: string, before: number) => invoke('chats:load-older', id, before),
   createChat: (opts: {
     cwd: string
     provider?: Provider

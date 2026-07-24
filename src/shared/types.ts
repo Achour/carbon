@@ -129,6 +129,26 @@ export interface ChatData extends ChatMeta {
 }
 
 /**
+ * What the renderer receives when it opens a chat: the most recent messages
+ * only, plus how many older ones were left in the database. Opening the largest
+ * real chat used to ship all 1201 messages — 36.9 MB across IPC, parsed twice
+ * and mounted as 1201 React rows — for a view showing the last screenful.
+ *
+ * `hiddenBefore` is also the cursor: pass it to `loadOlderMessages` to get the
+ * next window back, and use the `from` it returns as the new value.
+ */
+export interface ChatView {
+  chat: ChatData
+  hiddenBefore: number
+}
+
+/** One window of older messages, and the index the window starts at. */
+export interface OlderMessages {
+  from: number
+  messages: ChatMessage[]
+}
+
+/**
  * The project a chat belongs to. A worktree chat lives in its own directory but
  * groups under the project it branched from — the single definition of that
  * rule, so sidebar grouping, search labels and project removal can't drift.
@@ -801,7 +821,12 @@ export interface DockIconPalette {
 
 export interface Api {
   listChats(): Promise<ChatMeta[]>
-  getChat(id: string): Promise<ChatData | null>
+  getChat(id: string): Promise<ChatView | null>
+  /**
+   * The window of messages immediately before `before`. Returns an empty list
+   * once the beginning of the chat is reached.
+   */
+  loadOlderMessages(id: string, before: number): Promise<OlderMessages | null>
   createChat(opts: {
     cwd: string
     provider?: Provider

@@ -87,6 +87,23 @@ const RECONCILE_TAIL = 8
 const RECONCILE_VERIFY_BYTES = 512 * 1024
 
 /**
+ * How much of a chat `getChat` actually parses. Opening the largest real chat
+ * (36.6 MB, 1201 messages) cost 31.6 ms of JSON.parse on the Electron main
+ * thread and then a 36.9 MB structured clone across IPC — for a view that shows
+ * the last screenful. The window is walked backwards from the tail and stops at
+ * whichever limit binds first, because message sizes are wildly skewed: a count
+ * alone would still pull megabytes for a chat of large tool results, and a byte
+ * budget alone would hydrate thousands of one-line messages.
+ *
+ * MIN wins over BYTES so a chat of enormous messages still opens with enough
+ * history to be worth reading. Everything older stays a placeholder until
+ * `loadOlder` fetches it.
+ */
+const HYDRATE_TAIL = 60
+const HYDRATE_BYTES = 2 * 1024 * 1024
+const HYDRATE_MIN = 12
+
+/**
  * Injected the way worktree.ts injects its clock and codex.ts its SDK factory:
  * so the residency and debounce behaviour can be exercised by `node --test`
  * without waiting seconds or allocating megabytes.
@@ -114,8 +131,18 @@ export interface StoreOptions {
  * repaired — the caller writes exactly those rows instead of the whole chat.
  * Runs at hydrate time for the one chat being opened, not at boot for all of
  * them, so startup performs zero writes.
+ *
+ * `skip` excludes slots holding a placeholder, and `[from, to)` restricts the
+ * scan to the slots that were actually just read — so `loadOlder` settles the
+ * history it uncovers without re-walking the part of the chat that was already
+ * settled when the chat was opened.
  */
-function settleOrphanedTools(chat: ChatData): number[] {
+function settleOrphanedTools(
+  chat: ChatData,
+  skip?: ReadonlySet<number>,
+  from = 0,
+  to = chat.messages.length
+): number[] {
   const changed: number[] = []
   const settle = (parts: unknown): boolean => {
     if (!Array.isArray(parts)) return false
@@ -131,9 +158,11 @@ function settleOrphanedTools(chat: ChatData): number[] {
     }
     return hit
   }
-  chat.messages.forEach((message, index) => {
+  for (let index = Math.max(0, from); index < Math.min(to, chat.messages.length); index++) {
+    if (skip?.has(index)) continue
+    const message = chat.messages[index]
     if (message.role === 'assistant' && settle(message.parts)) changed.push(index)
-  })
+  }
   return changed
 }
 
@@ -184,6 +213,29 @@ function unreadableMessage(seq: number): ChatMessage {
   }
 }
 
+/**
+ * Stand-in for a message outside the hydration window — one that EXISTS and is
+ * perfectly readable, we simply have not paid to parse it. Like
+ * `unreadableMessage` it holds the position so `seq` keeps meaning "index in
+ * chat.messages", but it is tracked in `Resident.unloaded` rather than
+ * `corrupt`, because the two differ in one important way: an unloaded row can be
+ * promoted to the real message at any time by `loadOlder`, whereas a corrupt one
+ * never can. What they share — and it is the load-bearing property — is that NO
+ * WRITE PASS MAY EVER SERIALIZE ONE. It is not the message; writing it would
+ * destroy the real row.
+ *
+ * Never sent to the renderer: `viewChat` trims the array to the loaded suffix,
+ * so this text is a diagnostic for a main-process bug, not UI copy.
+ */
+function unloadedMessage(seq: number): ChatMessage {
+  return {
+    id: `unloaded-${seq}`,
+    role: 'assistant',
+    ts: 0,
+    parts: [{ type: 'text', text: '' }]
+  }
+}
+
 /** A chat held in the strong residency set, with its write baseline. */
 interface Resident {
   chat: ChatData
@@ -216,6 +268,15 @@ interface Resident {
    * that stands in for it.
    */
   corrupt: Set<number>
+  /**
+   * Slots holding an `unloadedMessage` placeholder — rows that exist on disk and
+   * were never parsed. Skipped by every write pass for the same reason `corrupt`
+   * is, and additionally IN SYNC WITH DISK BY CONSTRUCTION: nothing in this
+   * process has ever held the real message, so nothing can have mutated it. That
+   * is what lets the reconcile pass leave them out of its verification duty
+   * instead of declaring the chat permanently unverified.
+   */
+  unloaded: Set<number>
   /**
    * The `chats.rev` this baseline was built against, or -1 for a chat with no
    * row yet. A write asserts this still matches disk: if it does not, another
@@ -265,6 +326,17 @@ export class Store {
   private dirty = new Map<string, ChatData>()
   /** Body-byte size per chat id, kept across eviction so re-admission can budget. */
   private sizes = new Map<string, number>()
+  /**
+   * Placeholder slots per chat id, kept across eviction for the same reason
+   * `sizes` is — but this one is a CORRECTNESS requirement, not an optimization.
+   * Re-admitting a chat from its WeakRef rebuilds the baseline from scratch and
+   * forces a full reconcile; without these sets that reconcile sees a
+   * placeholder as an ordinary message and writes it over the real row. (The
+   * `corrupt` half of this was reachable before windowing existed: evicting a
+   * chat with an unreadable row and reopening it would overwrite the damaged
+   * bytes with the "could not be read" text.)
+   */
+  private holes = new Map<string, { corrupt: Set<number>; unloaded: Set<number> }>()
   private saveTimers = new Map<string, NodeJS.Timeout>()
   private firstDirtyAt = new Map<string, number>()
   private evictScheduled = false
@@ -303,6 +375,8 @@ export class Store {
 
   private selMeta!: StatementSync
   private selBodies!: StatementSync
+  private selRangeDesc!: StatementSync
+  private selMaxSeq!: StatementSync
   private upsertChat!: StatementSync
   private upsertMsg!: StatementSync
   private selRev!: StatementSync
@@ -518,6 +592,17 @@ export class Store {
   private prepare(): void {
     this.selMeta = this.db.prepare('SELECT meta FROM chats WHERE id = ?')
     this.selBodies = this.db.prepare('SELECT seq, body FROM messages WHERE chat_id = ? ORDER BY seq')
+    // One window of bodies below a given seq, newest first. `iterate` steps
+    // lazily, so breaking out of the walk means SQLite never reads the rest —
+    // this is the only statement on the open-a-chat path that touches a body.
+    this.selRangeDesc = this.db.prepare(
+      'SELECT seq, body FROM messages WHERE chat_id = ? AND seq < ? ORDER BY seq DESC LIMIT ?'
+    )
+    // Index-only via messages_pk: answers "how long is this chat" without
+    // reading anything. length(body) would NOT do — SQLite has to read the
+    // value to measure it, which on the 36.6 MB chat meant paging in the whole
+    // chat just to decide which 45 messages to parse.
+    this.selMaxSeq = this.db.prepare('SELECT MAX(seq) AS m FROM messages WHERE chat_id = ?')
     this.upsertChat = this.db.prepare(
       `INSERT INTO chats (id, updated_at, cwd, meta, rev) VALUES (?, ?, ?, ?, 1)
        ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at,
@@ -810,8 +895,13 @@ export class Store {
     chat: ChatData,
     bodies: Map<number, string>,
     bytes: number,
-    corrupt: Set<number> = new Set()
+    holes?: { corrupt: Set<number>; unloaded: Set<number> }
   ): Resident {
+    // A fresh hydrate passes its own sets; a re-admission from the WeakRef has
+    // none to pass and must recover the ones that chat was hydrated with, or the
+    // full reconcile it triggers would write placeholders over real rows.
+    const known = holes ?? this.holes.get(chat.id) ?? { corrupt: new Set(), unloaded: new Set() }
+    this.holes.set(chat.id, known)
     const entry: Resident = {
       chat,
       bodies,
@@ -822,12 +912,14 @@ export class Store {
       bytes,
       reconciledAt: Date.now(),
       needsFull: false,
-      corrupt,
+      corrupt: known.corrupt,
+      unloaded: known.unloaded,
       rev: this.diskRev(chat.id),
       refused: false,
       scanCursor: 0
     }
     for (let i = 0; i < chat.messages.length; i++) {
+      if (entry.unloaded.has(i)) continue
       if (hasLiveTool(chat.messages[i])) entry.watched.add(i)
     }
     this.evicted.delete(chat.id)
@@ -961,28 +1053,38 @@ export class Store {
       console.error(`Failed to parse chat meta ${id}:`, err)
       return null
     }
+    const maxRow = this.selMaxSeq.get(id) as { m: number | null } | undefined
+    const maxSeq = maxRow?.m == null ? -1 : Number(maxRow.m)
+    if (maxSeq >= 0) chat.messages.length = maxSeq + 1
+
     const bodies = new Map<number, string>()
     const corrupt = new Set<number>()
+    const unloaded = new Set<number>()
     let bytes = 0
-    let maxSeq = -1
+    let from = maxSeq + 1
     let tail = ''
-    for (const raw of this.selBodies.iterate(id)) {
-      const rowMsg = raw as unknown as { seq: number; body: string }
-      if (!Number.isInteger(rowMsg.seq) || rowMsg.seq < 0) continue
+    for (const row of this.readWindow(id, maxSeq + 1)) {
+      from = row.seq
+      bytes += row.body.length
       // Place each message AT ITS OWN seq. Pushing would compact past an
       // unparseable row and silently renumber the rest of the chat.
       try {
-        chat.messages[rowMsg.seq] = JSON.parse(rowMsg.body) as ChatMessage
+        chat.messages[row.seq] = JSON.parse(row.body) as ChatMessage
       } catch (err) {
-        console.error(`Failed to parse message ${id}/${rowMsg.seq}:`, err)
-        chat.messages[rowMsg.seq] = unreadableMessage(rowMsg.seq)
-        corrupt.add(rowMsg.seq)
+        console.error(`Failed to parse message ${id}/${row.seq}:`, err)
+        chat.messages[row.seq] = unreadableMessage(row.seq)
+        corrupt.add(row.seq)
       }
-      bytes += rowMsg.body.length
-      if (rowMsg.seq > maxSeq) {
-        maxSeq = rowMsg.seq
-        tail = rowMsg.body
-      }
+      if (row.seq === maxSeq) tail = row.body
+    }
+    // Below the window: a placeholder per slot, so `seq` keeps meaning "index in
+    // chat.messages" for every pass that follows. Assumed to have rows rather
+    // than verified against the index — a missing one is indistinguishable from
+    // an unloaded one here, both are equally unwritable, and `loadOlder`
+    // reclassifies it the moment anyone actually looks.
+    for (let i = 0; i < from; i++) {
+      chat.messages[i] = unloadedMessage(i)
+      unloaded.add(i)
     }
     // A seq with no row at all (one lost outright) leaves a hole; fill it so the
     // array has no undefined entries, and mark it so no pass overwrites it.
@@ -998,13 +1100,135 @@ export class Store {
     if (chat.messages.length && !corrupt.has(chat.messages.length - 1)) {
       bodies.set(chat.messages.length - 1, tail)
     }
-    const repaired = settleOrphanedTools(chat)
-    const entry = this.admit(chat, bodies, bytes, corrupt)
+    const repaired = settleOrphanedTools(chat, unloaded)
+    // `bytes` is what this chat costs IN MEMORY — the window, not the whole
+    // stored chat. Placeholders are free, so RESIDENT_BUDGET now measures the
+    // heap it was always meant to measure rather than a chat's size on disk.
+    const entry = this.admit(chat, bodies, bytes, { corrupt, unloaded })
     if (repaired.length) {
       for (const index of repaired) entry.forced.add(index)
       this.writeChat(id, false)
     }
     return chat
+  }
+
+  /**
+   * One window of stored messages ending just below `upto`, newest first,
+   * stopping as soon as a limit binds. Shared by the initial hydrate and by
+   * `loadOlder` so "how much is one window" has exactly one definition.
+   *
+   * The early `break` is the optimization: `iterate` steps the statement lazily,
+   * so SQLite reads the bodies this yields and not one more. A version of this
+   * that measured every row first — even via `length(body)`, which sounds free
+   * and is not — cost 35 ms on the 36.6 MB chat, the whole problem it exists to
+   * solve.
+   */
+  private *readWindow(id: string, upto: number): Generator<{ seq: number; body: string }> {
+    if (upto <= 0) return
+    let taken = 0
+    let bytes = 0
+    for (const raw of this.selRangeDesc.iterate(id, upto, HYDRATE_TAIL)) {
+      if (taken >= HYDRATE_MIN && (taken >= HYDRATE_TAIL || bytes >= HYDRATE_BYTES)) break
+      const row = raw as unknown as { seq: number; body: string }
+      if (!Number.isInteger(row.seq) || row.seq < 0) continue
+      taken++
+      bytes += row.body.length
+      yield row
+    }
+  }
+
+  /**
+   * The first index that is actually loaded. `unloaded` is a contiguous prefix
+   * by construction — hydration takes a suffix and loadOlder only ever extends
+   * it downwards — but this reads the real maximum rather than assuming it, so a
+   * future non-contiguous loader cannot silently hand the renderer a placeholder.
+   */
+  private loadedFrom(entry: Resident): number {
+    let from = 0
+    for (const seq of entry.unloaded) if (seq + 1 > from) from = seq + 1
+    return from
+  }
+
+  /**
+   * How many of a chat's messages are placeholders rather than real ones. Zero
+   * for a chat that is fully in memory, which is every chat short enough to fit
+   * one window. Anything that reads a chat from the FRONT — title generation is
+   * the only such caller — has to check this, or it would read whatever the
+   * hydration window happened to start at and take it for the beginning.
+   */
+  hiddenBefore(id: string): number {
+    const entry = this.resident.get(id)
+    return entry ? this.loadedFrom(entry) : 0
+  }
+
+  /**
+   * What the renderer gets: the loaded suffix only, plus how many older messages
+   * were left behind. Separate from `getChat` on purpose — main-process callers
+   * (every provider session) need the full-length array whose indices are `seq`,
+   * while the renderer needs neither the placeholders nor the 36 MB of history
+   * behind them. Trimming HERE rather than in getChat is what keeps the
+   * single-live-object invariant intact: the object sessions hold is untouched.
+   */
+  viewChat(id: string): { chat: ChatData; hiddenBefore: number } | null {
+    const chat = this.getChat(id)
+    if (!chat) return null
+    const entry = this.resident.get(id)
+    const hiddenBefore = entry ? this.loadedFrom(entry) : 0
+    if (!hiddenBefore) return { chat, hiddenBefore: 0 }
+    // A detached copy, never handed to a session: its messages array is a slice,
+    // so index no longer equals seq and every write path would mis-address it.
+    return { chat: { ...metaOf(chat), messages: chat.messages.slice(hiddenBefore) }, hiddenBefore }
+  }
+
+  /**
+   * Promote one more window of history below `before` from placeholder to real
+   * message, and return it. Idempotent: rows already loaded are left exactly as
+   * they are, so a double-click or a racing call cannot replace a message a
+   * session is mutating.
+   */
+  loadOlder(id: string, before: number): { from: number; messages: ChatMessage[] } | null {
+    const chat = this.getChat(id)
+    if (!chat) return null
+    const entry = this.resident.get(id)
+    if (!entry) return null
+    const upto = Math.max(0, Math.min(Math.trunc(before), chat.messages.length))
+    if (upto === 0) return { from: 0, messages: [] }
+    let from = upto
+    for (const row of this.readWindow(id, upto)) {
+      from = row.seq
+      // Only ever fills a hole. A row that is already loaded (or already known
+      // unreadable) is left alone — overwriting it would discard whatever the
+      // live session has since done to that message.
+      if (!entry.unloaded.has(row.seq)) continue
+      try {
+        chat.messages[row.seq] = JSON.parse(row.body) as ChatMessage
+        entry.bytes += row.body.length
+      } catch (err) {
+        console.error(`Failed to parse message ${id}/${row.seq}:`, err)
+        chat.messages[row.seq] = unreadableMessage(row.seq)
+        entry.corrupt.add(row.seq)
+      }
+      entry.unloaded.delete(row.seq)
+    }
+    if (from === upto) return { from: upto, messages: [] }
+    this.sizes.set(id, entry.bytes)
+    // A seq in the range with no row at all: the same "lost outright" case
+    // hydration handles. Reclassify it, or it would stay `unloaded` forever and
+    // the renderer would be handed its blank placeholder.
+    for (let i = from; i < upto; i++) {
+      if (!entry.unloaded.has(i)) continue
+      chat.messages[i] = unreadableMessage(i)
+      entry.unloaded.delete(i)
+      entry.corrupt.add(i)
+    }
+    // History that just became visible can still hold tools left running by a
+    // process that died; settle only the range we just uncovered.
+    const repaired = settleOrphanedTools(chat, entry.corrupt, from, upto)
+    if (repaired.length) {
+      for (const index of repaired) entry.forced.add(index)
+      this.writeChat(id, false)
+    }
+    return { from, messages: chat.messages.slice(from, upto) }
   }
 
   /**
@@ -1053,6 +1277,7 @@ export class Store {
       this.resident.delete(id)
       this.evicted.delete(id)
       this.sizes.delete(id)
+      this.holes.delete(id)
     }
     // No durable delete is possible after the database is closed; just drop it.
     if (this.closed) return forget()
@@ -1169,6 +1394,7 @@ export class Store {
     for (const i of entry.forced) if (i < messages.length) set.add(i)
     entry.watched.clear()
     for (let i = 0; i < messages.length; i++) {
+      if (entry.unloaded.has(i)) continue
       if (hasLiveTool(messages[i])) {
         set.add(i)
         entry.watched.add(i)
@@ -1177,6 +1403,10 @@ export class Store {
     // Never write back over a row we could not read: the placeholder standing in
     // for it is not its content, and the original bytes are the only copy left.
     for (const i of entry.corrupt) set.delete(i)
+    // Never write back over a row we never read. Same reasoning, and this is the
+    // guard that matters most: `unloaded` covers the bulk of a large chat, so a
+    // gap here would not corrupt one message, it would flatten its history.
+    for (const i of entry.unloaded) set.delete(i)
     return [...set].sort((a, b) => a - b)
   }
 
@@ -1421,9 +1651,18 @@ export class Store {
       let cursor = entry.scanCursor
       for (let n = 0; n < messages.length && budget > 0; n++) {
         cursor = cursor % Math.max(1, messages.length)
-        if (!verify.has(cursor)) {
+        // Step over placeholders without charging for them. The main loop skips
+        // them anyway, so paying budget here would spend the whole rotating
+        // window on rows that are never compared — on a windowed chat that is
+        // most of the array, and the safety net would take a hundred passes to
+        // come back round to a message that can actually have drifted.
+        if (!verify.has(cursor) && !entry.unloaded.has(cursor) && !entry.corrupt.has(cursor)) {
           verify.add(cursor)
-          budget -= storedLen.get(cursor) ?? Math.ceil(entry.bytes / Math.max(1, messages.length))
+          // Estimate per LOADED row: entry.bytes covers the window only, so
+          // dividing by the full message count would price every row at a
+          // fraction of its real size and blow the budget.
+          const loaded = Math.max(1, messages.length - entry.unloaded.size - entry.corrupt.size)
+          budget -= storedLen.get(cursor) ?? Math.ceil(entry.bytes / loaded)
         }
         cursor++
       }
@@ -1432,14 +1671,29 @@ export class Store {
 
     const changed: [number, string][] = []
     let bytes = 0
-    let unmeasured = 0
+    // Two DIFFERENT duties, which one counter used to conflate. `inexact` means
+    // the byte total is a guess, so it must not replace the last exact figure.
+    // `unchecked` means a row could hold an in-memory mutation that is not on
+    // disk, so quit still owes this chat a thorough pass. Windowing forces them
+    // apart: a windowed chat has thousands of rows whose size we never measured
+    // on a routine pass but which CANNOT be carrying an unflushed mutation, and
+    // collapsing that into "unverified" would pin the chat in memory forever —
+    // evictOverBudget refuses to evict an unverified chat.
+    let inexact = 0
+    let unchecked = 0
     let tail = ''
     for (let i = 0; i < messages.length; i++) {
-      // An unreadable row keeps its stored bytes and its slot: comparing the
-      // placeholder against it would "repair" real (if damaged) history away.
-      if (entry.corrupt.has(i)) {
-        bytes += storedLen.get(i) ?? 0
-        unmeasured++
+      // Placeholders, both kinds: never written, therefore never divergent in a
+      // way a write could fix. An unreadable row keeps its stored bytes and its
+      // slot (comparing the placeholder against it would "repair" real, if
+      // damaged, history away); an unloaded row was never parsed, so nothing in
+      // this process can have changed it.
+      if (entry.corrupt.has(i) || entry.unloaded.has(i)) {
+        // Contributes nothing to `bytes` on purpose: a placeholder costs no heap,
+        // and `bytes` is what this chat costs in memory. Charging it the stored
+        // row's size would make the LRU think a windowed chat weighs what it
+        // weighs on disk, which is the accounting that made 36 MB chats evict
+        // everything else.
         continue
       }
       const has = storedSeqs.has(i)
@@ -1447,8 +1701,10 @@ export class Store {
         // Not in this pass's window: trust the stored row. Its exact size is
         // only known on a thorough pass, so a routine one carries the previous
         // total forward rather than pretending to recompute it.
-        bytes += storedLen.get(i) ?? 0
-        unmeasured++
+        const n = storedLen.get(i)
+        if (n === undefined) inexact++
+        bytes += n ?? 0
+        unchecked++
         continue
       }
       const body = JSON.stringify(messages[i])
@@ -1476,10 +1732,11 @@ export class Store {
     entry.persisted = messages.length
     // A partial pass cannot produce an exact total, and a wrong one would
     // mis-drive the RESIDENT_BUDGET LRU. Keep the last exact figure instead.
-    if (unmeasured === 0) entry.bytes = bytes
-    // Only a pass that actually compared every message can promise the chat is
-    // fully on disk; anything less leaves work for the thorough pass at quit.
-    if (unmeasured === 0) this.unverified.delete(chat.id)
+    if (inexact === 0) entry.bytes = bytes
+    // Only a pass that actually compared every message it could have written can
+    // promise the chat is fully on disk; anything less leaves work for the
+    // thorough pass at quit.
+    if (unchecked === 0) this.unverified.delete(chat.id)
     else this.unverified.add(chat.id)
     entry.reconciledAt = Date.now()
     entry.needsFull = false
