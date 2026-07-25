@@ -25,6 +25,8 @@ import type {
   ChatStatus,
   EffortId,
   ElementRef,
+  FastModeState,
+  FastModeStatus,
   McpServerInfo,
   ModelOption,
   OpResult,
@@ -282,6 +284,8 @@ class ClaudeSession implements AgentSession {
   private initModel?: string
   /** Exact model name of the most recent assistant turn; keys into modelUsage. */
   private lastTurnModel?: string
+  /** Last Fast status seen from the CLI; the renderer only hears the changes. */
+  private fastMode?: FastModeStatus
   // Coalesces streaming deltas (~80ms) before IPC. Deps are read lazily so this
   // field initializer doesn't depend on when `emit`/`chat`/`store` are assigned.
   private readonly deltas = new DeltaCoalescer(
@@ -404,6 +408,20 @@ class ClaudeSession implements AgentSession {
     }))
     this.emit({ type: 'commands', chatId: this.chat.id, cwd: this.chat.cwd, commands })
     this.onCommands(commands)
+  }
+
+  /**
+   * Fast is a request, not a setting: the CLI answers back whether it is really
+   * serving it and, when it isn't, why (an account that doesn't allow the extra
+   * usage Fast bills to, a rate-limit cooldown, a model without it). Older CLIs
+   * omit the field — stay quiet then, so the composer says nothing rather than
+   * something wrong.
+   */
+  private emitFastMode(state?: FastModeState, reason?: string): void {
+    if (!state) return
+    if (this.fastMode?.state === state && this.fastMode.reason === reason) return
+    this.fastMode = { state, reason }
+    this.emit({ type: 'fast-mode', chatId: this.chat.id, status: this.fastMode })
   }
 
   private pushMessage(message: ChatData['messages'][number]): void {
@@ -936,6 +954,9 @@ class ClaudeSession implements AgentSession {
         if (msg.subtype === 'init') {
           this.initModel = msg.model
           this.resolveReady()
+          // Re-sent after a live `applyFlagSettings`, so a Fast toggle is
+          // answered without waiting for the next turn to finish.
+          this.emitFastMode(msg.fast_mode_state, msg.fast_mode_disabled_reason)
           if (msg.session_id && msg.session_id !== this.chat.sessionId) {
             this.chat.sessionId = msg.session_id
             this.emit({
@@ -1040,6 +1061,8 @@ class ClaudeSession implements AgentSession {
         // Covers valid itemless/silent turns and failures before assistant output.
         void this.maybeGenerateTitle()
         this.turnActive = false
+        // What the turn that just ran was actually served at.
+        this.emitFastMode(msg.fast_mode_state, msg.fast_mode_disabled_reason)
         if ('modelUsage' in msg && msg.modelUsage) {
           // modelUsage is cumulative across the (resumed) session and keyed by
           // model name, so after switching models it holds an entry per model

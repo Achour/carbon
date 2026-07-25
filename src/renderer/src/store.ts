@@ -30,6 +30,7 @@ import type {
   ChatStatus,
   BackgroundJob,
   EffortId,
+  FastModeStatus,
   FileContent,
   FileEntry,
   GitFileChange,
@@ -165,6 +166,13 @@ interface AppState {
   backgroundJobs: Record<string, BackgroundJob[]>
   /** Latest plan rate-limit signal per chat (from `rate_limit_event`). */
   rateLimits: Record<string, RateLimitState>
+  /**
+   * Whether the provider is honouring each chat's Fast selection. Absent means
+   * not reported yet (a chat with no live session, or a Codex chat — the Codex
+   * SDK exposes nothing equivalent), which the composer treats as "don't know"
+   * rather than "fine".
+   */
+  fastMode: Record<string, FastModeStatus>
   /** Models reported by the live session; empty until loaded (falls back to the static list). */
   models: ModelOption[]
   /** Fetches the session's model list once and caches it (feeds the composer picker). */
@@ -674,6 +682,7 @@ export const useApp = create<AppState>((set, get) => ({
   titling: {},
   backgroundJobs: {},
   rateLimits: {},
+  fastMode: {},
   models: [],
   codexConfigModel: undefined,
   permissions: {},
@@ -1807,6 +1816,7 @@ export const useApp = create<AppState>((set, get) => ({
         permissions: omit(s.permissions, [id]),
         backgroundJobs: omit(s.backgroundJobs, [id]),
         rateLimits: omit(s.rateLimits, [id]),
+        fastMode: omit(s.fastMode, [id]),
         panelOpenByChat: prunePanelState(s, [id]),
         tabsByChat: pruneTabsByChat(s, [id])
       }
@@ -1849,6 +1859,7 @@ export const useApp = create<AppState>((set, get) => ({
         permissions: omit(s.permissions, ids),
         backgroundJobs: omit(s.backgroundJobs, ids),
         rateLimits: omit(s.rateLimits, ids),
+        fastMode: omit(s.fastMode, ids),
         panelOpenByChat: prunePanelState(s, ids),
         tabsByChat: pruneTabsByChat(s, ids),
         defaults: s.defaults ? { ...s.defaults, recentDirs } : s.defaults
@@ -2001,7 +2012,14 @@ export const useApp = create<AppState>((set, get) => ({
         set((st) => ({
           chats: st.chats
             .map((c) => (c.id === ev.chatId ? { ...c, ...ev.patch } : c))
-            .sort((a, b) => b.updatedAt - a.updatedAt)
+            .sort((a, b) => b.updatedAt - a.updatedAt),
+          // Any options patch invalidates a Fast reading — it always carries the
+          // tier, and a model change can flip Fast support on its own. Drop it
+          // and wait for the session to report again; it re-inits on a live
+          // toggle, so the gap is short.
+          ...(ev.patch.serviceTier !== undefined
+            ? { fastMode: omit(st.fastMode, [ev.chatId]) }
+            : {})
         }))
         break
       }
@@ -2015,6 +2033,11 @@ export const useApp = create<AppState>((set, get) => ({
 
       case 'rate-limit': {
         set((st) => ({ rateLimits: { ...st.rateLimits, [ev.chatId]: ev.state } }))
+        break
+      }
+
+      case 'fast-mode': {
+        set((st) => ({ fastMode: { ...st.fastMode, [ev.chatId]: ev.status } }))
         break
       }
 

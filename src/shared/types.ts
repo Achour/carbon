@@ -420,6 +420,54 @@ export interface RateLimitState {
   resetsAt?: number
 }
 
+/**
+ * Whether the provider is actually serving Fast. `cooldown` is Fast paused
+ * after a rate limit — it comes back on its own.
+ */
+export type FastModeState = 'off' | 'cooldown' | 'on'
+
+/**
+ * What the provider reports back about Fast for a live session. Choosing Fast
+ * is a *request*: the account may not allow the extra usage Fast bills to, the
+ * model may not offer it, a rate limit may have paused it. Without reading this
+ * back the composer would keep advertising Fast while every turn ran Standard.
+ */
+export interface FastModeStatus {
+  state: FastModeState
+  /** Provider reason code when Fast can't serve; render it via `fastModeNote`. */
+  reason?: string
+}
+
+/**
+ * Why Fast isn't being served, in the user's words — null when it is being
+ * served, and also null while the provider is still working it out, since a
+ * pending check is not evidence of anything.
+ */
+export function fastModeNote(status?: FastModeStatus): string | null {
+  if (!status || status.state === 'on') return null
+  if (status.state === 'cooldown') return 'Paused until your rate limit resets'
+  switch (status.reason) {
+    case 'pending':
+      return null
+    case 'extra_usage_disabled':
+      return 'Extra usage is turned off for your account'
+    case 'free':
+      return 'Not included in your plan'
+    case 'preference':
+      return 'Turned off in your provider settings'
+    case 'model_not_allowed':
+      return 'Not available for this model'
+    case 'not_first_party':
+      return 'Not available on this API provider'
+    case 'disabled_by_env':
+      return 'Disabled by an environment variable'
+    case 'network_error':
+      return "Couldn't reach the provider to check"
+    default:
+      return 'Unavailable — running at standard speed'
+  }
+}
+
 export type ChatEvent =
   | { type: 'message'; chatId: string; message: ChatMessage }
   | { type: 'part-delta'; chatId: string; messageId: string; partIndex: number; delta: string }
@@ -435,6 +483,9 @@ export type ChatEvent =
   | { type: 'commands'; chatId: string; cwd: string; commands: SlashCommand[] }
   | { type: 'background-jobs'; chatId: string; jobs: BackgroundJob[] }
   | { type: 'rate-limit'; chatId: string; state: RateLimitState }
+  // Transient (not persisted): whether the provider is honouring this chat's
+  // Fast selection. Only Claude reports it; the Codex SDK exposes no equivalent.
+  | { type: 'fast-mode'; chatId: string; status: FastModeStatus }
   // Transient (not persisted): the AI title is being generated for this chat, so
   // the sidebar can shimmer the placeholder until the real title arrives.
   | { type: 'title-pending'; chatId: string; pending: boolean }

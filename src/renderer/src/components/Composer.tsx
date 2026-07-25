@@ -25,6 +25,7 @@ import {
   PERMISSION_MODES,
   PROVIDER_LABELS,
   SERVICE_TIER_OPTIONS,
+  fastModeNote,
   resolvedModelName,
   type Attachment,
   type EffortId,
@@ -302,6 +303,7 @@ function ModelSettingsPicker({
   serviceTier,
   onServiceTierChange,
   serviceTiers,
+  fastNote,
   disabled
 }: {
   model: string
@@ -313,6 +315,8 @@ function ModelSettingsPicker({
   serviceTier: ServiceTier
   onServiceTierChange?: (serviceTier: ServiceTier) => void
   serviceTiers: typeof SERVICE_TIER_OPTIONS
+  /** Why the provider isn't serving Fast, when it says so; null when it is. */
+  fastNote?: string | null
   disabled?: boolean
 }): React.JSX.Element {
   const [open, setOpen] = React.useState(false)
@@ -342,7 +346,10 @@ function ModelSettingsPicker({
     >
       <PopoverTrigger
         disabled={disabled}
-        aria-label={`${selectedName}, ${selectedEffort?.label ?? effort}${serviceTier === 'fast' ? ', Fast' : ''}`}
+        title={fastNote ?? undefined}
+        aria-label={`${selectedName}, ${selectedEffort?.label ?? effort}${
+          serviceTier === 'fast' ? (fastNote ? `, Fast unavailable: ${fastNote}` : ', Fast') : ''
+        }`}
         className="no-drag inline-flex h-7 min-w-0 max-w-full select-none items-center gap-1 rounded-md px-2 text-xs font-medium text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[popup-open]:bg-accent data-[popup-open]:text-foreground disabled:opacity-50"
       >
         <Sparkles className="size-3 shrink-0" />
@@ -352,7 +359,17 @@ function ModelSettingsPicker({
         {serviceTier === 'fast' && (
           <>
             <span className="shrink-0 text-muted-foreground/50">·</span>
-            <span className="shrink-0 text-violet-400">Fast</span>
+            {/* Struck through, not hidden: Fast is still what's selected — the
+                provider just isn't serving it, and silently showing Standard
+                would make the picker look broken. */}
+            <span
+              className={cn(
+                'shrink-0',
+                fastNote ? 'text-muted-foreground/60 line-through' : 'text-violet-400'
+              )}
+            >
+              Fast
+            </span>
           </>
         )}
         <ChevronDown className="size-3 shrink-0 opacity-60" />
@@ -455,28 +472,42 @@ function ModelSettingsPicker({
                 <Zap className="size-3.5 text-muted-foreground" />
                 <span className="flex-1 text-left">Speed</span>
                 <span className="text-xs text-muted-foreground">
-                  {selectedTier?.label ?? serviceTier}
+                  {fastNote && serviceTier === 'fast'
+                    ? 'Standard'
+                    : (selectedTier?.label ?? serviceTier)}
                 </span>
                 <ChevronRight className="size-3.5 text-muted-foreground" />
               </PopoverTrigger>
-              <PopoverContent side="right" align="end" className="w-44 p-1">
-                {serviceTiers.map((option) => (
-                  <button
-                    key={option.id}
-                    type="button"
-                    title={option.description}
-                    aria-pressed={option.id === serviceTier}
-                    onClick={() => {
-                      onServiceTierChange(option.id)
-                      setSpeedOpen(false)
-                      setOpen(false)
-                    }}
-                    className="flex h-9 w-full items-center gap-2 rounded-md px-2 text-sm outline-none transition-colors hover:bg-accent focus-visible:bg-accent"
-                  >
-                    <span className="flex-1 text-left">{option.label}</span>
-                    {option.id === serviceTier && <Check className="size-3.5" />}
-                  </button>
-                ))}
+              <PopoverContent side="right" align="end" className="w-52 p-1">
+                {serviceTiers.map((option) => {
+                  // Only the Fast row can be refused, and only say so where the
+                  // user is looking at the choice itself.
+                  const note = option.id === 'fast' ? fastNote : null
+                  return (
+                    <button
+                      key={option.id}
+                      type="button"
+                      title={note ?? option.description}
+                      aria-pressed={option.id === serviceTier}
+                      onClick={() => {
+                        onServiceTierChange(option.id)
+                        setSpeedOpen(false)
+                        setOpen(false)
+                      }}
+                      className="flex min-h-9 w-full items-center gap-2 rounded-md px-2 py-1 text-sm outline-none transition-colors hover:bg-accent focus-visible:bg-accent"
+                    >
+                      <span className="flex min-w-0 flex-1 flex-col text-left">
+                        <span className="truncate">{option.label}</span>
+                        {note && (
+                          <span className="text-[10px] leading-tight text-muted-foreground">
+                            {note}
+                          </span>
+                        )}
+                      </span>
+                      {option.id === serviceTier && <Check className="size-3.5 shrink-0" />}
+                    </button>
+                  )
+                })}
               </PopoverContent>
             </Popover>
           )}
@@ -624,6 +655,12 @@ export function Composer({
       : SERVICE_TIER_OPTIONS
   const invalidServiceTier = !serviceTierOptions.some((option) => option.id === serviceTier)
   const serviceTierValue = invalidServiceTier ? 'standard' : serviceTier
+  // Offering Fast (above) and *getting* it are different questions: the account
+  // may not allow the extra usage it bills to, or a rate limit may have paused
+  // it. The live session answers the second one; until it has, say nothing.
+  // Codex never answers it — its SDK surfaces no equivalent field.
+  const fastStatus = useApp((s) => (s.activeId ? s.fastMode[s.activeId] : undefined))
+  const fastNote = serviceTierValue === 'fast' ? fastModeNote(fastStatus) : null
 
   // New-chat can switch providers with an effort already selected, and a model
   // may not offer Fast. Normalize immediately so the hidden stale value cannot
@@ -1033,6 +1070,7 @@ export function Composer({
             serviceTier={serviceTierValue}
             onServiceTierChange={onServiceTierChange}
             serviceTiers={serviceTierOptions}
+            fastNote={fastNote}
             disabled={disabled}
           />
           <CompactSelect
