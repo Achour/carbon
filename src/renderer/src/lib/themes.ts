@@ -61,7 +61,9 @@ function lightThemeVars(
     'secondary-foreground': '#292b2f',
     muted: `color-mix(in oklab, ${accent} 4%, #f3f4f6)`,
     'muted-foreground': '#666b73',
-    accent: `color-mix(in oklab, ${accent} 9%, #edf0f3)`,
+    // A step below `secondary`/`muted` so hovering a secondary button or a
+    // menu item is visible against the surface it sits on.
+    accent: `color-mix(in oklab, ${accent} 9%, #e6eaef)`,
     'accent-foreground': '#202124',
     destructive: '#cf222e',
     'destructive-foreground': '#ffffff',
@@ -81,6 +83,11 @@ function lightThemeVars(
 
 function darkTheme(palette: DarkThemePalette): ThemeDef {
   const border = palette.border ?? 'rgb(255 255 255 / 9%)'
+  // `accent` is the hover/highlight level and must sit a step *above*
+  // `popover`/`secondary`, or every menu highlight and secondary-button hover
+  // repaints the color the surface already has and reads as no hover at all.
+  // Lifting toward the theme's own foreground keeps each palette's tint.
+  const hover = `color-mix(in oklab, ${palette.surfaceRaised} 88%, ${palette.foreground})`
   return {
     id: palette.id,
     name: palette.name,
@@ -97,7 +104,7 @@ function darkTheme(palette: DarkThemePalette): ThemeDef {
       'secondary-foreground': palette.foreground,
       muted: palette.surface,
       'muted-foreground': palette.mutedForeground,
-      accent: palette.surfaceRaised,
+      accent: hover,
       'accent-foreground': palette.foreground,
       border,
       input: 'rgb(255 255 255 / 13%)',
