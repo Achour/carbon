@@ -36,6 +36,8 @@ export const TurnChangesCard = React.memo(function TurnChangesCard({
   const git = useApp((state) => state.git)
   const reviewChanges = useApp((state) => state.reviewChanges)
   const rewindFiles = useApp((state) => state.rewindFiles)
+  const openDiff = useApp((state) => state.openDiff)
+  const openFile = useApp((state) => state.openFile)
   const paths = React.useMemo(() => changedPathsFromParts(message.parts, cwd), [message.parts, cwd])
   const files = React.useMemo(
     () => message.fileChanges ?? summarize(paths, git?.changes ?? []),
@@ -64,6 +66,19 @@ export const TurnChangesCard = React.memo(function TurnChangesCard({
       alive = false
     }
   }, [undoOpen, rewindFiles, userMessageId])
+
+  // A row opens that file's diff while the change is still in the working tree;
+  // once it is committed (or the card is scrolled back to from an older turn)
+  // there is no diff left to show, so fall back to opening the file itself.
+  const openChange = React.useCallback(
+    (path: string): void => {
+      const changes = git?.changes ?? []
+      const change = changes.find((c) => c.path === path && !c.staged) ?? changes.find((c) => c.path === path)
+      if (change) void openDiff(change, { preview: true })
+      else void openFile(path.startsWith('/') ? path : `${cwd}/${path}`, { preview: true })
+    },
+    [git?.changes, openDiff, openFile, cwd]
+  )
 
   if (files.length === 0) return null
   const visible = expanded ? files : files.slice(0, 3)
@@ -143,15 +158,23 @@ export const TurnChangesCard = React.memo(function TurnChangesCard({
       {!undone && (
         <div className="border-t border-border/70 px-3.5 py-1.5">
           {visible.map((file) => (
-            <div key={file.path} className="flex items-center gap-3 py-1.5 text-xs">
-              <span className="min-w-0 flex-1 truncate text-muted-foreground">{file.path}</span>
+            <button
+              key={file.path}
+              type="button"
+              title={`Open ${file.path}`}
+              onClick={() => openChange(file.path)}
+              className="group -mx-1.5 flex w-[calc(100%+0.75rem)] items-center gap-3 rounded-md px-1.5 py-1.5 text-left text-xs hover:bg-accent/50"
+            >
+              <span className="min-w-0 flex-1 truncate text-muted-foreground group-hover:text-foreground">
+                {file.path}
+              </span>
               {(file.additions > 0 || file.deletions > 0) && (
                 <span className="flex shrink-0 gap-1.5 tabular-nums">
                   <span className="text-success">+{file.additions}</span>
                   <span className="text-destructive">−{file.deletions}</span>
                 </span>
               )}
-            </div>
+            </button>
           ))}
           {files.length > 3 && (
             <button
