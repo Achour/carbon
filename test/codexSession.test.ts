@@ -13,6 +13,7 @@ import type {
 } from '@openai/codex-sdk'
 import type { ChatData, ChatEvent } from '../src/shared/types.ts'
 import { CodexSession } from '../src/main/codex.ts'
+import type { AppServerThreadOptions } from '../src/main/codexAppServer.ts'
 import type {
   CodexRolloutEvent,
   CodexRolloutWatcher,
@@ -49,8 +50,13 @@ async function waitFor(predicate: () => boolean): Promise<void> {
 }
 
 class FakeCodex {
-  readonly resumeCalls: { id: string; options?: ThreadOptions }[] = []
-  readonly startCalls: { options?: ThreadOptions }[] = []
+  readonly resumeCalls: { id: string; options?: AppServerThreadOptions }[] = []
+  readonly startCalls: { options?: AppServerThreadOptions }[] = []
+  readonly userInputResponses: {
+    requestId: string
+    answers: Record<string, { answers: string[] }>
+  }[] = []
+  readonly dismissedUserInputs: string[] = []
   runStreamedCalls = 0
   private readonly turns: TurnFactory[]
 
@@ -58,7 +64,7 @@ class FakeCodex {
     this.turns = turns
   }
 
-  private thread(options?: ThreadOptions): Thread {
+  private thread(options?: AppServerThreadOptions): Thread {
     return {
       runStreamed: async (input: Input, options?: TurnOptions) => {
         this.runStreamedCalls += 1
@@ -77,14 +83,25 @@ class FakeCodex {
     } as unknown as Thread
   }
 
-  resumeThread(id: string, options?: ThreadOptions): Thread {
+  resumeThread(id: string, options?: AppServerThreadOptions): Thread {
     this.resumeCalls.push({ id, options })
     return this.thread(options)
   }
 
-  startThread(options?: ThreadOptions): Thread {
+  startThread(options?: AppServerThreadOptions): Thread {
     this.startCalls.push({ options })
     return this.thread(options)
+  }
+
+  respondToUserInput(
+    requestId: string,
+    answers: Record<string, { answers: string[] }>
+  ): void {
+    this.userInputResponses.push({ requestId, answers })
+  }
+
+  dismissUserInput(requestId: string): void {
+    this.dismissedUserInputs.push(requestId)
   }
 }
 
@@ -330,6 +347,149 @@ test('a pending plan is persisted and can be approved by a recreated session', a
   assert.equal(codex.resumeCalls[0]?.options?.modelReasoningEffort, 'ultra')
   resumed.dispose()
   rmSync(first.cwd, { recursive: true, force: true })
+})
+
+test('a native App Server plan renders as a compact review row, not duplicate prose', async () => {
+  const h = harness(
+    [
+      async function* () {
+        yield { type: 'thread.started', thread_id: 'thread-1' }
+        yield {
+          type: 'item.started',
+          item: { id: 'plan-1', type: 'codex_plan', text: '' }
+        } as unknown as ThreadEvent
+        yield {
+          type: 'item.completed',
+          item: {
+            id: 'plan-1',
+            type: 'codex_plan',
+            text: '# Todo plan\n\n1. Build the task list.'
+          }
+        } as unknown as ThreadEvent
+        yield { type: 'turn.completed', usage }
+      }
+    ],
+    { permissionMode: 'plan', modeBeforePlan: 'default' }
+  )
+
+  h.session.send('Plan a todo app')
+  await waitFor(() => h.chat.pendingPlanReview != null)
+
+  assert.equal(h.chat.pendingPlanReview?.plan, '# Todo plan\n\n1. Build the task list.')
+  const assistant = h.chat.messages.find((message) => message.role === 'assistant')
+  assert.deepEqual(assistant?.parts, [
+    {
+      type: 'tool',
+      toolUseId: 'plan-1',
+      name: 'ExitPlanMode',
+      input: { plan: '# Todo plan\n\n1. Build the task list.' },
+      status: 'success'
+    }
+  ])
+  assert.equal(
+    assistant?.parts.some(
+      (part) => part.type === 'text' && part.text.includes('Build the task list')
+    ),
+    false
+  )
+  cleanup(h)
+})
+
+test('a native App Server question is answered inside the same Codex turn', async () => {
+  const gate = deferred()
+  const h = harness([
+    async function* () {
+      yield { type: 'thread.started', thread_id: 'thread-1' }
+      await gate.promise
+      yield {
+        type: 'item.completed',
+        item: { id: 'answer', type: 'agent_message', text: 'Using Zustand.' }
+      }
+      yield { type: 'turn.completed', usage }
+    }
+  ])
+
+  h.session.send('Add a flag')
+  await waitFor(() => h.codex.runStreamedCalls === 1)
+  ;(
+    h.session as unknown as {
+      handleNativeUserInput(request: {
+        requestId: string
+        threadId: string
+        turnId: string
+        itemId: string
+        autoResolutionMs: null
+        questions: Array<{
+          id: string
+          header: string
+          question: string
+          isOther: boolean
+          isSecret: boolean
+          options: Array<{ label: string; description: string }>
+        }>
+      }): void
+    }
+  ).handleNativeUserInput({
+    requestId: 'rpc-7',
+    threadId: 'thread-1',
+    turnId: 'turn-1',
+    itemId: 'question-item',
+    autoResolutionMs: null,
+    questions: [
+      {
+        id: 'store',
+        header: 'Store',
+        question: 'Which store?',
+        isOther: true,
+        isSecret: false,
+        options: [
+          { label: 'Zustand', description: 'Matches the app.' },
+          { label: 'React context', description: 'No extra dependency.' }
+        ]
+      }
+    ]
+  })
+
+  const request = h.events.find((event) => event.type === 'permission-request')
+  assert.equal(request?.type === 'permission-request' && request.request.toolName, 'AskUserQuestion')
+  assert.deepEqual(request?.type === 'permission-request' ? request.request.input : null, {
+    questions: [
+      {
+        id: 'store',
+        question: 'Which store?',
+        header: 'Store',
+        options: [
+          { label: 'Zustand', description: 'Matches the app.' },
+          { label: 'React context', description: 'No extra dependency.' }
+        ],
+        allowOther: true,
+        isSecret: false
+      }
+    ]
+  })
+  assert.equal(h.events.filter((event) => event.type === 'status').at(-1)?.status, 'waiting-permission')
+
+  h.session.respondPermission('rpc-7', {
+    behavior: 'allow',
+    updatedInput: {
+      answers: { 'Which store?': 'Zustand' },
+      answersById: { store: ['Zustand'] }
+    }
+  })
+  assert.deepEqual(h.codex.userInputResponses, [
+    { requestId: 'rpc-7', answers: { store: { answers: ['Zustand'] } } }
+  ])
+  assert.equal(h.codex.runStreamedCalls, 1)
+  ;(
+    h.session as unknown as { resolveNativeUserInput(requestId: string): void }
+  ).resolveNativeUserInput('rpc-7')
+  gate.resolve()
+  await waitFor(() => h.events.some((event) => event.type === 'status' && event.status === 'idle'))
+  assert.equal(
+    h.events.some((event) => event.type === 'permission-resolved' && event.requestId === 'rpc-7'),
+    true
+  )
+  cleanup(h)
 })
 
 test('missing persisted threads retry the same turn once on a fresh thread', async () => {

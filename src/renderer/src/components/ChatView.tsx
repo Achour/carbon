@@ -103,6 +103,54 @@ function findLatestTodo(
 }
 
 /**
+ * App Server builds before native plan-item support persisted the proposed plan
+ * as assistant prose. While that plan is still awaiting review, replace only
+ * the matching trailing block at render time with the same compact Plan row new
+ * turns use. The stored transcript stays untouched.
+ */
+function withCompactLegacyCodexPlan(
+  messages: ChatMessage[],
+  plan: string,
+  requestId: string
+): ChatMessage[] {
+  const expected = plan.trim()
+  if (!expected) return messages
+  for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex--) {
+    const message = messages[messageIndex]
+    if (message.role !== 'assistant') continue
+    for (let partIndex = message.parts.length - 1; partIndex >= 0; partIndex--) {
+      const part = message.parts[partIndex]
+      if (!part || part.type !== 'text') continue
+      const planIndex = part.text.lastIndexOf(expected)
+      if (planIndex < 0 || part.text.slice(planIndex + expected.length).trim()) continue
+      const prefix = part.text.slice(0, planIndex).trim()
+      const replacement: AssistantMessage['parts'] = [
+        ...(prefix ? [{ type: 'text' as const, text: prefix }] : []),
+        {
+          type: 'tool',
+          toolUseId: `legacy-codex-plan-${requestId}`,
+          name: 'ExitPlanMode',
+          input: { plan: expected },
+          status: 'success'
+        }
+      ]
+      const nextMessage: AssistantMessage = {
+        ...message,
+        parts: [
+          ...message.parts.slice(0, partIndex),
+          ...replacement,
+          ...message.parts.slice(partIndex + 1)
+        ]
+      }
+      const next = [...messages]
+      next[messageIndex] = nextMessage
+      return next
+    }
+  }
+  return messages
+}
+
+/**
  * Renders the message list, collapsing runs of consecutive read/search-only
  * assistant messages into a single ToolGroup ("Read 12 files"). Since every tool
  * call is its own assistant message, a task that reads many files would otherwise
@@ -340,6 +388,16 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
   const activityLabel = producedSomething ? 'Working…' : 'Thinking…'
 
   const pendingPlanRequest = permissions.find((r) => r.toolName === 'ExitPlanMode')
+  const pendingPlan = (pendingPlanRequest?.input as { plan?: unknown } | null)?.plan
+  const displayedMessages = React.useMemo(
+    () =>
+      chat.provider === 'codex' &&
+      pendingPlanRequest &&
+      typeof pendingPlan === 'string'
+        ? withCompactLegacyCodexPlan(messages, pendingPlan, pendingPlanRequest.id)
+        : messages,
+    [chat.provider, messages, pendingPlan, pendingPlanRequest]
+  )
 
   // The most recent TodoWrite is the live task list; earlier ones collapse.
   // A full backward scan per stream token is wasteful — a chat with no todos
@@ -492,7 +550,7 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
               </Button>
             </div>
           )}
-          <MessageHistory messages={messages} end={historyEnd} ctx={historyCtx} />
+          <MessageHistory messages={displayedMessages} end={historyEnd} ctx={historyCtx} />
           {liveAssistant && (
             <AssistantBlock
               message={liveAssistant}
@@ -503,7 +561,9 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
           )}
           {permissions.map((request) => {
             if (request.toolName === 'AskUserQuestion')
-              return <QuestionCard key={request.id} request={request} />
+              return (
+                <QuestionCard key={request.id} request={request} provider={chat.provider} />
+              )
             if (request.toolName === 'ExitPlanMode')
               return (
                 <div

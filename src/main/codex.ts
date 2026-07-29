@@ -3,15 +3,12 @@ import { readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  Codex,
   type CodexOptions,
   type Input,
   type ModelReasoningEffort,
   type SandboxMode,
-  type Thread,
   type ThreadEvent,
   type ThreadItem,
-  type ThreadOptions,
   type UserInput,
   type Usage
 } from '@openai/codex-sdk'
@@ -39,6 +36,7 @@ import type {
   ToolPart,
   ToolStatus,
   TurnStats,
+  UserQuestion,
   UsageInfo
 } from '@shared/types'
 import type { Store } from './store'
@@ -46,7 +44,15 @@ import type { AgentSession, Emit } from './session'
 import { DeltaCoalescer } from './deltaCoalescer.ts'
 import { IMAGE_EXT, pickTurnImages } from './imageScan.ts'
 import { isMissingCodexThreadError } from './codexResume.ts'
-import { parseCodexPlan, promptForCodexMode } from './codexMode.ts'
+import { parseCodexPlan } from './codexMode.ts'
+import {
+  CodexAppServerClient,
+  type AppServerThreadOptions,
+  type CodexClientLike,
+  isCodexPlanItem,
+  type CodexThreadLike,
+  type NativeUserInputRequest
+} from './codexAppServer.ts'
 import {
   createCodexRolloutWatcher,
   isCodexCollabToolCallItem,
@@ -85,10 +91,6 @@ export function codexOptionsForServiceTier(
   }
 }
 
-function createCodex(serviceTier?: ServiceTier): Codex {
-  return new Codex(codexOptionsForServiceTier(serviceTier))
-}
-
 interface PendingTurn {
   input: Input
   temps: string[]
@@ -99,13 +101,15 @@ interface PendingTurn {
   contextWindow: number
 }
 
+interface PendingNativeQuestions {
+  requestId: string
+  questions: UserQuestion[]
+}
+
 /**
- * Carbon's permission modes map onto Codex's sandbox policy. The Codex SDK runs
- * `codex exec` non-interactively — it exposes no per-tool approval callback (see
- * ThreadEvent, which has no approval event) — so we pick a sandbox up front
- * rather than prompting mid-turn, and always run with `approvalPolicy: 'never'`.
- * Plan mode also gets a collaboration instruction in buildInput(); read-only is
- * the enforcement layer, not the entirety of its behavior.
+ * Carbon's permission modes map onto App Server's native sandbox policy. Carbon
+ * still chooses the sandbox up front and runs with approvalPolicy `never`; Plan
+ * additionally selects App Server's built-in Plan collaboration mode.
  */
 function sandboxForMode(mode: PermissionModeId): SandboxMode {
   switch (mode) {
@@ -120,9 +124,9 @@ function sandboxForMode(mode: PermissionModeId): SandboxMode {
 }
 
 /**
- * An unset effort defers to ~/.codex/config.toml. The SDK's current TypeScript
- * union lags the CLI model catalog for max/ultra, but its runtime forwards this
- * string directly as model_reasoning_effort.
+ * An unset effort defers to ~/.codex/config.toml. The SDK's TypeScript union
+ * still lags the CLI model catalog for max/ultra, but App Server forwards the
+ * string as the native turn effort.
  */
 function effortForCodex(effort?: EffortId): ModelReasoningEffort | undefined {
   switch (effort) {
@@ -214,20 +218,17 @@ function describeElement(el: ElementRef): string {
 
 /**
  * One Codex conversation for a chat. Unlike `ClaudeSession` (a single long-lived
- * SDK process fed by an input queue), the Codex SDK models a `Thread` whose
- * `runStreamed()` is one turn; consecutive turns reuse the same thread, and the
- * thread id (captured from `thread.started`) resumes the conversation across app
- * restarts via `resumeThread`. Each turn's item stream is normalized into the
- * same `AssistantPart[]` / `ChatEvent`s the renderer already understands, so
- * nothing downstream of `ChatEvent` knows or cares that this is Codex.
+ * SDK process fed by an input queue), Codex uses one native `codex app-server`
+ * process. Its JSON-RPC events are adapted to the former SDK-shaped thread
+ * stream so the established AssistantPart/ChatEvent reducer stays unchanged.
  */
 export class CodexSession implements AgentSession {
   private chat: ChatData
   private emit: Emit
   private store: Store
   private onDead: () => void
-  private codex: Codex
-  private thread: Thread | null = null
+  private codex: CodexClientLike
+  private thread: CodexThreadLike | null = null
   private threadOptionsKey: string | null = null
   private threadId: string | null
   // Rebuild the thread before the next turn — thread options (model, sandbox,
@@ -259,6 +260,10 @@ export class CodexSession implements AgentSession {
   private generatedBeforeTurn = new Map<string, number>()
   /** Synthetic ExitPlanMode request used to reuse Carbon's plan-review UI. */
   private planReview: PersistedPlanReview | null = null
+  /** Most recent native App Server plan item for the active turn. */
+  private nativePlan: string | null = null
+  /** Live App Server request_user_input call blocking the current Codex turn. */
+  private userQuestions: PendingNativeQuestions | null = null
   private activeTurn: PendingTurn | null = null
   private interrupted = false
   private lastEmittedStatus: ChatStatus | null = null
@@ -290,7 +295,12 @@ export class CodexSession implements AgentSession {
   private sawTerminal = false
 
   get idle(): boolean {
-    return !this.running && this.pending.length === 0 && this.activeTurn === null && !this.planReview
+    return (
+      !this.running &&
+      this.pending.length === 0 &&
+      this.activeTurn === null &&
+      !this.planReview
+    )
   }
 
   constructor(
@@ -300,15 +310,21 @@ export class CodexSession implements AgentSession {
     // Kept for signature symmetry with ClaudeSession; a Codex session is warm
     // (no per-turn process to outlive it), so it never dies on its own.
     onDead: () => void,
-    // Injectable for provider-boundary tests; production reuses ~/.codex login.
-    codex: Codex = createCodex(chat.serviceTier),
+    // Injectable for provider-boundary tests; production App Server reuses
+    // ~/.codex authentication through Carbon's bundled Codex CLI.
+    codex?: CodexClientLike,
     rolloutWatcherFactory: CodexRolloutWatcherFactory = createCodexRolloutWatcher
   ) {
     this.chat = chat
     this.emit = emit
     this.store = store
     this.onDead = onDead
-    this.codex = codex
+    this.codex =
+      codex ??
+      new CodexAppServerClient({
+        onUserInput: (request) => this.handleNativeUserInput(request),
+        onUserInputResolved: (requestId) => this.resolveNativeUserInput(requestId)
+      })
     this.rolloutWatcher = rolloutWatcherFactory((event) => this.handleRolloutEvent(event))
     this.threadId = chat.sessionId ?? null
     this.planReview = chat.pendingPlanReview ?? null
@@ -387,6 +403,9 @@ export class CodexSession implements AgentSession {
 
   send(text: string, attachments: Attachment[] = [], label?: string): void {
     if (this.disposed) return
+    // A freeform message supersedes a blocking native question. Resolve it with
+    // an empty answer so App Server can finish that turn before the new one runs.
+    this.clearUserQuestions(true)
     if (!this.chat.title) {
       // Instant placeholder from the first message; the AI title is generated in
       // parallel with the turn (see maybeGenerateTitle) and swaps it in.
@@ -416,7 +435,7 @@ export class CodexSession implements AgentSession {
     const model = this.chat.model
     const effort = this.chat.effort
     return {
-      ...this.buildInput(text, attachments, permissionMode),
+      ...this.buildInput(text, attachments),
       userMessageId,
       permissionMode,
       model,
@@ -427,8 +446,7 @@ export class CodexSession implements AgentSession {
 
   private buildInput(
     text: string,
-    attachments: Attachment[],
-    permissionMode: PermissionModeId
+    attachments: Attachment[]
   ): { input: Input; temps: string[] } {
     const images: UserInput[] = []
     const temps: string[] = []
@@ -457,10 +475,6 @@ export class CodexSession implements AgentSession {
     if (elementNotes.length) {
       prompt = `${prompt ? `${prompt}\n\n` : ''}${elementNotes.join('\n\n')}`
     }
-    // The SDK exposes sandbox selection but not the interactive Codex client's
-    // Plan/Default collaboration-mode switch. Keep this provider-only and hidden
-    // from the rendered transcript while supplying equivalent turn semantics.
-    prompt = promptForCodexMode(prompt, permissionMode === 'plan')
     const blocks: UserInput[] = [{ type: 'text', text: prompt }, ...images]
     return { input: blocks, temps }
   }
@@ -473,7 +487,9 @@ export class CodexSession implements AgentSession {
     )
   }
 
-  private threadOptions(turn?: Pick<PendingTurn, 'model' | 'permissionMode' | 'effort'>): ThreadOptions {
+  private threadOptions(
+    turn?: Pick<PendingTurn, 'model' | 'permissionMode' | 'effort'>
+  ): AppServerThreadOptions {
     const selectedModel = turn ? turn.model : this.chat.model
     const permissionMode = turn ? turn.permissionMode : this.chat.permissionMode
     const effort = turn ? turn.effort : this.chat.effort
@@ -486,11 +502,13 @@ export class CodexSession implements AgentSession {
       skipGitRepoCheck: true,
       sandboxMode: sandboxForMode(permissionMode),
       approvalPolicy: 'never',
-      modelReasoningEffort: effortForCodex(effort)
+      modelReasoningEffort: effortForCodex(effort),
+      collaborationMode: permissionMode === 'plan' ? 'plan' : 'default',
+      serviceTier: this.chat.serviceTier ?? 'standard'
     }
   }
 
-  private ensureThread(turn: PendingTurn): Thread {
+  private ensureThread(turn: PendingTurn): CodexThreadLike {
     const opts = this.threadOptions(turn)
     const optionsKey = JSON.stringify(opts)
     if (this.thread && !this.optionsDirty && this.threadOptionsKey === optionsKey) return this.thread
@@ -566,6 +584,7 @@ export class CodexSession implements AgentSession {
     this.turnStart = Date.now()
     this.generatedBeforeTurn = this.threadGeneratedImages()
     this.current = null
+    this.nativePlan = null
     this.activeUserMessageId = turn.userMessageId
     this.activeTurn = turn
     this.itemLoc.clear()
@@ -919,54 +938,131 @@ export class CodexSession implements AgentSession {
       this.interrupted
     )
       return
-    const message = this.current
-    if (!message) return
-    for (let index = message.parts.length - 1; index >= 0; index--) {
-      const part = message.parts[index]
-      if (!part || part.type !== 'text') continue
-      const parsed = parseCodexPlan(part.text)
-      if (!parsed) continue
-      if (parsed.displayText !== part.text) {
-        message.parts[index] = { ...part, text: parsed.displayText }
-        this.emitPart(message, index)
-      }
-      const requestId = randomUUID()
-      const review = {
-        requestId,
-        plan: parsed.plan,
-        userMessageId: this.activeUserMessageId ?? ''
-      }
-      this.planReview = review
-      this.chat.pendingPlanReview = review
-      this.emit({
-        type: 'meta',
-        chatId: this.chat.id,
-        patch: { pendingPlanReview: review }
-      })
-      this.store.saveChat(this.chat.id)
-      this.emit({
-        type: 'permission-request',
-        chatId: this.chat.id,
-        request: {
-          id: requestId,
-          chatId: this.chat.id,
-          toolUseId: `codex-plan-${requestId}`,
-          toolName: 'ExitPlanMode',
-          input: { plan: parsed.plan },
-          title: 'Review plan',
-          displayName: 'Codex plan',
-          description: 'Approve this plan to implement it, or request a revision.',
-          hasSuggestions: false
+    let plan = this.nativePlan?.trim() || ''
+    // Keep compatibility with injected/older transports that returned a tagged
+    // assistant message instead of App Server's dedicated plan item.
+    if (!plan) {
+      const message = this.current
+      if (!message) return
+      for (let index = message.parts.length - 1; index >= 0; index--) {
+        const part = message.parts[index]
+        if (!part || part.type !== 'text') continue
+        const parsed = parseCodexPlan(part.text)
+        if (!parsed) continue
+        plan = parsed.plan
+        if (parsed.displayText !== part.text) {
+          message.parts[index] = { ...part, text: parsed.displayText }
+          this.emitPart(message, index)
         }
-      })
-      this.setStatus('waiting-permission')
+        break
+      }
+    }
+    if (!plan) return
+    const requestId = randomUUID()
+    const review = {
+      requestId,
+      plan,
+      userMessageId: this.activeUserMessageId ?? ''
+    }
+    this.planReview = review
+    this.chat.pendingPlanReview = review
+    this.emit({
+      type: 'meta',
+      chatId: this.chat.id,
+      patch: { pendingPlanReview: review }
+    })
+    this.store.saveChat(this.chat.id)
+    this.emit({
+      type: 'permission-request',
+      chatId: this.chat.id,
+      request: {
+        id: requestId,
+        chatId: this.chat.id,
+        toolUseId: `codex-plan-${requestId}`,
+        toolName: 'ExitPlanMode',
+        input: { plan },
+        title: 'Review plan',
+        displayName: 'Codex plan',
+        description: 'Approve this plan to implement it, or request a revision.',
+        hasSuggestions: false
+      }
+    })
+    this.setStatus('waiting-permission')
+  }
+
+  /** Surface App Server's native blocking request_user_input call in Carbon. */
+  private handleNativeUserInput(request: NativeUserInputRequest): void {
+    if (this.disposed || (this.threadId != null && request.threadId !== this.threadId)) {
+      this.codex.dismissUserInput?.(request.requestId)
       return
     }
+    // App Server can send another request after the first is resolved, but never
+    // two live request_user_input calls for one turn. Resolve a stale card if a
+    // provider bug violates that invariant.
+    this.clearUserQuestions(true)
+    const questions: UserQuestion[] = request.questions.map((question) => ({
+      id: question.id,
+      question: question.question,
+      header: question.header || 'Question',
+      options: (question.options ?? []).map((option) => ({
+        label: option.label,
+        ...(option.description ? { description: option.description } : {})
+      })),
+      allowOther: question.isOther || !question.options?.length,
+      isSecret: question.isSecret
+    }))
+    this.userQuestions = { requestId: request.requestId, questions }
+    this.emit({
+      type: 'permission-request',
+      chatId: this.chat.id,
+      request: {
+        id: request.requestId,
+        chatId: this.chat.id,
+        toolUseId: request.itemId,
+        toolName: 'AskUserQuestion',
+        input: { questions },
+        title: 'Answer questions',
+        displayName: 'Codex questions',
+        description: 'Codex needs your input to continue.',
+        hasSuggestions: false
+      }
+    })
+    this.setStatus('waiting-permission')
+  }
+
+  private resolveNativeUserInput(requestId: string): void {
+    if (this.userQuestions?.requestId !== requestId) return
+    this.clearUserQuestions(false)
+    if (this.running && !this.disposed) this.setStatus('streaming')
   }
 
   // ---------- Item → part mapping ----------
 
   private upsertItem(item: ThreadItem, terminal: boolean): void {
+    if (isCodexPlanItem(item as unknown)) {
+      const plan = (item as unknown as { text: string }).text
+      this.nativePlan = plan
+      if (!plan) return
+      const part: ToolPart = {
+        type: 'tool',
+        toolUseId: item.id,
+        name: 'ExitPlanMode',
+        input: { plan },
+        status: terminal ? 'success' : 'running'
+      }
+      const message = this.ensureCurrent()
+      const loc = this.itemLoc.get(item.id)
+      if (loc) {
+        loc.message.parts[loc.index] = part
+        this.emitPart(loc.message, loc.index)
+      } else {
+        const index = message.parts.length
+        message.parts[index] = part
+        this.itemLoc.set(item.id, { message, index })
+        this.emitPart(message, index)
+      }
+      return
+    }
     // codex exec already emits this item at runtime, but @openai/codex-sdk
     // 0.144.x has not added it to its TypeScript ThreadItem union yet.
     if (isCodexCollabToolCallItem(item as unknown)) {
@@ -1397,6 +1493,7 @@ export class CodexSession implements AgentSession {
     this.cleanupPendingTurns()
     this.abort?.abort()
     this.clearPlanReview()
+    this.clearUserQuestions(true)
     // An active run still has terminalization/checkpoint cleanup to finish. Let
     // drain() publish idle afterward so the renderer cannot send into that gap.
     if (!this.running) this.setStatus('idle')
@@ -1425,6 +1522,18 @@ export class CodexSession implements AgentSession {
   async stopBackgroundJob(): Promise<void> {}
 
   respondPermission(requestId: string, decision: PermissionDecision): void {
+    const questions = this.userQuestions
+    if (questions && questions.requestId === requestId) {
+      if (decision.behavior === 'allow') {
+        this.codex.respondToUserInput?.(
+          requestId,
+          this.nativeAnswers(questions.questions, decision.updatedInput)
+        )
+      } else {
+        this.codex.dismissUserInput?.(requestId)
+      }
+      return
+    }
     const review = this.planReview ?? this.chat.pendingPlanReview ?? null
     if (!review || review.requestId !== requestId) return
     this.clearPlanReview()
@@ -1498,6 +1607,41 @@ export class CodexSession implements AgentSession {
     void this.drain()
   }
 
+  private nativeAnswers(
+    questions: UserQuestion[],
+    updatedInput: Record<string, unknown> | undefined
+  ): Record<string, { answers: string[] }> {
+    const byId =
+      updatedInput?.answersById && typeof updatedInput.answersById === 'object'
+        ? (updatedInput.answersById as Record<string, unknown>)
+        : {}
+    const byQuestion =
+      updatedInput?.answers && typeof updatedInput.answers === 'object'
+        ? (updatedInput.answers as Record<string, unknown>)
+        : {}
+    const result: Record<string, { answers: string[] }> = {}
+    for (const question of questions) {
+      if (!question.id) continue
+      const raw = byId[question.id] ?? byQuestion[question.question]
+      const answers = Array.isArray(raw)
+        ? raw.filter((value): value is string => typeof value === 'string' && !!value.trim())
+        : typeof raw === 'string' && raw.trim()
+          ? [raw.trim()]
+          : []
+      result[question.id] = { answers }
+    }
+    return result
+  }
+
+  private clearUserQuestions(dismissProvider = false): void {
+    const questions = this.userQuestions
+    if (!questions) return
+    const { requestId } = questions
+    this.userQuestions = null
+    this.emit({ type: 'permission-resolved', chatId: this.chat.id, requestId })
+    if (dismissProvider) this.codex.dismissUserInput?.(requestId)
+  }
+
   private clearPlanReview(): void {
     const review = this.planReview ?? this.chat.pendingPlanReview
     if (!review) return
@@ -1566,6 +1710,7 @@ export class CodexSession implements AgentSession {
 
   dispose(): void {
     this.setTitlePending(false)
+    this.clearUserQuestions(false)
     this.disposed = true
     this.dead = true
     this.abort?.abort()
@@ -1574,8 +1719,9 @@ export class CodexSession implements AgentSession {
     this.deltas.flush()
     this.rolloutWatcher.stop()
     this.clearCodexJobs()
-    // Preserve an unresolved plan in ChatData; a recreated session can continue
-    // the same review after an option change or application restart.
+    // Preserve a plan review in ChatData. Native App Server questions belong to
+    // the live JSON-RPC process and are resolved when that process is disposed.
     this.cleanupPendingTurns()
+    this.codex.dispose?.()
   }
 }

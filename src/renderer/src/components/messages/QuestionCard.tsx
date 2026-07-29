@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { MessageCircleQuestion } from 'lucide-react'
-import type { PermissionRequestPayload, UserQuestion } from '@shared/types'
+import type { PermissionRequestPayload, Provider, UserQuestion } from '@shared/types'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -54,37 +54,42 @@ function QuestionBlock({
             </button>
           )
         })}
-        <button
-          type="button"
-          onClick={() => onToggle(OTHER)}
-          className={cn(
-            'rounded-lg border px-3 py-2 text-left transition-colors',
-            selected.has(OTHER)
-              ? 'border-primary/60 bg-primary/10'
-              : 'border-border hover:border-ring/40 hover:bg-accent/50'
-          )}
-        >
-          <div className="text-[13px] font-medium">Other</div>
-          {selected.has(OTHER) && (
-            <Input
-              value={otherText}
-              onChange={(e) => onOtherText(e.target.value)}
-              onClick={(e) => e.stopPropagation()}
-              autoFocus
-              placeholder="Type your answer…"
-              className="mt-1.5 h-7 bg-background/60"
-            />
-          )}
-        </button>
+        {question.allowOther !== false && (
+          <button
+            type="button"
+            onClick={() => onToggle(OTHER)}
+            className={cn(
+              'rounded-lg border px-3 py-2 text-left transition-colors',
+              selected.has(OTHER)
+                ? 'border-primary/60 bg-primary/10'
+                : 'border-border hover:border-ring/40 hover:bg-accent/50'
+            )}
+          >
+            <div className="text-[13px] font-medium">Other</div>
+            {selected.has(OTHER) && (
+              <Input
+                type={question.isSecret ? 'password' : 'text'}
+                value={otherText}
+                onChange={(e) => onOtherText(e.target.value)}
+                onClick={(e) => e.stopPropagation()}
+                autoFocus
+                placeholder="Type your answer…"
+                className="mt-1.5 h-7 bg-background/60"
+              />
+            )}
+          </button>
+        )}
       </div>
     </div>
   )
 }
 
 export function QuestionCard({
-  request
+  request,
+  provider
 }: {
   request: PermissionRequestPayload
+  provider: Provider
 }): React.JSX.Element {
   const respondPermission = useApp((s) => s.respondPermission)
   const [busy, setBusy] = React.useState(false)
@@ -113,25 +118,31 @@ export function QuestionCard({
     })
   }
 
-  const answerFor = (i: number): string | null => {
+  const answerValues = (i: number): string[] | null => {
     const picks = selected[i]
     if (!picks || picks.size === 0) return null
     const labels = [...picks].map((l) => (l === OTHER ? (otherText[i] ?? '').trim() : l))
     if (labels.some((l) => !l)) return null
-    return labels.join(', ')
+    return labels
   }
 
-  const complete = questions.length > 0 && questions.every((_q, i) => answerFor(i) !== null)
+  const complete = questions.length > 0 && questions.every((_q, i) => answerValues(i) !== null)
 
   const submit = (): void => {
     const answers: Record<string, string> = {}
+    const answersById: Record<string, string[]> = {}
     questions.forEach((q, i) => {
-      answers[q.question] = answerFor(i)!
+      const values = answerValues(i)!
+      answers[q.question] = values.join(', ')
+      if (q.id) answersById[q.id] = values
     })
     setBusy(true)
     void respondPermission(request.id, {
       behavior: 'allow',
-      updatedInput: { ...(request.input as Record<string, unknown>), answers }
+      updatedInput:
+        provider === 'codex'
+          ? { ...(request.input as Record<string, unknown>), answers, answersById }
+          : { ...(request.input as Record<string, unknown>), answers }
     })
   }
 
@@ -139,7 +150,9 @@ export function QuestionCard({
     <div className="animate-enter rounded-xl border border-primary/30 bg-primary/4 dark:bg-primary/6">
       <div className="flex items-center gap-2 border-b border-border/60 px-3.5 py-2.5">
         <MessageCircleQuestion className="size-4 text-primary" />
-        <span className="text-[13px] font-semibold">Claude has a question</span>
+        <span className="text-[13px] font-semibold">
+          {provider === 'codex' ? 'Codex' : 'Claude'} has a question
+        </span>
       </div>
       <div className="space-y-4 px-3.5 py-3">
         {questions.map((q, i) => (

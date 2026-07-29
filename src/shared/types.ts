@@ -322,10 +322,16 @@ export interface PermissionRule {
 }
 
 export interface UserQuestion {
+  /** Provider-stable id used by Codex App Server's request_user_input response. */
+  id?: string
   question: string
   header: string
   options: { label: string; description?: string }[]
   multiSelect?: boolean
+  /** Defaults to true for Claude's existing AskUserQuestion behavior. */
+  allowOther?: boolean
+  /** Request that a free-form answer be visually concealed. */
+  isSecret?: boolean
 }
 
 // ---------- Events streamed from main to renderer ----------
