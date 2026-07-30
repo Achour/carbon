@@ -239,7 +239,7 @@ export const AssistantBlock = React.memo(function AssistantBlock({
   onOpenPlan?: (plan: string) => void
   /** Hide completed edit rows when the turn-level summary represents them. */
   summarizeEdits?: boolean
-}): React.JSX.Element {
+}): React.JSX.Element | null {
   const parts = message.parts
   const lastIndex = parts.length - 1
 
@@ -266,6 +266,11 @@ export const AssistantBlock = React.memo(function AssistantBlock({
   parts.forEach((part, i) => {
     // Streamed arrays can be sparse; persisted ones turn holes into null.
     if (!part) return
+    // A text/thinking part with no text renders nothing. Skip it here rather
+    // than returning null from the map below: an item that renders null still
+    // occupies a slot in the parent's `gap`, so it would show up as a blank
+    // band between cards.
+    if ((part.type === 'text' || part.type === 'thinking') && !part.text) return
     if (
       part.type === 'tool' &&
       summarizeEdits &&
@@ -283,6 +288,10 @@ export const AssistantBlock = React.memo(function AssistantBlock({
   })
   flushRun()
 
+  // Nothing to show — the wrapper alone would still be a flex item in the
+  // message list and add a message-sized gap where no message is.
+  if (items.length === 0) return null
+
   return (
     <div className="space-y-2.5">
       {items.map((item) => {
@@ -292,7 +301,6 @@ export const AssistantBlock = React.memo(function AssistantBlock({
         const { part, index: i } = item
         const isLast = i === lastIndex
         if (part.type === 'text') {
-          if (!part.text) return null
           return streaming && isLast ? (
             <StreamingMarkdown key={i} text={part.text} cwd={cwd} />
           ) : (
@@ -300,7 +308,6 @@ export const AssistantBlock = React.memo(function AssistantBlock({
           )
         }
         if (part.type === 'thinking') {
-          if (!part.text) return null
           return <ThinkingBlock key={i} text={part.text} active={streaming && isLast} />
         }
         if (part.name === 'TodoWrite') {

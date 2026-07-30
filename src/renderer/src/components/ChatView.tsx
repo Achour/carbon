@@ -80,6 +80,17 @@ function isGroupableMsg(m: ChatMessage): boolean {
   )
 }
 
+/** An assistant message that renders nothing — the CLI ships thinking blocks
+ *  with their text withheld, and each one arrives as its own message. Left in
+ *  the list it would both split a run of groupable tool calls in two and, being
+ *  a zero-height flex item, open a message-sized gap where no message is. */
+function isBlankMsg(m: ChatMessage): boolean {
+  return (
+    m.role === 'assistant' &&
+    m.parts.every((p) => !p || ((p.type === 'text' || p.type === 'thinking') && !p.text))
+  )
+}
+
 interface RenderCtx {
   cwd: string
   busy: boolean
@@ -164,9 +175,10 @@ function withCompactLegacyCodexPlan(
  * call is its own assistant message, a task that reads many files would otherwise
  * bury the conversation under a wall of identical cards.
  */
-function renderMessages(messages: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
+function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
   const out: React.ReactNode[] = []
   let run: AssistantMessage[] = []
+  const messages = all.filter((m) => !isBlankMsg(m))
   const presentations = turnPresentations(messages, ctx.cwd, ctx.busy)
 
   const renderAssistant = (m: AssistantMessage): React.ReactNode => {

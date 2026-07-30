@@ -1325,13 +1325,25 @@ class ClaudeSession implements AgentSession {
     for (const part of message.parts) {
       if (part?.type === 'tool') priorTools.set(part.toolUseId, part)
     }
+    // The CLI ships thinking blocks with `thinking` emptied and only the
+    // `signature` left, so the final message is not a superset of what streamed:
+    // taking it verbatim would erase the deltas. Match the streamed thoughts by
+    // ordinal and keep them; a block that carried no text either way is dropped
+    // rather than kept as an empty part, since an empty part is still a message
+    // in the transcript and in the renderer's layout.
+    const priorThoughts = message.parts
+      .filter((part) => part?.type === 'thinking' && part.text)
+      .map((part) => (part as { text: string }).text)
+    let thoughtIndex = 0
     const parts: AssistantPart[] = []
     for (const block of msg.message.content as unknown as Array<Record<string, unknown>>) {
       const type = block.type as string
       if (type === 'text') {
         parts.push({ type: 'text', text: (block.text as string) ?? '' })
       } else if (type === 'thinking') {
-        parts.push({ type: 'thinking', text: (block.thinking as string) ?? '' })
+        const text = (block.thinking as string) || (priorThoughts[thoughtIndex] ?? '')
+        thoughtIndex++
+        if (text) parts.push({ type: 'thinking', text })
       } else if (type === 'redacted_thinking') {
         parts.push({ type: 'thinking', text: '[Thinking redacted]' })
       } else if (type === 'tool_use' || type === 'server_tool_use') {
@@ -1354,7 +1366,14 @@ class ClaudeSession implements AgentSession {
         })
       }
     }
-    if (parts.length > 0) {
+    // No parts normally means the final message told us nothing the stream had
+    // not already carried, so the streamed ones stand. A thinking-only turn is
+    // the exception: it reconciles to nothing on purpose, and keeping its husk
+    // is what would leave a blank message behind.
+    const streamedNothing = message.parts.every(
+      (part) => !part || ((part.type === 'text' || part.type === 'thinking') && !part.text)
+    )
+    if (parts.length > 0 || streamedNothing) {
       message.parts = parts
       for (let i = 0; i < parts.length; i++) {
         const part = parts[i]
