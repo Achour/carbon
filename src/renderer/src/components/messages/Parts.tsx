@@ -3,6 +3,8 @@ import { Collapsible } from '@base-ui/react/collapsible'
 import {
   AlertTriangle,
   ArrowRight,
+  ArrowRightLeft,
+  Check,
   ChevronRight,
   FileText,
   GitCommitHorizontal,
@@ -321,9 +323,12 @@ export const AssistantBlock = React.memo(function AssistantBlock({
 })
 
 export const EventRow = React.memo(function EventRow({
-  message
+  message,
+  pending = false
 }: {
   message: EventMessage
+  /** Switch dividers only: the handoff this divider records is still running. */
+  pending?: boolean
 }): React.JSX.Element | null {
   switch (message.kind) {
     case 'turn': {
@@ -364,19 +369,29 @@ export const EventRow = React.memo(function EventRow({
           </div>
         )
       }
-      // Same quiet divider as 'info' — a switch is a transcript milestone, not
-      // a card floating outside the message flow. The names carry the story.
+      // The same single-row card language as tool calls (see the Plan row in
+      // ToolCard): icon, bold names, muted detail, live status icon — spinner
+      // while the outgoing model writes the brief, check once the turn reaches
+      // the new model. Left-aligned in the flow, exactly like a tool.
       return (
-        <div className="flex items-center gap-3 py-1" title={message.text}>
-          <div className="h-px flex-1 bg-border" />
-          <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-            <span className="font-medium text-foreground/75">{s.fromModel}</span>
-            <ArrowRight className="size-3 text-muted-foreground/70" />
-            <span className="font-medium text-foreground/75">{s.toModel}</span>
-            <span className="text-muted-foreground/50">·</span>
-            <span>context handed off</span>
+        <div
+          className="flex w-full animate-enter items-center gap-2.5 rounded-xl border border-border bg-card/60 px-3 py-2"
+          title={message.text}
+        >
+          <ArrowRightLeft className="size-4 shrink-0 text-primary" />
+          <span className="shrink-0 text-[13px] font-medium">{s.fromModel}</span>
+          <ArrowRight className="size-3.5 shrink-0 text-muted-foreground/70" />
+          <span className="shrink-0 text-[13px] font-medium">{s.toModel}</span>
+          <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+            {pending ? `${s.fromModel} is writing a handoff brief…` : 'context handed off'}
           </span>
-          <div className="h-px flex-1 bg-border" />
+          <span className="shrink-0">
+            {pending ? (
+              <Loader2 className="size-3.5 animate-spin text-warning" />
+            ) : (
+              <Check className="size-3.5 text-success" />
+            )}
+          </span>
         </div>
       )
     }

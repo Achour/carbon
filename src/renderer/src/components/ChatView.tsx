@@ -96,6 +96,8 @@ interface RenderCtx {
   busy: boolean
   lastAssistantId?: string
   onOpenPlan?: (plan: string) => void
+  /** Switch divider currently mid-handoff (brief still generating), if any. */
+  switchPendingId?: string
 }
 
 /**
@@ -248,7 +250,7 @@ function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
       out.push(<UserBubble key={m.id} message={m} />)
     }
     else if (m.role === 'assistant') out.push(renderAssistant(m))
-    else out.push(<EventRow key={m.id} message={m} />)
+    else out.push(<EventRow key={m.id} message={m} pending={m.id === ctx.switchPendingId} />)
   }
   flush()
   return out
@@ -278,7 +280,8 @@ const MessageHistory = React.memo(
       prev.ctx.cwd !== next.ctx.cwd ||
       prev.ctx.busy !== next.ctx.busy ||
       prev.ctx.lastAssistantId !== next.ctx.lastAssistantId ||
-      prev.ctx.onOpenPlan !== next.ctx.onOpenPlan
+      prev.ctx.onOpenPlan !== next.ctx.onOpenPlan ||
+      prev.ctx.switchPendingId !== next.ctx.switchPendingId
     ) {
       return false
     }
@@ -487,13 +490,25 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
     [openPlanPanel, chat.id, pendingPlanRequest?.id]
   )
   const historyEnd = liveAssistant ? messages.length - 1 : messages.length
+  // The most recent switch divider renders live ("writing handoff brief…")
+  // exactly while main reports the handoff in flight; the busy gate means a
+  // crash or restart can never leave a divider shimmering forever.
+  const switchPendingId = React.useMemo(() => {
+    if (!busy || !chat.switchingNote) return undefined
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i]
+      if (m.role === 'event' && m.kind === 'switch') return m.id
+    }
+    return undefined
+  }, [busy, chat.switchingNote, messages])
   const historyCtx = React.useMemo<RenderCtx>(
     () => ({
       cwd: chat.cwd,
       busy,
-      onOpenPlan: openPlan
+      onOpenPlan: openPlan,
+      switchPendingId
     }),
-    [chat.cwd, busy, openPlan]
+    [chat.cwd, busy, openPlan, switchPendingId]
   )
 
   return (
