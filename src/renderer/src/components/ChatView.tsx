@@ -490,6 +490,27 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
     [openPlanPanel, chat.id, pendingPlanRequest?.id]
   )
   const historyEnd = liveAssistant ? messages.length - 1 : messages.length
+  // A live message that is itself only tool calls joins the trailing run of
+  // tool-only history messages in ONE live ToolGroup — the same row history
+  // will render once the turn ends. Without this, each new search/read/agent
+  // streams as its own card and only collapses after the fact (each call is
+  // its own assistant message on the Claude side, unlike Codex's single
+  // accumulating message).
+  const liveRun = React.useMemo(() => {
+    if (!liveAssistant || !isGroupableMsg(liveAssistant)) return null
+    let start = historyEnd
+    while (start > 0) {
+      const prev = displayedMessages[start - 1]
+      if (prev.role === 'assistant' && (isGroupableMsg(prev) || isBlankMsg(prev))) start -= 1
+      else break
+    }
+    const parts = [...displayedMessages.slice(start, historyEnd), liveAssistant].flatMap((m) =>
+      m.role === 'assistant'
+        ? m.parts.filter((p): p is ToolPart => !!p && p.type === 'tool')
+        : []
+    )
+    return parts.length >= GROUP_MIN ? { start, parts } : null
+  }, [liveAssistant, displayedMessages, historyEnd])
   // The most recent switch divider renders live ("writing handoff brief…")
   // exactly while main reports the handoff in flight; the busy gate means a
   // crash or restart can never leave a divider shimmering forever.
@@ -649,14 +670,22 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
               </Button>
             </div>
           )}
-          <MessageHistory messages={displayedMessages} end={historyEnd} ctx={historyCtx} />
-          {liveAssistant && (
-            <AssistantBlock
-              message={liveAssistant}
-              cwd={chat.cwd}
-              streaming
-              onOpenPlan={openPlan}
-            />
+          <MessageHistory
+            messages={displayedMessages}
+            end={liveRun ? liveRun.start : historyEnd}
+            ctx={historyCtx}
+          />
+          {liveRun ? (
+            <ToolGroup parts={liveRun.parts} cwd={chat.cwd} />
+          ) : (
+            liveAssistant && (
+              <AssistantBlock
+                message={liveAssistant}
+                cwd={chat.cwd}
+                streaming
+                onOpenPlan={openPlan}
+              />
+            )
           )}
           {permissions.map((request) => {
             if (request.toolName === 'AskUserQuestion')
