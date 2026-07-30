@@ -145,6 +145,19 @@ export function buildHandoffBriefPrompt(
 }
 
 /**
+ * Kickoff prompt when an approved plan is implemented by the other provider.
+ * The plan rides verbatim — it is the highest-fidelity handoff artifact there
+ * is; the generated brief only covers the conversation around it.
+ */
+export function buildPlanImplementPrompt(plan: string, fromLabel: string): string {
+  return (
+    `The plan below was written by ${fromLabel} and approved by the user in this ` +
+    'conversation, which has been handed off to you for implementation. Implement it now.\n\n' +
+    plan
+  )
+}
+
+/**
  * The block prepended (invisibly — the UI never shows it) to the user's first
  * message on the new provider. `raw` marks the fallback where the summary is
  * the serialized transcript itself rather than a written brief.

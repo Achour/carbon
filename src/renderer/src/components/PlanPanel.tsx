@@ -38,13 +38,14 @@ export function PlanContent({
   const pending = panel.requestId !== null
 
   // Approving can hand implementation to a different model than the one that
-  // wrote the plan — Cursor-style. Sessions aren't portable across backends,
-  // so the picker only offers the chat's own provider.
+  // wrote the plan — Cursor-style — including one from the other provider:
+  // main tears down the review and hands the plan across the backend boundary
+  // (see ChatManager.approvePlanCrossProvider).
   const buildOptions = React.useMemo(
     () =>
       chat
         ? assembleModelOptions(dynamicModels, codexConfigModel).filter(
-            (option) => option.provider === chat.provider && !option.disabled
+            (option) => !option.disabled
           )
         : [],
     [chat, dynamicModels, codexConfigModel]
@@ -55,10 +56,13 @@ export function PlanContent({
   const resolvedBuildModelOption = buildOptions.find(
     (option) => option.id === buildModelOption?.resolvedModel
   )
+  // Efforts follow the *picked* build model's provider — a cross-provider pick
+  // must offer that backend's levels, not the planning chat's.
+  const buildProvider = buildModelOption?.provider ?? chat?.provider ?? 'claude'
   const supportedBuildEfforts = new Set(
     buildModelOption?.supportedEfforts ??
       resolvedBuildModelOption?.supportedEfforts ??
-      (chat?.provider === 'codex'
+      (buildProvider === 'codex'
         ? ['low', 'medium', 'high', 'xhigh']
         : ['low', 'medium', 'high', 'xhigh', 'max'])
   )
@@ -70,7 +74,7 @@ export function PlanContent({
           ? {
               ...option,
               description:
-                chat.provider === 'codex'
+                buildProvider === 'codex'
                   ? 'Uses your Codex config'
                   : 'Uses your Claude Code config'
             }

@@ -63,6 +63,7 @@ import {
   HANDOFF_TRANSCRIPT_CHARS,
   buildHandoffBriefPrompt,
   buildHandoffContext,
+  buildPlanImplementPrompt,
   serializeTranscript
 } from './handoff'
 
@@ -837,6 +838,13 @@ class ClaudeSession implements AgentSession {
     // Stay in `waiting-permission` while other parallel tool calls still await
     // the user; only resume `streaming` once the last request is handled.
     this.setStatus(this.pending.size > 0 ? 'waiting-permission' : 'streaming')
+  }
+
+  pendingPlan(requestId: string): string | null {
+    const pending = this.pending.get(requestId)
+    if (!pending || pending.toolName !== 'ExitPlanMode') return null
+    const plan = (pending.input as Record<string, unknown> | undefined)?.plan
+    return typeof plan === 'string' ? plan : null
   }
 
   private denyAllPending(interrupt: boolean): void {
@@ -2319,6 +2327,22 @@ export class ChatManager {
   }
 
   respondPermission(chatId: string, requestId: string, decision: PermissionDecision): void {
+    const chat = this.store.getChat(chatId)
+    // A plan approved with the *other* provider's "Build with" model never
+    // reaches the session that wrote it — the manager tears the review down
+    // and hands implementation across the backend boundary instead.
+    if (
+      chat &&
+      decision.behavior === 'allow' &&
+      decision.model !== undefined &&
+      providerForModel(decision.model) !== chat.provider
+    ) {
+      const plan = this.planForRequest(chat, requestId)
+      if (plan !== null) {
+        this.approvePlanCrossProvider(chat, decision, plan)
+        return
+      }
+    }
     const live = this.sessionFor(chatId)
     if (live) {
       live.respondPermission(requestId, decision)
@@ -2326,10 +2350,54 @@ export class ChatManager {
     }
     // Codex plan reviews are persisted. Recreate the lightweight thread wrapper
     // on demand so an approval made after an app restart can still continue.
-    const chat = this.store.getChat(chatId)
     if (chat?.provider === 'codex' && chat.pendingPlanReview?.requestId === requestId) {
       this.createSession(chat).respondPermission(requestId, decision)
     }
+  }
+
+  /** The plan text behind a pending review request, if `requestId` is one. */
+  private planForRequest(chat: ChatData, requestId: string): string | null {
+    if (chat.provider === 'codex') {
+      return chat.pendingPlanReview?.requestId === requestId ? chat.pendingPlanReview.plan : null
+    }
+    // Claude's review is a live ExitPlanMode permission; it dies with the
+    // session, so a live session is the only place it can be pending.
+    return this.sessionFor(chat.id)?.pendingPlan?.(requestId) ?? null
+  }
+
+  /**
+   * Approve a plan into the other provider: restore the pre-plan permission
+   * mode, switch backends (disposing the plan session resolves its pending
+   * review; `switchProvider` stashes the handoff), and kick off implementation
+   * with the plan text verbatim — the plan itself is the handoff artifact, the
+   * generated brief only covers the conversation around it.
+   */
+  private approvePlanCrossProvider(
+    chat: ChatData,
+    decision: Extract<PermissionDecision, { behavior: 'allow' }>,
+    plan: string
+  ): void {
+    const nextProvider = providerForModel(decision.model!)
+    const fromLabel = modelLabel(chat.model, chat.provider)
+    // Same restore rule as the in-provider approvals: back to the mode the
+    // chat was in before plan mode, with 'default' for a chat *created* in
+    // plan mode — never read-only for the work it just approved.
+    const restore = chat.modeBeforePlan ?? 'default'
+    chat.modeBeforePlan = undefined
+    if (restore !== 'plan') chat.permissionMode = restore
+    if (decision.effort !== undefined) {
+      chat.effort = effortForProvider(decision.effort || undefined, nextProvider)
+    }
+    const prevModel = chat.model
+    chat.model = decision.model || undefined
+    this.switchProvider(chat, nextProvider, prevModel)
+    this.emit({
+      type: 'meta',
+      chatId: chat.id,
+      patch: { model: chat.model, permissionMode: chat.permissionMode, modeBeforePlan: undefined }
+    })
+    this.store.saveChat(chat.id)
+    this.sendPrompt(chat, buildPlanImplementPrompt(plan, fromLabel), undefined, 'Implement the plan')
   }
 
   async setOptions(

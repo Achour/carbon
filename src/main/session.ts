@@ -53,6 +53,12 @@ export interface AgentSession {
    * the displayed/persisted user message — the cross-provider handoff rides it.
    */
   send(text: string, attachments?: Attachment[], label?: string, hiddenContext?: string): void
+  /**
+   * The plan text behind a pending review request, or null if `requestId`
+   * isn't one. Lets the manager catch a plan approved into the *other*
+   * provider before the approval reaches this session (see ChatManager).
+   */
+  pendingPlan?(requestId: string): string | null
   interrupt(): Promise<void>
   setModel(model?: string): Promise<void>
   setPermissionMode(mode: PermissionModeId): Promise<void>

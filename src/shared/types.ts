@@ -312,9 +312,11 @@ export type PermissionDecision =
       updatedInput?: Record<string, unknown>
       /**
        * Plan approvals only: switch the chat to this model before implementation
-       * starts, so a plan written by one model can be built by another. Must stay
-       * within the chat's provider (sessions aren't portable across backends).
-       * Undefined keeps the model the plan was written with.
+       * starts, so a plan written by one model can be built by another. A model
+       * from the *other* provider works too — the manager tears down the review,
+       * switches backends, and hands the plan across (see
+       * ChatManager.approvePlanCrossProvider). Undefined keeps the model the
+       * plan was written with.
        */
       model?: string
       /**
