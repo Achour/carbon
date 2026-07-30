@@ -1823,8 +1823,13 @@ export class ChatManager {
     }
     const prevModel = chat.model
     chat.model = pending || undefined
-    this.emit({ type: 'meta', chatId: chat.id, patch: { pendingModel: undefined } })
+    this.emit({ type: 'meta', chatId: chat.id, patch: { pendingModel: undefined, model: chat.model } })
     return this.switchProvider(chat, nextProvider, prevModel)
+  }
+
+  /** `modelLabel` through the live SDK list, so dynamic alias ids get real names. */
+  private label(model: string | undefined, provider: Provider): string {
+    return modelLabel(model, provider, this.models ?? undefined)
   }
 
   private sendPrompt(
@@ -1834,13 +1839,22 @@ export class ChatManager {
     label?: string,
     handoff?: HandoffSnapshot | null
   ): void {
-    this.deliver(
-      chat,
-      text,
-      attachments,
-      label,
-      handoff ? this.handoffContext(chat, handoff) : undefined
-    )
+    if (!handoff) {
+      this.deliver(chat, text, attachments, label)
+      return
+    }
+    // Lock the composer with a visible reason while the handoff context is
+    // generated; the note clears the moment the turn reaches the new backend.
+    const note =
+      `Switching to ${this.label(chat.model, chat.provider)} — ` +
+      `${this.label(handoff.model, handoff.provider)} is handing off the conversation…`
+    chat.switchingNote = note
+    this.emit({ type: 'meta', chatId: chat.id, patch: { switchingNote: note } })
+    const context = this.handoffContext(chat, handoff).finally(() => {
+      chat.switchingNote = undefined
+      this.emit({ type: 'meta', chatId: chat.id, patch: { switchingNote: undefined } })
+    })
+    this.deliver(chat, text, attachments, label, context)
   }
 
   private deliver(
@@ -1917,8 +1931,8 @@ export class ChatManager {
     if (hasHistory) {
       this.pushEvent(
         chat,
-        `Switching to ${modelLabel(chat.model, nextProvider)} — ` +
-          `${modelLabel(prevModel, prevProvider)} is writing a handoff brief so the ` +
+        `Switching to ${this.label(chat.model, nextProvider)} — ` +
+          `${this.label(prevModel, prevProvider)} is writing a handoff brief so the ` +
           'conversation continues with its context.'
       )
     }
@@ -1959,13 +1973,13 @@ export class ChatManager {
     // Off the send IPC tick — serialization is bounded, but not free.
     await new Promise<void>((resolve) => setImmediate(resolve))
     try {
-      const fromLabel = modelLabel(handoff.model, handoff.provider)
+      const fromLabel = this.label(handoff.model, handoff.provider)
       const transcript = this.transcriptFor(chat, HANDOFF_TRANSCRIPT_CHARS)
       if (!transcript) return undefined
       const prompt = buildHandoffBriefPrompt(
         transcript,
         fromLabel,
-        modelLabel(chat.model, chat.provider)
+        this.label(chat.model, chat.provider)
       )
       const gen =
         handoff.provider === 'codex'
@@ -2365,7 +2379,7 @@ export class ChatManager {
     plan: string
   ): void {
     const nextProvider = providerForModel(decision.model!)
-    const fromLabel = modelLabel(chat.model, chat.provider)
+    const fromLabel = this.label(chat.model, chat.provider)
     // Same restore rule as the in-provider approvals: back to the mode the
     // chat was in before plan mode, with 'default' for a chat *created* in
     // plan mode — never read-only for the work it just approved.

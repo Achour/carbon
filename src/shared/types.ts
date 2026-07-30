@@ -129,6 +129,14 @@ export interface ChatMeta {
    * shows this model (and its provider's controls) while it waits.
    */
   pendingModel?: string
+  /**
+   * Transient: shown in a locked composer while the handoff context for a
+   * just-sent provider switch is being generated. Set as the switch applies,
+   * cleared when the turn is handed to the new backend. The renderer only
+   * shows it while the chat is busy, so a value left behind by a crash is
+   * invisible.
+   */
+  switchingNote?: string
   /** Tokens currently in the model's context (from the last API call). */
   contextTokens?: number
   /** Context window size of the model in use. */
@@ -737,13 +745,20 @@ export const PROVIDER_LABELS: Record<Provider, string> = {
 
 /**
  * Human "model (provider)" label for cross-provider copy — the handoff's
- * transcript events and brief prompts. Built on `resolvedModelName` so dynamic
- * SDK ids render their human name, not the raw wire id.
+ * transcript events, composer notes and brief prompts. `options` (the live
+ * picker list, when the caller has it) resolves dynamic SDK alias ids like
+ * `opus[1m]` that `resolvedModelName` alone can't name.
  */
-export function modelLabel(model: string | undefined, provider: Provider): string {
+export function modelLabel(
+  model: string | undefined,
+  provider: Provider,
+  options?: ModelOption[]
+): string {
   const name = PROVIDER_LABELS[provider]
   if (!model || model === CODEX_DEFAULT_MODEL) return name
-  return `${resolvedModelName(model) ?? model} (${name})`
+  const label =
+    options?.find((option) => option.id === model)?.label ?? resolvedModelName(model) ?? model
+  return `${label} (${name})`
 }
 
 export const PERMISSION_MODES: { id: PermissionModeId; label: string; description: string }[] = [

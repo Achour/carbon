@@ -536,6 +536,7 @@ export function Composer({
   cwd = null,
   commands = [],
   disabled = false,
+  switchingNote,
   placeholder = 'Ask Claude Code anything…',
   autoFocus = true
 }: {
@@ -563,6 +564,12 @@ export function Composer({
   /** Slash commands available in this project, for the / autocomplete. */
   commands?: SlashCommand[]
   disabled?: boolean
+  /**
+   * Set while a just-sent provider switch is generating its handoff context.
+   * Locks the composer (Stop stays available) and replaces the placeholder,
+   * so the wait has a visible reason instead of a silent spinner.
+   */
+  switchingNote?: string
   placeholder?: string
   autoFocus?: boolean
 }): React.JSX.Element {
@@ -801,7 +808,8 @@ export function Composer({
     setAttachError(skipped.length ? `Skipped: ${skipped.join(', ')}` : null)
   }
 
-  const canSend = (text.trim().length > 0 || attachments.length > 0) && !disabled
+  const locked = disabled || switchingNote !== undefined
+  const canSend = (text.trim().length > 0 || attachments.length > 0) && !locked
 
   const submit = (): void => {
     if (!canSend) return
@@ -847,7 +855,7 @@ export function Composer({
       className={cn(
         'relative rounded-2xl border border-border bg-card shadow-lg shadow-black/5 transition-colors focus-within:border-ring/60 dark:shadow-black/20',
         dragOver && 'border-primary/60 ring-2 ring-primary/25',
-        disabled && 'opacity-60'
+        locked && 'opacity-60'
       )}
     >
       {/* /-slash command picker */}
@@ -1017,8 +1025,10 @@ export function Composer({
             void addFiles(e.clipboardData.files)
           }
         }}
-        placeholder={streaming ? 'Queue a message for when this turn ends…' : placeholder}
-        disabled={disabled}
+        placeholder={
+          switchingNote ?? (streaming ? 'Queue a message for when this turn ends…' : placeholder)
+        }
+        disabled={locked}
         rows={1}
         className="no-drag block max-h-[220px] w-full resize-none bg-transparent px-4 pt-3.5 pb-1 text-[14px] leading-relaxed outline-none select-text placeholder:text-muted-foreground/60"
       />
@@ -1039,7 +1049,7 @@ export function Composer({
             variant="ghost"
             className="shrink-0 text-muted-foreground"
             onClick={() => fileInputRef.current?.click()}
-            disabled={disabled}
+            disabled={locked}
             aria-label="Attach files"
           >
             <Paperclip />
@@ -1059,7 +1069,7 @@ export function Composer({
             onServiceTierChange={onServiceTierChange}
             serviceTiers={serviceTierOptions}
             fastNote={fastNote}
-            disabled={disabled}
+            disabled={locked}
           />
           <CompactSelect
             value={permissionValue}

@@ -762,6 +762,8 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
             provider={composerProvider}
             cwd={chat.cwd}
             commands={commands}
+            // Busy-gated so a note left behind by a crash can never stick.
+            switchingNote={busy ? chat.switchingNote : undefined}
             placeholder={composerProvider === 'codex' ? 'Ask Codex anything…' : undefined}
           />
         </div>
