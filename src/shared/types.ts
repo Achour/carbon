@@ -277,13 +277,25 @@ export interface TurnStats {
   outputTokens?: number
 }
 
+/** Structured from → to of a provider switch, for the transcript's handoff card. */
+export interface ModelSwitchInfo {
+  /** Display names only ('Opus 5'); provider names ride separately. */
+  fromModel: string
+  fromProvider: Provider
+  toModel: string
+  toProvider: Provider
+}
+
 export interface EventMessage {
   id: string
   role: 'event'
-  kind: 'error' | 'info' | 'compact' | 'turn'
+  kind: 'error' | 'info' | 'compact' | 'turn' | 'switch'
+  /** Always set — the prose fallback when a renderer lacks the structured card. */
   text: string
   ts: number
   stats?: TurnStats
+  /** kind 'switch' only. */
+  switch?: ModelSwitchInfo
 }
 
 export type ChatMessage = UserMessage | AssistantMessage | EventMessage
@@ -744,10 +756,23 @@ export const PROVIDER_LABELS: Record<Provider, string> = {
 }
 
 /**
+ * Just the model's display name ('Opus 5'), or the provider's name when the
+ * model is the provider-default row. `options` (the live picker list, when the
+ * caller has it) resolves dynamic SDK alias ids like `opus[1m]` that
+ * `resolvedModelName` alone can't name.
+ */
+export function modelDisplayName(
+  model: string | undefined,
+  provider: Provider,
+  options?: ModelOption[]
+): string {
+  if (!model || model === CODEX_DEFAULT_MODEL) return PROVIDER_LABELS[provider]
+  return options?.find((option) => option.id === model)?.label ?? resolvedModelName(model) ?? model
+}
+
+/**
  * Human "model (provider)" label for cross-provider copy — the handoff's
- * transcript events, composer notes and brief prompts. `options` (the live
- * picker list, when the caller has it) resolves dynamic SDK alias ids like
- * `opus[1m]` that `resolvedModelName` alone can't name.
+ * composer notes, prose fallbacks and brief prompts.
  */
 export function modelLabel(
   model: string | undefined,
@@ -755,10 +780,8 @@ export function modelLabel(
   options?: ModelOption[]
 ): string {
   const name = PROVIDER_LABELS[provider]
-  if (!model || model === CODEX_DEFAULT_MODEL) return name
-  const label =
-    options?.find((option) => option.id === model)?.label ?? resolvedModelName(model) ?? model
-  return `${label} (${name})`
+  const display = modelDisplayName(model, provider, options)
+  return display === name ? name : `${display} (${name})`
 }
 
 export const PERMISSION_MODES: { id: PermissionModeId; label: string; description: string }[] = [

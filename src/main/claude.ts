@@ -29,6 +29,7 @@ import type {
   FastModeStatus,
   McpServerInfo,
   ModelOption,
+  ModelSwitchInfo,
   OpResult,
   PermissionDecision,
   PermissionModeId,
@@ -45,6 +46,7 @@ import {
   claudeModelContextWindow,
   claudeModelLabel,
   effortForProvider,
+  modelDisplayName,
   modelLabel,
   providerForModel
 } from '@shared/types'
@@ -1900,8 +1902,20 @@ export class ChatManager {
     }
   }
 
-  private pushEvent(chat: ChatData, text: string, kind: 'info' | 'error' = 'info'): void {
-    const msg = { id: randomUUID(), role: 'event' as const, kind, text, ts: Date.now() }
+  private pushEvent(
+    chat: ChatData,
+    text: string,
+    kind: 'info' | 'error' | 'switch' = 'info',
+    switchInfo?: ModelSwitchInfo
+  ): void {
+    const msg = {
+      id: randomUUID(),
+      role: 'event' as const,
+      kind,
+      text,
+      ts: Date.now(),
+      ...(switchInfo ? { switch: switchInfo } : {})
+    }
     chat.messages.push(msg)
     chat.updatedAt = msg.ts
     this.emit({ type: 'message', chatId: chat.id, message: msg })
@@ -1933,7 +1947,14 @@ export class ChatManager {
         chat,
         `Switching to ${this.label(chat.model, nextProvider)} — ` +
           `${this.label(prevModel, prevProvider)} is writing a handoff brief so the ` +
-          'conversation continues with its context.'
+          'conversation continues with its context.',
+        'switch',
+        {
+          fromModel: modelDisplayName(prevModel, prevProvider, this.models ?? undefined),
+          fromProvider: prevProvider,
+          toModel: modelDisplayName(chat.model, nextProvider, this.models ?? undefined),
+          toProvider: nextProvider
+        }
       )
     }
     if (review) {

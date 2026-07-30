@@ -2,14 +2,24 @@ import * as React from 'react'
 import { Collapsible } from '@base-ui/react/collapsible'
 import {
   AlertTriangle,
+  ArrowRight,
   ChevronRight,
   FileText,
   GitCommitHorizontal,
   Loader2,
   MousePointerClick,
-  RotateCcw
+  RotateCcw,
+  Sparkles
 } from 'lucide-react'
-import type { AssistantMessage, EventMessage, RewindResult, ToolPart, UserMessage } from '@shared/types'
+import type {
+  AssistantMessage,
+  EventMessage,
+  Provider,
+  RewindResult,
+  ToolPart,
+  UserMessage
+} from '@shared/types'
+import { PROVIDER_LABELS } from '@shared/types'
 import { cn } from '@/lib/utils'
 import { formatCost, formatDuration } from '@/lib/format'
 import { Markdown, StreamingMarkdown, useStreamText } from '@/components/Markdown'
@@ -351,6 +361,50 @@ export const EventRow = React.memo(function EventRow({
           <div className="h-px flex-1 bg-border" />
         </div>
       )
+    case 'switch': {
+      const s = message.switch
+      if (!s) {
+        // Old events persisted without the structured payload keep the divider.
+        return (
+          <div className="flex items-center gap-3 py-1">
+            <div className="h-px flex-1 bg-border" />
+            <span className="text-[11px] text-muted-foreground">{message.text}</span>
+            <div className="h-px flex-1 bg-border" />
+          </div>
+        )
+      }
+      const chip = (model: string, provider: Provider): React.JSX.Element => (
+        <span className="inline-flex items-baseline gap-1.5">
+          <span className="font-medium text-foreground">{model}</span>
+          {model !== PROVIDER_LABELS[provider] && (
+            <span className="text-[10px] tracking-wide text-muted-foreground/70 uppercase">
+              {PROVIDER_LABELS[provider]}
+            </span>
+          )}
+        </span>
+      )
+      return (
+        <div className="flex justify-center py-2">
+          <div className="animate-enter w-full max-w-md rounded-xl border border-border bg-card/60 px-4 py-3">
+            <div className="flex items-center justify-center gap-2.5 text-[13px]">
+              {chip(s.fromModel, s.fromProvider)}
+              <ArrowRight className="size-3.5 shrink-0 text-muted-foreground" />
+              {chip(s.toModel, s.toProvider)}
+            </div>
+            <div className="mt-2.5 space-y-1.5 border-t border-border/60 pt-2.5">
+              <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                <FileText className="size-3 shrink-0" />
+                <span>{s.fromModel} writes a handoff brief of the conversation</span>
+              </div>
+              <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                <Sparkles className="size-3 shrink-0" />
+                <span>{s.toModel} continues with that context</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )
+    }
     case 'error':
       return (
         <div className="flex animate-enter items-start gap-2.5 rounded-xl border border-destructive/30 bg-destructive/8 px-3.5 py-2.5 dark:bg-destructive/10">
