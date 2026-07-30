@@ -118,6 +118,86 @@ async function untrackedLineCounts(cwd: string, paths: string[]): Promise<Map<st
   return counts
 }
 
+const DEFAULT_BRANCHES = ['main', 'master']
+
+/**
+ * The repo's default branch, or null when it has neither `main` nor `master`.
+ * One `for-each-ref` instead of a `rev-parse --verify` per candidate: it lists
+ * only the refs that exist and exits 0 when none do.
+ */
+export async function detectDefaultBranch(cwd: string): Promise<string | null> {
+  const heads = await git(cwd, [
+    'for-each-ref',
+    '--format=%(refname:short)',
+    ...DEFAULT_BRANCHES.map((b) => `refs/heads/${b}`)
+  ]).catch(() => '')
+  // for-each-ref sorts by refname, so precedence comes from DEFAULT_BRANCHES.
+  const present = heads.split('\n').map((l) => l.trim())
+  return DEFAULT_BRANCHES.find((b) => present.includes(b)) ?? null
+}
+
+/**
+ * Where `branch` stands relative to the repo's default branch: `behind` is the
+ * staleness that has no other symptom until it surfaces as a conflicted merge,
+ * `ahead` is the work not yet landed. Null only when the repo has no
+ * main/master; the counts are null on the default branch itself, where the
+ * question doesn't apply. This is the single implementation of that question —
+ * `gitStatus`, `worktreeStatus` and the merge guards all read it from here, so
+ * the chip, the dialog and the operation can never disagree.
+ * (`GitStatus.behind` is a different number: vs the branch's own upstream.)
+ */
+export async function branchVsDefault(
+  cwd: string,
+  branch: string
+): Promise<{ defaultBranch: string; behind: number | null; ahead: number | null } | null> {
+  const def = await detectDefaultBranch(cwd)
+  if (!def) return null
+  if (!branch || branch === def) return { defaultBranch: def, behind: null, ahead: null }
+  // "<left>\t<right>" — left is what the default has and we don't.
+  const counts = await git(cwd, ['rev-list', '--left-right', '--count', `${def}...${branch}`])
+    .then((out) => out.trim().split(/\s+/).map(Number))
+    .catch(() => null)
+  const valid = counts?.length === 2 && counts.every(Number.isFinite)
+  return {
+    defaultBranch: def,
+    behind: valid ? counts![0] : null,
+    ahead: valid ? counts![1] : null
+  }
+}
+
+/** The branch checked out in `cwd` ('HEAD' when detached). */
+export async function currentBranch(cwd: string): Promise<string> {
+  return (await git(cwd, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim()
+}
+
+/**
+ * Files with uncommitted changes (staged + unstaged + untracked). An unreadable
+ * tree reads as clean — the git command being guarded then refuses itself.
+ */
+export async function dirtyFileCount(cwd: string): Promise<number> {
+  const out = await git(cwd, ['status', '--porcelain']).catch(() => '')
+  return out.split('\n').filter((l) => l.trim().length > 0).length
+}
+
+/** The one spelling of the dirty-tree refusal every guarded operation shows. */
+export function uncommitted(n: number, subject: string, suffix: string): string {
+  return `${subject} ${n} uncommitted file${n === 1 ? '' : 's'}. ${suffix}`
+}
+
+/**
+ * Merge `branch` into the checked-out branch, aborting on conflict so the tree
+ * is never left half-merged. Returns git's message on failure, null on success.
+ */
+export async function mergeOrAbort(cwd: string, branch: string): Promise<string | null> {
+  try {
+    await git(cwd, ['merge', '--no-edit', branch], 30_000)
+    return null
+  } catch (err) {
+    await git(cwd, ['merge', '--abort'], 30_000).catch(() => {})
+    return errText(err)
+  }
+}
+
 export async function gitStatus(cwd: string): Promise<GitStatus> {
   let out: string
   try {
@@ -175,6 +255,9 @@ export async function gitStatus(cwd: string): Promise<GitStatus> {
   }
 
   status.changes = changes
+  // Started here and awaited at the end so it overlaps the numstat reads below
+  // rather than adding its own round trip to every status refresh.
+  const standing = branchVsDefault(cwd, status.branch)
   try {
     status.hasRemote = (await git(cwd, ['remote'])).trim().length > 0
   } catch {
@@ -224,6 +307,13 @@ export async function gitStatus(cwd: string): Promise<GitStatus> {
     status.deletions = w.deletions + s.deletions
   } catch {
     // leave additions/deletions at 0
+  }
+
+  const vs = await standing
+  if (vs) {
+    status.defaultBranch = vs.defaultBranch
+    if (vs.behind !== null) status.behindDefault = vs.behind
+    if (vs.ahead !== null) status.aheadDefault = vs.ahead
   }
 
   return status
@@ -413,4 +503,67 @@ export async function gitPull(cwd: string): Promise<GitResult> {
   } catch (err) {
     return { ok: false, error: errText(err) }
   }
+}
+
+/**
+ * Land the checked-out branch into the default branch, in place: switch, merge,
+ * delete the branch. This is the ordinary end of a feature branch, and it ends
+ * *on* the default branch — which is only safe because the source-control
+ * ladder's first rung from there is "Create Branch & Commit", so the next piece
+ * of work branches off again instead of piling onto main.
+ *
+ * Unlike the worktree merge, this rewrites the directory the chat is sitting
+ * in, so the caller only offers it on an idle chat. A dirty tree is refused
+ * outright: `switch` would either carry the changes onto the default branch or
+ * refuse halfway, and neither is something to hand a beginner. A conflicting
+ * merge is aborted and the original branch checked out again, so a refusal
+ * always leaves the working directory exactly as it was found.
+ */
+export async function gitMergeIntoDefault(cwd: string): Promise<GitResult> {
+  let branch: string, def: string | null, dirty: number
+  try {
+    // Pure reads with no dependency between them; the guards keep their order.
+    ;[branch, def, dirty] = await Promise.all([
+      currentBranch(cwd),
+      detectDefaultBranch(cwd),
+      dirtyFileCount(cwd)
+    ])
+  } catch (err) {
+    return { ok: false, error: errText(err) }
+  }
+
+  if (!def) return { ok: false, error: 'No main or master branch to merge into.' }
+  if (branch === def) return { ok: false, error: `Already on ${def}.` }
+  if (branch === 'HEAD') return { ok: false, error: 'Not on a branch (detached HEAD).' }
+  if (dirty > 0) {
+    return {
+      ok: false,
+      error: uncommitted(dirty, 'You have', 'Commit them first — only committed work can be merged.')
+    }
+  }
+
+  try {
+    await git(cwd, ['switch', def], 30_000)
+  } catch (err) {
+    return { ok: false, error: errText(err) }
+  }
+
+  const conflict = await mergeOrAbort(cwd, branch)
+  if (conflict) {
+    // Put the directory back the way it was: the merge is undone, undo the switch.
+    await git(cwd, ['switch', branch], 30_000).catch(() => {})
+    return {
+      ok: false,
+      error: `${conflict}\n\nNothing changed — you're still on ${branch}. Ask the agent to merge ${def} into this branch and resolve the conflicts first.`
+    }
+  }
+
+  try {
+    // Unforced: git only agrees to this because it just merged the branch.
+    await git(cwd, ['branch', '-d', branch], 30_000)
+  } catch (err) {
+    // The merge is what mattered; a surviving branch is harmless.
+    return { ok: true, output: `Merged into ${def}. The ${branch} branch is still there: ${errText(err)}` }
+  }
+  return { ok: true, output: `Merged ${branch} into ${def} and deleted the branch.` }
 }

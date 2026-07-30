@@ -18,6 +18,7 @@ export type GitActionId =
   | 'create-pr'
   | 'publish-github'
   | 'sync-cleanup'
+  | 'update-from-main'
 
 export interface GitAction {
   id: GitActionId
@@ -34,7 +35,8 @@ const LABELS: Record<GitActionId, string> = {
   pull: 'Pull',
   'create-pr': 'Create Pull Request',
   'publish-github': 'Publish to GitHub',
-  'sync-cleanup': 'Sync & delete branch'
+  'sync-cleanup': 'Sync & delete branch',
+  'update-from-main': 'Update from main'
 }
 
 export function gitAction(id: GitActionId): GitAction {
@@ -64,10 +66,13 @@ function set(primary: GitActionId | null, rungs: GitActionId[]): GitActionSet {
  * Maps the current git + GitHub state to the source-control button's primary
  * action and dropdown ladder. `github` may be null (still loading / gh absent),
  * in which case only local actions are offered and it upgrades once gh reports.
+ * `opts.worktree` marks a chat running in a linked worktree, where one rung is
+ * physically impossible — see `sync-cleanup` below.
  */
 export function resolveGitActions(
   git: GitStatus | null,
-  github: GitHubState | null
+  github: GitHubState | null,
+  opts: { worktree?: boolean } = {}
 ): GitActionSet {
   if (!git || !git.isRepo) return set(null, [])
 
@@ -83,8 +88,13 @@ export function resolveGitActions(
     return set(dirty ? 'commit' : null, [])
   }
 
-  // The branch's PR has merged → close the loop.
+  // The branch's PR has merged → close the loop. `sync-cleanup` switches to the
+  // default branch, which git refuses inside a worktree ("already used by
+  // worktree at …") because the main checkout holds it. There the cleanup is
+  // removing the worktree itself, which is an environment action in the chat's
+  // ⋯ menu rather than a rung here.
   if (github?.pr?.state === 'MERGED') {
+    if (opts.worktree) return set(dirty ? 'commit-push' : null, [])
     return set('sync-cleanup', dirty ? ['commit-push'] : [])
   }
 
@@ -155,6 +165,11 @@ export function gitActionPrompt(id: GitActionId, opts: { commitScope: string }):
       return `Publish this project to GitHub. If there are no commits yet, stage all files and make an initial commit with a clear message. Then create a new PRIVATE GitHub repository from this directory and push to it (\`gh repo create <folder-name> --source . --private --push\`). ${noExtras} Print the repository URL.`
     case 'sync-cleanup':
       return `The pull request for this branch has been merged. Switch to the repository's default branch, pull the latest, and delete the now-merged local branch. ${noExtras} Report what you did.`
+    case 'update-from-main':
+      // Delegated rather than executed directly precisely because of conflicts:
+      // the whole value of updating early is having someone resolve them here,
+      // in a scratch branch, instead of at merge time.
+      return `Bring this branch up to date with the repository's default branch (main or master). Fetch first, then merge the default branch into this one — the remote-tracking copy (\`origin/<default>\`) if there is a remote, the local branch otherwise. If the merge conflicts, resolve each conflict carefully, preserving the intent of both sides, and complete the merge. Do not make any other changes and do not commit unrelated work. Report what came in and how you resolved anything that conflicted.`
     case 'push':
     case 'pull':
       // Executed directly by the store, not via the agent.

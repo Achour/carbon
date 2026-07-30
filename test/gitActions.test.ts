@@ -114,3 +114,23 @@ test('PR merged → sync & delete branch', () => {
   const s = resolveGitActions(gitStatus({ branch: 'feature', ahead: 0 }), github({ pr: pr({ state: 'MERGED' }) }))
   assert.equal(s.primary?.id, 'sync-cleanup')
 })
+
+test('PR merged in a worktree → no sync-cleanup, which git would refuse there', () => {
+  // `sync-cleanup` switches to the default branch; inside a worktree git says
+  // "already used by worktree at …". Cleanup there means removing the worktree,
+  // which lives in the chat's ⋯ menu, so the ladder offers nothing.
+  const merged = github({ pr: pr({ state: 'MERGED' }) })
+  const s = resolveGitActions(gitStatus({ branch: 'feature' }), merged, { worktree: true })
+  assert.equal(s.primary, null)
+  assert.deepEqual(s.rungs, [])
+
+  // Uncommitted work is still committable from a worktree.
+  const d = resolveGitActions(dirty({ branch: 'feature' }), merged, { worktree: true })
+  assert.equal(d.primary?.id, 'commit-push')
+
+  // Every other state is unaffected by the flag.
+  assert.equal(
+    resolveGitActions(dirty({ branch: 'feature' }), github(), { worktree: true }).primary?.id,
+    resolveGitActions(dirty({ branch: 'feature' }), github()).primary?.id
+  )
+})

@@ -6,7 +6,16 @@ import { basename, dirname, join } from 'node:path'
 import type { OpResult, WorktreeInfo, WorktreeRef, WorktreeStatus } from '@shared/types'
 // The .ts extension keeps `node --test` able to load this module directly (see
 // codex.ts for the same pattern); git.ts value-imports only node: builtins.
-import { errText, git } from './git.ts'
+import {
+  branchVsDefault,
+  currentBranch,
+  detectDefaultBranch,
+  dirtyFileCount,
+  errText,
+  git,
+  mergeOrAbort,
+  uncommitted
+} from './git.ts'
 
 /** Worktree commands checkout whole trees, so they get longer than git.ts's default. */
 const TIMEOUT = 30_000
@@ -120,13 +129,26 @@ export function parseWorktreeList(stdout: string): WorktreeRef[] {
   return refs
 }
 
-/** Every worktree of the repo `cwd` belongs to, main checkout first. */
+/**
+ * Every worktree of the repo `cwd` belongs to, main checkout first, each tagged
+ * with whether its branch is already merged into the default branch — that's
+ * what marks a worktree as finished so the picker can offer to clean it up.
+ * Merged-ness costs one `branch --merged` for the whole list, not one per
+ * worktree, and stays undefined when the repo has no recognizable default.
+ */
 export async function listWorktrees(cwd: string): Promise<WorktreeRef[]> {
-  try {
-    return parseWorktreeList(await git(cwd, ['worktree', 'list', '--porcelain']))
-  } catch {
-    return []
-  }
+  // The picker blocks on this at open, so the independent reads go together.
+  const [refs, def] = await Promise.all([
+    git(cwd, ['worktree', 'list', '--porcelain']).then(parseWorktreeList).catch(() => null),
+    detectDefaultBranch(cwd)
+  ])
+  if (!refs) return []
+  if (!def) return refs
+  const merged = await git(cwd, ['branch', '--merged', def, '--format=%(refname:short)'])
+    .then((out) => new Set(out.split('\n').map((l) => l.trim()).filter(Boolean)))
+    .catch(() => null)
+  if (!merged) return refs
+  return refs.map((r) => (r.isMain ? r : { ...r, merged: merged.has(r.branch) }))
 }
 
 /** True when `path` is inside the directory the app owns. Guards destructive ops. */
@@ -199,38 +221,24 @@ export async function resolveWorktree(path: string): Promise<WorktreeInfo | null
   }
 }
 
-const DEFAULT_BRANCHES = ['main', 'master']
-
 /**
  * Dirty-file and unmerged-commit counts, used to gate destructive removal.
- * The delete dialog blocks on this, so the independent reads go concurrently
- * and the default branch is probed with one `for-each-ref` instead of a
- * `rev-parse --verify` per candidate.
+ * The delete dialog blocks on this, so the independent reads go concurrently.
  */
 export async function worktreeStatus(path: string, branch: string): Promise<WorktreeStatus> {
-  const [status, heads] = await Promise.all([
-    // Unreadable tree — report clean and let the git commands themselves refuse.
-    git(path, ['status', '--porcelain']).catch(() => ''),
-    // for-each-ref lists only the refs that exist, and exits 0 when none do.
-    git(path, [
-      'for-each-ref',
-      '--format=%(refname:short)',
-      ...DEFAULT_BRANCHES.map((b) => `refs/heads/${b}`)
-    ]).catch(() => '')
-  ])
+  const [dirtyFiles, vs] = await Promise.all([dirtyFileCount(path), branchVsDefault(path, branch)])
+  return { dirtyFiles, unmergedCommits: vs?.ahead ?? null }
+}
 
-  const dirtyFiles = status.split('\n').filter((l) => l.trim().length > 0).length
-  // for-each-ref sorts by refname, so precedence comes from DEFAULT_BRANCHES.
-  const present = heads.split('\n').map((l) => l.trim())
-  const def = DEFAULT_BRANCHES.find((b) => present.includes(b))
-
-  const unmergedCommits = def
-    ? await git(path, ['rev-list', '--count', branch, '--not', def])
-        .then((out) => Number(out.trim()) || 0)
-        .catch(() => null)
-    : null
-
-  return { dirtyFiles, unmergedCommits }
+/** `git worktree remove` plus dropping the per-repo parent dir once empty. */
+async function removeWorktreeDir(repoRoot: string, path: string, force: boolean): Promise<void> {
+  await git(
+    repoRoot,
+    force ? ['worktree', 'remove', '--force', path] : ['worktree', 'remove', path],
+    TIMEOUT
+  )
+  // Fails harmlessly while other worktrees of this repo remain.
+  await rmdir(dirname(path)).catch(() => {})
 }
 
 /** Outcome of a hand-off; `cwd` is where the chat should continue. */
@@ -258,24 +266,19 @@ export async function handOffWorktree(
   if (!isManagedWorktree(worktreePath)) {
     return { ok: false, error: 'This worktree was not created here — remove it yourself first.' }
   }
-  const { dirtyFiles } = await worktreeStatus(worktreePath, branch)
-  if (dirtyFiles > 0) {
+  const dirty = await dirtyFileCount(worktreePath)
+  if (dirty > 0) {
     return {
       ok: false,
-      error: `The worktree has ${dirtyFiles} uncommitted file${dirtyFiles === 1 ? '' : 's'}. Commit or discard them before handing off.`
+      error: uncommitted(dirty, 'The worktree has', 'Commit or discard them before handing off.')
     }
   }
 
   try {
-    await git(repoRoot, ['worktree', 'remove', worktreePath], TIMEOUT)
+    await removeWorktreeDir(repoRoot, worktreePath, false)
   } catch (err) {
     // Nothing moved — the chat stays where it is.
     return { ok: false, error: errText(err) }
-  }
-  try {
-    await rmdir(dirname(worktreePath))
-  } catch {
-    // Other worktrees of this repo remain.
   }
 
   try {
@@ -289,37 +292,146 @@ export async function handOffWorktree(
 }
 
 /**
+ * Retire a worktree whose work has landed elsewhere — the ending of the pull
+ * request path, where the merge happened on the remote and nothing is left to
+ * do locally but clean up. The chat moves to `repoRoot`.
+ *
+ * The branch deletion is allowed to fail without failing the whole operation:
+ * a squash-merged PR leaves local commits that git can't see in the default
+ * branch, so `branch -d` refuses even though the work is safely merged. The
+ * worktree is still gone by then, so the chat must move regardless — reporting
+ * a leftover branch is honest, stranding the chat in a deleted directory isn't.
+ */
+export async function finishWorktree(
+  worktreePath: string,
+  { repoRoot, branch }: WorktreeInfo
+): Promise<HandoffResult> {
+  if (!isManagedWorktree(worktreePath)) {
+    return { ok: false, error: 'This worktree was not created here — remove it yourself.' }
+  }
+  const dirty = await dirtyFileCount(worktreePath)
+  if (dirty > 0) {
+    return {
+      ok: false,
+      error: uncommitted(dirty, 'The worktree has', 'Removing it would take them with it.')
+    }
+  }
+
+  const res = await removeWorktree(repoRoot, worktreePath, branch, false)
+  if (res.ok) return { ok: true, cwd: repoRoot }
+  // Nothing moved — the chat stays where it is.
+  if (!res.removed) return { ok: false, error: res.error }
+  return {
+    ok: false,
+    cwd: repoRoot,
+    error: `The worktree is gone and this chat moved to the main checkout, but the ${branch} branch is still here:\n\n${res.error}\n\nA squash-merged pull request looks unmerged to git. Delete it with \`git branch -D ${branch}\` once you're sure.`
+  }
+}
+
+/**
+ * Land a worktree's branch: merge it into the default branch in the main
+ * checkout, then drop the worktree and the now-merged branch. This is the
+ * ending for work that never goes through a pull request, and the only one the
+ * app performs itself rather than delegating — the merge has to happen in
+ * `repoRoot`, which is outside the agent's cwd (and outside Codex's sandbox).
+ *
+ * Every guard here exists to keep a beginner's main checkout unharmed: we only
+ * merge into a clean main checkout that already has the default branch out, and
+ * a conflicting merge is aborted rather than left half-applied for someone to
+ * discover. Removal reuses the unforced path, which is safe by construction
+ * here — git only deletes a branch it agrees is merged.
+ */
+export async function mergeWorktree(
+  worktreePath: string,
+  { repoRoot, branch }: WorktreeInfo
+): Promise<HandoffResult> {
+  if (!isManagedWorktree(worktreePath)) {
+    return { ok: false, error: 'This worktree was not created here — merge it yourself.' }
+  }
+
+  // Pure reads with no dependency between them; the guards keep their order.
+  const [dirty, vs, onBranch, rootDirty] = await Promise.all([
+    dirtyFileCount(worktreePath),
+    branchVsDefault(worktreePath, branch),
+    currentBranch(repoRoot).catch(() => ''),
+    dirtyFileCount(repoRoot)
+  ])
+
+  if (dirty > 0) {
+    return {
+      ok: false,
+      error: uncommitted(dirty, 'The worktree has', 'Commit them first — a merge only moves committed work.')
+    }
+  }
+  const def = vs?.defaultBranch
+  if (!def) {
+    return { ok: false, error: 'No main or master branch to merge into.' }
+  }
+  if (vs.ahead === 0) {
+    return { ok: false, error: `Nothing to merge — ${branch} is already in ${def}.` }
+  }
+  if (onBranch !== def) {
+    return {
+      ok: false,
+      error: `Your main checkout is on ${onBranch || 'another branch'}, not ${def}. Switch it to ${def} and try again.`
+    }
+  }
+  if (rootDirty > 0) {
+    return {
+      ok: false,
+      error: uncommitted(rootDirty, 'Your main checkout has', 'Commit or stash them so the merge can be undone cleanly if it conflicts.')
+    }
+  }
+
+  const conflict = await mergeOrAbort(repoRoot, branch)
+  if (conflict) {
+    return {
+      ok: false,
+      error: `${conflict}\n\nThe merge was undone. Try "Update from main" in the worktree first — the agent can resolve the conflicts there.`
+    }
+  }
+
+  const removed = await removeWorktree(repoRoot, worktreePath, branch, false)
+  if (removed.ok) return { ok: true, cwd: repoRoot }
+  // The merge landed either way, so the work is safe. The chat moves only when
+  // the directory is actually gone (a leftover branch), never on a failed remove.
+  if (!removed.removed) {
+    return { ok: false, error: `Merged into ${def}, but the worktree is still there: ${removed.error}` }
+  }
+  return {
+    ok: false,
+    cwd: repoRoot,
+    error: `Merged into ${def}, but the ${branch} branch is still here: ${removed.error}`
+  }
+}
+
+/**
  * Remove a worktree and its branch. Unforced, git itself refuses to drop a
  * dirty tree or an unmerged branch — that refusal is the safety policy, and its
  * message is handed back for the confirm dialog. Never touches a path outside
  * the app-managed root, so chats attached to a user's own worktree are safe.
+ * `removed` distinguishes a failed removal (nothing happened) from a surviving
+ * branch (the directory is gone — a chat living there has to move).
  */
 export async function removeWorktree(
   repoRoot: string,
   path: string,
   branch: string,
   force: boolean
-): Promise<OpResult> {
+): Promise<OpResult & { removed?: boolean }> {
   if (!isManagedWorktree(path)) {
     return { ok: false, error: 'Refusing to remove a worktree the app did not create.' }
   }
   try {
-    await git(repoRoot, force ? ['worktree', 'remove', '--force', path] : ['worktree', 'remove', path])
+    await removeWorktreeDir(repoRoot, path, force)
   } catch (err) {
     return { ok: false, error: errText(err) }
   }
   try {
-    await git(repoRoot, ['branch', force ? '-D' : '-d', branch])
+    await git(repoRoot, ['branch', force ? '-D' : '-d', branch], TIMEOUT)
   } catch (err) {
     // The tree is already gone; a surviving branch is recoverable, not fatal.
-    return { ok: false, error: errText(err) }
+    return { ok: false, removed: true, error: errText(err) }
   }
-  try {
-    // Drop the per-repo parent once its last worktree is gone, so the root
-    // doesn't accumulate empty directories. Fails harmlessly when non-empty.
-    await rmdir(dirname(path))
-  } catch {
-    // Other worktrees of this repo remain.
-  }
-  return { ok: true }
+  return { ok: true, removed: true }
 }

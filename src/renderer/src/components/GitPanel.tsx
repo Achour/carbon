@@ -405,8 +405,12 @@ function GitActionButton(): React.JSX.Element | null {
   const agentName = useApp((s) =>
     s.chats.find((c) => c.id === s.activeId)?.provider === 'codex' ? 'Codex' : 'Claude'
   )
+  const inWorktree = useApp((s) => !!s.chats.find((c) => c.id === s.activeId)?.worktree)
 
-  const { primary, rungs } = React.useMemo(() => resolveGitActions(git, github), [git, github])
+  const { primary, rungs } = React.useMemo(
+    () => resolveGitActions(git, github, { worktree: inWorktree }),
+    [git, github, inWorktree]
+  )
   if (!primary) return null
 
   // The dropdown is a default-PICKER (Cursor-style), not an action menu: the

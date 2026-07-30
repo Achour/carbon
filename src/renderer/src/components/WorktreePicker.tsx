@@ -2,6 +2,7 @@ import * as React from 'react'
 import { Check, ChevronDown, GitBranch, Laptop, Plus } from 'lucide-react'
 import type { WorktreeRef, WorktreeTarget } from '@shared/types'
 import { cn, contextPillAction } from '@/lib/utils'
+import { GitErrorDialog } from '@/components/BranchActions'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -46,6 +47,19 @@ export function WorktreePicker({
   })
   const worktrees = loaded.cwd === cwd ? loaded.refs : []
   const [open, setOpen] = React.useState(false)
+  const [removing, setRemoving] = React.useState<string | null>(null)
+  const [error, setError] = React.useState<string | null>(null)
+
+  const remove = async (path: string): Promise<void> => {
+    setRemoving(path)
+    const res = await window.api.worktreeRemove(path)
+    setRemoving(null)
+    if (!res.ok) {
+      setError(res.error ?? 'Removal failed.')
+      return
+    }
+    setLoaded((l) => ({ ...l, refs: l.refs.filter((r) => r.path !== path) }))
+  }
 
   // Only the popup reads this list, and the home screen mounts on every visit —
   // so pay for the git spawn when the menu opens, not on mount.
@@ -67,6 +81,7 @@ export function WorktreePicker({
   const isLocal = value.kind === 'local'
 
   return (
+    <>
     <DropdownMenu open={open} onOpenChange={setOpen}>
       <DropdownMenuTrigger
         disabled={disabled}
@@ -96,6 +111,21 @@ export function WorktreePicker({
           >
             <GitBranch />
             <span className="max-w-52 flex-1 truncate">{w.branch}</span>
+            {/* Merged means the work already landed — without saying so, finished
+                worktrees pile up here indistinguishable from live ones. */}
+            {w.merged && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  void remove(w.path)
+                }}
+                title={`${w.branch} is merged — remove this worktree`}
+                className="shrink-0 rounded px-1 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              >
+                {removing === w.path ? 'removing…' : 'merged · remove'}
+              </button>
+            )}
             {value.kind === 'existing' && value.path === w.path && <Check className="opacity-70" />}
           </DropdownMenuItem>
         ))}
@@ -107,5 +137,14 @@ export function WorktreePicker({
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
+
+    {/* Removal is unforced, so git's refusal is the message worth showing. */}
+    <GitErrorDialog
+      title="Couldn’t remove the worktree"
+      detail="It’s still there. Git said:"
+      error={error}
+      onDismiss={() => setError(null)}
+    />
+    </>
   )
 }

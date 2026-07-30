@@ -1235,7 +1235,7 @@ export class Store {
    * Is any chat other than `exceptId` working in `cwd`? Used before removing a
    * worktree, so a directory another chat still occupies is left alone.
    */
-  hasOtherChatIn(cwd: string, exceptId: string): boolean {
+  hasOtherChatIn(cwd: string, exceptId?: string): boolean {
     // Live objects first and authoritatively: a chat whose cwd just changed in
     // memory must not be judged by whatever its row still says.
     const live = new Set<string>()
@@ -1245,9 +1245,9 @@ export class Store {
       live.add(id)
       if (id !== exceptId && chat.cwd === cwd) return true
     }
-    const rows = this.db.prepare('SELECT id FROM chats WHERE cwd = ? AND id <> ?').all(cwd, exceptId) as {
-      id: string
-    }[]
+    const rows = this.db
+      .prepare('SELECT id FROM chats WHERE cwd = ? AND id <> ?')
+      .all(cwd, exceptId ?? '') as { id: string }[]
     return rows.some((r) => !live.has(r.id))
   }
 

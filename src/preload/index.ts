@@ -56,6 +56,9 @@ const api: Api = {
   worktreeSetupCommand: (chatId: string) => invoke('worktree:setup-command', chatId),
   listWorktrees: (cwd: string) => invoke('worktree:list', cwd),
   worktreeHandoff: (chatId: string) => invoke('worktree:handoff', chatId),
+  worktreeMerge: (chatId: string) => invoke('worktree:merge', chatId),
+  worktreeFinish: (chatId: string) => invoke('worktree:finish', chatId),
+  worktreeRemove: (path: string) => invoke('worktree:remove', path),
   renameChat: (id: string, title: string) => invoke('chats:rename', id, title),
   send: (chatId: string, text: string, attachments?: Attachment[], label?: string) =>
     invoke('chat:send', chatId, text, attachments, label),
@@ -100,6 +103,7 @@ const api: Api = {
   gitCommit: (cwd: string, message: string) => invoke('git:commit', cwd, message),
   gitPush: (cwd: string) => invoke('git:push', cwd),
   gitPull: (cwd: string) => invoke('git:pull', cwd),
+  gitMergeIntoDefault: (cwd: string) => invoke('git:merge-into-default', cwd),
   gitFetch: (cwd: string) => invoke('git:fetch', cwd),
   gitBranchChanges: (cwd: string, baseBranch?: string) =>
     invoke('git:branch-changes', cwd, baseBranch),

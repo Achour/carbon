@@ -51,8 +51,11 @@ import { hydrateShellPath } from './shellEnv'
 import { dockIconSvg } from './dockIcon'
 import {
   createWorktree,
+  finishWorktree,
   handOffWorktree,
+  type HandoffResult,
   listWorktrees,
+  mergeWorktree,
   removeWorktree,
   resolveWorktree,
   setupCommandFor,
@@ -448,21 +451,42 @@ function registerIpc(): void {
 
   ipcMain.handle('worktree:list', (_e, cwd: string) => listWorktrees(cwd))
 
-  ipcMain.handle('worktree:handoff', async (_e, chatId: string): Promise<OpResult> => {
-    const chat = store.getMeta(chatId)
-    if (!chat?.worktree) return { ok: false, error: 'This chat is not running in a worktree.' }
-    // Another chat still working here would lose its directory underneath it.
-    if (store.hasOtherChatIn(chat.cwd, chatId)) {
-      return { ok: false, error: 'Another chat is working in this worktree.' }
-    }
+  // The three ways a chat leaves its worktree (hand-off, merge, finish) share
+  // every guard: no other chat may be living in the directory, and the provider
+  // process must release the cwd before git touches it — a live process holding
+  // it makes `git worktree remove` fail on some platforms. A refused operation
+  // still disposed the session; the next send simply resumes it.
+  const worktreeExits: [string, (path: string, info: WorktreeInfo) => Promise<HandoffResult>, string][] = [
+    ['worktree:handoff', handOffWorktree, 'Hand-off failed.'],
+    ['worktree:merge', mergeWorktree, 'Merge failed.'],
+    ['worktree:finish', finishWorktree, 'Removal failed.']
+  ]
+  for (const [channel, run, fallback] of worktreeExits) {
+    ipcMain.handle(channel, async (_e, chatId: string): Promise<OpResult> => {
+      const chat = store.getMeta(chatId)
+      if (!chat?.worktree) return { ok: false, error: 'This chat is not running in a worktree.' }
+      if (store.hasOtherChatIn(chat.cwd, chatId)) {
+        return { ok: false, error: 'Another chat is working in this worktree.' }
+      }
+      manager.disposeChat(chatId)
 
-    const res = await handOffWorktree(chat.cwd, chat.worktree)
-    // `cwd` is set whenever the worktree is gone — even on a failed checkout,
-    // where the chat must move or it would point at a deleted directory.
-    if (res.cwd) {
-      manager.relocateChat(chatId, res.cwd)
+      const res = await run(chat.cwd, chat.worktree)
+      // `cwd` is set whenever the worktree is gone — even on a failure like a
+      // surviving branch, the chat must move or it points at a deleted directory.
+      if (res.cwd) manager.relocateChat(chatId, res.cwd)
+      return res.ok ? { ok: true } : { ok: false, error: res.error ?? fallback }
+    })
+  }
+
+  ipcMain.handle('worktree:remove', async (_e, path: string): Promise<OpResult> => {
+    // Removing a directory a chat is living in would strand it, and the chat's
+    // own delete flow is the supported way to do that.
+    if (store.hasOtherChatIn(path)) {
+      return { ok: false, error: 'A chat is still working in this worktree.' }
     }
-    return res.ok ? { ok: true } : { ok: false, error: res.error ?? 'Hand-off failed.' }
+    const info = await resolveWorktree(path)
+    if (!info) return { ok: false, error: 'Not a git worktree.' }
+    return removeWorktree(info.repoRoot, path, info.branch, false)
   })
 
   ipcMain.handle('worktree:setup-command', (_e, chatId: string): string | null => {
@@ -626,6 +650,7 @@ function registerIpc(): void {
   ipcMain.handle('git:commit', (_e, cwd: string, message: string) => gitOps.gitCommit(cwd, message))
   ipcMain.handle('git:push', (_e, cwd: string) => gitOps.gitPush(cwd))
   ipcMain.handle('git:pull', (_e, cwd: string) => gitOps.gitPull(cwd))
+  ipcMain.handle('git:merge-into-default', (_e, cwd: string) => gitOps.gitMergeIntoDefault(cwd))
   ipcMain.handle('git:fetch', (_e, cwd: string) => gitOps.gitFetch(cwd))
   ipcMain.handle('git:branch-changes', (_e, cwd: string, baseBranch?: string) =>
     gitOps.gitBranchChanges(cwd, baseBranch)

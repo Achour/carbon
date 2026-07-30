@@ -91,6 +91,12 @@ export interface WorktreeRef {
   branch: string
   /** True for the repo's main checkout ("Local" in the picker). */
   isMain: boolean
+  /**
+   * Branch is already merged into the default branch — the worktree is done and
+   * safe to remove. Undefined when unknown (no default branch, or the main
+   * checkout, which is never "finished").
+   */
+  merged?: boolean
 }
 
 
@@ -750,6 +756,20 @@ export interface GitStatus {
   /** Total added / removed lines across staged, unstaged and untracked changes. */
   additions: number
   deletions: number
+  /**
+   * Commits the repo's *default* branch has that this one doesn't — how stale
+   * the branch is. Distinct from `behind`, which is measured against the
+   * branch's own upstream. Absent on the default branch itself and in repos
+   * with no main/master, where the question doesn't apply.
+   */
+  behindDefault?: number
+  /** The reverse: commits here that the default branch doesn't have yet. */
+  aheadDefault?: number
+  /**
+   * The repo's default branch ('main' / 'master'); set whenever one exists,
+   * including while it's the branch checked out.
+   */
+  defaultBranch?: string
 }
 
 export type GitResult = { ok: true; output?: string } | { ok: false; error: string }
@@ -907,6 +927,19 @@ export interface Api {
    * its branch out there. Refuses while the worktree has uncommitted work.
    */
   worktreeHandoff(chatId: string): Promise<OpResult>
+  /**
+   * Land a worktree chat's branch: merge it into the default branch in the main
+   * checkout, then remove the worktree. Refuses unless both trees are clean and
+   * the main checkout is on the default branch; a conflicting merge is aborted.
+   */
+  worktreeMerge(chatId: string): Promise<OpResult>
+  /**
+   * Retire a worktree whose work landed elsewhere (the PR path): remove it and
+   * move the chat to the main checkout. Refuses while it has uncommitted work.
+   */
+  worktreeFinish(chatId: string): Promise<OpResult>
+  /** Remove a worktree by path (the picker's cleanup); unforced, like deletion. */
+  worktreeRemove(path: string): Promise<OpResult>
   renameChat(id: string, title: string): Promise<void>
   send(chatId: string, text: string, attachments?: Attachment[], label?: string): Promise<void>
   /** Absolute path of a dragged/picked File (empty string for in-memory files). */
@@ -950,6 +983,12 @@ export interface Api {
   gitCommit(cwd: string, message: string): Promise<GitResult>
   gitPush(cwd: string): Promise<GitResult>
   gitPull(cwd: string): Promise<GitResult>
+  /**
+   * Land the checked-out branch into the default branch in place: switch, merge,
+   * delete it. Refuses on a dirty tree and undoes a conflicting merge, so a
+   * failure always leaves the working directory as it was.
+   */
+  gitMergeIntoDefault(cwd: string): Promise<GitResult>
   /** Update remote-tracking refs so ahead/behind reflects the real remote. */
   gitFetch(cwd: string): Promise<GitResult>
   /** Branch-scope changes: everything on the current branch vs its base branch. */

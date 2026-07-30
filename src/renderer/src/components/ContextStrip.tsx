@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { FileDiff, Folder, GitBranch } from 'lucide-react'
+import { ArrowDown, FileDiff, Folder, GitBranch } from 'lucide-react'
 import type { GitStatus } from '@shared/types'
 import { basename } from '@/lib/format'
 import { cn, contextPill, contextPillAction } from '@/lib/utils'
@@ -18,6 +18,7 @@ export function ContextStrip({
   branch,
   project,
   onReviewChanges,
+  onUpdateFromDefault,
   children
 }: {
   cwd: string
@@ -31,10 +32,19 @@ export function ContextStrip({
    */
   project?: string
   onReviewChanges: () => void
+  /**
+   * Runs the agent's "Update from main". Given only where there's a chat to run
+   * it in, which is what turns the staleness marker from a label into a fix.
+   */
+  onUpdateFromDefault?: () => void
   children?: React.ReactNode
 }): React.JSX.Element {
   const shown = branch ?? git?.branch
   const changes = git?.isRepo ? git.changes.length : 0
+  // Only meaningful for the branch actually checked out here: `branch` is an
+  // override the new-chat screen passes for a worktree it hasn't started in.
+  const behind = branch ? 0 : (git?.behindDefault ?? 0)
+  const base = git?.defaultBranch ?? 'main'
   return (
     <div data-context-strip className="mb-2 flex items-center gap-2">
       <WithTooltip label={cwd}>
@@ -50,6 +60,30 @@ export function ContextStrip({
           )}
         </div>
       </WithTooltip>
+      {/* Drifting behind the default branch has no other symptom until it
+          surfaces as a conflict, so it gets said out loud while it's cheap
+          to fix. */}
+      {behind > 0 && (
+        <WithTooltip
+          label={`${shown} is ${behind} commit${behind === 1 ? '' : 's'} behind ${base}${
+            onUpdateFromDefault ? ' — merge it in' : ''
+          }`}
+        >
+          <button
+            type="button"
+            onClick={onUpdateFromDefault}
+            disabled={!onUpdateFromDefault}
+            aria-label={`Update from ${base}`}
+            className={cn(
+              onUpdateFromDefault ? contextPillAction : contextPill,
+              'tabular-nums text-muted-foreground'
+            )}
+          >
+            <ArrowDown className="size-3" />
+            <span>{behind}</span>
+          </button>
+        </WithTooltip>
+      )}
       {children}
       {changes > 0 && git && (
         <WithTooltip label={`Review changes — ${changes} file${changes === 1 ? '' : 's'}`}>

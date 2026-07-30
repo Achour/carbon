@@ -1,15 +1,19 @@
 import * as React from 'react'
 import {
   ArrowDown,
+  ArrowLeftRight,
   ArrowUp,
   Clock,
   FileDiff,
   Folder,
   GitBranch,
+  GitMerge,
   MoreHorizontal,
   PanelLeft,
   PanelRight,
   Pencil,
+  RefreshCw,
+  Trash,
   Trash2,
   X
 } from 'lucide-react'
@@ -37,7 +41,11 @@ import { Input } from '@/components/ui/input'
 import { WithTooltip } from '@/components/ui/tooltip'
 import { Composer } from '@/components/Composer'
 import { ContextStrip } from '@/components/ContextStrip'
-import { EnvironmentMenu } from '@/components/EnvironmentMenu'
+import {
+  MergeIntoMainDialog,
+  WorktreeFinishDialog,
+  WorktreeHandoffDialog
+} from '@/components/BranchActions'
 import {
   AssistantBlock,
   EventRow,
@@ -287,6 +295,9 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
   const openPlanPanel = useApp((s) => s.openPlanPanel)
   const togglePanel = useApp((s) => s.togglePanel)
   const reviewChanges = useApp((s) => s.reviewChanges)
+  const runGitAction = useApp((s) => s.runGitAction)
+  const setupMissing = useApp((s) => s.setupMissingFor === chat.id)
+  const dismissSetupNotice = useApp((s) => s.dismissSetupNotice)
   const panelOpen = useApp((s) => s.panelOpen)
   const sidebarOpen = useApp((s) => s.sidebarOpen)
   const toggleSidebar = useApp((s) => s.toggleSidebar)
@@ -310,8 +321,18 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
   const [renameOpen, setRenameOpen] = React.useState(false)
   const [deleteOpen, setDeleteOpen] = React.useState(false)
   const [renameValue, setRenameValue] = React.useState('')
+  const [handoffOpen, setHandoffOpen] = React.useState(false)
+  const [mergeOpen, setMergeOpen] = React.useState(false)
+  const [finishOpen, setFinishOpen] = React.useState(false)
 
   const busy = status !== 'idle'
+
+  // Merging is only ever offered off the default branch — on it there is
+  // nothing to land, and the ladder's job there is to branch off instead.
+  // `git.defaultBranch` is the same field the ↓n chip and the merge dialog
+  // read, so the label always names the branch the operation actually targets.
+  const defaultBranch = git?.defaultBranch ?? 'main'
+  const canMerge = !!git?.defaultBranch && git.branch !== git.defaultBranch
 
   const scrollToBottom = React.useCallback((smooth = false): void => {
     const el = scrollRef.current
@@ -499,6 +520,31 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
             >
               <Pencil /> Rename
             </DropdownMenuItem>
+            {/* How the branch ends: keep it current, land it here, or — in a
+                worktree — move out of it or retire it once the work landed
+                through a PR. Merging rewrites the chat's own directory when
+                there's no worktree, so that one waits for idle. */}
+            {(chat.worktree || canMerge) && <DropdownMenuSeparator />}
+            {canMerge && (
+              <>
+                <DropdownMenuItem onClick={() => void runGitAction('update-from-main')}>
+                  <RefreshCw /> Update from {defaultBranch}
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setMergeOpen(true)} disabled={busy}>
+                  <GitMerge /> Merge into {defaultBranch}
+                </DropdownMenuItem>
+              </>
+            )}
+            {chat.worktree && (
+              <>
+                <DropdownMenuItem onClick={() => setHandoffOpen(true)}>
+                  <ArrowLeftRight /> Continue in local checkout
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setFinishOpen(true)}>
+                  <Trash /> Remove worktree
+                </DropdownMenuItem>
+              </>
+            )}
             <DropdownMenuSeparator />
             <DropdownMenuItem destructive onClick={() => setDeleteOpen(true)}>
               <Trash2 /> Delete chat
@@ -529,6 +575,27 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
         <div className="border-b border-amber-500/25 bg-amber-500/10 px-4 py-2 text-xs text-amber-200/90">
           This chat is open in another Carbon instance, which owns it. Changes made here
           are <span className="font-medium">not being saved</span>. Close it there, then reopen this chat.
+        </div>
+      )}
+
+      {/* A fresh worktree has none of the repo's gitignored files, and with no
+          setup script nothing installed them — say so, or the agent's first
+          "command not found" looks like a bug in the project. */}
+      {setupMissing && (
+        <div className="flex items-start gap-2 border-b border-border bg-secondary/40 px-4 py-2 text-xs text-muted-foreground">
+          <span className="min-w-0 flex-1">
+            This worktree is a fresh checkout with no dependencies installed — the project has no{' '}
+            <code className="font-mono text-[11px] text-foreground">.karbun/setup.sh</code>. Add one
+            (or run your install command in a terminal tab) if the agent needs them.
+          </span>
+          <button
+            type="button"
+            onClick={dismissSetupNotice}
+            aria-label="Dismiss"
+            className="shrink-0 rounded p-0.5 transition-colors hover:bg-accent hover:text-foreground"
+          >
+            <X className="size-3" />
+          </button>
         </div>
       )}
 
@@ -616,9 +683,8 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
             project={projectRoot(chat)}
             git={git}
             onReviewChanges={() => void reviewChanges()}
-          >
-            {git?.isRepo && <EnvironmentMenu chat={chat} />}
-          </ContextStrip>
+            onUpdateFromDefault={() => void runGitAction('update-from-main')}
+          />
           {queued.length > 0 && (
             <div className="mb-2 space-y-1.5">
               {queued.map((q) => (
@@ -713,6 +779,14 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
           </form>
         </DialogContent>
       </Dialog>
+
+      {chat.worktree && (
+        <>
+          <WorktreeHandoffDialog chat={chat} open={handoffOpen} onOpenChange={setHandoffOpen} />
+          <WorktreeFinishDialog chat={chat} open={finishOpen} onOpenChange={setFinishOpen} />
+        </>
+      )}
+      {canMerge && <MergeIntoMainDialog chat={chat} open={mergeOpen} onOpenChange={setMergeOpen} />}
 
       {/* Delete dialog */}
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>

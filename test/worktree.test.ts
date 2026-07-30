@@ -8,10 +8,12 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import {
   createWorktree,
+  finishWorktree,
   handOffWorktree,
   defaultBranchName,
   isManagedWorktree,
   listWorktrees,
+  mergeWorktree,
   parseWorktreeList,
   removeWorktree,
   resolveWorktree,
@@ -20,16 +22,13 @@ import {
   worktreePathFor,
   worktreeStatus
 } from '../src/main/worktree.ts'
+import { git, initRepo } from './gitRepo.ts'
 
 const execFileP = promisify(execFile)
 
 // Keep worktrees the tests create out of the developer's real ~/.karbun.
 const TEST_ROOT = join(tmpdir(), 'karbun-worktrees-test')
 process.env.KARBUN_WORKTREES_DIR = TEST_ROOT
-
-async function git(cwd: string, args: string[]): Promise<void> {
-  await execFileP('git', args, { cwd })
-}
 
 test('sanitizeBranch coerces user input into a valid ref name', () => {
   assert.equal(sanitizeBranch('Fix the login bug'), 'fix-the-login-bug')
@@ -142,6 +141,10 @@ test('listWorktrees reports the main checkout alongside its worktrees', async ()
         ['side-quest', false]
       ]
     )
+    // Branched but not yet committed to, so it holds nothing main lacks — the
+    // same state a worktree is in once its PR merges, and what marks it done.
+    assert.equal(fromWorktree.find((w) => w.branch === 'side-quest')?.merged, true)
+    assert.equal(fromWorktree[0].merged, undefined, 'the main checkout is never "finished"')
   } finally {
     if (made) await removeWorktree(repo, made, 'side-quest', true)
     await rm(repo, { recursive: true, force: true })
@@ -231,6 +234,144 @@ test('handOffWorktree checks the branch out locally and drops the worktree', asy
     })
     assert.equal(branch.trim(), 'feature-x')
     assert.ok(existsSync(join(repo, 'b.txt')), 'work done in the worktree came along')
+    made = null
+  } finally {
+    if (made) await rm(made, { recursive: true, force: true })
+    await rm(repo, { recursive: true, force: true })
+  }
+})
+
+test('mergeWorktree lands the branch in the main checkout and cleans up', async () => {
+  const repo = await initRepo('karbun-worktree-merge-')
+  let made: string | null = null
+  try {
+    const created = await createWorktree(repo, 'feature-y')
+    made = created.path
+
+    // Nothing committed yet — there is no merge to make.
+    const empty = await mergeWorktree(created.path, created)
+    assert.equal(empty.ok, false)
+    assert.match(empty.error ?? '', /already in main/i)
+
+    await writeFile(join(created.path, 'b.txt'), 'work\n')
+    await git(created.path, ['add', '.'])
+    await git(created.path, ['commit', '-qm', 'work in worktree'])
+
+    const status = await worktreeStatus(created.path, created.branch)
+    assert.equal(status.unmergedCommits, 1)
+
+    // Uncommitted work blocks the merge — it would be left behind by removal.
+    await writeFile(join(created.path, 'scratch.txt'), 'unsaved\n')
+    const dirty = await mergeWorktree(created.path, created)
+    assert.equal(dirty.ok, false)
+    assert.match(dirty.error ?? '', /uncommitted/i)
+    await rm(join(created.path, 'scratch.txt'))
+
+    // A dirty main checkout blocks it too: an aborted merge needs a clean tree.
+    await writeFile(join(repo, 'local.txt'), 'in progress\n')
+    const dirtyRoot = await mergeWorktree(created.path, created)
+    assert.equal(dirtyRoot.ok, false)
+    assert.match(dirtyRoot.error ?? '', /main checkout has 1 uncommitted/i)
+    await rm(join(repo, 'local.txt'))
+
+    const res = await mergeWorktree(created.path, created)
+    assert.equal(res.ok, true)
+    assert.equal(res.cwd, created.repoRoot)
+    assert.ok(!existsSync(created.path), 'the worktree directory is gone')
+    assert.ok(existsSync(join(repo, 'b.txt')), 'the branch work landed in main')
+
+    // Branch and worktree are both gone; main stayed checked out throughout.
+    const { stdout: branch } = await execFileP('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
+      cwd: repo
+    })
+    assert.equal(branch.trim(), 'main')
+    const { stdout: heads } = await execFileP('git', ['branch', '--format=%(refname:short)'], {
+      cwd: repo
+    })
+    assert.deepEqual(heads.trim().split('\n'), ['main'])
+    made = null
+  } finally {
+    if (made) await rm(made, { recursive: true, force: true })
+    await rm(repo, { recursive: true, force: true })
+  }
+})
+
+test('mergeWorktree undoes a conflicting merge and leaves both trees intact', async () => {
+  const repo = await initRepo('karbun-worktree-conflict-')
+  let made: string | null = null
+  try {
+    const created = await createWorktree(repo, 'feature-z')
+    made = created.path
+
+    // Both sides change the same line — a guaranteed conflict.
+    await writeFile(join(created.path, 'a.txt'), 'from the worktree\n')
+    await git(created.path, ['commit', '-qam', 'worktree edit'])
+    await writeFile(join(repo, 'a.txt'), 'from main\n')
+    await git(repo, ['commit', '-qam', 'main edit'])
+
+    // The worktree still holds its one unlanded commit.
+    const status = await worktreeStatus(created.path, created.branch)
+    assert.equal(status.unmergedCommits, 1)
+
+    const res = await mergeWorktree(created.path, created)
+    assert.equal(res.ok, false)
+    assert.match(res.error ?? '', /undone/i)
+
+    // The main checkout is not left mid-merge, and keeps its own version.
+    assert.ok(!existsSync(join(repo, '.git', 'MERGE_HEAD')), 'the merge was aborted')
+    const { stdout: content } = await execFileP('git', ['show', 'HEAD:a.txt'], { cwd: repo })
+    assert.equal(content, 'from main\n')
+    assert.ok(existsSync(created.path), 'the worktree survives a failed merge')
+
+    // The worktree branch is still listed as unmerged, so it reads as live.
+    const refs = await listWorktrees(repo)
+    assert.equal(refs.find((r) => r.branch === 'feature-z')?.merged, false)
+  } finally {
+    if (made) await rm(made, { recursive: true, force: true })
+    await rm(repo, { recursive: true, force: true })
+  }
+})
+
+test('finishWorktree retires a landed worktree and reports a leftover branch', async () => {
+  const repo = await initRepo('karbun-worktree-finish-')
+  let made: string | null = null
+  try {
+    const created = await createWorktree(repo, 'landed')
+    made = created.path
+
+    // Uncommitted work blocks removal rather than going down with the folder.
+    await writeFile(join(created.path, 'scratch.txt'), 'unsaved\n')
+    const refused = await finishWorktree(created.path, created)
+    assert.equal(refused.ok, false)
+    assert.match(refused.error ?? '', /uncommitted/i)
+    assert.equal(refused.cwd, undefined, 'a refusal never moves the chat')
+    assert.ok(existsSync(created.path))
+    await rm(join(created.path, 'scratch.txt'))
+
+    // A commit git can't see in main stands in for a squash-merged PR: the
+    // worktree still goes, the branch survives, and the chat still moves.
+    await writeFile(join(created.path, 'b.txt'), 'work\n')
+    await git(created.path, ['add', '.'])
+    await git(created.path, ['commit', '-qm', 'unmerged work'])
+
+    const leftover = await finishWorktree(created.path, created)
+    assert.equal(leftover.ok, false)
+    assert.equal(leftover.cwd, created.repoRoot, 'the chat moves even so')
+    assert.match(leftover.error ?? '', /squash-merged/i)
+    assert.ok(!existsSync(created.path), 'the worktree directory is gone')
+    const heads = await execFileP('git', ['branch', '--format=%(refname:short)'], { cwd: repo })
+    assert.ok(heads.stdout.includes('landed'), 'the unmerged branch survives')
+    made = null
+
+    // The clean case: a branch with nothing of its own leaves nothing behind.
+    const second = await createWorktree(repo, 'done')
+    made = second.path
+    const res = await finishWorktree(second.path, second)
+    assert.equal(res.ok, true)
+    assert.equal(res.cwd, second.repoRoot)
+    assert.ok(!existsSync(second.path))
+    const after = await execFileP('git', ['branch', '--format=%(refname:short)'], { cwd: repo })
+    assert.ok(!after.stdout.includes('done'), 'the merged branch is deleted')
     made = null
   } finally {
     if (made) await rm(made, { recursive: true, force: true })

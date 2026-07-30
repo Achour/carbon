@@ -405,10 +405,28 @@ interface AppState {
   /** Opens a terminal tab running the project's worktree setup script, if any. */
   runWorktreeSetup(chatId: string): Promise<void>
   /**
-   * Move the active chat out of its worktree and into the main checkout, with
-   * its branch checked out there. Returns git's refusal when it can't.
+   * Chat whose fresh worktree found no setup script, so nothing installed its
+   * dependencies. Held only until dismissed: it's a creation-time notice, and
+   * nagging about it every time the chat is reopened would be worse than the
+   * silence it replaces.
    */
-  handOffToLocal(chatId: string): Promise<OpResult>
+  setupMissingFor: string | null
+  dismissSetupNotice(): void
+  /**
+   * The three ways a chat leaves its worktree: check the branch out locally and
+   * keep working (`handoff`), land it in the default branch (`merge`), or retire
+   * a worktree whose work already landed via a PR (`finish`). Main owns the
+   * guards; this just runs the operation and follows the chat to its new cwd.
+   */
+  exitWorktree(chatId: string, op: 'handoff' | 'merge' | 'finish'): Promise<OpResult>
+  /**
+   * The same landing for a chat that isn't in a worktree: merge the checked-out
+   * branch into the default branch in place. Rewrites the chat's own directory,
+   * so callers only offer it on an idle chat.
+   */
+  mergeBranchInPlace(): Promise<OpResult>
+  /** Point the panel at a chat's new cwd after it leaves its worktree. */
+  followRelocation(chatId: string): void
   /**
    * Drop to the new-chat composer with an existing worktree preselected, so the
    * next chat joins it. The composer's model picker still chooses the provider —
@@ -1691,21 +1709,60 @@ export const useApp = create<AppState>((set, get) => ({
     await get().openChat(null)
   },
 
-  async handOffToLocal(chatId) {
-    const res = await window.api.worktreeHandoff(chatId)
-    // Main emits a `meta` patch with the new cwd, which applyEvent folds into
-    // the chat list — but the panel follows selectedCwd, so move that too.
+  async exitWorktree(chatId, op) {
+    const call =
+      op === 'handoff'
+        ? window.api.worktreeHandoff
+        : op === 'merge'
+          ? window.api.worktreeMerge
+          : window.api.worktreeFinish
+    const res = await call(chatId)
+    // Runs even on failure: a leftover branch can still have moved the chat.
+    get().followRelocation(chatId)
+    return res
+  },
+
+  /**
+   * Main emits a `meta` patch with the new cwd, which applyEvent folds into the
+   * chat list — but the panel follows selectedCwd, so move that too. Shared by
+   * both worktree exits; the guard on `worktree` is what makes it a no-op when
+   * the operation refused and the chat never moved.
+   */
+  followRelocation(chatId) {
     const moved = get().chats.find((c) => c.id === chatId)
     if (moved && !moved.worktree && get().activeId === chatId) {
       get().setSelectedCwd(moved.cwd)
       void get().refreshGit()
     }
+  },
+
+  async mergeBranchInPlace() {
+    const cwd = get().selectedCwd
+    if (!cwd) return { ok: false, error: 'No project selected.' }
+    const res = await window.api.gitMergeIntoDefault(cwd)
+    // The branch, the working tree and the PR picture all just changed; the
+    // three refreshes are independent, so only the git one gates returning.
+    const refreshed = get().refreshGit()
+    void get().refreshGithub()
+    if (get().panelOpen) void get().loadDir(cwd)
+    await refreshed
     return res
+  },
+
+  setupMissingFor: null,
+
+  dismissSetupNotice() {
+    set({ setupMissingFor: null })
   },
 
   async runWorktreeSetup(chatId) {
     const command = await window.api.worktreeSetupCommand(chatId)
-    if (!command) return
+    if (!command) {
+      // Silence here used to read as "installed" — the agent would just start
+      // failing on missing dependencies with nothing to explain why.
+      set({ setupMissingFor: chatId })
+      return
+    }
     const chat = get().chats.find((c) => c.id === chatId)
     if (chat) get().openTerminal({ cwd: chat.cwd, command, label: 'Setup' })
   },
