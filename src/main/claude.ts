@@ -20,6 +20,7 @@ import type {
   Attachment,
   BackgroundJob,
   ChatData,
+  ChatHandoff,
   ChatMeta,
   ChatOptionsPatch,
   ChatStatus,
@@ -45,15 +46,25 @@ import {
   claudeModelContextWindow,
   claudeModelLabel,
   effortForProvider,
+  modelLabel,
   providerForModel
 } from '@shared/types'
 import { CODEX_SLASH_COMMANDS, parseCodexSlashCommand } from '@shared/codexCommands'
 import type { Store } from './store'
 import type { PreviewManager } from './preview'
-import { CodexSession } from './codex'
-import type { AgentSession, Emit } from './session'
+import { CodexSession, generateCodexText } from './codex'
+import { composePrompt, withTimeout, type AgentSession, type Emit } from './session'
 import { DeltaCoalescer } from './deltaCoalescer'
 import { TITLE_SYSTEM, buildTitlePrompt, cleanTitle, deriveTitle, firstUserText } from './titles'
+import {
+  HANDOFF_BRIEF_SYSTEM,
+  HANDOFF_FALLBACK_CHARS,
+  HANDOFF_TIMEOUT_MS,
+  HANDOFF_TRANSCRIPT_CHARS,
+  buildHandoffBriefPrompt,
+  buildHandoffContext,
+  serializeTranscript
+} from './handoff'
 
 /**
  * Appended to the claude_code preset. The GUI renders ```mermaid fenced blocks
@@ -224,18 +235,23 @@ function toModelOption(m: ModelInfo): ModelOption {
 const TITLE_MODEL = 'claude-haiku-4-5-20251001'
 
 /**
- * One-shot, tool-less Haiku call that turns the opening exchange into a terse
- * chat title. Deliberately bare — a custom (non-preset) system prompt, no MCP,
- * no project settings, one turn — so it stays cheap and can't touch the repo.
- * Returns null on any failure so the placeholder title simply stands.
+ * One-shot, tool-less Claude call. Deliberately bare — a custom (non-preset)
+ * system prompt, no MCP, no project settings, one turn — so it stays cheap and
+ * can't touch the repo. Backs the title and handoff-brief generators. Returns
+ * null on any failure so callers can fall back.
  */
-async function generateClaudeTitle(cwd: string, userText: string): Promise<string | null> {
+async function generateClaudeText(
+  cwd: string,
+  model: string | undefined,
+  systemPrompt: string,
+  prompt: string
+): Promise<string | null> {
   const q = query({
-    prompt: buildTitlePrompt(userText),
+    prompt,
     options: {
       cwd: cwd || undefined,
-      model: TITLE_MODEL,
-      systemPrompt: TITLE_SYSTEM,
+      model,
+      systemPrompt,
       settingSources: [],
       allowedTools: [],
       maxTurns: 1,
@@ -253,7 +269,7 @@ async function generateClaudeTitle(cwd: string, userText: string): Promise<strin
         break
       }
     }
-    return cleanTitle(out) || null
+    return out.trim() || null
   } catch {
     return null
   } finally {
@@ -263,6 +279,12 @@ async function generateClaudeTitle(cwd: string, userText: string): Promise<strin
       // already closed
     }
   }
+}
+
+/** Terse Haiku chat title from the opening exchange; null keeps the placeholder. */
+async function generateClaudeTitle(cwd: string, userText: string): Promise<string | null> {
+  const out = await generateClaudeText(cwd, TITLE_MODEL, TITLE_SYSTEM, buildTitlePrompt(userText))
+  return out ? cleanTitle(out) || null : null
 }
 
 class ClaudeSession implements AgentSession {
@@ -468,7 +490,7 @@ class ClaudeSession implements AgentSession {
     this.emit({ type: 'title-pending', chatId: this.chat.id, pending })
   }
 
-  send(text: string, attachments: Attachment[] = [], label?: string): void {
+  send(text: string, attachments: Attachment[] = [], label?: string, hiddenContext?: string): void {
     if (!this.chat.title) {
       // Instant placeholder from the first message; the AI title is generated in
       // parallel with the turn below (see maybeGenerateTitle) and swaps it in.
@@ -505,7 +527,7 @@ class ClaudeSession implements AgentSession {
       if (a.kind === 'element' && a.element) elementBlocks.push(describeElement(a.element))
     }
     const filePaths = attachments.filter((a) => a.kind === 'file' && a.path).map((a) => a.path!)
-    let prompt = text
+    let prompt = composePrompt(text, hiddenContext)
     if (filePaths.length) {
       const list = filePaths.map((p) => `- ${p}`).join('\n')
       prompt = `${prompt ? `${prompt}\n\n` : ''}Attached files:\n${list}`
@@ -1586,6 +1608,10 @@ class ClaudeSession implements AgentSession {
 export class ChatManager {
   private sessions = new Map<string, AgentSession>()
   private static readonly MAX_IDLE_SESSIONS = 2
+  /** In-flight handoff-brief generation, one per chat (see startHandoffBrief). */
+  private handoffJobs = new Map<string, Promise<string | null>>()
+  /** Per-chat send chain while a handoff is pending, so the brief rides exactly the first turn. */
+  private handoffSends = new Map<string, Promise<void>>()
   // Slash commands are the same for every chat in a folder, so cache them by cwd
   // — new chats in a known project can show the menu before their first turn.
   private commandsByCwd = new Map<string, SlashCommand[]>()
@@ -1754,9 +1780,25 @@ export class ChatManager {
     attachments?: Attachment[],
     label?: string
   ): void {
+    // A pending cross-provider handoff makes the first send async (the brief
+    // may still be generating); later sends chain behind it so order holds.
+    if (chat.handoff || this.handoffSends.has(chat.id)) {
+      void this.sendWithHandoff(chat, text, attachments, label)
+      return
+    }
+    this.deliver(chat, text, attachments, label)
+  }
+
+  private deliver(
+    chat: ChatData,
+    text: string,
+    attachments?: Attachment[],
+    label?: string,
+    hiddenContext?: string
+  ): void {
     try {
       const session = this.sessionFor(chat.id) ?? this.createSession(chat)
-      session.send(text, attachments, label)
+      session.send(text, attachments, label, hiddenContext)
     } catch (err) {
       // Session construction failed before the turn started (e.g. a missing or
       // non-executable Codex binary). Persist the prompt, surface the error, and
@@ -1790,19 +1832,179 @@ export class ChatManager {
     }
   }
 
+  private pushEvent(chat: ChatData, text: string, kind: 'info' | 'error' = 'info'): void {
+    const msg = { id: randomUUID(), role: 'event' as const, kind, text, ts: Date.now() }
+    chat.messages.push(msg)
+    chat.updatedAt = msg.ts
+    this.emit({ type: 'message', chatId: chat.id, message: msg })
+    this.store.saveChatSoon(chat.id)
+  }
+
+  /**
+   * Flip a chat to the other provider's backend (the model itself was already
+   * assigned by setOptions). Sessions aren't portable across backends, so the
+   * live session is dropped and the conversation carries over via a handoff
+   * brief — unless this is a switch *back* before anything was sent, where the
+   * stashed resume id restores the original session untouched.
+   */
+  private switchProvider(
+    chat: ChatData,
+    nextProvider: Provider,
+    prevModel: string | undefined
+  ): void {
+    const prevProvider = chat.provider
+    const prevSessionId = chat.sessionId
+    chat.provider = nextProvider
+    chat.effort = effortForProvider(chat.effort, nextProvider)
+    chat.sessionId = undefined
+    const review = chat.pendingPlanReview
+    chat.pendingPlanReview = undefined
+    this.disposeChat(chat.id)
+    if (chat.handoff?.provider === nextProvider) {
+      // The original session was never touched (the brief runs on a throwaway
+      // one-shot), so restore it as if the detour never happened.
+      chat.sessionId = chat.handoff.sessionId
+      chat.handoff = undefined
+      this.pushEvent(
+        chat,
+        `Switched back to ${modelLabel(chat.model, nextProvider)} — resuming the original session.`
+      )
+    } else if (chat.messages.some((m) => m.role === 'user' || m.role === 'assistant')) {
+      chat.handoff = { provider: prevProvider, model: prevModel, sessionId: prevSessionId }
+      this.pushEvent(
+        chat,
+        `Switched to ${modelLabel(chat.model, nextProvider)}. ` +
+          `${modelLabel(prevModel, prevProvider)} is writing a handoff brief so the ` +
+          'conversation continues with its context.'
+      )
+      void this.startHandoffBrief(chat)
+    }
+    if (review) {
+      this.emit({ type: 'permission-resolved', chatId: chat.id, requestId: review.requestId })
+    }
+    this.emit({
+      type: 'meta',
+      chatId: chat.id,
+      patch: {
+        provider: nextProvider,
+        sessionId: chat.sessionId,
+        effort: chat.effort,
+        pendingPlanReview: undefined
+      }
+    })
+    // A disposed session emits no final status; release the renderer so a
+    // switch during a live turn doesn't leave the chat stuck 'streaming'.
+    this.emit({ type: 'status', chatId: chat.id, status: 'idle' })
+  }
+
+  /** The chat's loaded transcript, serialized under `cap` for the handoff. */
+  private transcriptFor(chat: ChatData, cap: number): string {
+    const hidden = this.store.hiddenBefore(chat.id)
+    return serializeTranscript(chat.messages.slice(hidden), cap, hidden > 0)
+  }
+
+  /**
+   * The handoff brief, shared across callers: switch time starts it so it races
+   * the user typing their next message; the first send awaits the same job.
+   * Resolves null on failure or timeout.
+   */
+  private startHandoffBrief(chat: ChatData): Promise<string | null> {
+    const handoff = chat.handoff
+    if (!handoff) return Promise.resolve(null)
+    if (handoff.brief) return Promise.resolve(handoff.brief)
+    const running = this.handoffJobs.get(chat.id)
+    if (running) return running
+    const job = this.generateHandoffBrief(chat, handoff).then((brief) => {
+      // The stash may have been replaced by more switching; the brief depends
+      // only on the direction (transcript + outgoing model), so match on that
+      // rather than object identity.
+      if (brief && chat.handoff?.provider === handoff.provider && !chat.handoff.brief) {
+        chat.handoff.brief = brief
+        this.store.saveChatSoon(chat.id)
+      }
+      return brief
+    })
+    this.handoffJobs.set(chat.id, job)
+    void job.finally(() => this.handoffJobs.delete(chat.id))
+    return job
+  }
+
+  /**
+   * The outgoing model writes the brief on a throwaway one-shot (never by
+   * resuming the original session — that must stay untouched so switching back
+   * before the first send can restore it).
+   */
+  private async generateHandoffBrief(chat: ChatData, handoff: ChatHandoff): Promise<string | null> {
+    // Off the setOptions IPC tick — serialization is bounded, but not free.
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    const transcript = this.transcriptFor(chat, HANDOFF_TRANSCRIPT_CHARS)
+    if (!transcript) return null
+    const prompt = buildHandoffBriefPrompt(
+      transcript,
+      modelLabel(handoff.model, handoff.provider),
+      modelLabel(chat.model, chat.provider)
+    )
+    const gen =
+      handoff.provider === 'codex'
+        ? generateCodexText(chat.cwd, handoff.model, `${HANDOFF_BRIEF_SYSTEM}\n\n${prompt}`)
+        : generateClaudeText(chat.cwd, handoff.model, HANDOFF_BRIEF_SYSTEM, prompt)
+    return withTimeout(gen, HANDOFF_TIMEOUT_MS, null)
+  }
+
+  private async sendWithHandoff(
+    chat: ChatData,
+    text: string,
+    attachments?: Attachment[],
+    label?: string
+  ): Promise<void> {
+    const prev = this.handoffSends.get(chat.id) ?? Promise.resolve()
+    const run = prev.then(async () => {
+      const handoff = chat.handoff
+      if (!handoff) {
+        // An earlier chained send already consumed the handoff.
+        this.deliver(chat, text, attachments, label)
+        return
+      }
+      // Show life while the brief finishes; the session's own status stream
+      // takes over the moment the turn is delivered.
+      this.emit({ type: 'status', chatId: chat.id, status: 'starting' })
+      // Boot the incoming provider now so its spawn overlaps the brief wait.
+      try {
+        this.sessionFor(chat.id) ?? this.createSession(chat)
+      } catch {
+        // Construction failures surface properly from deliver below.
+      }
+      let context: string | undefined
+      try {
+        const brief = await this.startHandoffBrief(chat)
+        const summary = brief ?? this.transcriptFor(chat, HANDOFF_FALLBACK_CHARS)
+        if (summary) {
+          context = buildHandoffContext(summary, modelLabel(handoff.model, handoff.provider), !brief)
+        }
+      } catch (err) {
+        console.error('[handoff] brief failed, delivering without context:', err)
+      }
+      chat.handoff = undefined
+      this.store.saveChatSoon(chat.id)
+      this.deliver(chat, text, attachments, label, context)
+    })
+    this.handoffSends.set(chat.id, run)
+    void run.finally(() => {
+      if (this.handoffSends.get(chat.id) === run) this.handoffSends.delete(chat.id)
+    })
+    await run
+  }
+
   private pushCommandResult(
     chat: ChatData,
     commandText: string,
     text: string,
     kind: 'info' | 'error' = 'info'
   ): void {
-    const now = Date.now()
-    const user = { id: randomUUID(), role: 'user' as const, text: commandText, ts: now }
-    const event = { id: randomUUID(), role: 'event' as const, kind, text, ts: now }
-    chat.messages.push(user, event)
-    chat.updatedAt = now
+    const user = { id: randomUUID(), role: 'user' as const, text: commandText, ts: Date.now() }
+    chat.messages.push(user)
     this.emit({ type: 'message', chatId: chat.id, message: user })
-    this.emit({ type: 'message', chatId: chat.id, message: event })
+    this.pushEvent(chat, text, kind)
     this.emit({ type: 'status', chatId: chat.id, status: 'idle' })
     this.store.saveChat(chat.id)
   }
@@ -2139,33 +2341,10 @@ export class ChatManager {
     const session = this.sessionFor(chatId)
     if (patch.model !== undefined) {
       const nextProvider = providerForModel(patch.model)
+      const prevModel = chat.model
       chat.model = patch.model || undefined
       if (nextProvider !== chat.provider) {
-        // Switching provider mid-chat: session ids aren't portable across
-        // backends, so drop the live session and clear the resume id — the next
-        // send starts the right backend fresh (the transcript is kept as-is).
-        chat.provider = nextProvider
-        chat.effort = effortForProvider(chat.effort, nextProvider)
-        chat.sessionId = undefined
-        const review = chat.pendingPlanReview
-        chat.pendingPlanReview = undefined
-        this.disposeChat(chatId)
-        if (review) {
-          this.emit({ type: 'permission-resolved', chatId, requestId: review.requestId })
-        }
-        this.emit({
-          type: 'meta',
-          chatId,
-          patch: {
-            provider: nextProvider,
-            sessionId: undefined,
-            effort: chat.effort,
-            pendingPlanReview: undefined
-          }
-        })
-        // A disposed session emits no final status; release the renderer so a
-        // switch during a live turn doesn't leave the chat stuck 'streaming'.
-        this.emit({ type: 'status', chatId, status: 'idle' })
+        this.switchProvider(chat, nextProvider, prevModel)
       } else {
         await session?.setModel(chat.model)
       }
@@ -2252,6 +2431,8 @@ export class ChatManager {
     chat.cwd = cwd
     chat.worktree = undefined
     if (chat.provider !== 'codex') chat.sessionId = undefined
+    // Same rule for a resume id stashed by a pending provider switch.
+    if (chat.handoff && chat.handoff.provider !== 'codex') chat.handoff.sessionId = undefined
     this.store.saveChat(chatId)
     this.emit({
       type: 'meta',

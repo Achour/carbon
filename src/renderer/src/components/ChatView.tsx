@@ -752,7 +752,6 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
             contextTokens={chat.contextTokens}
             contextWindow={chat.contextWindow}
             provider={chat.provider}
-            lockProvider
             cwd={chat.cwd}
             commands={commands}
             placeholder={chat.provider === 'codex' ? 'Ask Codex anything…' : undefined}

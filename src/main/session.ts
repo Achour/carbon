@@ -17,6 +17,26 @@ import type {
 export type Emit = (ev: ChatEvent) => void
 
 /**
+ * The prompt a provider sees for one send: hidden context (the cross-provider
+ * handoff) first, then the user's text. The displayed/persisted message keeps
+ * the user's own words — only the outbound prompt is composed here.
+ */
+export function composePrompt(text: string, hiddenContext?: string): string {
+  return [hiddenContext, text].filter(Boolean).join('\n\n')
+}
+
+/** Resolve to `fallback` after `ms`. The work is not cancelled, just ignored. */
+export function withTimeout<T>(work: Promise<T>, ms: number, fallback: T): Promise<T> {
+  let timer: NodeJS.Timeout | undefined
+  return Promise.race([
+    work.finally(() => clearTimeout(timer)),
+    new Promise<T>((resolve) => {
+      timer = setTimeout(() => resolve(fallback), ms)
+    })
+  ])
+}
+
+/**
  * The provider-agnostic surface `ChatManager` drives. Both `ClaudeSession`
  * (Agent SDK) and `CodexSession` (Codex SDK) implement it, so everything the
  * manager and IPC layer touch is identical regardless of which agent runs the
@@ -28,7 +48,11 @@ export interface AgentSession {
   readonly dead: boolean
   /** True when the wrapper has no running turn, prompt, permission, or background job. */
   readonly idle: boolean
-  send(text: string, attachments?: Attachment[], label?: string): void
+  /**
+   * `hiddenContext` is prepended to the prompt the provider sees but never to
+   * the displayed/persisted user message — the cross-provider handoff rides it.
+   */
+  send(text: string, attachments?: Attachment[], label?: string, hiddenContext?: string): void
   interrupt(): Promise<void>
   setModel(model?: string): Promise<void>
   setPermissionMode(mode: PermissionModeId): Promise<void>

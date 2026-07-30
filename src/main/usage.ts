@@ -1,6 +1,7 @@
 import { query } from '@anthropic-ai/claude-agent-sdk'
 import type { ProviderUsage, RateLimitWindow, UsageOverview } from '@shared/types'
 import { CodexAppServerClient } from './codexAppServer'
+import { withTimeout } from './session'
 import { codexWindow, type CodexWindow } from './usageWindows'
 
 /**
@@ -35,12 +36,6 @@ function unavailable(provider: ProviderUsage['provider'], note: string): Provide
   return { provider, available: false, note, windows: [] }
 }
 
-function withTimeout<T>(work: Promise<T>, fallback: T): Promise<T> {
-  return Promise.race([
-    work,
-    new Promise<T>((resolve) => setTimeout(() => resolve(fallback), TIMEOUT_MS))
-  ])
-}
 
 // ---------- Claude ----------
 
@@ -165,8 +160,8 @@ export function readUsageOverview(cwd: string, refresh = false): Promise<UsageOv
   const run = (async (): Promise<UsageOverview> => {
     // Independent so one provider being signed out never blanks the other.
     const [claude, codex] = await Promise.all([
-      withTimeout(readClaude(cwd), unavailable('claude', 'Timed out reading Claude usage.')),
-      withTimeout(readCodex(), unavailable('codex', 'Timed out reading Codex usage.'))
+      withTimeout(readClaude(cwd), TIMEOUT_MS, unavailable('claude', 'Timed out reading Claude usage.')),
+      withTimeout(readCodex(), TIMEOUT_MS, unavailable('codex', 'Timed out reading Codex usage.'))
     ])
     const value: UsageOverview = { claude, codex }
     cached = { at: Date.now(), value }

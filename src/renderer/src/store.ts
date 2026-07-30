@@ -683,6 +683,10 @@ export function scopedChanges(
 
 const initialThemeMode = storedThemeMode()
 let codexConfigModelLoad: Promise<string | null> | null = null
+// One Claude model-list probe per app run: every composer mount asks (Codex
+// chats included, for the cross-provider picker rows), and a missing or broken
+// Claude CLI must not be re-spawned on every chat switch.
+let modelsLoad: Promise<ModelOption[]> | null = null
 // GitHub reads are deduped per project, not globally. A request for project A
 // must not suppress the refresh kicked off when the user switches to project B.
 const githubRequests = new Map<string, Promise<GitHubState>>()
@@ -1840,8 +1844,13 @@ export const useApp = create<AppState>((set, get) => ({
     // Either identifies a folder to read the list from — a chat via its cwd, or
     // the new-chat screen's picked folder directly.
     if (!id && !cwd) return
-    const models = await window.api.listModels(id ?? '', cwd)
-    if (models.length) set({ models })
+    modelsLoad ??= window.api.listModels(id ?? '', cwd)
+    try {
+      const models = await modelsLoad
+      if (models.length) set({ models })
+    } catch {
+      // One failed probe per run; the picker keeps the static fallback list.
+    }
   },
 
   async refreshUsage(force = false) {

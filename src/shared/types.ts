@@ -120,6 +120,16 @@ export interface ChatMeta {
   pendingPlanReview?: PersistedPlanReview
   /** Provider-side session id, used to resume conversations. */
   sessionId?: string
+  /**
+   * Pending cross-provider model switch, kept until the first send on the new
+   * provider. `sessionId` is the outgoing provider's resume id, so switching
+   * back before that send restores the original session untouched (the brief
+   * runs on a throwaway session, never the original). `brief` is the handoff
+   * summary the outgoing model writes at switch time; it is injected invisibly
+   * into the new provider's first turn so the conversation context carries
+   * over — the two backends cannot share sessions any other way.
+   */
+  handoff?: ChatHandoff
   /** Tokens currently in the model's context (from the last API call). */
   contextTokens?: number
   /** Context window size of the model in use. */
@@ -128,6 +138,14 @@ export interface ChatMeta {
   worktree?: WorktreeInfo
   createdAt: number
   updatedAt: number
+}
+
+/** The outgoing side of a pending cross-provider switch — see `ChatMeta.handoff`. */
+export interface ChatHandoff {
+  provider: Provider
+  model?: string
+  sessionId?: string
+  brief?: string
 }
 
 export interface ChatData extends ChatMeta {
@@ -722,6 +740,17 @@ export function claudeModelContextWindow(
 export const PROVIDER_LABELS: Record<Provider, string> = {
   claude: 'Claude Code',
   codex: 'Codex'
+}
+
+/**
+ * Human "model (provider)" label for cross-provider copy — the handoff's
+ * transcript events and brief prompts. Built on `resolvedModelName` so dynamic
+ * SDK ids render their human name, not the raw wire id.
+ */
+export function modelLabel(model: string | undefined, provider: Provider): string {
+  const name = PROVIDER_LABELS[provider]
+  if (!model || model === CODEX_DEFAULT_MODEL) return name
+  return `${resolvedModelName(model) ?? model} (${name})`
 }
 
 export const PERMISSION_MODES: { id: PermissionModeId; label: string; description: string }[] = [

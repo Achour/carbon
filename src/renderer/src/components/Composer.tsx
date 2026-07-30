@@ -533,7 +533,6 @@ export function Composer({
   contextTokens,
   contextWindow,
   provider = 'claude',
-  lockProvider = false,
   cwd = null,
   commands = [],
   disabled = false,
@@ -559,13 +558,6 @@ export function Composer({
   contextWindow?: number
   /** Which agent backs this chat; switches the pickers/labels to its reality. */
   provider?: Provider
-  /**
-   * Lock the model picker to `provider`'s models (an existing chat). Provider is
-   * a create-time choice — switching it mid-chat would silently drop the
-   * conversation context, since the two backends don't share sessions. New-chat
-   * screens leave this false so either provider can be chosen up front.
-   */
-  lockProvider?: boolean
   /** Project folder used for @-file mentions; null disables them. */
   cwd?: string | null
   /** Slash commands available in this project, for the / autocomplete. */
@@ -594,17 +586,13 @@ export function Composer({
   // Fetch the real Claude list up front rather than waiting for a first turn:
   // the static fallback's "Default" row can't name the model it resolves to, so
   // the chip would read "Default" where Codex's already reads its real model.
-  // Skipped for a Codex-locked chat, whose picker never shows a Claude row.
-  const wantsClaudeModels = !lockProvider || provider === 'claude'
   React.useEffect(() => {
-    if (wantsClaudeModels) void loadModels(undefined, cwd ?? undefined)
-  }, [loadModels, wantsClaudeModels, cwd])
-  const allModelOptions = assembleModelOptions(dynamicModels, codexConfigModel)
-  // An existing chat only offers its own provider's models — provider is fixed
-  // once the chat is created (see the lockProvider doc).
-  const modelOptions = lockProvider
-    ? allModelOptions.filter((m) => m.provider === provider)
-    : allModelOptions
+    void loadModels(undefined, cwd ?? undefined)
+  }, [loadModels, cwd])
+  // Both providers' models are always offered — picking one from the other
+  // provider switches the chat's backend mid-conversation, and main hands the
+  // context over via a handoff brief (see ChatManager.startHandoffBrief).
+  const modelOptions = assembleModelOptions(dynamicModels, codexConfigModel)
 
   const selectedModel = React.useMemo(
     () => canonicalModelId(model, modelOptions),

@@ -40,7 +40,7 @@ import type {
   UsageInfo
 } from '@shared/types'
 import type { Store } from './store'
-import type { AgentSession, Emit } from './session'
+import { composePrompt, type AgentSession, type Emit } from './session.ts'
 import { DeltaCoalescer } from './deltaCoalescer.ts'
 import { IMAGE_EXT, pickTurnImages } from './imageScan.ts'
 import { isMissingCodexThreadError } from './codexResume.ts'
@@ -70,6 +70,40 @@ import {
 import { TITLE_SYSTEM, buildTitlePrompt, cleanTitle, deriveTitle, firstUserText } from './titles.ts'
 
 const OUTPUT_CAP = 100_000
+
+/**
+ * One-shot Codex text turn on a throwaway read-only thread — backs the chat
+ * title and the cross-provider handoff brief (see ChatManager). A live session
+ * passes its own `client`; without one a throwaway is spawned and disposed
+ * (the handoff runs after the chat's session is already gone). Returns null on
+ * any error so callers can fall back.
+ */
+export async function generateCodexText(
+  cwd: string,
+  model: string | undefined,
+  prompt: string,
+  client?: CodexClientLike
+): Promise<string | null> {
+  const codex = client ?? new CodexAppServerClient({})
+  try {
+    const thread = codex.startThread({
+      model: model && model !== CODEX_DEFAULT_MODEL ? model : undefined,
+      workingDirectory: cwd,
+      skipGitRepoCheck: true,
+      sandboxMode: 'read-only',
+      approvalPolicy: 'never',
+      // NB not 'minimal' — it 400s on some Codex models (e.g. gpt-5.6-sol
+      // only allows none/low/medium/high/xhigh), which silently kills the turn.
+      modelReasoningEffort: 'low'
+    })
+    const turn = await thread.run(prompt)
+    return turn.finalResponse.trim() || null
+  } catch {
+    return null
+  } finally {
+    if (!client) codex.dispose?.()
+  }
+}
 
 // Used only for an unknown/config-selected model. Explicit models carry their
 // advertised window in MODEL_OPTIONS.
@@ -401,7 +435,7 @@ export class CodexSession implements AgentSession {
 
   // ---------- Sending ----------
 
-  send(text: string, attachments: Attachment[] = [], label?: string): void {
+  send(text: string, attachments: Attachment[] = [], label?: string, hiddenContext?: string): void {
     if (this.disposed) return
     // A freeform message supersedes a blocking native question. Resolve it with
     // an empty answer so App Server can finish that turn before the new one runs.
@@ -422,7 +456,7 @@ export class CodexSession implements AgentSession {
       ...(label ? { label } : {})
     })
     this.emit({ type: 'meta', chatId: this.chat.id, patch: { updatedAt: this.chat.updatedAt } })
-    this.pending.push(this.buildPendingTurn(text, attachments, messageId))
+    this.pending.push(this.buildPendingTurn(composePrompt(text, hiddenContext), attachments, messageId))
     void this.drain()
   }
 
@@ -742,29 +776,15 @@ export class CodexSession implements AgentSession {
     this.emit({ type: 'title-pending', chatId: this.chat.id, pending })
   }
 
-  /**
-   * One-shot Codex title turn on a throwaway read-only thread — low effort, no
-   * writes, separate from the conversation thread. Returns null on any error so
-   * the placeholder title simply stands.
-   *
-   * NB: 'minimal' effort 400s on some Codex models (e.g. gpt-5.6-sol only allows
-   * none/low/medium/high/xhigh), which silently killed titling — use 'low'.
-   */
+  /** Terse chat title via a generateCodexText one-shot on the session's own client. */
   private async generateCodexTitle(userText: string): Promise<string | null> {
-    try {
-      const thread = this.codex.startThread({
-        model: this.threadOptions().model,
-        workingDirectory: this.chat.cwd,
-        skipGitRepoCheck: true,
-        sandboxMode: 'read-only',
-        approvalPolicy: 'never',
-        modelReasoningEffort: 'low'
-      })
-      const turn = await thread.run(`${TITLE_SYSTEM}\n\n${buildTitlePrompt(userText)}`)
-      return cleanTitle(turn.finalResponse) || null
-    } catch {
-      return null
-    }
+    const out = await generateCodexText(
+      this.chat.cwd,
+      this.threadOptions().model,
+      `${TITLE_SYSTEM}\n\n${buildTitlePrompt(userText)}`,
+      this.codex
+    )
+    return out ? cleanTitle(out) || null : null
   }
 
   /** Clear only an unusable Codex resume id; transcript and current prompt stay. */
