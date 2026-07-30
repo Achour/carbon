@@ -2,12 +2,14 @@ import * as React from 'react'
 import {
   Archive,
   ArchiveRestore,
+  Bot,
   ChevronRight,
   EyeOff,
   Folder,
   FolderOpen,
   GitBranch,
   Loader2,
+  MessageCircleQuestion,
   MessageSquarePlus,
   MoreHorizontal,
   PanelLeft,
@@ -22,6 +24,7 @@ import { projectRoot } from '@shared/types'
 import { cn } from '@/lib/utils'
 import { basename, relativeTime } from '@/lib/format'
 import { REVEAL_LABEL } from '@/lib/platform'
+import { chatActivity, projectActivity, type ChatActivity } from '@/lib/chatActivity'
 import { useApp } from '@/store'
 import { Button } from '@/components/ui/button'
 import {
@@ -61,7 +64,7 @@ function describeAtRisk({ dirtyFiles, unmergedCommits }: WorktreeStatus): string
 function ChatItem({
   chat,
   active,
-  streaming,
+  activity,
   titling,
   onOpen,
   onRename,
@@ -70,7 +73,7 @@ function ChatItem({
 }: {
   chat: ChatMeta
   active: boolean
-  streaming: boolean
+  activity: ChatActivity
   titling: boolean
   onOpen: () => void
   onRename: () => void
@@ -129,8 +132,8 @@ function ChatItem({
             menuOpen && 'opacity-0'
           )}
         >
-          {streaming ? (
-            <Loader2 className="size-3 animate-spin text-primary" />
+          {activity.kind !== 'idle' ? (
+            <ActivityIndicator activity={activity} />
           ) : (
             relativeTime(chat.updatedAt)
           )}
@@ -291,10 +294,34 @@ function SearchChatsDialog({
   )
 }
 
+function ActivityIndicator({ activity }: { activity: ChatActivity }): React.JSX.Element | null {
+  if (activity.kind === 'idle') return null
+
+  return (
+    <WithTooltip label={activity.label} side="right">
+      <span
+        role="status"
+        aria-label={activity.label}
+        className="inline-flex h-4 shrink-0 items-center gap-0.5 tabular-nums"
+      >
+        {activity.kind === 'needs-input' ? (
+          <MessageCircleQuestion className="size-3.5 text-warning" />
+        ) : activity.kind === 'background' ? (
+          <Bot className="size-3.5 animate-pulse-soft text-primary" />
+        ) : (
+          <Loader2 className="size-3 animate-spin text-primary" />
+        )}
+      </span>
+    </WithTooltip>
+  )
+}
+
 export function Sidebar(): React.JSX.Element {
   const chats = useApp((s) => s.chats)
   const activeId = useApp((s) => s.activeId)
   const statuses = useApp((s) => s.statuses)
+  const permissions = useApp((s) => s.permissions)
+  const backgroundJobs = useApp((s) => s.backgroundJobs)
   const titling = useApp((s) => s.titling)
   const openChat = useApp((s) => s.openChat)
   const renameChat = useApp((s) => s.renameChat)
@@ -567,7 +594,11 @@ export function Sidebar(): React.JSX.Element {
         ].map(({ group, archived }, i) => {
           // Archived projects default to collapsed.
           const isCollapsed = collapsedProjects[group.cwd] ?? archived
-          const hasStreaming = group.chats.some((c) => (statuses[c.id] ?? 'idle') !== 'idle')
+          const collapsedActivity = projectActivity(
+            group.chats.map((chat) =>
+              chatActivity(statuses[chat.id], backgroundJobs[chat.id], permissions[chat.id])
+            )
+          )
           const firstArchived = archived && i === activeGroups.length
           // Cap to the most-recent chats (search shows all matches). Keep the
           // open chat visible even when it's older than the cap.
@@ -668,8 +699,8 @@ export function Sidebar(): React.JSX.Element {
                             {group.chats.length}
                           </span>
                         )}
-                        {isCollapsed && hasStreaming && (
-                          <Loader2 className="size-3 shrink-0 animate-spin text-primary" />
+                        {isCollapsed && collapsedActivity.kind !== 'idle' && (
+                          <ActivityIndicator activity={collapsedActivity} />
                         )}
                       </button>
                     </WithTooltip>
@@ -736,7 +767,11 @@ export function Sidebar(): React.JSX.Element {
                         key={chat.id}
                         chat={chat}
                         active={chat.id === activeId}
-                        streaming={(statuses[chat.id] ?? 'idle') !== 'idle'}
+                        activity={chatActivity(
+                          statuses[chat.id],
+                          backgroundJobs[chat.id],
+                          permissions[chat.id]
+                        )}
                         titling={!!titling[chat.id]}
                         onOpen={() => void openChat(chat.id)}
                         onRename={() => {
