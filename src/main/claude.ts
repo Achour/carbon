@@ -20,7 +20,6 @@ import type {
   Attachment,
   BackgroundJob,
   ChatData,
-  ChatHandoff,
   ChatMeta,
   ChatOptionsPatch,
   ChatStatus,
@@ -304,6 +303,10 @@ class ClaudeSession implements AgentSession {
   // message's parts — so they need their own location map for result matching.
   private childToolLoc = new Map<string, { parent: ToolPart; index: number }>()
   private pending = new Map<string, PendingPermission>()
+  /** Serializes prompt enqueues so a send can await its handoff context (see send). */
+  private sendChain: Promise<void> = Promise.resolve()
+  /** Bumped by interrupt so sends still waiting in the chain are dropped, not queued. */
+  private sendEpoch = 0
   private initModel?: string
   /** Exact model name of the most recent assistant turn; keys into modelUsage. */
   private lastTurnModel?: string
@@ -491,7 +494,12 @@ class ClaudeSession implements AgentSession {
     this.emit({ type: 'title-pending', chatId: this.chat.id, pending })
   }
 
-  send(text: string, attachments: Attachment[] = [], label?: string, hiddenContext?: string): void {
+  send(
+    text: string,
+    attachments: Attachment[] = [],
+    label?: string,
+    hiddenContext?: string | Promise<string | undefined>
+  ): void {
     if (!this.chat.title) {
       // Instant placeholder from the first message; the AI title is generated in
       // parallel with the turn below (see maybeGenerateTitle) and swaps it in.
@@ -528,24 +536,34 @@ class ClaudeSession implements AgentSession {
       if (a.kind === 'element' && a.element) elementBlocks.push(describeElement(a.element))
     }
     const filePaths = attachments.filter((a) => a.kind === 'file' && a.path).map((a) => a.path!)
-    let prompt = composePrompt(text, hiddenContext)
-    if (filePaths.length) {
-      const list = filePaths.map((p) => `- ${p}`).join('\n')
-      prompt = `${prompt ? `${prompt}\n\n` : ''}Attached files:\n${list}`
+    const epoch = this.sendEpoch
+    const finish = (ctx?: string): void => {
+      if (this.disposed || epoch !== this.sendEpoch) return
+      let prompt = composePrompt(text, ctx)
+      if (filePaths.length) {
+        const list = filePaths.map((p) => `- ${p}`).join('\n')
+        prompt = `${prompt ? `${prompt}\n\n` : ''}Attached files:\n${list}`
+      }
+      if (elementBlocks.length) {
+        prompt = `${prompt ? `${prompt}\n\n` : ''}${elementBlocks.join('\n\n')}`
+      }
+      if (prompt || content.length === 0) content.push({ type: 'text', text: prompt })
+      this.input.push({
+        type: 'user',
+        message: { role: 'user', content },
+        parent_tool_use_id: null,
+        uuid: messageId
+      } as unknown as SDKUserMessage)
     }
-    if (elementBlocks.length) {
-      prompt = `${prompt ? `${prompt}\n\n` : ''}${elementBlocks.join('\n\n')}`
-    }
-    if (prompt || content.length === 0) content.push({ type: 'text', text: prompt })
-    this.input.push({
-      type: 'user',
-      message: { role: 'user', content },
-      parent_tool_use_id: null,
-      uuid: messageId
-    } as unknown as SDKUserMessage)
+    // Every send rides the chain so a plain message can never overtake one
+    // still waiting on its handoff context (the echo above stays instant).
+    this.sendChain = this.sendChain.then(
+      () => Promise.resolve(hiddenContext).then(finish, () => finish())
+    )
   }
 
   async interrupt(): Promise<void> {
+    this.sendEpoch += 1
     this.denyAllPending(true)
     this.interruptedTurn = true
     try {
@@ -1613,13 +1631,15 @@ class ClaudeSession implements AgentSession {
 
 // ---------- Manager ----------
 
+/** The outgoing side of a provider switch, snapshotted as the switch applies. */
+interface HandoffSnapshot {
+  provider: Provider
+  model?: string
+}
+
 export class ChatManager {
   private sessions = new Map<string, AgentSession>()
   private static readonly MAX_IDLE_SESSIONS = 2
-  /** In-flight handoff-brief generation, one per chat (see startHandoffBrief). */
-  private handoffJobs = new Map<string, Promise<string | null>>()
-  /** Per-chat send chain while a handoff is pending, so the brief rides exactly the first turn. */
-  private handoffSends = new Map<string, Promise<void>>()
   // Slash commands are the same for every chat in a folder, so cache them by cwd
   // — new chats in a known project can show the menu before their first turn.
   private commandsByCwd = new Map<string, SlashCommand[]>()
@@ -1774,27 +1794,53 @@ export class ChatManager {
   send(chatId: string, text: string, attachments?: Attachment[], label?: string): void {
     const chat = this.store.getChat(chatId)
     if (!chat) return
+    // A pending model pick from the other provider applies now — the send is
+    // the commitment; until here it was only a chip in the composer.
+    const handoff = this.applyPendingSwitch(chat)
     const command = chat.provider === 'codex' ? parseCodexSlashCommand(text) : null
     if (command) {
-      void this.runCodexCommand(chat, command, attachments)
+      void this.runCodexCommand(chat, command, attachments, handoff)
       return
     }
-    this.sendPrompt(chat, text, attachments, label)
+    this.sendPrompt(chat, text, attachments, label, handoff)
+  }
+
+  /**
+   * Apply a deferred cross-provider model pick. Returns the outgoing side for
+   * the handoff context, or null when nothing was pending (or the pick had
+   * already been cancelled by re-picking the current provider).
+   */
+  private applyPendingSwitch(chat: ChatData): HandoffSnapshot | null {
+    const pending = chat.pendingModel
+    if (pending === undefined) return null
+    chat.pendingModel = undefined
+    const nextProvider = providerForModel(pending)
+    if (nextProvider === chat.provider) {
+      // Stale pick that ended up back home — just make sure the model applies.
+      chat.model = pending || undefined
+      this.emit({ type: 'meta', chatId: chat.id, patch: { pendingModel: undefined, model: chat.model } })
+      return null
+    }
+    const prevModel = chat.model
+    chat.model = pending || undefined
+    this.emit({ type: 'meta', chatId: chat.id, patch: { pendingModel: undefined } })
+    return this.switchProvider(chat, nextProvider, prevModel)
   }
 
   private sendPrompt(
     chat: ChatData,
     text: string,
     attachments?: Attachment[],
-    label?: string
+    label?: string,
+    handoff?: HandoffSnapshot | null
   ): void {
-    // A pending cross-provider handoff makes the first send async (the brief
-    // may still be generating); later sends chain behind it so order holds.
-    if (chat.handoff || this.handoffSends.has(chat.id)) {
-      void this.sendWithHandoff(chat, text, attachments, label)
-      return
-    }
-    this.deliver(chat, text, attachments, label)
+    this.deliver(
+      chat,
+      text,
+      attachments,
+      label,
+      handoff ? this.handoffContext(chat, handoff) : undefined
+    )
   }
 
   private deliver(
@@ -1802,7 +1848,7 @@ export class ChatManager {
     text: string,
     attachments?: Attachment[],
     label?: string,
-    hiddenContext?: string
+    hiddenContext?: string | Promise<string | undefined>
   ): void {
     try {
       const session = this.sessionFor(chat.id) ?? this.createSession(chat)
@@ -1850,42 +1896,31 @@ export class ChatManager {
 
   /**
    * Flip a chat to the other provider's backend (the model itself was already
-   * assigned by setOptions). Sessions aren't portable across backends, so the
-   * live session is dropped and the conversation carries over via a handoff
-   * brief — unless this is a switch *back* before anything was sent, where the
-   * stashed resume id restores the original session untouched.
+   * assigned by the caller). Sessions aren't portable across backends, so the
+   * live session is dropped; the returned snapshot feeds `handoffContext` so
+   * the conversation carries over on the turn being sent. Null when the chat
+   * has no history worth handing over.
    */
   private switchProvider(
     chat: ChatData,
     nextProvider: Provider,
     prevModel: string | undefined
-  ): void {
+  ): HandoffSnapshot | null {
     const prevProvider = chat.provider
-    const prevSessionId = chat.sessionId
     chat.provider = nextProvider
     chat.effort = effortForProvider(chat.effort, nextProvider)
     chat.sessionId = undefined
     const review = chat.pendingPlanReview
     chat.pendingPlanReview = undefined
     this.disposeChat(chat.id)
-    if (chat.handoff?.provider === nextProvider) {
-      // The original session was never touched (the brief runs on a throwaway
-      // one-shot), so restore it as if the detour never happened.
-      chat.sessionId = chat.handoff.sessionId
-      chat.handoff = undefined
+    const hasHistory = chat.messages.some((m) => m.role === 'user' || m.role === 'assistant')
+    if (hasHistory) {
       this.pushEvent(
         chat,
-        `Switched back to ${modelLabel(chat.model, nextProvider)} — resuming the original session.`
-      )
-    } else if (chat.messages.some((m) => m.role === 'user' || m.role === 'assistant')) {
-      chat.handoff = { provider: prevProvider, model: prevModel, sessionId: prevSessionId }
-      this.pushEvent(
-        chat,
-        `Switched to ${modelLabel(chat.model, nextProvider)}. ` +
+        `Switching to ${modelLabel(chat.model, nextProvider)} — ` +
           `${modelLabel(prevModel, prevProvider)} is writing a handoff brief so the ` +
           'conversation continues with its context.'
       )
-      void this.startHandoffBrief(chat)
     }
     if (review) {
       this.emit({ type: 'permission-resolved', chatId: chat.id, requestId: review.requestId })
@@ -1895,14 +1930,12 @@ export class ChatManager {
       chatId: chat.id,
       patch: {
         provider: nextProvider,
-        sessionId: chat.sessionId,
+        sessionId: undefined,
         effort: chat.effort,
         pendingPlanReview: undefined
       }
     })
-    // A disposed session emits no final status; release the renderer so a
-    // switch during a live turn doesn't leave the chat stuck 'streaming'.
-    this.emit({ type: 'status', chatId: chat.id, status: 'idle' })
+    return hasHistory ? { provider: prevProvider, model: prevModel } : null
   }
 
   /** The chat's loaded transcript, serialized under `cap` for the handoff. */
@@ -1912,95 +1945,39 @@ export class ChatManager {
   }
 
   /**
-   * The handoff brief, shared across callers: switch time starts it so it races
-   * the user typing their next message; the first send awaits the same job.
-   * Resolves null on failure or timeout.
+   * The hidden context for the first turn after a provider switch: the
+   * outgoing model writes a handoff brief on a throwaway one-shot (never by
+   * touching the original session), with the raw capped transcript as the
+   * fallback when that fails or times out. Returned as a promise — the
+   * session echoes the user message immediately and holds the turn until
+   * this resolves.
    */
-  private startHandoffBrief(chat: ChatData): Promise<string | null> {
-    const handoff = chat.handoff
-    if (!handoff) return Promise.resolve(null)
-    if (handoff.brief) return Promise.resolve(handoff.brief)
-    const running = this.handoffJobs.get(chat.id)
-    if (running) return running
-    const job = this.generateHandoffBrief(chat, handoff).then((brief) => {
-      // The stash may have been replaced by more switching; the brief depends
-      // only on the direction (transcript + outgoing model), so match on that
-      // rather than object identity.
-      if (brief && chat.handoff?.provider === handoff.provider && !chat.handoff.brief) {
-        chat.handoff.brief = brief
-        this.store.saveChatSoon(chat.id)
-      }
-      return brief
-    })
-    this.handoffJobs.set(chat.id, job)
-    void job.finally(() => this.handoffJobs.delete(chat.id))
-    return job
-  }
-
-  /**
-   * The outgoing model writes the brief on a throwaway one-shot (never by
-   * resuming the original session — that must stay untouched so switching back
-   * before the first send can restore it).
-   */
-  private async generateHandoffBrief(chat: ChatData, handoff: ChatHandoff): Promise<string | null> {
-    // Off the setOptions IPC tick — serialization is bounded, but not free.
-    await new Promise<void>((resolve) => setImmediate(resolve))
-    const transcript = this.transcriptFor(chat, HANDOFF_TRANSCRIPT_CHARS)
-    if (!transcript) return null
-    const prompt = buildHandoffBriefPrompt(
-      transcript,
-      modelLabel(handoff.model, handoff.provider),
-      modelLabel(chat.model, chat.provider)
-    )
-    const gen =
-      handoff.provider === 'codex'
-        ? generateCodexText(chat.cwd, handoff.model, `${HANDOFF_BRIEF_SYSTEM}\n\n${prompt}`)
-        : generateClaudeText(chat.cwd, handoff.model, HANDOFF_BRIEF_SYSTEM, prompt)
-    return withTimeout(gen, HANDOFF_TIMEOUT_MS, null)
-  }
-
-  private async sendWithHandoff(
+  private async handoffContext(
     chat: ChatData,
-    text: string,
-    attachments?: Attachment[],
-    label?: string
-  ): Promise<void> {
-    const prev = this.handoffSends.get(chat.id) ?? Promise.resolve()
-    const run = prev.then(async () => {
-      const handoff = chat.handoff
-      if (!handoff) {
-        // An earlier chained send already consumed the handoff.
-        this.deliver(chat, text, attachments, label)
-        return
-      }
-      // Show life while the brief finishes; the session's own status stream
-      // takes over the moment the turn is delivered.
-      this.emit({ type: 'status', chatId: chat.id, status: 'starting' })
-      // Boot the incoming provider now so its spawn overlaps the brief wait.
-      try {
-        this.sessionFor(chat.id) ?? this.createSession(chat)
-      } catch {
-        // Construction failures surface properly from deliver below.
-      }
-      let context: string | undefined
-      try {
-        const brief = await this.startHandoffBrief(chat)
-        const summary = brief ?? this.transcriptFor(chat, HANDOFF_FALLBACK_CHARS)
-        if (summary) {
-          context = buildHandoffContext(summary, modelLabel(handoff.model, handoff.provider), !brief)
-        }
-      } catch (err) {
-        console.error('[handoff] brief failed, delivering without context:', err)
-      }
-      chat.handoff = undefined
-      this.store.saveChatSoon(chat.id)
-      this.deliver(chat, text, attachments, label, context)
-    })
-    this.handoffSends.set(chat.id, run)
-    void run.finally(() => {
-      if (this.handoffSends.get(chat.id) === run) this.handoffSends.delete(chat.id)
-    })
-    await run
+    handoff: HandoffSnapshot
+  ): Promise<string | undefined> {
+    // Off the send IPC tick — serialization is bounded, but not free.
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    try {
+      const fromLabel = modelLabel(handoff.model, handoff.provider)
+      const transcript = this.transcriptFor(chat, HANDOFF_TRANSCRIPT_CHARS)
+      if (!transcript) return undefined
+      const prompt = buildHandoffBriefPrompt(
+        transcript,
+        fromLabel,
+        modelLabel(chat.model, chat.provider)
+      )
+      const gen =
+        handoff.provider === 'codex'
+          ? generateCodexText(chat.cwd, handoff.model, `${HANDOFF_BRIEF_SYSTEM}\n\n${prompt}`)
+          : generateClaudeText(chat.cwd, handoff.model, HANDOFF_BRIEF_SYSTEM, prompt)
+      const brief = await withTimeout(gen, HANDOFF_TIMEOUT_MS, null)
+      const summary = brief ?? this.transcriptFor(chat, HANDOFF_FALLBACK_CHARS)
+      return summary ? buildHandoffContext(summary, fromLabel, !brief) : undefined
+    } catch (err) {
+      console.error('[handoff] brief failed, delivering without context:', err)
+      return undefined
+    }
   }
 
   private pushCommandResult(
@@ -2017,17 +1994,23 @@ export class ChatManager {
     this.store.saveChat(chat.id)
   }
 
+  /**
+   * `handoff` carries a provider switch this same send applied. Prompt-running
+   * commands thread it into their turn; commands that don't start a turn drop
+   * it — the switch already happened, only the brief is skipped.
+   */
   private async runCodexCommand(
     chat: ChatData,
     command: NonNullable<ReturnType<typeof parseCodexSlashCommand>>,
-    attachments?: Attachment[]
+    attachments?: Attachment[],
+    handoff?: HandoffSnapshot | null
   ): Promise<void> {
     try {
       switch (command.name) {
         case 'plan': {
           await this.setOptions(chat.id, { permissionMode: 'plan' })
           if (command.argument) {
-            this.sendPrompt(chat, command.argument, attachments)
+            this.sendPrompt(chat, command.argument, attachments, undefined, handoff)
           } else {
             this.pushCommandResult(
               chat,
@@ -2204,7 +2187,9 @@ export class ChatManager {
           this.sendPrompt(
             chat,
             'Create an AGENTS.md file for this project. Inspect the repository first, then write concise, practical guidance for coding agents: architecture, important commands, conventions, verification steps, and project-specific pitfalls. Do not overwrite useful existing instructions; improve them in place if AGENTS.md already exists.',
-            attachments
+            attachments,
+            undefined,
+            handoff
           )
           return
 
@@ -2213,7 +2198,9 @@ export class ChatManager {
           this.sendPrompt(
             chat,
             `Review the current working tree for defects, regressions, security issues, and missing tests. Do not modify any files. Report actionable findings first, ordered by severity, with file and line references.${focus}`,
-            attachments
+            attachments,
+            undefined,
+            handoff
           )
         }
       }
@@ -2390,14 +2377,26 @@ export class ChatManager {
     }
     const prevModel = chat.model
     chat.model = decision.model || undefined
-    this.switchProvider(chat, nextProvider, prevModel)
+    chat.pendingModel = undefined
+    const handoff = this.switchProvider(chat, nextProvider, prevModel)
     this.emit({
       type: 'meta',
       chatId: chat.id,
-      patch: { model: chat.model, permissionMode: chat.permissionMode, modeBeforePlan: undefined }
+      patch: {
+        model: chat.model,
+        pendingModel: undefined,
+        permissionMode: chat.permissionMode,
+        modeBeforePlan: undefined
+      }
     })
     this.store.saveChat(chat.id)
-    this.sendPrompt(chat, buildPlanImplementPrompt(plan, fromLabel), undefined, 'Implement the plan')
+    this.sendPrompt(
+      chat,
+      buildPlanImplementPrompt(plan, fromLabel),
+      undefined,
+      'Implement the plan',
+      handoff
+    )
   }
 
   async setOptions(
@@ -2408,12 +2407,15 @@ export class ChatManager {
     if (!chat) return
     const session = this.sessionFor(chatId)
     if (patch.model !== undefined) {
-      const nextProvider = providerForModel(patch.model)
-      const prevModel = chat.model
-      chat.model = patch.model || undefined
-      if (nextProvider !== chat.provider) {
-        this.switchProvider(chat, nextProvider, prevModel)
+      if (providerForModel(patch.model) !== chat.provider) {
+        // Crossing providers has real side effects (session teardown, a
+        // handoff brief), so a pick only *arms* the switch — it applies on
+        // the next send (see applyPendingSwitch). A misclick costs nothing.
+        chat.pendingModel = patch.model
       } else {
+        // Picking back into the current provider cancels any armed switch.
+        chat.pendingModel = undefined
+        chat.model = patch.model || undefined
         await session?.setModel(chat.model)
       }
     }
@@ -2472,6 +2474,7 @@ export class ChatManager {
       chatId,
       patch: {
         model: chat.model,
+        pendingModel: chat.pendingModel,
         effort: chat.effort,
         serviceTier: chat.serviceTier,
         permissionMode: chat.permissionMode,
@@ -2499,8 +2502,6 @@ export class ChatManager {
     chat.cwd = cwd
     chat.worktree = undefined
     if (chat.provider !== 'codex') chat.sessionId = undefined
-    // Same rule for a resume id stashed by a pending provider switch.
-    if (chat.handoff && chat.handoff.provider !== 'codex') chat.handoff.sessionId = undefined
     this.store.saveChat(chatId)
     this.emit({
       type: 'meta',

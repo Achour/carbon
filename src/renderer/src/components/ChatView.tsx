@@ -18,7 +18,7 @@ import {
   X
 } from 'lucide-react'
 import type { AssistantMessage, ChatMessage, ChatMeta, ToolPart } from '@shared/types'
-import { projectRoot } from '@shared/types'
+import { projectRoot, providerForModel } from '@shared/types'
 import { cn } from '@/lib/utils'
 import { basename } from '@/lib/format'
 import { useApp } from '@/store'
@@ -317,6 +317,11 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
   const interrupt = useApp((s) => s.interrupt)
   const setChatOptions = useApp((s) => s.setChatOptions)
   const modelEfforts = useApp((s) => s.defaults?.modelEfforts)
+  // A cross-provider pick is only armed until the next send; the composer
+  // previews its provider (efforts, placeholder, labels) while the chat itself
+  // stays on the current backend.
+  const composerProvider =
+    chat.pendingModel !== undefined ? providerForModel(chat.pendingModel) : chat.provider
   const renameChat = useApp((s) => s.renameChat)
   const deleteChat = useApp((s) => s.deleteChat)
 
@@ -738,7 +743,10 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
             onSend={(text, attachments) => sendMessage(text, attachments)}
             streaming={busy}
             onStop={() => void interrupt()}
-            model={chat.model ?? ''}
+            // A cross-provider pick is only armed until the next send; the
+            // composer previews it (chip, efforts, placeholder) while the chat
+            // itself stays on its current backend.
+            model={chat.pendingModel ?? chat.model ?? ''}
             onModelChange={(model) => void setChatOptions({ model })}
             effort={chat.effort ?? ''}
             onEffortChange={(effort, opts) => void setChatOptions({ effort, ...opts })}
@@ -751,10 +759,10 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
             onPermissionModeChange={(permissionMode) => void setChatOptions({ permissionMode })}
             contextTokens={chat.contextTokens}
             contextWindow={chat.contextWindow}
-            provider={chat.provider}
+            provider={composerProvider}
             cwd={chat.cwd}
             commands={commands}
-            placeholder={chat.provider === 'codex' ? 'Ask Codex anything…' : undefined}
+            placeholder={composerProvider === 'codex' ? 'Ask Codex anything…' : undefined}
           />
         </div>
       </div>

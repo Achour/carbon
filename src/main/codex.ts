@@ -269,6 +269,13 @@ export class CodexSession implements AgentSession {
   // effort) are fixed at start/resume time and have no live setter.
   private optionsDirty = true
   private pending: PendingTurn[] = []
+  /** Serializes turn enqueues so a send can await its handoff context (see send). */
+  private sendChain: Promise<void> = Promise.resolve()
+  /**
+   * Turns still waiting in the chain, so interrupt/dispose can sweep them (and
+   * their temp files) *synchronously* — a swept turn is dropped, not queued.
+   */
+  private chainQueued = new Set<PendingTurn>()
   private checkpoints = new Map<string, WorkspaceCheckpoint>()
   private activeUserMessageId: string | null = null
   private running = false
@@ -435,7 +442,12 @@ export class CodexSession implements AgentSession {
 
   // ---------- Sending ----------
 
-  send(text: string, attachments: Attachment[] = [], label?: string, hiddenContext?: string): void {
+  send(
+    text: string,
+    attachments: Attachment[] = [],
+    label?: string,
+    hiddenContext?: string | Promise<string | undefined>
+  ): void {
     if (this.disposed) return
     // A freeform message supersedes a blocking native question. Resolve it with
     // an empty answer so App Server can finish that turn before the new one runs.
@@ -456,8 +468,29 @@ export class CodexSession implements AgentSession {
       ...(label ? { label } : {})
     })
     this.emit({ type: 'meta', chatId: this.chat.id, patch: { updatedAt: this.chat.updatedAt } })
-    this.pending.push(this.buildPendingTurn(composePrompt(text, hiddenContext), attachments, messageId))
-    void this.drain()
+    // Lock the composer right away — the turn may still be waiting on its
+    // handoff context below, and drain() would otherwise not flip the status
+    // until that resolves.
+    this.setStatus(this.threadId ? 'streaming' : 'starting')
+    // Snapshot the turn now (options and temp-image writes happen once);
+    // the chain only waits for the handoff context and patches it into the
+    // text block, so a later plain send can't overtake this one.
+    const turn = this.buildPendingTurn(text, attachments, messageId)
+    this.chainQueued.add(turn)
+    this.sendChain = this.sendChain.then(async () => {
+      let ctx: string | undefined
+      try {
+        ctx = (await hiddenContext) || undefined
+      } catch {
+        ctx = undefined
+      }
+      // Swept while waiting (interrupt/dispose) — dropped, temps already gone.
+      if (!this.chainQueued.delete(turn)) return
+      const block = turn.input[0] as { type: string; text: string } | undefined
+      if (ctx && block?.type === 'text') block.text = composePrompt(block.text, ctx)
+      this.pending.push(turn)
+      void this.drain()
+    })
   }
 
   private buildPendingTurn(
@@ -1678,7 +1711,7 @@ export class CodexSession implements AgentSession {
   }
 
   private cleanupPendingTurns(): void {
-    for (const turn of this.pending) {
+    for (const turn of [...this.pending, ...this.chainQueued]) {
       for (const file of turn.temps) {
         try {
           rmSync(file, { force: true })
@@ -1688,6 +1721,7 @@ export class CodexSession implements AgentSession {
       }
     }
     this.pending.length = 0
+    this.chainQueued.clear()
   }
 
   async rewindFiles(userMessageId: string, dryRun: boolean): Promise<RewindResult> {

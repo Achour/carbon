@@ -50,9 +50,17 @@ export interface AgentSession {
   readonly idle: boolean
   /**
    * `hiddenContext` is prepended to the prompt the provider sees but never to
-   * the displayed/persisted user message — the cross-provider handoff rides it.
+   * the displayed/persisted user message — the cross-provider handoff rides
+   * it. A promise is allowed (the handoff brief resolving): the user message
+   * echoes immediately and the turn starts once the context lands; sessions
+   * keep an internal send queue so later sends can't overtake it.
    */
-  send(text: string, attachments?: Attachment[], label?: string, hiddenContext?: string): void
+  send(
+    text: string,
+    attachments?: Attachment[],
+    label?: string,
+    hiddenContext?: string | Promise<string | undefined>
+  ): void
   /**
    * The plan text behind a pending review request, or null if `requestId`
    * isn't one. Lets the manager catch a plan approved into the *other*

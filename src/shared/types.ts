@@ -121,15 +121,14 @@ export interface ChatMeta {
   /** Provider-side session id, used to resume conversations. */
   sessionId?: string
   /**
-   * Pending cross-provider model switch, kept until the first send on the new
-   * provider. `sessionId` is the outgoing provider's resume id, so switching
-   * back before that send restores the original session untouched (the brief
-   * runs on a throwaway session, never the original). `brief` is the handoff
-   * summary the outgoing model writes at switch time; it is injected invisibly
-   * into the new provider's first turn so the conversation context carries
-   * over — the two backends cannot share sessions any other way.
+   * A cross-provider model pick that hasn't been sent yet. Switching backends
+   * has real side effects (session teardown, a handoff brief), so it applies
+   * on the next send rather than on click — a misclick is undone by simply
+   * picking again, with the original session never touched. `''` targets the
+   * Claude default row; undefined means no switch is pending. The composer
+   * shows this model (and its provider's controls) while it waits.
    */
-  handoff?: ChatHandoff
+  pendingModel?: string
   /** Tokens currently in the model's context (from the last API call). */
   contextTokens?: number
   /** Context window size of the model in use. */
@@ -138,14 +137,6 @@ export interface ChatMeta {
   worktree?: WorktreeInfo
   createdAt: number
   updatedAt: number
-}
-
-/** The outgoing side of a pending cross-provider switch — see `ChatMeta.handoff`. */
-export interface ChatHandoff {
-  provider: Provider
-  model?: string
-  sessionId?: string
-  brief?: string
 }
 
 export interface ChatData extends ChatMeta {
