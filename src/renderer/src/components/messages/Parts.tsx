@@ -8,18 +8,9 @@ import {
   GitCommitHorizontal,
   Loader2,
   MousePointerClick,
-  RotateCcw,
-  Sparkles
+  RotateCcw
 } from 'lucide-react'
-import type {
-  AssistantMessage,
-  EventMessage,
-  Provider,
-  RewindResult,
-  ToolPart,
-  UserMessage
-} from '@shared/types'
-import { PROVIDER_LABELS } from '@shared/types'
+import type { AssistantMessage, EventMessage, RewindResult, ToolPart, UserMessage } from '@shared/types'
 import { cn } from '@/lib/utils'
 import { formatCost, formatDuration } from '@/lib/format'
 import { Markdown, StreamingMarkdown, useStreamText } from '@/components/Markdown'
@@ -373,35 +364,19 @@ export const EventRow = React.memo(function EventRow({
           </div>
         )
       }
-      const chip = (model: string, provider: Provider): React.JSX.Element => (
-        <span className="inline-flex items-baseline gap-1.5">
-          <span className="font-medium text-foreground">{model}</span>
-          {model !== PROVIDER_LABELS[provider] && (
-            <span className="text-[10px] tracking-wide text-muted-foreground/70 uppercase">
-              {PROVIDER_LABELS[provider]}
-            </span>
-          )}
-        </span>
-      )
+      // Same quiet divider as 'info' — a switch is a transcript milestone, not
+      // a card floating outside the message flow. The names carry the story.
       return (
-        <div className="flex justify-center py-2">
-          <div className="animate-enter w-full max-w-md rounded-xl border border-border bg-card/60 px-4 py-3">
-            <div className="flex items-center justify-center gap-2.5 text-[13px]">
-              {chip(s.fromModel, s.fromProvider)}
-              <ArrowRight className="size-3.5 shrink-0 text-muted-foreground" />
-              {chip(s.toModel, s.toProvider)}
-            </div>
-            <div className="mt-2.5 space-y-1.5 border-t border-border/60 pt-2.5">
-              <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-                <FileText className="size-3 shrink-0" />
-                <span>{s.fromModel} writes a handoff brief of the conversation</span>
-              </div>
-              <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-                <Sparkles className="size-3 shrink-0" />
-                <span>{s.toModel} continues with that context</span>
-              </div>
-            </div>
-          </div>
+        <div className="flex items-center gap-3 py-1" title={message.text}>
+          <div className="h-px flex-1 bg-border" />
+          <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <span className="font-medium text-foreground/75">{s.fromModel}</span>
+            <ArrowRight className="size-3 text-muted-foreground/70" />
+            <span className="font-medium text-foreground/75">{s.toModel}</span>
+            <span className="text-muted-foreground/50">·</span>
+            <span>context handed off</span>
+          </span>
+          <div className="h-px flex-1 bg-border" />
         </div>
       )
     }
