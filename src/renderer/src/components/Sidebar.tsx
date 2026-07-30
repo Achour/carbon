@@ -26,6 +26,7 @@ import { basename, relativeTime } from '@/lib/format'
 import { REVEAL_LABEL } from '@/lib/platform'
 import { chatActivity, projectActivity, type ChatActivity } from '@/lib/chatActivity'
 import { useApp } from '@/store'
+import { UsagePanel } from '@/components/UsagePanel'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -826,7 +827,8 @@ export function Sidebar(): React.JSX.Element {
       </div>
 
       {/* Footer */}
-      <div className="flex shrink-0 items-center justify-end border-t border-sidebar-border px-3 py-2">
+      <div className="flex shrink-0 items-center justify-between border-t border-sidebar-border px-3 py-2">
+        <UsagePanel />
         <WithTooltip label="Settings  ⌘,">
           <Button size="icon-sm" variant="ghost" onClick={openSettings} aria-label="Open settings">
             <Settings />

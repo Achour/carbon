@@ -20,6 +20,17 @@ export function relativeTime(ts: number): string {
   return new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
+/** Compact "time until reset" for a future epoch-ms timestamp. */
+export function resetsIn(ts: number): string {
+  const diff = ts - Date.now()
+  if (!Number.isFinite(diff) || diff <= 0) return 'soon'
+  const min = Math.floor(diff / 60_000)
+  if (min < 60) return `${Math.max(1, min)}m`
+  const hours = Math.floor(min / 60)
+  if (hours < 24) return `${hours}h`
+  return `${Math.floor(hours / 24)}d`
+}
+
 export function dateGroup(ts: number): string {
   const date = new Date(ts)
   const today = new Date()

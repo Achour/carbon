@@ -47,6 +47,7 @@ import { getPermissionRules, removePermissionRule } from './permissions'
 import { PreviewManager } from './preview'
 import { Store } from './store'
 import { TerminalManager } from './terminal'
+import { readUsageOverview } from './usage'
 import { hydrateShellPath } from './shellEnv'
 import { dockIconSvg } from './dockIcon'
 import {
@@ -550,6 +551,11 @@ function registerIpc(): void {
   ipcMain.handle('session:agents', (_e, chatId: string) => manager.listAgents(chatId))
   ipcMain.handle('session:account', (_e, chatId: string) => manager.accountInfo(chatId))
   ipcMain.handle('session:usage', (_e, chatId: string) => manager.usageInfo(chatId))
+  // Account-level, so it deliberately takes no chat id — and runs from home so
+  // no project's settings or hooks sit in the path of a plan-limit read.
+  ipcMain.handle('usage:overview', (_e, refresh?: boolean) =>
+    readUsageOverview(app.getPath('home'), refresh)
+  )
 
   ipcMain.handle('permissions:list', (_e, cwd: string) => getPermissionRules(cwd))
   ipcMain.handle('permissions:remove', (_e, cwd: string, rule: PermissionRule) =>

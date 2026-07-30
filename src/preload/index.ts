@@ -88,6 +88,7 @@ const api: Api = {
   listAgents: (chatId: string) => invoke('session:agents', chatId),
   accountInfo: (chatId: string) => invoke('session:account', chatId),
   usageInfo: (chatId: string) => invoke('session:usage', chatId),
+  usageOverview: (refresh?: boolean) => invoke('usage:overview', refresh),
   getPermissionRules: (cwd: string) => invoke('permissions:list', cwd),
   removePermissionRule: (cwd: string, rule: PermissionRule) =>
     invoke('permissions:remove', cwd, rule),

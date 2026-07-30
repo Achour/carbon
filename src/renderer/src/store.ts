@@ -48,6 +48,7 @@ import type {
   RewindResult,
   ServiceTier,
   SlashCommand,
+  UsageOverview,
   WorktreeDisposition,
   WorktreeInfo,
   WorktreeTarget
@@ -166,6 +167,19 @@ interface AppState {
   backgroundJobs: Record<string, BackgroundJob[]>
   /** Latest plan rate-limit signal per chat (from `rate_limit_event`). */
   rateLimits: Record<string, RateLimitState>
+  /**
+   * Account-level plan limits for both providers, behind the sidebar's Usage
+   * chip. App-global rather than per-chat: it's a property of the logins, and
+   * every chat's turns draw down the same windows.
+   */
+  usage: UsageOverview | null
+  /**
+   * Re-reads both providers' plan limits. Unforced calls are cheap — main
+   * answers from its cache unless it has gone stale — so callers don't throttle
+   * themselves; the one TTL over there is what caps real reads. `force` is the
+   * panel's explicit refresh and always spends a real read.
+   */
+  refreshUsage(force?: boolean): Promise<void>
   /**
    * Whether the provider is honouring each chat's Fast selection. Absent means
    * not reported yet (a chat with no live session, or a Codex chat — the Codex
@@ -700,6 +714,7 @@ export const useApp = create<AppState>((set, get) => ({
   titling: {},
   backgroundJobs: {},
   rateLimits: {},
+  usage: null,
   fastMode: {},
   models: [],
   codexConfigModel: undefined,
@@ -1829,6 +1844,15 @@ export const useApp = create<AppState>((set, get) => ({
     if (models.length) set({ models })
   },
 
+  async refreshUsage(force = false) {
+    try {
+      set({ usage: await window.api.usageOverview(force) })
+    } catch {
+      // Keep the last good numbers rather than blanking the chip: a stale
+      // percentage is still worth more than none, and the next turn retries.
+    }
+  },
+
   async loadCodexConfigModel() {
     if (get().codexConfigModel !== undefined) return
     codexConfigModelLoad ??= window.api.codexConfigModel()
@@ -2117,6 +2141,12 @@ export const useApp = create<AppState>((set, get) => ({
         // main dedups consecutive statuses, so an `idle` here is a real
         // transition (the interrupt()+result double-`idle` is collapsed there).
         if (ev.status === 'idle') {
+          // A turn just drew down the plan, so this is when the usage chip is
+          // most likely wrong. Not gated on the active chat like the refreshes
+          // below: a background chat's turn spends the same windows. Throttled
+          // inside refreshUsage — turn boundaries come far faster than limits
+          // move, and each real read spawns a CLI process per provider.
+          void get().refreshUsage()
           // A queued message goes out as soon as the chat is free again.
           const next = get().queued[ev.chatId]?.[0]
           if (next) {

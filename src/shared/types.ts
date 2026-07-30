@@ -419,6 +419,36 @@ export interface UsageInfo {
 }
 
 /**
+ * One provider's *account-level* plan limits, for the sidebar Usage popover.
+ *
+ * Deliberately not `UsageInfo`: that one is per-session (its cost and line
+ * counts only mean anything for a specific chat), while this answers "how much
+ * headroom is left on my plan" — which is a property of the account and has to
+ * be readable with no chat open at all.
+ */
+export interface ProviderUsage {
+  provider: Provider
+  /** False when signed out, unreachable, or on a backend without plan limits. */
+  available: boolean
+  /** Why it's unavailable, in the user's words. Only set when `available`. */
+  note?: string
+  /** Plan name the provider reports ('max', 'plus', …). */
+  plan?: string | null
+  windows: RateLimitWindow[]
+  /**
+   * Codex "rate limit reset" credits the account can spend to clear a window.
+   * Omitted for Claude, which has no equivalent.
+   */
+  resetCredits?: number
+}
+
+/** Both providers' plan limits, read side by side. */
+export interface UsageOverview {
+  claude: ProviderUsage
+  codex: ProviderUsage
+}
+
+/**
  * Live rate-limit signal pushed from a `rate_limit_event` mid-session. Surfaced
  * as a warning when approaching or hitting a claude.ai plan limit.
  */
@@ -967,6 +997,8 @@ export interface Api {
   listAgents(chatId: string): Promise<AgentInfo[]>
   accountInfo(chatId: string): Promise<AccountInfo | null>
   usageInfo(chatId: string): Promise<UsageInfo | null>
+  /** Account-level plan limits for both providers; needs no chat. */
+  usageOverview(refresh?: boolean): Promise<UsageOverview>
   // ---- Persisted permission rules ----
   getPermissionRules(cwd: string): Promise<PermissionRule[]>
   /** Remove a rule from a project settings file (local or project scope only). */

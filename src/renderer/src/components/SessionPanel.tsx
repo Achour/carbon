@@ -19,22 +19,12 @@ import type {
   UsageInfo
 } from '@shared/types'
 import { cn } from '@/lib/utils'
-import { formatCost } from '@/lib/format'
+import { formatCost, resetsIn } from '@/lib/format'
 import { useApp } from '@/store'
+import { UsageBar } from '@/components/UsageBar'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { WithTooltip } from '@/components/ui/tooltip'
-
-/** Compact "time until reset" for a future epoch-ms timestamp. */
-function resetsIn(ts: number): string {
-  const diff = ts - Date.now()
-  if (!Number.isFinite(diff) || diff <= 0) return 'soon'
-  const min = Math.floor(diff / 60_000)
-  if (min < 60) return `${Math.max(1, min)}m`
-  const hours = Math.floor(min / 60)
-  if (hours < 24) return `${hours}h`
-  return `${Math.floor(hours / 24)}d`
-}
 
 const STATUS_COLOR: Record<McpServerInfo['status'], string> = {
   connected: 'bg-emerald-500',
@@ -60,40 +50,6 @@ function SectionTitle({
         {children}
       </span>
       {action && <span className="ml-auto">{action}</span>}
-    </div>
-  )
-}
-
-/** A 0–100 utilization bar with a label and reset time. */
-function UsageBar({
-  label,
-  utilization,
-  resetsAt
-}: {
-  label: string
-  utilization: number | null
-  resetsAt?: string | null
-}): React.JSX.Element {
-  const pct = Math.max(0, Math.min(100, utilization ?? 0))
-  const reset = resetsAt ? Date.parse(resetsAt) : NaN
-  return (
-    <div>
-      <div className="flex items-baseline justify-between text-[11px]">
-        <span className="text-muted-foreground">{label}</span>
-        <span className="tabular-nums text-muted-foreground">
-          {utilization == null ? '—' : `${Math.round(pct)}%`}
-          {Number.isFinite(reset) && <span className="ml-1 opacity-70">· resets in {resetsIn(reset)}</span>}
-        </span>
-      </div>
-      <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-secondary">
-        <div
-          className={cn(
-            'h-full rounded-full',
-            pct > 90 ? 'bg-destructive' : pct > 70 ? 'bg-amber-500' : 'bg-primary'
-          )}
-          style={{ width: `${Math.max(2, pct)}%` }}
-        />
-      </div>
     </div>
   )
 }
