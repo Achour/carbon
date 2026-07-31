@@ -506,6 +506,15 @@ function registerIpc(): void {
     emit({ type: 'meta', chatId: id, patch: { title, titleManual: true } })
   })
 
+  ipcMain.handle('chats:set-pinned', (_e, id: string, pinned: boolean) => {
+    const chat = store.getChat(id)
+    if (!chat) return
+    if (pinned) chat.pinnedAt = Date.now()
+    else delete chat.pinnedAt
+    store.saveChat(id)
+    emit({ type: 'meta', chatId: id, patch: { pinnedAt: chat.pinnedAt } })
+  })
+
   ipcMain.handle(
     'chat:send',
     (_e, chatId: string, text: string, attachments?: Attachment[], label?: string) => {

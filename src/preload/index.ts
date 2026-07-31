@@ -60,6 +60,7 @@ const api: Api = {
   worktreeFinish: (chatId: string) => invoke('worktree:finish', chatId),
   worktreeRemove: (path: string) => invoke('worktree:remove', path),
   renameChat: (id: string, title: string) => invoke('chats:rename', id, title),
+  setChatPinned: (id: string, pinned: boolean) => invoke('chats:set-pinned', id, pinned),
   send: (chatId: string, text: string, attachments?: Attachment[], label?: string) =>
     invoke('chat:send', chatId, text, attachments, label),
   pathForFile: (file: File) => {

@@ -14,6 +14,8 @@ import {
   MoreHorizontal,
   PanelLeft,
   Pencil,
+  Pin,
+  PinOff,
   Plus,
   Search,
   Settings,
@@ -70,6 +72,7 @@ function ChatItem({
   onOpen,
   onRename,
   onDelete,
+  onTogglePin,
   onNewInWorktree
 }: {
   chat: ChatMeta
@@ -79,10 +82,13 @@ function ChatItem({
   onOpen: () => void
   onRename: () => void
   onDelete: () => void
+  /** Move the chat to (or out of) the Pinned section at the top of the sidebar. */
+  onTogglePin: () => void
   /** Start another chat — possibly on the other provider — in the same worktree. */
   onNewInWorktree: () => void
 }): React.JSX.Element {
   const [menuOpen, setMenuOpen] = React.useState(false)
+  const pinned = chat.pinnedAt !== undefined
   return (
     <ContextMenu>
       <ContextMenuTrigger
@@ -155,6 +161,9 @@ function ChatItem({
             }
           />
           <DropdownMenuContent align="start">
+            <DropdownMenuItem onClick={onTogglePin}>
+              {pinned ? <PinOff /> : <Pin />} {pinned ? 'Unpin' : 'Pin'}
+            </DropdownMenuItem>
             <DropdownMenuItem onClick={onRename}>
               <Pencil /> Rename
             </DropdownMenuItem>
@@ -172,6 +181,9 @@ function ChatItem({
       </div>
       </ContextMenuTrigger>
       <ContextMenuContent>
+        <ContextMenuItem onClick={onTogglePin}>
+          {pinned ? <PinOff /> : <Pin />} {pinned ? 'Unpin' : 'Pin'}
+        </ContextMenuItem>
         <ContextMenuItem onClick={onRename}>
           <Pencil /> Rename
         </ContextMenuItem>
@@ -387,6 +399,7 @@ export function Sidebar(): React.JSX.Element {
   const [renamingProject, setRenamingProject] = React.useState<string | null>(null)
   const [projectNameValue, setProjectNameValue] = React.useState('')
   const removeProject = useApp((s) => s.removeProject)
+  const setChatPinned = useApp((s) => s.setChatPinned)
   const startInWorktree = useApp((s) => s.startInWorktree)
   const [removingProject, setRemovingProject] = React.useState<{
     cwd: string
@@ -497,13 +510,27 @@ export function Sidebar(): React.JSX.Element {
   // updatedAt (the chat list is pre-sorted), but the PROJECT order is fixed by
   // the user's saved order — so a chat bump no longer yanks its project to the
   // top. Projects not yet in the saved order keep their discovery order.
-  const groups: { cwd: string; chats: ChatMeta[] }[] = []
+  // Pinned chats are pulled out into a section of their own at the top, so they
+  // render once, not twice — but they stay in `group.chats`, which is what the
+  // delete-project count means. `unpinned` is what the group actually lists;
+  // keeping both is also what keeps a project whose only chat is pinned from
+  // disappearing from the sidebar entirely.
+  const groups: { cwd: string; chats: ChatMeta[]; unpinned: ChatMeta[] }[] = []
   for (const chat of chats) {
     const key = projectRoot(chat)
-    const group = groups.find((g) => g.cwd === key)
-    if (group) group.chats.push(chat)
-    else groups.push({ cwd: key, chats: [chat] })
+    let group = groups.find((g) => g.cwd === key)
+    if (!group) {
+      group = { cwd: key, chats: [], unpinned: [] }
+      groups.push(group)
+    }
+    group.chats.push(chat)
+    if (chat.pinnedAt === undefined) group.unpinned.push(chat)
   }
+  // Oldest pin first, so pinning appends to the bottom of the section instead of
+  // the order shuffling every time one of them is used.
+  const pinnedChats = chats
+    .filter((c) => c.pinnedAt !== undefined)
+    .sort((a, b) => (a.pinnedAt ?? 0) - (b.pinnedAt ?? 0))
   const orderRank = (cwd: string): number => {
     const i = projectOrder.indexOf(cwd)
     return i === -1 ? Number.MAX_SAFE_INTEGER : i
@@ -521,6 +548,31 @@ export function Sidebar(): React.JSX.Element {
   const visibleGroups = groups.filter((g) => !hiddenProjects[g.cwd])
   const activeGroups = visibleGroups.filter((g) => !archivedProjects[g.cwd])
   const archivedGroups = visibleGroups.filter((g) => archivedProjects[g.cwd])
+
+  // A chat row is identical wherever it appears — in its project group or in the
+  // Pinned section — so both sites render through here.
+  const renderChatItem = (chat: ChatMeta): React.JSX.Element => (
+    <ChatItem
+      key={chat.id}
+      chat={chat}
+      active={chat.id === activeId}
+      activity={chatActivity(statuses[chat.id], backgroundJobs[chat.id], permissions[chat.id])}
+      titling={!!titling[chat.id]}
+      onOpen={() => void openChat(chat.id)}
+      onRename={() => {
+        setRenameValue(chat.title)
+        setRenaming(chat)
+      }}
+      onDelete={() => setDeleting(chat)}
+      onTogglePin={() => void setChatPinned(chat.id, chat.pinnedAt === undefined)}
+      onNewInWorktree={() => {
+        // Drops to the composer with the worktree preselected; the model picker
+        // there chooses the provider, so a Codex chat can pick up a worktree
+        // Claude started.
+        if (chat.worktree) void startInWorktree(chat.cwd, chat.worktree)
+      }}
+    />
+  )
 
   return (
     <aside
@@ -564,6 +616,21 @@ export function Sidebar(): React.JSX.Element {
         </button>
       </div>
 
+      {/* Pinned chats, above the projects and outside their scroller so they
+          stay reachable no matter how far down the project list you are. */}
+      {pinnedChats.length > 0 && (
+        <div className="flex max-h-[35vh] shrink-0 flex-col">
+          <div className="flex items-center gap-2 px-3.5 pt-3 pb-1">
+            <span className="text-[11px] font-medium tracking-wide text-muted-foreground/70">
+              Pinned
+            </span>
+          </div>
+          <div className="min-h-0 overflow-y-auto px-3">
+            <div className="ml-[22px] space-y-px">{pinnedChats.map(renderChatItem)}</div>
+          </div>
+        </div>
+      )}
+
       {/* Projects section header with an add-project button */}
       <div className="flex items-center gap-2 px-3.5 pt-3 pb-1">
         <span className="text-[11px] font-medium tracking-wide text-muted-foreground/70">
@@ -595,8 +662,10 @@ export function Sidebar(): React.JSX.Element {
         ].map(({ group, archived }, i) => {
           // Archived projects default to collapsed.
           const isCollapsed = collapsedProjects[group.cwd] ?? archived
+          // Pinned chats show their own indicator up top, so rolling them into
+          // the collapsed project's would just say the same thing twice.
           const collapsedActivity = projectActivity(
-            group.chats.map((chat) =>
+            group.unpinned.map((chat) =>
               chatActivity(statuses[chat.id], backgroundJobs[chat.id], permissions[chat.id])
             )
           )
@@ -606,14 +675,14 @@ export function Sidebar(): React.JSX.Element {
           const revealedBatches = revealedChatBatches[group.cwd] ?? 0
           const chatListLimit = chatsPerProject * (revealedBatches + 1)
           const cappedChats = (() => {
-            if (group.chats.length <= chatListLimit) return group.chats
-            const top = group.chats.slice(0, chatListLimit)
-            const activeInGroup = group.chats.find((c) => c.id === activeId)
+            if (group.unpinned.length <= chatListLimit) return group.unpinned
+            const top = group.unpinned.slice(0, chatListLimit)
+            const activeInGroup = group.unpinned.find((c) => c.id === activeId)
             return activeInGroup && !top.some((c) => c.id === activeId)
               ? [...top, activeInGroup]
               : top
           })()
-          const hiddenChatCount = group.chats.length - cappedChats.length
+          const hiddenChatCount = group.unpinned.length - cappedChats.length
           return (
             <React.Fragment key={group.cwd}>
               {firstArchived && (
@@ -763,31 +832,7 @@ export function Sidebar(): React.JSX.Element {
                 </ContextMenu>
                 {!isCollapsed && (
                   <div className="ml-[22px] space-y-px pb-1">
-                    {cappedChats.map((chat) => (
-                      <ChatItem
-                        key={chat.id}
-                        chat={chat}
-                        active={chat.id === activeId}
-                        activity={chatActivity(
-                          statuses[chat.id],
-                          backgroundJobs[chat.id],
-                          permissions[chat.id]
-                        )}
-                        titling={!!titling[chat.id]}
-                        onOpen={() => void openChat(chat.id)}
-                        onRename={() => {
-                          setRenameValue(chat.title)
-                          setRenaming(chat)
-                        }}
-                        onDelete={() => setDeleting(chat)}
-                        onNewInWorktree={() => {
-                          // Drops to the composer with the worktree preselected;
-                          // the model picker there chooses the provider, so a
-                          // Codex chat can pick up a worktree Claude started.
-                          if (chat.worktree) void startInWorktree(chat.cwd, chat.worktree)
-                        }}
-                      />
-                    ))}
+                    {cappedChats.map(renderChatItem)}
                     {(hiddenChatCount > 0 || revealedBatches > 0) && (
                       <div className="flex items-center">
                         {hiddenChatCount > 0 && (

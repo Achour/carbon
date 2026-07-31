@@ -143,6 +143,12 @@ export interface ChatMeta {
   contextWindow?: number
   /** Present when `cwd` is a git worktree the app manages or attached to. */
   worktree?: WorktreeInfo
+  /**
+   * When the user pinned the chat; absent means unpinned. A timestamp rather
+   * than a flag so the sidebar's Pinned section has a stable order (oldest pin
+   * first) instead of reshuffling every time a pinned chat is used.
+   */
+  pinnedAt?: number
   createdAt: number
   updatedAt: number
 }
@@ -1031,6 +1037,8 @@ export interface Api {
   /** Remove a worktree by path (the picker's cleanup); unforced, like deletion. */
   worktreeRemove(path: string): Promise<OpResult>
   renameChat(id: string, title: string): Promise<void>
+  /** Pin/unpin a chat to the sidebar's Pinned section. */
+  setChatPinned(id: string, pinned: boolean): Promise<void>
   send(chatId: string, text: string, attachments?: Attachment[], label?: string): Promise<void>
   /** Absolute path of a dragged/picked File (empty string for in-memory files). */
   pathForFile(file: File): string

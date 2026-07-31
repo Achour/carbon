@@ -456,6 +456,8 @@ interface AppState {
   /** Deletes every chat in the project and drops it from recent folders. */
   removeProject(cwd: string): Promise<void>
   renameChat(id: string, title: string): Promise<void>
+  /** Pin/unpin a chat; pinned chats leave their project group for the Pinned section. */
+  setChatPinned(id: string, pinned: boolean): Promise<void>
   setChatOptions(patch: ChatOptionsPatch): Promise<void>
   respondPermission(requestId: string, decision: PermissionDecision): Promise<void>
   applyEvent(ev: ChatEvent): void
@@ -1962,6 +1964,14 @@ export const useApp = create<AppState>((set, get) => ({
     set((s) => ({
       chats: s.chats.map((c) => (c.id === id ? { ...c, title, titleManual: true } : c))
     }))
+  },
+
+  async setChatPinned(id, pinned) {
+    // Mirror locally first: the toggle is a direct manipulation, so it must not
+    // wait a round trip. Main answers with the authoritative timestamp.
+    const at = pinned ? Date.now() : undefined
+    set((s) => ({ chats: s.chats.map((c) => (c.id === id ? { ...c, pinnedAt: at } : c)) }))
+    await window.api.setChatPinned(id, pinned)
   },
 
   async setChatOptions(patch) {
