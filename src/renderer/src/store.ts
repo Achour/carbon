@@ -95,6 +95,11 @@ export interface TerminalTab {
   command?: string
   /** Tab label override, e.g. "Setup". */
   label?: string
+  /**
+   * Chat this tab was opened from. Tabs stay visible from every chat — this is
+   * only so deleting that chat can reap the shell (and drop the tab with it).
+   */
+  chatId?: string
 }
 
 export interface PreviewTab {
@@ -211,10 +216,19 @@ interface AppState {
   terminals: TerminalTab[]
   /** Monotonic counter for stable "Terminal N" labels. */
   terminalSeq: number
+  /**
+   * Foreground process per terminal id, for tabs running something (a dev
+   * server, a build). Absent/undefined means an idle shell. Tracked in the store
+   * rather than in TerminalPanel because the tab strip and the panel toggle show
+   * it while the terminal itself is unmounted or hidden.
+   */
+  terminalBusy: Record<string, string>
   /** Opens a new terminal tab and focuses it. */
   /** Opens a terminal tab; `command` runs one-shot instead of an interactive shell. */
   openTerminal(opts?: { cwd?: string; command?: string; label?: string }): void
   closeTerminal(id: string): void
+  /** Records a terminal's foreground process; null clears it back to idle. */
+  setTerminalBusy(id: string, command: string | null): void
   toggleTerminal(): void
 
   // ---- Browser preview ----
@@ -576,6 +590,32 @@ function chatSwitchPatch(
   return { tabsByChat, openFiles: restored.openFiles, activeTab: restored.activeTab }
 }
 
+/**
+ * Drop terminal tabs belonging to deleted chats. Main has already reaped their
+ * shells; this removes the tabs so none can respawn one on remount, and clears
+ * the active tab if it was one of them.
+ */
+function pruneTerminals(
+  s: Pick<AppState, 'terminals' | 'terminalBusy' | 'activeTab' | 'openFiles' | 'planPanel'>,
+  ids: string[]
+): Partial<AppState> {
+  const doomed = s.terminals.filter((t) => t.chatId && ids.includes(t.chatId))
+  if (doomed.length === 0) return {}
+  const gone = doomed.map((t) => t.id)
+  const terminals = s.terminals.filter((t) => !gone.includes(t.id))
+  const patch: Partial<AppState> = {
+    terminals,
+    terminalBusy: omit(s.terminalBusy, gone)
+  }
+  if (s.activeTab && gone.includes(s.activeTab)) {
+    patch.activeTab =
+      terminals[terminals.length - 1]?.id ??
+      s.openFiles[s.openFiles.length - 1]?.path ??
+      (s.planPanel ? 'plan' : null)
+  }
+  return patch
+}
+
 /** Drop saved tab sets for deleted chats. */
 function pruneTabsByChat(
   s: Pick<AppState, 'tabsByChat'>,
@@ -746,13 +786,14 @@ export const useApp = create<AppState>((set, get) => ({
   // user opens it), never racing a fresh-load init.
   terminals: [],
   terminalSeq: 0,
+  terminalBusy: {},
 
   openTerminal(opts) {
     set((s) => {
       const n = s.terminalSeq + 1
       const id = `terminal:${n}`
       return {
-        terminals: [...s.terminals, { id, n, ...opts }],
+        terminals: [...s.terminals, { id, n, chatId: s.activeId ?? undefined, ...opts }],
         terminalSeq: n,
         activeTab: id,
         ...panelPatch(s, true)
@@ -771,7 +812,15 @@ export const useApp = create<AppState>((set, get) => ({
           s.openFiles[s.openFiles.length - 1]?.path ??
           (s.planPanel ? 'plan' : null)
       }
-      return { terminals, activeTab }
+      return { terminals, activeTab, terminalBusy: omit(s.terminalBusy, [id]) }
+    })
+  },
+
+  setTerminalBusy(id, command) {
+    set((s) => {
+      if ((s.terminalBusy[id] ?? null) === command) return s
+      if (command === null) return { terminalBusy: omit(s.terminalBusy, [id]) }
+      return { terminalBusy: { ...s.terminalBusy, [id]: command } }
     })
   },
 
@@ -1910,7 +1959,8 @@ export const useApp = create<AppState>((set, get) => ({
         rateLimits: omit(s.rateLimits, [id]),
         fastMode: omit(s.fastMode, [id]),
         panelOpenByChat: prunePanelState(s, [id]),
-        tabsByChat: pruneTabsByChat(s, [id])
+        tabsByChat: pruneTabsByChat(s, [id]),
+        ...pruneTerminals(s, [id])
       }
     })
     return res
@@ -1954,6 +2004,7 @@ export const useApp = create<AppState>((set, get) => ({
         fastMode: omit(s.fastMode, ids),
         panelOpenByChat: prunePanelState(s, ids),
         tabsByChat: pruneTabsByChat(s, ids),
+        ...pruneTerminals(s, ids),
         defaults: s.defaults ? { ...s.defaults, recentDirs } : s.defaults
       }
     })

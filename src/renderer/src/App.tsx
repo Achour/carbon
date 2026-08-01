@@ -43,6 +43,12 @@ export default function App(): React.JSX.Element {
     const offPreview = window.api.onPreviewEvent((ev) => {
       if (ev.type === 'state') useApp.getState().applyPreviewState(ev.state)
     })
+    // Subscribed here rather than in TerminalPanel: the activity dot has to keep
+    // updating for tabs whose terminal is hidden or unmounted — that is the case
+    // it exists for.
+    const offTerminal = window.api.onTerminalEvent((ev) => {
+      if (ev.type === 'busy') useApp.getState().setTerminalBusy(ev.id, ev.command)
+    })
     // The agent (via main) asks the renderer to drive the live <webview>:
     // navigate it, or capture a screenshot to see what it built.
     const offPreviewCmd = window.api.onPreviewCommand(async (cmd) => {
@@ -130,6 +136,7 @@ export default function App(): React.JSX.Element {
       offNewChat()
       offOpenChat()
       offPreview()
+      offTerminal()
       offPreviewCmd()
       window.removeEventListener('keydown', onKey)
       window.removeEventListener('dragover', preventNav)

@@ -314,6 +314,10 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
   const setupMissing = useApp((s) => s.setupMissingFor === chat.id)
   const dismissSetupNotice = useApp((s) => s.dismissSetupNotice)
   const panelOpen = useApp((s) => s.panelOpen)
+  const terminalBusy = useApp((s) => s.terminalBusy)
+  const busyTerminals = Object.values(terminalBusy)
+  const busyLabel =
+    busyTerminals.length === 1 ? busyTerminals[0] : `${busyTerminals.length} processes`
   const sidebarOpen = useApp((s) => s.sidebarOpen)
   const toggleSidebar = useApp((s) => s.toggleSidebar)
   const sendMessage = useApp((s) => s.sendMessage)
@@ -608,14 +612,20 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
             the collapse button at the same inset, so open and close are one
             unmoving target rather than two positions with the ⋯ menu between. */}
         {!panelOpen && (
-          <WithTooltip label="Show files">
+          <WithTooltip label={busyTerminals.length ? `${busyLabel} running` : 'Show files'}>
             <Button
               size="icon-sm"
               variant="ghost"
               onClick={togglePanel}
               aria-label="Show file panel"
+              className="relative"
             >
               <PanelRight />
+              {/* A dev server left running in a collapsed panel is invisible
+                  otherwise — it only shows up later as memory. */}
+              {busyTerminals.length > 0 && (
+                <span className="absolute top-1 right-1 size-1.5 rounded-full bg-primary" />
+              )}
             </Button>
           </WithTooltip>
         )}

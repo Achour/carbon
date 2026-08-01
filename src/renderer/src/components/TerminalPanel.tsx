@@ -15,11 +15,17 @@ import { basename } from '@/lib/format'
  * command (worktree setup); otherwise it follows the active chat's folder, else
  * the selected project.
  */
-function spawnFor(id: string): { cwd: string; command?: string } {
+function spawnFor(id: string): { cwd: string; command?: string; chatId?: string } {
   const s = useApp.getState()
   const tab = s.terminals.find((t) => t.id === id)
   const chat = s.chats.find((c) => c.id === s.activeId)
-  return { cwd: tab?.cwd ?? chat?.cwd ?? s.selectedCwd ?? '', command: tab?.command }
+  return {
+    cwd: tab?.cwd ?? chat?.cwd ?? s.selectedCwd ?? '',
+    command: tab?.command,
+    // The tab's own chat, not the active one — the tab outlives switching away,
+    // and deleting the chat it came from is what reaps it.
+    chatId: tab?.chatId
+  }
 }
 
 // Resolve a CSS custom property to a concrete color xterm can parse (hex/rgb),
@@ -122,11 +128,18 @@ export function TerminalPane({ id, active }: { id: string; active: boolean }): R
   const spawn = React.useCallback((): void => {
     const term = termRef.current
     if (!term) return
-    const { cwd, command } = spawnFor(id)
+    const { cwd, command, chatId } = spawnFor(id)
     setSpawnCwd(cwd)
     lastSpawnRef.current = performance.now()
     exitedRef.current = false
-    void window.api.terminalCreate({ id, cwd, cols: term.cols, rows: term.rows, command })
+    void window.api.terminalCreate({
+      id,
+      cwd,
+      cols: term.cols,
+      rows: term.rows,
+      command,
+      chatId
+    })
   }, [id])
 
   const restart = React.useCallback((): void => {
@@ -181,6 +194,9 @@ export function TerminalPane({ id, active }: { id: string; active: boolean }): R
       }
       if (ev.type === 'data') {
         write(ev.data)
+      } else if (ev.type === 'busy') {
+        // Handled globally in App so the dot keeps updating while this terminal
+        // is hidden or unmounted.
       } else {
         // Ignore an exit right after a spawn (session replacement / StrictMode
         // dev remount) — the fresh shell is already taking over.

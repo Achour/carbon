@@ -436,6 +436,11 @@ function registerIpc(): void {
         }
       }
 
+      // Shells opened by this chat go with it. Their cwd may be the worktree
+      // just removed above, and the tab is about to disappear from the UI — a
+      // survivor (typically a dev server) would run on with nothing to stop it.
+      terminals.killForChat(id)
+
       // The chat record goes regardless — a failed cleanup leaves the worktree
       // on disk, which is recoverable; a stuck chat row is not.
       store.deleteChat(id)

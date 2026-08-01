@@ -929,11 +929,22 @@ export interface TerminalCreateOpts {
   rows: number
   /** Run this command via `$SHELL -lc` instead of an interactive login shell. */
   command?: string
+  /**
+   * Chat that opened this terminal. Only used to reap the pty when that chat is
+   * deleted — tabs themselves stay global, visible from every chat.
+   */
+  chatId?: string
 }
 
 export type TerminalEvent =
   | { type: 'data'; id: string; data: string }
   | { type: 'exit'; id: string; exitCode: number }
+  /**
+   * Foreground process under the shell changed. `command` is null when the bare
+   * shell is in front (nothing running); otherwise it names what is running, so
+   * a long-lived `npm run dev` is visible without opening the tab.
+   */
+  | { type: 'busy'; id: string; command: string | null }
 
 // ---------- Browser preview / dev server ----------
 

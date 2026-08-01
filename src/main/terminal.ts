@@ -10,13 +10,25 @@ import { killTree } from './pty'
 const nodeRequire = createRequire(import.meta.url)
 const pty = nodeRequire('node-pty') as typeof import('node-pty')
 
+/** How often the foreground process of each shell is sampled for `busy`. */
+const BUSY_POLL_MS = 1000
+
+interface Session {
+  proc: IPty
+  /** Chat that opened the tab, if any — the unit `killForChat` reaps by. */
+  chatId?: string
+  /** Last foreground process reported, so we only emit on change. */
+  busy: string | null
+}
+
 /** Owns pseudo-terminal sessions, one long-lived shell per id. */
 export class TerminalManager {
-  private sessions = new Map<string, IPty>()
+  private sessions = new Map<string, Session>()
+  private poll: NodeJS.Timeout | null = null
 
   constructor(private emit: (ev: TerminalEvent) => void) {}
 
-  create({ id, cwd, cols, rows, command }: TerminalCreateOpts): void {
+  create({ id, cwd, cols, rows, command, chatId }: TerminalCreateOpts): void {
     // Replacing an existing session (e.g. "restart") kills the old shell first.
     this.kill(id)
     const shell = process.env.SHELL || '/bin/zsh'
@@ -34,15 +46,51 @@ export class TerminalManager {
       // A replaced session (restart, or React StrictMode's dev remount) can emit
       // its exit late, after its successor is mapped under the same id — ignore
       // it so we don't evict the live shell or surface a stale "exited".
-      if (this.sessions.get(id) !== proc) return
+      if (this.sessions.get(id)?.proc !== proc) return
       this.sessions.delete(id)
+      this.emit({ type: 'busy', id, command: null })
       this.emit({ type: 'exit', id, exitCode })
+      this.syncPoll()
     })
-    this.sessions.set(id, proc)
+    this.sessions.set(id, { proc, chatId, busy: null })
+    this.syncPoll()
+  }
+
+  /**
+   * node-pty reports the pty's foreground process name. When it differs from the
+   * shell itself something is running in the tab — the signal behind the tab's
+   * activity dot, which is what makes a forgotten `npm run dev` visible.
+   */
+  private sampleBusy(): void {
+    const shell = (process.env.SHELL || '/bin/zsh').split('/').pop()
+    for (const [id, s] of this.sessions) {
+      let name: string | null = null
+      try {
+        name = s.proc.process || null
+      } catch {
+        // pty died between iterations — its onExit already reported idle
+        continue
+      }
+      const busy = !name || name === shell ? null : name
+      if (busy === s.busy) continue
+      s.busy = busy
+      this.emit({ type: 'busy', id, command: busy })
+    }
+  }
+
+  /** Runs the busy poll only while at least one shell is alive. */
+  private syncPoll(): void {
+    if (this.sessions.size > 0 && !this.poll) {
+      this.poll = setInterval(() => this.sampleBusy(), BUSY_POLL_MS)
+      this.poll.unref?.()
+    } else if (this.sessions.size === 0 && this.poll) {
+      clearInterval(this.poll)
+      this.poll = null
+    }
   }
 
   write(id: string, data: string): void {
-    const s = this.sessions.get(id)
+    const s = this.sessions.get(id)?.proc
     if (!s) return
     try {
       s.write(data)
@@ -52,7 +100,7 @@ export class TerminalManager {
   }
 
   resize(id: string, cols: number, rows: number): void {
-    const s = this.sessions.get(id)
+    const s = this.sessions.get(id)?.proc
     if (!s) return
     try {
       s.resize(Math.max(cols, 1), Math.max(rows, 1))
@@ -65,11 +113,24 @@ export class TerminalManager {
     const s = this.sessions.get(id)
     if (!s) return
     this.sessions.delete(id)
-    killTree(s)
+    killTree(s.proc)
+    this.syncPoll()
+  }
+
+  /**
+   * Reaps every shell opened by a chat. Deleting a chat can also remove its
+   * worktree, which would leave a dev server running in a directory the user
+   * can no longer see or reach — there is no tab left to close it from.
+   */
+  killForChat(chatId: string): void {
+    for (const [id, s] of [...this.sessions]) {
+      if (s.chatId === chatId) this.kill(id)
+    }
   }
 
   disposeAll(): void {
-    for (const s of this.sessions.values()) killTree(s)
+    for (const s of this.sessions.values()) killTree(s.proc)
     this.sessions.clear()
+    this.syncPoll()
   }
 }

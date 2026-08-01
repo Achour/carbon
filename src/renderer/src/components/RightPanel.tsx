@@ -39,6 +39,7 @@ function Tab({
   active,
   attention = false,
   preview = false,
+  busy,
   onSelect,
   onDoubleClick,
   onClose
@@ -48,6 +49,8 @@ function Tab({
   active: boolean
   attention?: boolean
   preview?: boolean
+  /** Foreground process name; renders the activity dot when set. */
+  busy?: string
   onSelect: () => void
   onDoubleClick?: () => void
   onClose: () => void
@@ -67,6 +70,14 @@ function Tab({
     >
       <span className={cn(attention && 'text-warning')}>{icon}</span>
       <span className={cn('max-w-36 truncate', preview && 'italic')}>{label}</span>
+      {busy && (
+        <span
+          // Sits before the close button, which only appears on hover — so the
+          // dot marks a running process without the tab ever changing width.
+          className="size-1.5 shrink-0 rounded-full bg-primary group-hover:hidden"
+          title={`${busy} is running`}
+        />
+      )}
       <button
         type="button"
         onClick={(e) => {
@@ -518,6 +529,7 @@ export function RightPanel(): React.JSX.Element | null {
   const dockOpen = useApp((s) => s.explorerOpen)
   const toggleDock = useApp((s) => s.toggleExplorer)
   const terminals = useApp((s) => s.terminals)
+  const terminalBusy = useApp((s) => s.terminalBusy)
   const closeTerminal = useApp((s) => s.closeTerminal)
   const previews = useApp((s) => s.previews)
   const closePreview = useApp((s) => s.closePreview)
@@ -775,6 +787,7 @@ export function RightPanel(): React.JSX.Element | null {
               icon={<SquareTerminal className="size-3.5" />}
               label={t.label ?? `Terminal ${t.n}`}
               active={current === t.id}
+              busy={terminalBusy[t.id]}
               onSelect={() => setActiveTab(t.id)}
               onClose={() => closeTerminal(t.id)}
             />
