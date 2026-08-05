@@ -33,7 +33,9 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          # 24, not 22: `npm test` runs `node --test` straight over the .ts
+          # files, and unflagged type stripping only lands late in the 22 line.
+          node-version: 24
           cache: npm
 
       - run: npm ci
