@@ -38,6 +38,13 @@ jobs:
           node-version: 24
           cache: npm
 
+      # node-pty builds through node-gyp, which still imports `distutils` —
+      # removed from the stdlib in Python 3.12, and the runner's default is
+      # newer than that. 3.11 is the last release that carries it.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
       - run: npm ci
 
       - name: Typecheck
