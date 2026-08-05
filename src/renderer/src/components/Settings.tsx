@@ -1,10 +1,12 @@
 import * as React from 'react'
 import { Select } from '@base-ui/react/select'
 import {
+  ArrowDownToLine,
   Bell,
   Check,
   ChevronDown,
   Info,
+  Loader2,
   MessageSquare,
   Minus,
   Monitor,
@@ -80,6 +82,65 @@ function Row({
         <div className="mt-0.5 text-xs text-muted-foreground">{description}</div>
       </div>
       {children}
+    </div>
+  )
+}
+
+/**
+ * The version line, and the manual half of the update story.
+ *
+ * The sidebar banner is the automatic half — it appears on its own when a
+ * release lands. This is where someone goes to ask *now*, or to find the
+ * download again after dismissing the banner, and it's the only place that
+ * answers "am I up to date?" out loud when the answer is yes.
+ */
+function UpdateRow(): React.JSX.Element {
+  const update = useApp((s) => s.update)
+  const checkForUpdate = useApp((s) => s.checkForUpdate)
+  const [checking, setChecking] = React.useState(false)
+  // Distinguishes "checked, nothing there" from "never asked" — without it the
+  // button would look inert on an up-to-date install.
+  const [checked, setChecked] = React.useState(false)
+
+  const run = async (): Promise<void> => {
+    setChecking(true)
+    try {
+      await checkForUpdate()
+    } finally {
+      setChecking(false)
+      setChecked(true)
+    }
+  }
+
+  const status = checking
+    ? 'Checking…'
+    : update
+      ? `Version ${update.version} is available`
+      : checked
+        ? 'Carbon is up to date'
+        : 'Checked automatically on launch and every 6 hours'
+
+  return (
+    <div className="flex items-center gap-4 px-2 py-2.5">
+      <div className="min-w-0 flex-1">
+        <div className="text-[13px] font-medium">Version {window.api.appVersion}</div>
+        <div className="mt-0.5 text-xs text-muted-foreground">{status}</div>
+      </div>
+      {update ? (
+        <Button
+          size="sm"
+          variant="secondary"
+          onClick={() => void window.api.openExternal(update.downloadUrl ?? update.releaseUrl)}
+        >
+          <ArrowDownToLine />
+          {update.downloadUrl ? 'Download' : 'View release'}
+        </Button>
+      ) : (
+        <Button size="sm" variant="secondary" disabled={checking} onClick={() => void run()}>
+          {checking && <Loader2 className="animate-spin" />}
+          Check for updates
+        </Button>
+      )}
     </div>
   )
 }
@@ -544,6 +605,9 @@ export function Settings(): React.JSX.Element {
                   title="About"
                   description="Carbon — a desktop GUI for coding agents."
                 />
+                <div className="mb-3 border-b border-border pb-2">
+                  <UpdateRow />
+                </div>
                 <div className="space-y-2 px-2 text-[13px] text-muted-foreground">
                   <p>
                     Sessions run through your existing Claude Code or Codex login, in whatever
