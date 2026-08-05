@@ -14,7 +14,8 @@
     "test": "node --test test/*.test.ts",
     "rebuild": "electron-rebuild -f -o node-pty",
     "postinstall": "electron-rebuild -f -o node-pty",
-    "package": "electron-vite build && electron-builder --mac dir"
+    "package": "electron-vite build && electron-builder --mac dir",
+    "install-app": "npm run package && node scripts/install-app.mjs"
   },
   "devDependencies": {
     "@base-ui/react": "^1.6.0",

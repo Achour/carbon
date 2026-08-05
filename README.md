@@ -5,72 +5,100 @@ A desktop app for Claude Code and Codex.
 Both agents already run in your terminal. Carbon gives them a window: streaming
 responses with collapsible tool cards, permission prompts you click instead of
 type, a diff review beside the conversation, and — the part a terminal can't do
-— more than one agent working at once, in isolated git worktrees, without them
-stepping on each other.
+— several agents working at once, in isolated git worktrees, without stepping on
+each other.
 
 It uses the login you already have. No API key, no extra subscription; Carbon
 talks to the [Claude Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk)
 and the [Codex SDK](https://www.npmjs.com/package/@openai/codex-sdk) from the
-Electron main process, and they reuse your existing Claude Code / Codex session.
+Electron main process, and both reuse your existing Claude Code / Codex session.
 
 ## Install
 
-Download the latest `.dmg` from [Releases](https://github.com/Achour/carbon/releases/latest) —
-`-arm64` for Apple Silicon, `-x64` for Intel.
+**Requires:** macOS, Node 24+, and a `claude` or `codex` login you can already use.
 
-macOS will refuse the first launch with *"Carbon is damaged and can't be
-opened."* It isn't damaged. That message is what Gatekeeper says about any app it
-can't trace to a paid Apple Developer certificate ($99/yr), which this one
-doesn't have. Drag it to Applications, then clear the quarantine flag once:
+```sh
+git clone https://github.com/Achour/carbon
+cd carbon
+npm install
+npm run install-app
+```
+
+That builds Carbon and puts it in `/Applications`. Open it from Spotlight.
+
+Building locally is the recommended path because macOS never questions it.
+Carbon isn't signed with an Apple Developer certificate ($99/yr, and this is a
+free app), and Gatekeeper blocks *downloaded* apps that aren't — but an app you
+built on your own machine was never downloaded, so nothing prompts.
+
+To update:
+
+```sh
+git pull
+npm install
+npm run install-app
+```
+
+Carbon tells you when there's a new version — a banner in the sidebar, and
+Settings → About → Check for updates.
+
+<details>
+<summary>If <code>npm install</code> fails on <code>node-pty</code></summary>
+
+Carbon's terminal uses node-pty, which compiles through node-gyp, which still
+imports Python's `distutils` — removed from the standard library in Python 3.12.
+Give it the compatibility shim:
+
+```sh
+python3 -m pip install --break-system-packages setuptools
+npm run rebuild
+```
+</details>
+
+### Prebuilt download
+
+There are `.dmg` builds on [Releases](https://github.com/Achour/carbon/releases/latest)
+if you'd rather not build — `-arm64` for Apple Silicon, `-x64` for Intel. Because
+these *are* downloaded, macOS will refuse the first launch with *"Carbon is
+damaged and can't be opened."* It isn't damaged; that's what Gatekeeper says
+about any unsigned app. Open it once via **System Settings → Privacy & Security →
+Open Anyway**, or clear the flag from a terminal:
 
 ```sh
 xattr -cr /Applications/Carbon.app
 ```
 
-Carbon checks for new releases on launch and every 6 hours, and shows a banner in
-the sidebar when one is out. Updates are downloads rather than in-place installs,
-for the same reason — macOS won't auto-update an unsigned app.
-
 ## What it does
 
 **Two providers, one conversation.** Claude and Codex are both first-class, and a
 chat can switch between them mid-conversation — the outgoing model writes a brief
-of the discussion so far, and the incoming one picks it up. Plan with one model,
+of the discussion so far and the incoming one picks it up. Plan with one model,
 implement with another.
 
 **Parallel work in git worktrees.** Point a chat at a new worktree and it runs in
-its own branch and directory, so several agents can work simultaneously without
+its own branch and directory, so several agents can work at once without
 colliding. Carbon creates the worktree, runs your `.karbun/setup.sh` in a visible
 terminal, and offers the whole lifecycle when you're done: update from main, merge
 into main, hand off to your local checkout, or clean up after a merged PR.
 
-**Review without leaving.** A diff chip tracks what the turn changed; the review
+**Review without leaving.** A diff chip tracks what each turn changed; the review
 pane carries a commit → push → `gh pr create` ladder that knows which rung you're
-on. There's a file tree, an editor, a real terminal (node-pty), and a browser
-preview that starts your dev server and can hand screenshots back to the agent.
+on. There's a file tree, an editor, a real terminal, and a browser preview that
+starts your dev server and can hand screenshots back to the agent.
 
 **The rest.** Permission prompts with per-tool "always allow", plan mode with an
 approve/edit review, checkpoint and rewind to any message, chat history that
 survives restarts, MCP server status, usage and rate-limit tracking, light/dark
 themes with macOS vibrancy.
 
-## Run from source
+## Development
 
 ```sh
-npm install
-npm run dev
-```
-
-Requires Node 22+ and a working `claude` or `codex` login.
-
-```sh
-npm run build      # production build to out/
-npm run typecheck  # the primary verification gate — tsc over main+preload and renderer
+npm run dev        # hot-reloading dev window
+npm run typecheck  # the primary verification gate
 npm test           # node --test over test/*.test.ts
-npm run package    # build a local .dmg into dist/
+npm run package    # build Carbon.app into dist/ without installing it
 ```
-
-## Architecture
 
 Three Electron layers with one shared contract:
 
@@ -89,8 +117,8 @@ Three Electron layers with one shared contract:
 Adding an IPC method touches four files: the `Api` interface, a handler in
 `main/index.ts`, the bridge entry in `preload/index.ts`, and the renderer store.
 
-`CLAUDE.md` / `AGENTS.md` carry the deeper notes — persistence invariants,
-session flow, worktree design — for both humans and agents working in this repo.
+`CLAUDE.md` / `AGENTS.md` carry the deeper notes — persistence invariants, session
+flow, worktree design — for both humans and agents working in this repo.
 
 ## Releasing
 
@@ -100,9 +128,12 @@ npm version 0.2.0 && git push --follow-tags
 
 The tag triggers `.github/workflows/release.yml`, which typechecks, tests, builds
 both macOS architectures and attaches the `.dmg` files to a GitHub Release.
-Running installs pick it up from there — there's no separate publish step.
 
 ## Status
 
-macOS only for now. The build config and the update check already handle Windows
-and Linux artifacts; nobody has tested them.
+macOS only. The build config and update check already handle Windows and Linux
+artifacts; nobody has tested them.
+
+## License
+
+[MIT](LICENSE)
