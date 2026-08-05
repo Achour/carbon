@@ -48,6 +48,7 @@ import type {
   RewindResult,
   ServiceTier,
   SlashCommand,
+  UpdateInfo,
   UsageOverview,
   WorktreeDisposition,
   WorktreeInfo,
@@ -210,6 +211,14 @@ interface AppState {
   loading: boolean
   sidebarOpen: boolean
   toggleSidebar(): void
+
+  // ---- Updates ----
+  /** A release newer than this build, or null. Set by the periodic check. */
+  update: UpdateInfo | null
+  /** Version the user dismissed; suppresses the banner until a newer one ships. */
+  updateDismissed: string | null
+  checkForUpdate(): Promise<void>
+  dismissUpdate(): void
 
   // ---- Terminal ----
   /** Open terminal tabs in the right panel; each has its own shell session. */
@@ -771,6 +780,29 @@ export const useApp = create<AppState>((set, get) => ({
   loading: true,
   sidebarOpen: localStorage.getItem('sidebarOpen') !== 'false',
 
+  update: null,
+  updateDismissed: localStorage.getItem('updateDismissed'),
+
+  async checkForUpdate() {
+    const update = await window.api.checkForUpdate()
+    // Clearing a stale dismissal here, rather than filtering at render time,
+    // is what lets a second (newer) release re-open a banner the user closed.
+    const dismissed = get().updateDismissed
+    if (update && dismissed && dismissed !== update.version) {
+      localStorage.removeItem('updateDismissed')
+      set({ update, updateDismissed: null })
+      return
+    }
+    set({ update })
+  },
+
+  dismissUpdate() {
+    const version = get().update?.version
+    if (!version) return
+    localStorage.setItem('updateDismissed', version)
+    set({ updateDismissed: version })
+  },
+
   toggleSidebar() {
     set((s) => {
       const open = !s.sidebarOpen
@@ -1091,6 +1123,11 @@ export const useApp = create<AppState>((set, get) => ({
       loading: false,
       selectedCwd: homeCwd(chats, defaults.recentDirs)
     })
+    // Fire-and-forget: an update check must never gate the first paint, and it
+    // resolves to null when offline. Re-checked every 6h so a long-running
+    // window still learns about a release.
+    void get().checkForUpdate()
+    setInterval(() => void get().checkForUpdate(), 6 * 60 * 60 * 1000)
     const cwd = get().selectedCwd
     if (cwd) {
       void get().refreshGit()

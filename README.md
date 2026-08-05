@@ -4,12 +4,42 @@ A desktop GUI for coding agents. Claude Code today, Codex next.
 
 Electron + React + Tailwind v4 + shadcn-style components on [Base UI](https://base-ui.com), talking to the [Claude Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk) from the Electron main process. Sessions use your existing Claude Code login and run locally in whatever folder you pick.
 
-## Run
+## Install
+
+Download the latest `.dmg` from [Releases](https://github.com/Achour/carbon/releases/latest) —
+`-arm64` for Apple Silicon, `-x64` for Intel.
+
+Carbon is not notarized (an Apple Developer account costs $99/yr, and this is a
+free app), so macOS will refuse the first launch with *"Carbon is damaged and
+can't be opened."* It isn't damaged — that message is what Gatekeeper says about
+any app it can't trace to a paid developer certificate. Clear the quarantine flag
+once, after dragging it to Applications:
+
+```sh
+xattr -cr /Applications/Carbon.app
+```
+
+The app checks GitHub for new releases on launch and every 6 hours, and shows a
+banner in the sidebar when one is out. Updates are downloads, not in-place
+installs — for the same reason: macOS won't apply an automatic update to an
+unsigned app.
+
+## Run from source
 
 ```sh
 npm install
 npm run dev
 ```
+
+## Releasing
+
+```sh
+npm version 0.2.0 && git push --follow-tags
+```
+
+The tag triggers `.github/workflows/release.yml`, which typechecks, tests, builds
+both macOS architectures, and attaches the `.dmg` files to a GitHub Release.
+Running installs pick it up from there — no separate publish step.
 
 ## Features
 

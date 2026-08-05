@@ -1003,6 +1003,22 @@ export interface DockIconPalette {
   primary: string
 }
 
+/**
+ * A published release newer than the running build. Carbon ships unsigned, so
+ * updates are *announced*, not installed: the user downloads the new build.
+ */
+export interface UpdateInfo {
+  /** Semver without the tag's `v` prefix. */
+  version: string
+  /** Installer for this platform/arch, or null when no asset matched it. */
+  downloadUrl: string | null
+  /** The release page — always offered, and the fallback when no asset matched. */
+  releaseUrl: string
+  /** Release notes (markdown), possibly empty. */
+  notes: string
+  publishedAt: string
+}
+
 export interface Api {
   listChats(): Promise<ChatMeta[]>
   getChat(id: string): Promise<ChatView | null>
@@ -1115,6 +1131,15 @@ export interface Api {
   revealPath(path: string): Promise<void>
   /** Bring the app window to the foreground (notification clicks). */
   focusWindow(): Promise<void>
+  /** Open an http(s) URL in the user's default browser. */
+  openExternal(url: string): Promise<void>
+  /**
+   * The newest published release when it is newer than this build, else null.
+   * Never rejects — offline and up-to-date are the same answer to the UI.
+   */
+  checkForUpdate(): Promise<UpdateInfo | null>
+  /** The running build's version, for the settings/about line. */
+  readonly appVersion: string
   /**
    * Align native macOS chrome and vibrancy with the app's appearance.
    * `resolvedDark` supplies the current material tone while System mode stays

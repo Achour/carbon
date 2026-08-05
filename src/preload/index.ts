@@ -116,6 +116,12 @@ const api: Api = {
   forgetDir: (dir: string) => invoke('app:forget-dir', dir),
   revealPath: (path: string) => invoke('app:reveal-path', path),
   focusWindow: () => invoke('app:focus-window'),
+  openExternal: (url: string) => invoke('app:open-external', url),
+  checkForUpdate: () => invoke('app:check-update'),
+  // Resolved once at bridge construction: `app` isn't reachable from preload,
+  // and a version that can't change while the process lives has no business
+  // being an async call the renderer has to await.
+  appVersion: ipcRenderer.sendSync('app:version') as string,
   setWindowAppearance: (mode: 'dark' | 'light' | 'system', resolvedDark: boolean) =>
     invoke('window:set-appearance', mode, resolvedDark),
   setDockIcon: (palette: DockIconPalette) => invoke('window:set-dock-icon', palette),

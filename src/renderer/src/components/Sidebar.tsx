@@ -28,6 +28,7 @@ import { basename, relativeTime } from '@/lib/format'
 import { REVEAL_LABEL } from '@/lib/platform'
 import { chatActivity, projectActivity, type ChatActivity } from '@/lib/chatActivity'
 import { useApp } from '@/store'
+import { UpdateBanner } from '@/components/UpdateBanner'
 import { UsagePanel } from '@/components/UsagePanel'
 import { Button } from '@/components/ui/button'
 import {
@@ -870,6 +871,8 @@ export function Sidebar(): React.JSX.Element {
           )
         })}
       </div>
+
+      <UpdateBanner />
 
       {/* Footer */}
       <div className="flex shrink-0 items-center justify-between border-t border-sidebar-border px-3 py-2">

@@ -47,6 +47,7 @@ import { getPermissionRules, removePermissionRule } from './permissions'
 import { PreviewManager } from './preview'
 import { Store } from './store'
 import { TerminalManager } from './terminal'
+import { checkForUpdate } from './updates'
 import { readUsageOverview } from './usage'
 import { hydrateShellPath } from './shellEnv'
 import { dockIconSvg } from './dockIcon'
@@ -590,6 +591,20 @@ function registerIpc(): void {
   ipcMain.handle('app:forget-dir', (_e, dir: string) => store.forgetDir(dir))
 
   ipcMain.handle('app:reveal-path', (_e, path: string) => shell.showItemInFolder(path))
+
+  ipcMain.handle('app:open-external', (_e, url: string) => {
+    // Same guard as the window's own navigation handler: only ever hand the OS
+    // an http(s) URL, never a file:// or custom scheme from renderer data.
+    if (url.startsWith('http:') || url.startsWith('https:')) void shell.openExternal(url)
+  })
+
+  ipcMain.handle('app:check-update', () => checkForUpdate())
+
+  // Sync on purpose — the preload bridge reads it while building `window.api`,
+  // and registerIpc() runs before createWindow(), so the channel always exists.
+  ipcMain.on('app:version', (e) => {
+    e.returnValue = app.getVersion()
+  })
 
   ipcMain.handle(
     'window:set-appearance',

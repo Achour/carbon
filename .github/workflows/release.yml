@@ -1,0 +1,64 @@
+name: Release
+
+# Publishing a version is: bump package.json, tag it, push the tag.
+#
+#   npm version 0.2.0 && git push --follow-tags
+#
+# That is the entire release process. This workflow builds both macOS
+# architectures and attaches the .dmg files to a GitHub Release; the app's
+# update check (main/updates.ts) reads that release and tells running installs.
+on:
+  push:
+    tags:
+      - 'v*'
+  # Lets a failed release be re-run without moving the tag.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to (re)build, e.g. v0.2.0'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    # macos-14 is Apple Silicon; it cross-builds the x64 dmg fine, and native
+    # deps (node-pty) get rebuilt per-arch by electron-builder.
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Package (arm64 + x64 dmg)
+        run: npx electron-builder --mac --publish never
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        # --clobber so a re-run replaces assets instead of failing on collision.
+        run: |
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --generate-notes \
+            --verify-tag \
+            || echo "release already exists, uploading assets"
+          gh release upload "$TAG" dist/*.dmg --clobber

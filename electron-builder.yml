@@ -29,5 +29,23 @@ mac:
   category: public.app-category.developer-tools
   icon: build/icon.icns
   target:
-    - dir
+    - target: dmg
+      arch:
+        - arm64
+        - x64
+  # No Developer ID certificate, so no notarization — which costs us the clean
+  # first launch (Gatekeeper's "damaged" dialog; README documents `xattr -cr`)
+  # but nothing else. `null` is NOT the same as omitting this: electron-builder
+  # would otherwise hunt the keychain for an identity and fail the build on a
+  # machine that happens to have one.
+  #
+  # arm64 still needs *some* signature — macOS refuses to exec an unsigned
+  # arm64 binary at all — so the ad-hoc pass in `afterPack` supplies one. That
+  # is free and unrelated to notarization.
   identity: null
+afterPack: build/adhoc-sign.cjs
+dmg:
+  # `Carbon-0.2.0-arm64.dmg` / `Carbon-0.2.0.dmg`. The arch suffix is what the
+  # update check keys on to hand an Apple Silicon Mac the native build
+  # (see main/updateCheck.ts).
+  artifactName: ${productName}-${version}-${arch}.${ext}
