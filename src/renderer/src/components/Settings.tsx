@@ -34,6 +34,7 @@ import {
   CHATS_PER_PROJECT_MIN,
   useApp
 } from '@/store'
+import { CopyUpdateCommand } from '@/components/UpdateBanner'
 import { Button } from '@/components/ui/button'
 import { WithTooltip } from '@/components/ui/tooltip'
 
@@ -121,25 +122,37 @@ function UpdateRow(): React.JSX.Element {
         : 'Checked automatically on launch and every 6 hours'
 
   return (
-    <div className="flex items-center gap-4 px-2 py-2.5">
-      <div className="min-w-0 flex-1">
-        <div className="text-[13px] font-medium">Version {window.api.appVersion}</div>
-        <div className="mt-0.5 text-xs text-muted-foreground">{status}</div>
+    <div className="px-2 py-2.5">
+      <div className="flex items-center gap-4">
+        <div className="min-w-0 flex-1">
+          <div className="text-[13px] font-medium">Version {window.api.appVersion}</div>
+          <div className="mt-0.5 text-xs text-muted-foreground">{status}</div>
+        </div>
+        {update ? (
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => void window.api.openExternal(update.downloadUrl ?? update.releaseUrl)}
+          >
+            <ArrowDownToLine />
+            {update.downloadUrl ? 'Download' : 'View release'}
+          </Button>
+        ) : (
+          <Button size="sm" variant="secondary" disabled={checking} onClick={() => void run()}>
+            {checking && <Loader2 className="animate-spin" />}
+            Check for updates
+          </Button>
+        )}
       </div>
-      {update ? (
-        <Button
-          size="sm"
-          variant="secondary"
-          onClick={() => void window.api.openExternal(update.downloadUrl ?? update.releaseUrl)}
-        >
-          <ArrowDownToLine />
-          {update.downloadUrl ? 'Download' : 'View release'}
-        </Button>
-      ) : (
-        <Button size="sm" variant="secondary" disabled={checking} onClick={() => void run()}>
-          {checking && <Loader2 className="animate-spin" />}
-          Check for updates
-        </Button>
+      {update && (
+        // The download is the .dmg, which arrives quarantined; anyone who built
+        // from a clone should update the same way they installed, and skip that.
+        <div className="mt-2 rounded-md border border-border bg-muted/30 p-2">
+          <div className="mb-1 text-xs text-muted-foreground">
+            Installed from source? Update the same way — no Gatekeeper prompt:
+          </div>
+          <CopyUpdateCommand className="text-[11px]" />
+        </div>
       )}
     </div>
   )
