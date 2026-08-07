@@ -55,6 +55,28 @@ npm run rebuild
 ```
 </details>
 
+### Homebrew
+
+```sh
+brew install --cask achour/carbon/carbon
+```
+
+Homebrew won't load a cask from a third-party tap until you trust it. Installing
+one by name counts as trusting it, so the line above is all you need — but a
+read-only command like `brew info --cask carbon` will refuse until you've either
+installed it or run `brew trust achour/carbon`.
+
+The cask clears the quarantine flag after installing, so this route skips the
+Gatekeeper prompt the raw `.dmg` gets — and it's the only one that updates in
+place:
+
+```sh
+brew upgrade --cask carbon
+```
+
+Carbon recognizes a Homebrew install and shows that command in place of a
+download link when a new version lands.
+
 ### Prebuilt download
 
 There are `.dmg` builds on [Releases](https://github.com/Achour/carbon/releases/latest)
@@ -127,7 +149,13 @@ npm version 0.2.0 && git push --follow-tags
 ```
 
 The tag triggers `.github/workflows/release.yml`, which typechecks, tests, builds
-both macOS architectures and attaches the `.dmg` files to a GitHub Release.
+both macOS architectures, attaches the `.dmg` files to a GitHub Release, and
+bumps the cask in [Achour/homebrew-carbon](https://github.com/Achour/homebrew-carbon).
+
+That last step needs a `TAP_DEPLOY_KEY` repository secret — the private half of a
+write-enabled deploy key on the tap, since the workflow's own token only reaches
+this repo. Without it the step skips itself: the release still succeeds and the
+cask goes un-bumped.
 
 ## Status
 

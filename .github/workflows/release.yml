@@ -26,6 +26,11 @@ jobs:
     # macos-14 is Apple Silicon; it cross-builds the x64 dmg fine, and native
     # deps (node-pty) get rebuilt per-arch by electron-builder.
     runs-on: macos-14
+    # Job-level rather than on the step that uses it: the `secrets` context
+    # isn't readable from a step-level `if`, and gating on `env` is what lets
+    # the cask bump skip itself instead of failing the release.
+    env:
+      TAP_DEPLOY_KEY: ${{ secrets.TAP_DEPLOY_KEY }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -71,3 +76,60 @@ jobs:
             --verify-tag \
             || echo "release already exists, uploading assets"
           gh release upload "$TAG" dist/*.dmg --clobber
+
+      # Points `brew install/upgrade --cask carbon` at the release that just
+      # shipped. Runs last, and only with a key: a missing secret leaves the
+      # release itself intact and the cask bumpable by hand.
+      #
+      # TAP_DEPLOY_KEY is an ed25519 private key whose public half is a
+      # write-enabled deploy key on Achour/homebrew-carbon. github.token can't
+      # reach another repository, and a deploy key beats a PAT here because it
+      # is scoped to that one repo, carries no other permission, and is revoked
+      # from the tap's own settings rather than an account-wide token list.
+      - name: Bump the Homebrew cask
+        if: env.TAP_DEPLOY_KEY != ''
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          ARM_SHA=$(shasum -a 256 "dist/Carbon-${VERSION}-arm64.dmg" | cut -d' ' -f1)
+          X64_SHA=$(shasum -a 256 "dist/Carbon-${VERSION}-x64.dmg" | cut -d' ' -f1)
+
+          # Confined to this step's runner. `ssh-keyscan` pins GitHub's host key
+          # rather than disabling host checking, and IdentitiesOnly stops ssh
+          # offering any other identity the runner might pick up.
+          KEY="$(mktemp -d)/tap_key"
+          printf '%s\n' "$TAP_DEPLOY_KEY" > "$KEY"
+          chmod 600 "$KEY"
+          mkdir -p ~/.ssh
+          ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
+          export GIT_SSH_COMMAND="ssh -i $KEY -o IdentitiesOnly=yes"
+
+          git clone --depth 1 git@github.com:Achour/homebrew-carbon.git tap
+          CASK=tap/Casks/carbon.rb
+
+          sed -i '' -E \
+            -e "s|^  version \".*\"$|  version \"${VERSION}\"|" \
+            -e "s|^  sha256 arm:   \".*\",$|  sha256 arm:   \"${ARM_SHA}\",|" \
+            -e "s|^         intel: \".*\"$|         intel: \"${X64_SHA}\"|" \
+            "$CASK"
+
+          # sed exits 0 when it matches nothing, so assert the result instead of
+          # pushing a cask that still points at the previous release.
+          grep -q "version \"${VERSION}\"" "$CASK"
+          grep -q "\"${ARM_SHA}\"" "$CASK"
+          grep -q "\"${X64_SHA}\"" "$CASK"
+
+          # A re-run over an unchanged tag has nothing to commit, and an empty
+          # commit would fail the job under `set -e`.
+          if git -C tap diff --quiet; then
+            echo "Cask already at ${VERSION}; nothing to push."
+            exit 0
+          fi
+
+          git -C tap \
+            -c user.name='github-actions[bot]' \
+            -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -am "Carbon cask ${VERSION}"
+          git -C tap push

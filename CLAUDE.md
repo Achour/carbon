@@ -24,7 +24,41 @@ can run the `.ts` directly without a bundler.
 Dev utilities (env vars for `npm run dev`, used for UI iteration without a human clicking):
 - `AIGUI_CAPTURE=/tmp/shot.png` — saves a window screenshot after load. `AIGUI_CAPTURE_DELAY=2000,8000` takes a comma list of delays and saves `shot-1.png`, `shot-2.png`, …
 - `AIGUI_E2E='<js>'` — runs a script in the renderer after load and logs the result to the terminal.
+- `CARBON_UPDATE_REPO=owner/repo` — points the update check at another repo, so a real
+  "newer release" can be faked (any repo whose latest tag outranks `package.json`).
+- `CARBON_FAKE_HOMEBREW=1` — forces `installedViaHomebrew`, the only way to reach the
+  cask variant of the update UI outside an actual `brew install`. Dev-only; a packaged
+  build ignores it.
 - Renderer console output is mirrored to the terminal in dev.
+
+## Distribution and updates
+
+Auto-update is impossible while the app is unsigned, and not for the reason people
+assume: `build/adhoc-sign.cjs` gives every build a designated requirement of
+`cdhash H"…"` — a hash of *that one build* — so Squirrel.Mac's check that an update
+matches the installed app can never pass. It's the signature, not the feed. Fixing it
+costs an Apple Developer ID ($99/yr); the release layout here is already what
+`electron-updater` wants, so that day changes the client and nothing else.
+
+The Homebrew cask is therefore the one route that updates in place, and
+`installedViaHomebrew` (`main/updates.ts`) is what lets the update banner say so —
+`brew upgrade --cask carbon` instead of a download. It keys on
+`<brew prefix>/Caskroom/carbon/<running version>`: matching the *version*, not just the
+token, keeps the answer honest when someone brew-installs and then builds a newer copy
+over the top. Every failure mode is a false negative, which is why each check is a hard
+requirement rather than one signal among several — the cost is a brew user seeing the
+generic banner, where the reverse would tell a non-brew user to run a command that
+errors, or a brew user to install a `.dmg` that desynchronizes Homebrew's records.
+
+The cask lives in a second repo, `Achour/homebrew-carbon` (Homebrew requires the
+`homebrew-` prefix). `.github/workflows/release.yml` rewrites it on every tag via `sed`
+over three anchored lines — `version` and both `sha256`s — followed by `grep`
+assertions, because `sed` exits 0 when it matches nothing and would otherwise push a
+cask still pointing at the previous release. The step needs a `TAP_DEPLOY_KEY` secret —
+the private half of a write-enabled deploy key on the tap, since `github.token` can't
+reach another repo — and skips itself without one, so a missing secret never fails a
+release. A deploy key rather than a PAT: it is scoped to that single repo, carries no
+other permission, and is revoked from the tap's settings instead of an account-wide list.
 
 ## Architecture
 

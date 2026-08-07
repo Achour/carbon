@@ -20,7 +20,15 @@ There is no linter. `npm run typecheck` is the primary verification gate; focuse
 Dev utilities (env vars for `npm run dev`, used for UI iteration without a human clicking):
 - `AIGUI_CAPTURE=/tmp/shot.png` — saves a window screenshot after load. `AIGUI_CAPTURE_DELAY=2000,8000` takes a comma list of delays and saves `shot-1.png`, `shot-2.png`, …
 - `AIGUI_E2E='<js>'` — runs a script in the renderer after load and logs the result to the terminal.
+- `CARBON_UPDATE_REPO=owner/repo` — points the update check at another repo, faking a newer release.
+- `CARBON_FAKE_HOMEBREW=1` — forces `installedViaHomebrew`, the only way to reach the cask variant of the update UI outside a real `brew install`. Dev-only.
 - Renderer console output is mirrored to the terminal in dev.
+
+Carbon ships unsigned, so it can't auto-update: the ad-hoc signature makes every build's
+designated requirement a `cdhash` of that one build, which Squirrel.Mac can never match
+against an update. The Homebrew cask in `Achour/homebrew-carbon` is the only in-place
+route — `installedViaHomebrew` (`main/updates.ts`) detects it and swaps the update
+banner's download for `brew upgrade --cask carbon`. The release workflow bumps that cask.
 
 ## Architecture
 

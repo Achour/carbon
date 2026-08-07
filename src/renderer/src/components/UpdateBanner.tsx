@@ -14,14 +14,22 @@ import { WithTooltip } from '@/components/ui/tooltip'
 export const UPDATE_FROM_SOURCE = 'git pull && npm install && npm run install-app'
 
 /**
- * Click-to-copy for the from-source command.
+ * The cask upgrades in place and clears the quarantine flag itself, so for a
+ * brew install this is the entire update story — no download, no Gatekeeper.
+ */
+export const UPDATE_VIA_HOMEBREW = 'brew upgrade --cask carbon'
+
+/**
+ * Click-to-copy for a one-line update command.
  *
- * Shown next to the download rather than instead of it: nothing in the app
- * records how it was installed, so the honest move is to offer both routes and
- * let the reader recognize their own.
+ * When main can tell the app came from Homebrew this replaces the download
+ * outright; otherwise it sits *next to* one, because nothing distinguishes a
+ * build made from a clone from a downloaded `.dmg` — so the honest move is to
+ * offer both routes and let the reader recognize their own.
  */
 export function CopyUpdateCommand({
   className,
+  command = UPDATE_FROM_SOURCE,
   /**
    * The sidebar is too narrow for the command, and a version truncated
    * mid-word reads worse than a label — so there it names the action instead.
@@ -29,12 +37,13 @@ export function CopyUpdateCommand({
   label
 }: {
   className?: string
+  command?: string
   label?: string
 }): React.JSX.Element {
   const [copied, setCopied] = React.useState(false)
 
   const copy = async (): Promise<void> => {
-    await navigator.clipboard.writeText(UPDATE_FROM_SOURCE)
+    await navigator.clipboard.writeText(command)
     setCopied(true)
     setTimeout(() => setCopied(false), 1600)
   }
@@ -43,12 +52,14 @@ export function CopyUpdateCommand({
     <button
       type="button"
       onClick={() => void copy()}
-      className={
-        'group flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left ' +
-        'text-[10px] text-muted-foreground/80 transition-colors hover:bg-accent/60 ' +
-        'hover:text-foreground ' +
-        (className ?? '')
-      }
+      // `cn` rather than concatenation so a caller's `text-[11px]` actually
+      // beats the default size instead of racing it in the stylesheet.
+      className={cn(
+        'group flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left',
+        'text-[10px] text-muted-foreground/80 transition-colors hover:bg-accent/60',
+        'hover:text-foreground',
+        className
+      )}
       aria-label="Copy the update-from-source command"
     >
       {copied ? (
@@ -57,7 +68,7 @@ export function CopyUpdateCommand({
         <Copy className="size-3 shrink-0 opacity-60" />
       )}
       <code className={cn('truncate', label ? 'font-sans' : 'font-mono')}>
-        {copied ? 'Copied' : (label ?? UPDATE_FROM_SOURCE)}
+        {copied ? 'Copied' : (label ?? command)}
       </code>
     </button>
   )
@@ -66,22 +77,25 @@ export function CopyUpdateCommand({
 /**
  * "A new version is out" — the whole update story for an unsigned build.
  *
- * There is no in-place install to offer (see `main/updates.ts`), so the banner's
- * only job is to name the version and point at the two ways to get it. It sits
- * just above the sidebar footer: present enough to be noticed on the next glance
- * at the chat list, quiet enough not to interrupt a turn.
+ * The app can't install the update itself (see `main/updates.ts`), so the
+ * banner's job is to name the version and hand over the one command or link that
+ * finishes the job. It sits just above the sidebar footer: present enough to be
+ * noticed on the next glance at the chat list, quiet enough not to interrupt a
+ * turn.
  */
 export function UpdateBanner(): React.ReactElement | null {
   const update = useApp((s) => s.update)
   const dismissed = useApp((s) => s.updateDismissed)
   const dismissUpdate = useApp((s) => s.dismissUpdate)
+  const brew = window.api.installedViaHomebrew
 
   if (!update || dismissed === update.version) return null
 
   // No matching asset (a release that only shipped other platforms) still has
-  // somewhere useful to go — the release page lists everything.
+  // somewhere useful to go — the release page lists everything. A brew install
+  // needs neither link, so an assetless release still has something to say to it.
   const href = update.downloadUrl ?? update.releaseUrl
-  if (!href) return null
+  if (!brew && !href) return null
 
   return (
     <div className="mx-2 mb-2 shrink-0 rounded-lg border border-border bg-accent/40 px-2.5 py-2">
@@ -106,19 +120,40 @@ export function UpdateBanner(): React.ReactElement | null {
           </Button>
         </WithTooltip>
       </div>
-      <Button
-        size="sm"
-        variant="secondary"
-        className="mt-2 w-full"
-        onClick={() => void window.api.openExternal(href)}
-      >
-        <ArrowDownToLine />
-        {update.downloadUrl ? 'Download' : 'View release'}
-      </Button>
-      <div className="mt-1.5 border-t border-border/60 pt-1">
-        <div className="px-1.5 pb-0.5 text-[10px] text-muted-foreground/70">Built from source?</div>
-        <CopyUpdateCommand label="Copy update command" />
-      </div>
+      {brew ? (
+        // Homebrew upgrades in place, so the command *replaces* the download
+        // rather than sitting under it as an alternative — offering the .dmg
+        // here would strand brew's records on a version no longer installed.
+        <div className="mt-2">
+          {/* Short enough to hold one line at the sidebar's width — the full
+              sentence lives in Settings, where there's room for it. */}
+          <div className="px-1.5 pb-0.5 text-[10px] text-muted-foreground/70">
+            Upgrade with Homebrew:
+          </div>
+          <CopyUpdateCommand
+            command={UPDATE_VIA_HOMEBREW}
+            className="border border-border/70 bg-background/50 py-1.5 text-[11px]"
+          />
+        </div>
+      ) : (
+        <>
+          <Button
+            size="sm"
+            variant="secondary"
+            className="mt-2 w-full"
+            onClick={() => void window.api.openExternal(href)}
+          >
+            <ArrowDownToLine />
+            {update.downloadUrl ? 'Download' : 'View release'}
+          </Button>
+          <div className="mt-1.5 border-t border-border/60 pt-1">
+            <div className="px-1.5 pb-0.5 text-[10px] text-muted-foreground/70">
+              Built from source?
+            </div>
+            <CopyUpdateCommand label="Copy update command" />
+          </div>
+        </>
+      )}
     </div>
   )
 }

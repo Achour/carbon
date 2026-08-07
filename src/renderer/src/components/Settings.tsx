@@ -34,7 +34,11 @@ import {
   CHATS_PER_PROJECT_MIN,
   useApp
 } from '@/store'
-import { CopyUpdateCommand } from '@/components/UpdateBanner'
+import {
+  CopyUpdateCommand,
+  UPDATE_FROM_SOURCE,
+  UPDATE_VIA_HOMEBREW
+} from '@/components/UpdateBanner'
 import { Button } from '@/components/ui/button'
 import { WithTooltip } from '@/components/ui/tooltip'
 
@@ -98,6 +102,7 @@ function Row({
 function UpdateRow(): React.JSX.Element {
   const update = useApp((s) => s.update)
   const checkForUpdate = useApp((s) => s.checkForUpdate)
+  const brew = window.api.installedViaHomebrew
   const [checking, setChecking] = React.useState(false)
   // Distinguishes "checked, nothing there" from "never asked" — without it the
   // button would look inert on an up-to-date install.
@@ -128,7 +133,7 @@ function UpdateRow(): React.JSX.Element {
           <div className="text-[13px] font-medium">Version {window.api.appVersion}</div>
           <div className="mt-0.5 text-xs text-muted-foreground">{status}</div>
         </div>
-        {update ? (
+        {update && !brew ? (
           <Button
             size="sm"
             variant="secondary"
@@ -138,6 +143,8 @@ function UpdateRow(): React.JSX.Element {
             {update.downloadUrl ? 'Download' : 'View release'}
           </Button>
         ) : (
+          // A brew install has nothing to download, so the check button stays —
+          // re-checking is the only button-shaped action left to it.
           <Button size="sm" variant="secondary" disabled={checking} onClick={() => void run()}>
             {checking && <Loader2 className="animate-spin" />}
             Check for updates
@@ -145,13 +152,19 @@ function UpdateRow(): React.JSX.Element {
         )}
       </div>
       {update && (
-        // The download is the .dmg, which arrives quarantined; anyone who built
-        // from a clone should update the same way they installed, and skip that.
+        // Brew upgrades in place; everyone else gets the .dmg, which arrives
+        // quarantined, so anyone who built from a clone should update the way
+        // they installed and skip that.
         <div className="mt-2 rounded-md border border-border bg-muted/30 p-2">
           <div className="mb-1 text-xs text-muted-foreground">
-            Installed from source? Update the same way — no Gatekeeper prompt:
+            {brew
+              ? 'Installed with Homebrew — upgrade in place:'
+              : 'Installed from source? Update the same way — no Gatekeeper prompt:'}
           </div>
-          <CopyUpdateCommand className="text-[11px]" />
+          <CopyUpdateCommand
+            className="text-[11px]"
+            command={brew ? UPDATE_VIA_HOMEBREW : UPDATE_FROM_SOURCE}
+          />
         </div>
       )}
     </div>

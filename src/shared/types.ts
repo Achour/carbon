@@ -1141,6 +1141,12 @@ export interface Api {
   /** The running build's version, for the settings/about line. */
   readonly appVersion: string
   /**
+   * True when the Homebrew cask installed this build — the one install route
+   * that updates in place, so the update UI offers `brew upgrade` instead of a
+   * download. False is the safe answer and the one every ambiguous case gets.
+   */
+  readonly installedViaHomebrew: boolean
+  /**
    * Align native macOS chrome and vibrancy with the app's appearance.
    * `resolvedDark` supplies the current material tone while System mode stays
    * attached to OS appearance changes. No-op off macOS.

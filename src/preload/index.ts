@@ -122,6 +122,7 @@ const api: Api = {
   // and a version that can't change while the process lives has no business
   // being an async call the renderer has to await.
   appVersion: ipcRenderer.sendSync('app:version') as string,
+  installedViaHomebrew: ipcRenderer.sendSync('app:installed-via-homebrew') as boolean,
   setWindowAppearance: (mode: 'dark' | 'light' | 'system', resolvedDark: boolean) =>
     invoke('window:set-appearance', mode, resolvedDark),
   setDockIcon: (palette: DockIconPalette) => invoke('window:set-dock-icon', palette),

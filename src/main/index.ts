@@ -47,7 +47,7 @@ import { getPermissionRules, removePermissionRule } from './permissions'
 import { PreviewManager } from './preview'
 import { Store } from './store'
 import { TerminalManager } from './terminal'
-import { checkForUpdate } from './updates'
+import { checkForUpdate, installedViaHomebrew } from './updates'
 import { readUsageOverview } from './usage'
 import { hydrateShellPath } from './shellEnv'
 import { dockIconSvg } from './dockIcon'
@@ -604,6 +604,12 @@ function registerIpc(): void {
   // and registerIpc() runs before createWindow(), so the channel always exists.
   ipcMain.on('app:version', (e) => {
     e.returnValue = app.getVersion()
+  })
+
+  // Same reasoning as `app:version`, and the answer is likewise fixed for the
+  // life of the process — nobody re-installs Carbon while it's running.
+  ipcMain.on('app:installed-via-homebrew', (e) => {
+    e.returnValue = installedViaHomebrew()
   })
 
   ipcMain.handle(
