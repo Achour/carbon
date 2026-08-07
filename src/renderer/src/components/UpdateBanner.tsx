@@ -16,8 +16,16 @@ export const UPDATE_FROM_SOURCE = 'git pull && npm install && npm run install-ap
 /**
  * The cask upgrades in place and clears the quarantine flag itself, so for a
  * brew install this is the entire update story — no download, no Gatekeeper.
+ *
+ * `brew update &&` is not optional, and leaving it off is a bug we shipped
+ * once: Homebrew only re-pulls a tap when its last auto-update was more than
+ * `HOMEBREW_AUTO_UPDATE_SECS` ago (a day, by default), so a bare `brew upgrade`
+ * reads a stale local clone of the tap and answers "the latest version is
+ * already installed". This banner has just read the real answer straight from
+ * the releases API, so that reply is not merely unhelpful — it directly
+ * contradicts the thing the user is looking at.
  */
-export const UPDATE_VIA_HOMEBREW = 'brew upgrade --cask carbon'
+export const UPDATE_VIA_HOMEBREW = 'brew update && brew upgrade --cask carbon'
 
 /**
  * Click-to-copy for a one-line update command.
@@ -130,8 +138,12 @@ export function UpdateBanner(): React.ReactElement | null {
           <div className="px-1.5 pb-0.5 text-[10px] text-muted-foreground/70">
             Upgrade with Homebrew:
           </div>
+          {/* Named rather than shown: the two-part command is too wide for the
+              sidebar, and a command truncated mid-flag reads as if that's all
+              of it. Settings has the room and prints it in full. */}
           <CopyUpdateCommand
             command={UPDATE_VIA_HOMEBREW}
+            label="Copy upgrade command"
             className="border border-border/70 bg-background/50 py-1.5 text-[11px]"
           />
         </div>

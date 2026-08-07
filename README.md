@@ -71,8 +71,12 @@ Gatekeeper prompt the raw `.dmg` gets — and it's the only one that updates in
 place:
 
 ```sh
-brew upgrade --cask carbon
+brew update && brew upgrade --cask carbon
 ```
+
+The `brew update` is load-bearing. Homebrew only re-pulls a tap once its last
+auto-update is a day old, so a bare `brew upgrade` can read a stale copy of the
+cask and tell you the latest version is already installed.
 
 Carbon recognizes a Homebrew install and shows that command in place of a
 download link when a new version lands.
