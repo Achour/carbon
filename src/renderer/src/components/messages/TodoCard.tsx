@@ -1,28 +1,29 @@
 import * as React from 'react'
 import { Check, ChevronRight, Circle, ListTodo, Loader2 } from 'lucide-react'
-import type { ToolPart } from '@shared/types'
 import { cn } from '@/lib/utils'
 
-interface TodoItem {
+export interface TodoItem {
   content?: string
   status?: string
   activeForm?: string
 }
 
 /**
- * TodoWrite rendered as a live task checklist. Each call rewrites the whole
- * list, so only the latest card in the chat (`live`) stays expanded; earlier
- * ones collapse to a summary row.
+ * The agent's task checklist. Only the chat's latest card (`live`) stays
+ * expanded; earlier ones collapse to a summary row.
+ *
+ * Takes the list rather than the tool part, because the two providers deliver
+ * it in completely different shapes: Codex's `TodoWrite` carries the whole list
+ * in one call, while Claude Code builds it up across many `TaskCreate` /
+ * `TaskUpdate` calls that have to be folded first (see `lib/taskList.ts`).
  */
 export const TodoCard = React.memo(function TodoCard({
-  part,
+  todos,
   live
 }: {
-  part: ToolPart
+  todos: TodoItem[]
   live: boolean
 }): React.JSX.Element {
-  const input = (part.input ?? {}) as { todos?: TodoItem[] }
-  const todos = Array.isArray(input.todos) ? input.todos.filter((t) => t?.content) : []
   const done = todos.filter((t) => t.status === 'completed').length
   const active = todos.find((t) => t.status === 'in_progress')
 

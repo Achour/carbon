@@ -22,7 +22,9 @@ import { projectRoot, providerForModel } from '@shared/types'
 import { cn } from '@/lib/utils'
 import { basename } from '@/lib/format'
 import { useApp } from '@/store'
-import { useLatestTodo } from '@/latestTodoStore'
+import { useTaskList } from '@/taskListStore'
+import { TASK_LIST_TOOLS, foldTaskParts, reconcileSnapshots } from '@/lib/taskList'
+import type { TaskSnapshots, TranscriptItem } from '@/lib/taskList'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -101,15 +103,21 @@ interface RenderCtx {
 }
 
 /**
- * Most-recent TodoWrite in `messages[from, to)`, scanning backward. Returns its
- * `toolUseId` and array index, or null. Pulled out so the id can be recomputed
- * incrementally (see the `latestTodoId` memo) instead of re-walking the whole
- * conversation on every stream token.
+ * Most-recent checklist call in `messages[from, to)`, scanning backward. Returns
+ * its `toolUseId` and array index, or null. Pulled out so the id can be
+ * recomputed incrementally (see the `latestTodoId` memo) instead of re-walking
+ * the whole conversation on every stream token.
+ *
+ * Either provider's spelling counts — Codex's `TodoWrite`, or one of Claude
+ * Code's `Task*` calls. A `Task*` call only counts once the fold gave it a
+ * snapshot: a failed one renders as an ordinary tool card, and letting it claim
+ * "latest" would collapse the real list above it with nothing taking its place.
  */
 function findLatestTodo(
   messages: ChatMessage[],
   from: number,
-  to: number
+  to: number,
+  snapshots: TaskSnapshots
 ): { id: string; index: number } | null {
   for (let i = to - 1; i >= from; i--) {
     const m = messages[i]
@@ -117,10 +125,35 @@ function findLatestTodo(
     for (let j = m.parts.length - 1; j >= 0; j--) {
       // Streamed part arrays can be sparse — indexes may arrive out of order.
       const p = m.parts[j]
-      if (p?.type === 'tool' && p.name === 'TodoWrite') return { id: p.toolUseId, index: i }
+      if (p?.type !== 'tool') continue
+      if (p.name === 'TodoWrite') return { id: p.toolUseId, index: i }
+      if (TASK_LIST_TOOLS.has(p.name) && snapshots.has(p.toolUseId)) {
+        return { id: p.toolUseId, index: i }
+      }
     }
   }
   return null
+}
+
+/**
+ * Everything the loaded window renders, in order, for the task-list fold. Not
+ * just the tool parts: prose and user turns have to come through too, because
+ * the fold collapses only checklist calls that are genuinely back to back, and
+ * anything on screen between two of them ends that run.
+ */
+function* streamItems(messages: ChatMessage[]): Generator<TranscriptItem> {
+  for (const m of messages) {
+    if (m.role !== 'assistant') {
+      yield { type: m.role }
+      continue
+    }
+    for (const p of m.parts) {
+      if (!p) continue
+      if (p.type === 'tool') yield p
+      // An empty text/thinking part renders nothing, so it breaks no run.
+      else if (p.text) yield { type: p.type }
+    }
+  }
 }
 
 /**
@@ -444,7 +477,23 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
     [chat.provider, messages, pendingPlan, pendingPlanRequest]
   )
 
-  // The most recent TodoWrite is the live task list; earlier ones collapse.
+  // Claude Code's checklist arrives as incremental TaskCreate/TaskUpdate calls
+  // that carry no list of their own, so it is folded out of the whole loaded
+  // window here — the fold has to span messages, since a TaskUpdate's matching
+  // TaskCreate is never in the same one. Cheap in practice: the window is
+  // HYDRATE_TAIL-bounded, and a chat with no Task* calls costs one name check
+  // per part. `reconcileSnapshots` keeps unchanged arrays at their old identity
+  // so cards don't re-render on every token.
+  const snapshotsRef = React.useRef<TaskSnapshots>(new Map())
+  const taskFold = React.useMemo(() => {
+    const fold = foldTaskParts(streamItems(messages))
+    fold.snapshots = reconcileSnapshots(snapshotsRef.current, fold.snapshots)
+    snapshotsRef.current = fold.snapshots
+    return fold
+  }, [messages])
+  const taskSnapshots = taskFold.snapshots
+
+  // The most recent checklist call is the live task list; earlier ones collapse.
   // A full backward scan per stream token is wasteful — a chat with no todos
   // would re-walk its whole history on every token. Streaming keeps earlier
   // message objects by reference (only the live message mutates / new ones
@@ -464,8 +513,8 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
       const min = Math.min(cache.messages.length, messages.length)
       while (diverge < min && cache.messages[diverge] === messages[diverge]) diverge++
     }
-    // A newer TodoWrite can only be in the changed/appended suffix.
-    let found = findLatestTodo(messages, diverge, messages.length)
+    // A newer checklist call can only be in the changed/appended suffix.
+    let found = findLatestTodo(messages, diverge, messages.length, taskSnapshots)
     if (!found && cache && cache.index >= 0 && cache.index < diverge) {
       // Nothing newer, and the cached answer still lives in the untouched prefix.
       found = { id: cache.id as string, index: cache.index }
@@ -473,19 +522,24 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
       // The prefix changed under the cached answer (rewind / chat switch, or no
       // cache yet) — scan it too. `diverge` is 0 on a chat switch, so the suffix
       // scan above already covered everything and this range is empty.
-      found = findLatestTodo(messages, 0, diverge)
+      found = findLatestTodo(messages, 0, diverge, taskSnapshots)
     }
     const next = found ?? { id: null, index: -1 }
     todoScanCache.current = { messages, id: next.id, index: next.index }
     return next.id
-  }, [messages])
+  }, [messages, taskSnapshots])
 
-  // Publish the live-todo id to its own store so only the affected TodoCards
-  // re-render — see latestTodoStore. Kept out of the history render path.
-  const setLatestTodoId = useLatestTodo((s) => s.setLatestTodoId)
+  // Publish the live id and the folded lists to their own store so only the
+  // affected cards re-render — see taskListStore. Kept out of the history
+  // render path.
+  const setLatestId = useTaskList((s) => s.setLatestId)
+  const setFold = useTaskList((s) => s.setFold)
   React.useEffect(() => {
-    setLatestTodoId(latestTodoId)
-  }, [latestTodoId, setLatestTodoId])
+    setLatestId(latestTodoId)
+  }, [latestTodoId, setLatestId])
+  React.useEffect(() => {
+    setFold(taskFold.snapshots, taskFold.superseded)
+  }, [taskFold, setFold])
 
   const openPlan = React.useCallback(
     (plan: string) => {

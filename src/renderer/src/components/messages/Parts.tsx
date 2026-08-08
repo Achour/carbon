@@ -22,10 +22,12 @@ import { WithTooltip } from '@/components/ui/tooltip'
 import { useApp } from '@/store'
 import { FILE_MUTATION_TOOLS, GROUPABLE_TOOLS, ToolCard, ToolGroup } from './ToolCard'
 import { TodoCard } from './TodoCard'
-import { useLatestTodo } from '@/latestTodoStore'
+import type { TodoItem } from './TodoCard'
+import { useTaskList } from '@/taskListStore'
+import { TASK_LIST_TOOLS } from '@/lib/taskList'
 
 /**
- * Wraps `TodoCard` with an equality-selector subscription to the latest-todo
+ * Wraps `TodoCard` with an equality-selector subscription to the task-list
  * store. Only this leaf re-renders when the live task list changes — the id
  * never crosses the `AssistantBlock`/`MessageHistory` memo boundary, so history
  * rows are untouched while an agent flips todos mid-turn.
@@ -35,8 +37,38 @@ const LiveTodoCard = React.memo(function LiveTodoCard({
 }: {
   part: ToolPart
 }): React.JSX.Element {
-  const live = useLatestTodo((s) => s.latestTodoId === part.toolUseId)
-  return <TodoCard part={part} live={live} />
+  const live = useTaskList((s) => s.latestId === part.toolUseId)
+  const input = (part.input ?? {}) as { todos?: TodoItem[] }
+  const todos = Array.isArray(input.todos) ? input.todos.filter((t) => t?.content) : []
+  return <TodoCard todos={todos} live={live} />
+})
+
+/**
+ * The same card for Claude Code's incremental checklist. The list isn't in the
+ * call — it's folded across the whole transcript in `ChatView` and looked up
+ * here by call id.
+ *
+ * A call with no snapshot falls back to the ordinary tool card: that means it
+ * failed, or it only touched tasks created before the loaded window, and an
+ * empty "Tasks 0/0" would be a worse answer than the call itself.
+ */
+const TaskListCard = React.memo(function TaskListCard({
+  part,
+  cwd,
+  onOpenPlan
+}: {
+  part: ToolPart
+  cwd: string
+  onOpenPlan?: (plan: string) => void
+}): React.JSX.Element {
+  const live = useTaskList((s) => s.latestId === part.toolUseId)
+  const tasks = useTaskList((s) => s.snapshots.get(part.toolUseId))
+  const todos = React.useMemo<TodoItem[]>(
+    () => (tasks ?? []).map((t) => ({ content: t.subject, status: t.status, activeForm: t.activeForm })),
+    [tasks]
+  )
+  if (!todos.length) return <ToolCard part={part} cwd={cwd} onOpenPlan={onOpenPlan} />
+  return <TodoCard todos={todos} live={live} />
 })
 
 /**
@@ -246,6 +278,25 @@ export const AssistantBlock = React.memo(function AssistantBlock({
   const parts = message.parts
   const lastIndex = parts.length - 1
 
+  // Checklist calls folded into a later card in the same run draw nothing. They
+  // have to be dropped *here* rather than rendered as null: Claude Code emits
+  // one Task call per message, so a superseded one is usually the message's only
+  // part, and an AssistantBlock with no children is still a flex item in the
+  // message list — a message-sized gap where no message is (the same trap
+  // `isBlankMsg` exists for). Subscribing to a joined string rather than the
+  // Set: the Set's identity changes on every streamed token, and this component
+  // is inside the memo boundary that keeps history out of the stream loop.
+  const supersededKey = useTaskList((s) =>
+    parts
+      .filter((p) => p?.type === 'tool' && s.superseded.has(p.toolUseId))
+      .map((p) => (p as ToolPart).toolUseId)
+      .join(',')
+  )
+  const superseded = React.useMemo(
+    () => new Set(supersededKey ? supersededKey.split(',') : []),
+    [supersededKey]
+  )
+
   // Coalesce inspection/terminal sequences into one activity row. Short progress
   // narration between calls stays available inside the expanded group instead
   // of breaking the sequence into a wall of cards.
@@ -274,6 +325,7 @@ export const AssistantBlock = React.memo(function AssistantBlock({
     // occupies a slot in the parent's `gap`, so it would show up as a blank
     // band between cards.
     if ((part.type === 'text' || part.type === 'thinking') && !part.text) return
+    if (part.type === 'tool' && superseded.has(part.toolUseId)) return
     if (
       part.type === 'tool' &&
       summarizeEdits &&
@@ -315,6 +367,11 @@ export const AssistantBlock = React.memo(function AssistantBlock({
         }
         if (part.name === 'TodoWrite') {
           return <LiveTodoCard key={part.toolUseId} part={part} />
+        }
+        if (TASK_LIST_TOOLS.has(part.name)) {
+          return (
+            <TaskListCard key={part.toolUseId} part={part} cwd={cwd} onOpenPlan={onOpenPlan} />
+          )
         }
         return <ToolCard key={part.toolUseId} part={part} cwd={cwd} onOpenPlan={onOpenPlan} />
       })}

@@ -108,6 +108,48 @@ The legacy `chats/<id>.json` files are imported once and then **never written, m
 
 Only the active chat's messages are held in memory, and only the window main sent — `messages` is the loaded suffix and `hiddenBefore` counts what is still in the database. Switching chats refetches via `getChat`; the "Load earlier messages" control at the top of `ChatView` prepends the next window and restores the reading position by anchoring on distance from the *bottom* of the scroller, which is the part a prepend does not move. Events for non-active chats still update sidebar metadata and statuses. The right panel hosts file tabs, git diff tabs (tab ids prefixed `diff:`), and the plan panel; an `ExitPlanMode` permission request auto-opens the plan panel. When a chat's status returns to `idle`, open files, the file tree, and git status are refreshed so the agent's edits show up.
 
+### The task checklist (`lib/taskList.ts`, `TodoCard`)
+
+One card, two completely different provider shapes. Codex sends `TodoWrite`,
+where a single call carries the whole list and the card is just a render of
+`input.todos`. Claude Code replaced that tool with an incremental API —
+`TaskCreate` one task at a time, `TaskUpdate` to flip a status — so **no single
+call holds the list** and it has to be folded out of the transcript. `TodoCard`
+therefore takes the list, not the tool part.
+
+Three things about the fold, each measured against the real corpus rather than
+assumed:
+
+- **The id exists only in the output.** `TaskCreate`'s *input* has no id; it
+  comes back in the result (`Task #3 created successfully: …`), and that string
+  is the only thing a later `TaskUpdate` can be matched against.
+- **It is never message-local.** Each API response carries at most one of these
+  calls, so a `TaskUpdate` is never in the same assistant message as its
+  `TaskCreate` — across 366 real updates, not once. Folding per message would
+  render an empty list every time; the fold spans the whole loaded window.
+- **A run collapses to one card.** A five-task plan arrives as five back-to-back
+  `TaskCreate`s, which would stutter "0/1, 0/2, 0/3…" — 566 real calls for 255
+  runs, i.e. over half the cards saying nothing. Only the last call of a run
+  draws, showing the list once it settled; any other rendered content between
+  two calls ends the run. Superseded calls are dropped in `AssistantBlock`
+  rather than rendered as null, because Claude Code puts one call in a message
+  and an empty block is still a flex item in the message list — the gap
+  `isBlankMsg` exists to prevent.
+
+A call with no folded list falls back to an ordinary tool card: it either failed
+(the list didn't change, so claiming otherwise would be a lie) or it only moved
+a task created before the loaded window, which nothing on screen can name.
+`Task{Stop,Output,Get}` are a *different* feature — background agents, keyed by
+a snake_case `task_id` hash rather than the checklist's numeric `taskId` — and
+are deliberately not folded in.
+
+The fold and the live-card id live in `taskListStore`, outside the message
+history render path, for the reason that store already existed: both churn
+several times a second mid-turn, and threading them through props would
+re-render every transcript row on each flip. That only works because
+`reconcileSnapshots` carries unchanged lists forward *by identity* — a fresh
+array per fold would defeat the whole arrangement.
+
 ### File icons (`lib/fileIcon.tsx`)
 
 One filename → icon map behind every place the app names a file: the tree,

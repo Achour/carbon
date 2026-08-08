@@ -80,6 +80,15 @@ function toolMeta(part: ToolPart, cwd: string): ToolMeta {
       return { icon: Globe, label: 'Search', summary: str(input.query) }
     case 'TodoWrite':
       return { icon: ListChecks, label: 'Todos', summary: 'Update task list' }
+    // Only reached when the fold produced no list for the call — it failed, or
+    // it moved a task created before the loaded window. The checklist card
+    // (see Parts.tsx) handles every other case.
+    case 'TaskCreate':
+      return { icon: ListChecks, label: 'Tasks', summary: str(input.subject) ?? 'Add a task' }
+    case 'TaskUpdate':
+      return { icon: ListChecks, label: 'Tasks', summary: 'Update a task' }
+    case 'TaskList':
+      return { icon: ListChecks, label: 'Tasks', summary: 'List tasks' }
     case 'ExitPlanMode':
       return { icon: ClipboardList, label: 'Plan', summary: 'Present plan for approval' }
     case 'AskUserQuestion':
