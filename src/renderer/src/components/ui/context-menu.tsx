@@ -54,7 +54,18 @@ function ContextMenuSeparator({
   return <BaseContextMenu.Separator className={cn('my-1 h-px bg-border', className)} {...props} />
 }
 
-/** A heading over a run of items — says what the items below it act on. */
+/**
+ * A run of items under a shared heading. Required around `ContextMenuLabel` —
+ * Base UI's `GroupLabel` reads a context this provides and *throws* without it,
+ * which in a renderer means a blank window rather than a missing label.
+ */
+function ContextMenuGroup(
+  props: React.ComponentProps<typeof BaseContextMenu.Group>
+): React.JSX.Element {
+  return <BaseContextMenu.Group {...props} />
+}
+
+/** A heading over a group of items — says what the items below it act on. */
 function ContextMenuLabel({
   className,
   ...props
@@ -71,6 +82,7 @@ export {
   ContextMenu,
   ContextMenuTrigger,
   ContextMenuContent,
+  ContextMenuGroup,
   ContextMenuItem,
   ContextMenuLabel,
   ContextMenuSeparator

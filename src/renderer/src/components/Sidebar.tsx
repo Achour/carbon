@@ -51,6 +51,7 @@ import {
 import {
   ContextMenu,
   ContextMenuContent,
+  ContextMenuGroup,
   ContextMenuItem,
   ContextMenuLabel,
   ContextMenuSeparator,
@@ -904,11 +905,13 @@ export function Sidebar(): React.JSX.Element {
         detailed ? (
           <>
             <ContextMenuSeparator />
-            <ContextMenuLabel>{projectLabel(projectRoot(chat))}</ContextMenuLabel>
-            <ContextMenuItem onClick={() => newChatIn(projectRoot(chat))}>
-              <Plus /> New chat here
-            </ContextMenuItem>
-            {projectMenuItems(projectRoot(chat), !!archivedProjects[projectRoot(chat)])}
+            <ContextMenuGroup>
+              <ContextMenuLabel>{projectLabel(projectRoot(chat))}</ContextMenuLabel>
+              <ContextMenuItem onClick={() => newChatIn(projectRoot(chat))}>
+                <Plus /> New chat here
+              </ContextMenuItem>
+              {projectMenuItems(projectRoot(chat), !!archivedProjects[projectRoot(chat)])}
+            </ContextMenuGroup>
           </>
         ) : null
       }
