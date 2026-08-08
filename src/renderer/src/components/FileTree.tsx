@@ -1,15 +1,9 @@
 import * as React from 'react'
-import {
-  ChevronRight,
-  FileText,
-  Folder,
-  FolderOpen,
-  MessageSquarePlus,
-  RefreshCw,
-  Search
-} from 'lucide-react'
+import { ChevronRight, Folder, FolderOpen, MessageSquarePlus, RefreshCw, Search } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { basename } from '@/lib/format'
+import { FileIcon } from '@/lib/fileIcon'
+import { GIT_STATUS_COLOR } from '@/lib/gitStatusColor'
 import { REVEAL_LABEL } from '@/lib/platform'
 import { handleTreeKeyDown } from '@/lib/treeKeyNav'
 import { useApp } from '@/store'
@@ -23,7 +17,30 @@ import {
 } from '@/components/ui/context-menu'
 import { WithTooltip } from '@/components/ui/tooltip'
 
-function TreeNode({ dir, depth }: { dir: string; depth: number }): React.JSX.Element | null {
+/**
+ * Which rows git has something to say about, resolved once per status refresh.
+ *
+ * `files` is keyed by absolute path so a row is a Map hit rather than a scan,
+ * and `dirs` holds every ancestor of a changed file — a collapsed folder is the
+ * only place the change would otherwise be invisible, which is exactly when you
+ * need to know it's in there. Repo-relative paths are joined onto the tree root
+ * the same way `openDiff` does it: the app already treats the selected folder
+ * as the repo root everywhere it shells out to git.
+ */
+interface TreeDeco {
+  files: Map<string, string>
+  dirs: Set<string>
+}
+
+function TreeNode({
+  dir,
+  depth,
+  deco
+}: {
+  dir: string
+  depth: number
+  deco: TreeDeco
+}): React.JSX.Element | null {
   const entries = useApp((s) => s.filesByDir[dir])
   const expandedDirs = useApp((s) => s.expandedDirs)
   const toggleDir = useApp((s) => s.toggleDir)
@@ -51,6 +68,10 @@ function TreeNode({ dir, depth }: { dir: string; depth: number }): React.JSX.Ele
       {entries.map((entry) => {
         const expanded = entry.kind === 'dir' && expandedDirs[entry.path]
         const dotfile = entry.name.startsWith('.')
+        const status = entry.kind === 'file' ? deco.files.get(entry.path) : undefined
+        // A folder's own dot is redundant once it's open — the changed rows are
+        // right there — so it marks what's still hidden.
+        const buried = entry.kind === 'dir' && !expanded && deco.dirs.has(entry.path)
         return (
           <React.Fragment key={entry.path}>
             <ContextMenu>
@@ -92,10 +113,18 @@ function TreeNode({ dir, depth }: { dir: string; depth: number }): React.JSX.Ele
                   ) : (
                     <>
                       <span className="w-3 shrink-0" />
-                      <FileText className="size-3.5 shrink-0 text-muted-foreground/80" />
+                      <FileIcon path={entry.name} />
                     </>
                   )}
-                  <span className="truncate">{entry.name}</span>
+                  <span className={cn('truncate', status && GIT_STATUS_COLOR[status])}>
+                    {entry.name}
+                  </span>
+                  {buried && (
+                    <span
+                      className="ml-auto size-1.5 shrink-0 rounded-full bg-amber-500/70"
+                      title="Contains uncommitted changes"
+                    />
+                  )}
                 </button>
               </ContextMenuTrigger>
               <ContextMenuContent>
@@ -123,7 +152,7 @@ function TreeNode({ dir, depth }: { dir: string; depth: number }): React.JSX.Ele
                 </ContextMenuItem>
               </ContextMenuContent>
             </ContextMenu>
-            {expanded && <TreeNode dir={entry.path} depth={depth + 1} />}
+            {expanded && <TreeNode dir={entry.path} depth={depth + 1} deco={deco} />}
           </React.Fragment>
         )
       })}
@@ -134,10 +163,30 @@ function TreeNode({ dir, depth }: { dir: string; depth: number }): React.JSX.Ele
 export function FileTree(): React.JSX.Element {
   const cwd = useApp((s) => s.selectedCwd)
   const loaded = useApp((s) => (s.selectedCwd ? Boolean(s.filesByDir[s.selectedCwd]) : false))
+  const changes = useApp((s) => s.git?.changes)
   const loadDir = useApp((s) => s.loadDir)
   const refreshFiles = useApp((s) => s.refreshFiles)
   const setFileSearchOpen = useApp((s) => s.setFileSearchOpen)
   const [refreshing, setRefreshing] = React.useState(false)
+
+  const deco = React.useMemo<TreeDeco>(() => {
+    const files = new Map<string, string>()
+    const dirs = new Set<string>()
+    if (!cwd || !changes) return { files, dirs }
+    for (const change of changes) {
+      const abs: string = `${cwd}/${change.path}`
+      // A file staged *and* dirty appears twice; the first letter (the staged
+      // one, per the porcelain parse) wins, so the row doesn't flicker meaning.
+      if (!files.has(abs)) files.set(abs, change.status)
+      let parent: string = abs.slice(0, abs.lastIndexOf('/'))
+      while (parent.length > cwd.length && parent.startsWith(cwd)) {
+        if (dirs.has(parent)) break // this whole chain is already marked
+        dirs.add(parent)
+        parent = parent.slice(0, parent.lastIndexOf('/'))
+      }
+    }
+    return { files, dirs }
+  }, [cwd, changes])
 
   React.useEffect(() => {
     if (cwd && !loaded) void loadDir(cwd)
@@ -190,7 +239,7 @@ export function FileTree(): React.JSX.Element {
         role="tree"
         onKeyDown={handleTreeKeyDown}
       >
-        <TreeNode dir={cwd} depth={0} />
+        <TreeNode dir={cwd} depth={0} deco={deco} />
       </div>
     </div>
   )

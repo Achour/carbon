@@ -1,6 +1,7 @@
 import * as React from 'react'
-import { FileText, Search } from 'lucide-react'
+import { Search } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { FileIcon } from '@/lib/fileIcon'
 import { useApp } from '@/store'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 
@@ -95,7 +96,7 @@ export function FileSearchDialog(): React.JSX.Element {
                     i === idx && 'bg-accent'
                   )}
                 >
-                  <FileText className="size-3.5 shrink-0 text-muted-foreground" />
+                  <FileIcon path={r.rel} />
                   <span className="min-w-0 truncate text-[13px]">
                     <span className="text-foreground">{name}</span>
                     {dir && <span className="ml-1.5 text-muted-foreground/60">{dir}</span>}

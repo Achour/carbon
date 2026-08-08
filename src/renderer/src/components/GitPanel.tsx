@@ -26,6 +26,7 @@ import type { GitFileChange, PrChecks, PrInfo } from '@shared/types'
 import { cn } from '@/lib/utils'
 import { handleTreeKeyDown } from '@/lib/treeKeyNav'
 import { resolveGitActions, type GitActionId } from '@/lib/gitActions'
+import { GIT_STATUS_COLOR } from '@/lib/gitStatusColor'
 import { useStableChanges } from '@/lib/useStableChanges'
 import { scopedChanges, useApp } from '@/store'
 import { Button } from '@/components/ui/button'
@@ -36,17 +37,6 @@ import {
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
 import { WithTooltip } from '@/components/ui/tooltip'
-
-const STATUS_COLORS: Record<string, string> = {
-  M: 'text-amber-500',
-  T: 'text-amber-500',
-  A: 'text-emerald-500',
-  '?': 'text-emerald-500',
-  D: 'text-red-500',
-  R: 'text-sky-500',
-  C: 'text-sky-500',
-  U: 'text-orange-500'
-}
 
 const INDENT = 12
 
@@ -108,7 +98,7 @@ function ChangeRow({
         <span
           className={cn(
             'w-3 shrink-0 text-center font-mono text-[11px] font-bold',
-            STATUS_COLORS[change.status] ?? 'text-muted-foreground'
+            GIT_STATUS_COLOR[change.status] ?? 'text-muted-foreground'
           )}
         >
           {change.status === '?' ? 'U' : change.status}

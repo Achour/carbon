@@ -108,6 +108,31 @@ The legacy `chats/<id>.json` files are imported once and then **never written, m
 
 Only the active chat's messages are held in memory, and only the window main sent — `messages` is the loaded suffix and `hiddenBefore` counts what is still in the database. Switching chats refetches via `getChat`; the "Load earlier messages" control at the top of `ChatView` prepends the next window and restores the reading position by anchoring on distance from the *bottom* of the scroller, which is the part a prepend does not move. Events for non-active chats still update sidebar metadata and statuses. The right panel hosts file tabs, git diff tabs (tab ids prefixed `diff:`), and the plan panel; an `ExitPlanMode` permission request auto-opens the plan panel. When a chat's status returns to `idle`, open files, the file tree, and git status are refreshed so the agent's edits show up.
 
+### File icons (`lib/fileIcon.tsx`)
+
+One filename → icon map behind every place the app names a file: the tree,
+editor tabs, ⌘P, @-mentions, composer attachments. **Shape says what kind of
+thing a file is, color says which language** — an image, an archive, a lockfile,
+a key and a stylesheet each get their own silhouette, while the twenty-odd
+source languages share `FileCode` and are told apart by hue. That split is the
+whole design: at 14px a column of distinct silhouettes reads as static, where
+one silhouette in seven colors reads as a sorted list. The exceptions are marks
+more recognisable than any color (React's orbit, Rust's gear, Java's cup) and
+`CLAUDE.md` / `AGENTS.md`, which get their provider's own `ProviderMark`.
+
+Colors come from `--icon-*` (`index.css`), a seven-hue palette stepped per mode
+— *not* real brand hues, which are picked for marketing pages and half of which
+are illegible or shouty against one of the two chat surfaces. Distinct again
+from `--brand-*` (a fact about a logo) and `--chart-*` (series identity): here
+color is only a grouping, and no icon may out-shout the filename beside it.
+
+The tree also carries git: a changed file's *name* takes its status color
+(`lib/gitStatusColor.ts`, shared with the review panel's status column, since a
+file that is amber in one list and green in the other is worse than no color at
+all), and a **collapsed** folder holding changes gets an amber dot — the one
+place a change would otherwise be invisible. Repo-relative paths are joined onto
+the tree root exactly as `openDiff` does it.
+
 ### Sidebar modes (`Sidebar.tsx`, `SidebarDensity`)
 
 The sidebar has two shapes, chosen in Settings → Chats and persisted in

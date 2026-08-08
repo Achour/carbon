@@ -6,7 +6,6 @@ import {
   ChevronDown,
   ChevronRight,
   ClipboardList,
-  FileText,
   FileCheck2,
   MousePointerClick,
   Paperclip,
@@ -36,6 +35,7 @@ import {
   type SlashCommand
 } from '@shared/types'
 import { cn } from '@/lib/utils'
+import { FileIcon } from '@/lib/fileIcon'
 import {
   assembleModelOptions,
   canonicalModelId,
@@ -198,7 +198,7 @@ function AttachmentChip({
           title={att.path}
           className="flex h-8 max-w-44 items-center gap-1.5 rounded-lg border border-border bg-secondary/60 px-2.5"
         >
-          <FileText className="size-3.5 shrink-0 text-muted-foreground" />
+          <FileIcon path={att.name} />
           <span className="truncate text-xs">{att.name}</span>
         </div>
       )}
@@ -922,7 +922,7 @@ export function Composer({
                   i === mentionIdx ? 'bg-accent' : undefined
                 )}
               >
-                <FileText className="size-3.5 shrink-0 text-muted-foreground" />
+                <FileIcon path={r.rel} />
                 <span className="min-w-0 truncate text-xs">
                   <span className="text-foreground">{name}</span>
                   {dir && <span className="ml-1.5 text-muted-foreground/70">{dir}</span>}

@@ -19,6 +19,7 @@ import {
   X
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { FileIcon } from '@/lib/fileIcon'
 import { useApp, type OpenTab } from '@/store'
 import { Button } from '@/components/ui/button'
 import { WithTooltip } from '@/components/ui/tooltip'
@@ -280,7 +281,7 @@ function QuickOpen(): React.JSX.Element {
                     i === idx && 'bg-accent'
                   )}
                 >
-                  <FileText className="size-3.5 shrink-0 text-muted-foreground" />
+                  <FileIcon path={r.rel} />
                   <span className="min-w-0 truncate text-xs">
                     <span className="text-foreground">{name}</span>
                     {dir && <span className="ml-1.5 text-muted-foreground/60">{dir}</span>}
@@ -500,7 +501,7 @@ function UntitledView({ tabPath }: { tabPath: string }): React.JSX.Element {
                     i === idx && 'bg-accent'
                   )}
                 >
-                  <FileText className="size-3.5 shrink-0 text-muted-foreground" />
+                  <FileIcon path={r.rel} />
                   <span className="min-w-0 truncate text-xs">
                     <span className="text-foreground">{name}</span>
                     {dir && <span className="ml-1.5 text-muted-foreground/60">{dir}</span>}
@@ -770,7 +771,7 @@ export function RightPanel(): React.JSX.Element | null {
                 ) : file.diff ? (
                   <FileDiff className="size-3.5 text-amber-500" />
                 ) : (
-                  <FileText className="size-3.5" />
+                  <FileIcon path={file.name} />
                 )
               }
               label={file.name}
