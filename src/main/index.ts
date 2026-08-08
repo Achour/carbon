@@ -703,6 +703,7 @@ function registerIpc(): void {
   ipcMain.handle('git:pull', (_e, cwd: string) => gitOps.gitPull(cwd))
   ipcMain.handle('git:merge-into-default', (_e, cwd: string) => gitOps.gitMergeIntoDefault(cwd))
   ipcMain.handle('git:fetch', (_e, cwd: string) => gitOps.gitFetch(cwd))
+  ipcMain.handle('git:branches', (_e, cwds: string[]) => gitOps.branchesAt(cwds))
   ipcMain.handle('git:branch-changes', (_e, cwd: string, baseBranch?: string) =>
     gitOps.gitBranchChanges(cwd, baseBranch)
   )

@@ -4,10 +4,13 @@ import {
   ArchiveRestore,
   Bot,
   ChartColumn,
+  Check,
+  ChevronDown,
   ChevronRight,
   EyeOff,
   Folder,
   FolderOpen,
+  FolderPlus,
   GitBranch,
   Loader2,
   MessageCircleQuestion,
@@ -23,9 +26,9 @@ import {
   Trash2
 } from 'lucide-react'
 import type { ChatMeta, WorktreeStatus } from '@shared/types'
-import { projectRoot } from '@shared/types'
+import { PROVIDER_LABELS, projectRoot } from '@shared/types'
 import { cn } from '@/lib/utils'
-import { basename, relativeTime } from '@/lib/format'
+import { basename, dateGroup, relativeTime, shortenPath } from '@/lib/format'
 import { REVEAL_LABEL } from '@/lib/platform'
 import { chatActivity, projectActivity, type ChatActivity } from '@/lib/chatActivity'
 import { useApp } from '@/store'
@@ -49,11 +52,13 @@ import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuLabel,
   ContextMenuSeparator,
   ContextMenuTrigger
 } from '@/components/ui/context-menu'
 import { Input } from '@/components/ui/input'
 import { Kbd } from '@/components/ui/kbd'
+import { ProviderAvatar } from '@/components/ui/provider-mark'
 import { WithTooltip } from '@/components/ui/tooltip'
 
 /** "3 uncommitted files and 2 unmerged commits" — what a force-delete destroys, '' when nothing is. */
@@ -66,11 +71,30 @@ function describeAtRisk({ dirtyFiles, unmergedCommits }: WorktreeStatus): string
   return parts.join(' and ')
 }
 
+/**
+ * The line a detailed row carries under its title — what makes the row stand on
+ * its own without a project heading above it.
+ *
+ * In a repo that is the project and the branch, because the branch is the thing
+ * that differs between two chats that otherwise look identical (same project,
+ * same title stem, one on a worktree branch and one on main). Outside a repo it
+ * is just the folder path: the project name is the last segment of it, so
+ * printing both would say the same word twice.
+ */
+interface ChatDetail {
+  kind: 'branch' | 'path'
+  /** Project the chat belongs to; absent when `text` already names the folder. */
+  project?: string
+  text: string
+}
+
 function ChatItem({
   chat,
   active,
   activity,
   titling,
+  detail,
+  projectMenu,
   onOpen,
   onRename,
   onDelete,
@@ -81,6 +105,16 @@ function ChatItem({
   active: boolean
   activity: ChatActivity
   titling: boolean
+  /** Second line for a detailed row; null renders the compact single-line row. */
+  detail: ChatDetail | null
+  /**
+   * This chat's *project* actions, appended to the right-click menu. Detailed
+   * mode has no project rows to carry them, and a mode where archiving or
+   * hiding a project silently disappears is not a mode — so the row the project
+   * is named on carries them instead. Null in compact mode, where the project
+   * row's own menu already does.
+   */
+  projectMenu: React.ReactNode
   onOpen: () => void
   onRename: () => void
   onDelete: () => void
@@ -91,6 +125,31 @@ function ChatItem({
 }): React.JSX.Element {
   const [menuOpen, setMenuOpen] = React.useState(false)
   const pinned = chat.pinnedAt !== undefined
+  // Cursor-style: inactive chats are muted, the open one is bright — the
+  // brightness gap (plus the filled highlight) marks the active chat.
+  // Bright, NOT bold — Cursor keeps regular weight, which reads cleaner.
+  const titleClass = cn(
+    'min-w-0 flex-1 truncate text-[13px] transition-colors',
+    active
+      ? 'text-sidebar-foreground'
+      : 'text-sidebar-foreground/55 group-hover:text-sidebar-foreground/90',
+    titling && 'title-forming'
+  )
+  // The timestamp yields to the ⋯ button on hover; both occupy the same corner.
+  const trailing = (
+    <span
+      className={cn(
+        'flex shrink-0 items-center text-[11px] text-muted-foreground/80 transition-opacity group-hover:opacity-0',
+        menuOpen && 'opacity-0'
+      )}
+    >
+      {activity.kind !== 'idle' ? (
+        <ActivityIndicator activity={activity} />
+      ) : (
+        relativeTime(chat.updatedAt)
+      )}
+    </span>
+  )
   return (
     <ContextMenu>
       <ContextMenuTrigger
@@ -106,51 +165,73 @@ function ChatItem({
           />
         }
       >
-      <button
-        type="button"
-        onClick={onOpen}
-        className="flex w-full min-w-0 items-center gap-1.5 px-2.5 py-1.5 text-left outline-none"
-      >
-        {chat.worktree && (
-          <WithTooltip label={`${chat.worktree.branch} · ${chat.cwd}`}>
-            <GitBranch
+      {detail ? (
+        <button
+          type="button"
+          onClick={onOpen}
+          className="flex w-full min-w-0 items-start gap-2 px-2 py-1.5 text-left outline-none"
+        >
+          <WithTooltip label={PROVIDER_LABELS[chat.provider]} side="right">
+            {/* Identity, not state — so it keeps its color on every row and the
+                brightness ladder that marks the active chat stays the title's
+                job. Inactive rows only take the edge off it. */}
+            <ProviderAvatar
+              provider={chat.provider}
               className={cn(
-                'size-3 shrink-0 transition-colors',
-                active ? 'text-sidebar-foreground/70' : 'text-sidebar-foreground/40'
+                'mt-px transition-opacity',
+                !active && 'opacity-75 group-hover:opacity-100'
               )}
             />
           </WithTooltip>
-        )}
-        <span
-          className={cn(
-            'min-w-0 flex-1 truncate text-[13px] transition-colors',
-            // Cursor-style: inactive chats are muted, the open one is bright — the
-            // brightness gap (plus the filled highlight) marks the active chat.
-            // Bright, NOT bold — Cursor keeps regular weight, which reads cleaner.
-            active
-              ? 'text-sidebar-foreground'
-              : 'text-sidebar-foreground/55 group-hover:text-sidebar-foreground/90',
-            titling && 'title-forming'
-          )}
+          <span className="flex min-w-0 flex-1 flex-col gap-px">
+            <span className="flex min-w-0 items-center gap-1.5">
+              <span className={titleClass}>{chat.title || 'New chat'}</span>
+              {trailing}
+            </span>
+            <span className="flex min-w-0 items-center gap-1.5 text-[11px] leading-tight text-muted-foreground/65">
+              {detail.project && (
+                <>
+                  <span className="min-w-0 truncate">{detail.project}</span>
+                  <span className="shrink-0 opacity-45">·</span>
+                </>
+              )}
+              <span className="flex min-w-0 items-center gap-1">
+                {detail.kind === 'branch' ? (
+                  <GitBranch className="size-3 shrink-0" />
+                ) : (
+                  <Folder className="size-3 shrink-0" />
+                )}
+                <span className="min-w-0 truncate">{detail.text}</span>
+              </span>
+            </span>
+          </span>
+        </button>
+      ) : (
+        <button
+          type="button"
+          onClick={onOpen}
+          className="flex w-full min-w-0 items-center gap-1.5 px-2.5 py-1.5 text-left outline-none"
         >
-          {chat.title || 'New chat'}
-        </span>
-        <span
-          className={cn(
-            'flex shrink-0 items-center text-[11px] text-muted-foreground/80 transition-opacity group-hover:opacity-0',
-            menuOpen && 'opacity-0'
+          {chat.worktree && (
+            <WithTooltip label={`${chat.worktree.branch} · ${chat.cwd}`}>
+              <GitBranch
+                className={cn(
+                  'size-3 shrink-0 transition-colors',
+                  active ? 'text-sidebar-foreground/70' : 'text-sidebar-foreground/40'
+                )}
+              />
+            </WithTooltip>
           )}
-        >
-          {activity.kind !== 'idle' ? (
-            <ActivityIndicator activity={activity} />
-          ) : (
-            relativeTime(chat.updatedAt)
-          )}
-        </span>
-      </button>
+          <span className={titleClass}>{chat.title || 'New chat'}</span>
+          {trailing}
+        </button>
+      )}
       <div
         className={cn(
-          'absolute top-1/2 right-1 -translate-y-1/2 opacity-0 transition-opacity group-hover:opacity-100',
+          'absolute right-1 opacity-0 transition-opacity group-hover:opacity-100',
+          // Sits where the timestamp it replaces was, which on a two-line row is
+          // the first line rather than the middle.
+          detail ? 'top-1' : 'top-1/2 -translate-y-1/2',
           menuOpen && 'opacity-100'
         )}
       >
@@ -198,10 +279,18 @@ function ChatItem({
         <ContextMenuItem destructive onClick={onDelete}>
           <Trash2 /> Delete
         </ContextMenuItem>
+        {projectMenu}
       </ContextMenuContent>
     </ContextMenu>
   )
 }
+
+/**
+ * How many chats the detailed mode's flat list shows at a time. Per-batch
+ * rather than per-project (the compact mode's `chatsPerProject`) because the
+ * list has no projects to divide by — same idea, different unit.
+ */
+const FLAT_BATCH = 40
 
 // Drag bounds for the sidebar width.
 const SIDEBAR_DEFAULT = 264
@@ -309,6 +398,131 @@ function SearchChatsDialog({
   )
 }
 
+/**
+ * "Which project?" — the one question starting a chat has always had, and the
+ * one it never asked. `New chat` (and ⌘N) used to drop you into whatever folder
+ * happened to be selected, which is invisible state; the per-project ＋ in
+ * compact mode was the only place the answer was ever explicit, and detailed
+ * mode has no project rows to put one on.
+ *
+ * Same palette shape as the chat search above: type to narrow, arrows to move,
+ * Enter to start. Ordered by recency (the chat list arrives newest-first), so
+ * the project you were last in is the default pick and the common case is
+ * ⌘N-Enter.
+ */
+function NewChatDialog({
+  open,
+  onOpenChange,
+  projects,
+  onPick,
+  onBrowse
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  projects: { cwd: string; label: string; count: number }[]
+  onPick: (cwd: string) => void
+  onBrowse: () => void
+}): React.JSX.Element {
+  const [q, setQ] = React.useState('')
+  const [idx, setIdx] = React.useState(0)
+  const inputRef = React.useRef<HTMLInputElement>(null)
+
+  React.useEffect(() => {
+    if (!open) return
+    setQ('')
+    setIdx(0)
+    const t = setTimeout(() => inputRef.current?.focus(), 30)
+    return () => clearTimeout(t)
+  }, [open])
+
+  const results = React.useMemo(() => {
+    const term = q.trim().toLowerCase()
+    if (!term) return projects
+    // Path as well as label: a project renamed in the sidebar is still findable
+    // by the folder it actually is.
+    return projects.filter(
+      (p) => p.label.toLowerCase().includes(term) || p.cwd.toLowerCase().includes(term)
+    )
+  }, [q, projects])
+
+  React.useEffect(() => setIdx(0), [q])
+
+  // "Open another folder…" is the last row, so it takes part in the keyboard
+  // walk instead of being a mouse-only escape hatch.
+  const rows = results.length + 1
+  const choose = (i: number): void => {
+    onOpenChange(false)
+    if (i >= results.length) onBrowse()
+    else onPick(results[i].cwd)
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="top-[14%] max-w-lg translate-y-0 overflow-hidden p-0">
+        <DialogTitle className="sr-only">Start a new chat</DialogTitle>
+        <div className="flex items-center gap-2 border-b border-border px-3.5 py-3">
+          <MessageSquarePlus className="size-4 shrink-0 text-muted-foreground" />
+          <input
+            ref={inputRef}
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'ArrowDown') {
+                e.preventDefault()
+                setIdx((i) => Math.min(i + 1, rows - 1))
+              } else if (e.key === 'ArrowUp') {
+                e.preventDefault()
+                setIdx((i) => Math.max(i - 1, 0))
+              } else if (e.key === 'Enter') {
+                e.preventDefault()
+                choose(idx)
+              }
+            }}
+            placeholder="Start a chat in…"
+            spellCheck={false}
+            className="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground/60"
+          />
+        </div>
+        <div className="max-h-80 overflow-y-auto p-1.5">
+          {results.map((p, i) => (
+            <button
+              key={p.cwd}
+              type="button"
+              onMouseEnter={() => setIdx(i)}
+              onClick={() => choose(i)}
+              className={cn(
+                'flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left transition-colors',
+                i === idx && 'bg-accent'
+              )}
+            >
+              <Folder className="size-3.5 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 flex-1 truncate text-[13px]">{p.label}</span>
+              <span className="max-w-56 shrink-0 truncate text-[11px] text-muted-foreground/60">
+                {shortenPath(p.cwd, window.api.home)}
+              </span>
+              <span className="w-6 shrink-0 text-right text-[11px] text-muted-foreground/50">
+                {p.count}
+              </span>
+            </button>
+          ))}
+          <button
+            type="button"
+            onMouseEnter={() => setIdx(results.length)}
+            onClick={() => choose(results.length)}
+            className={cn(
+              'flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left transition-colors',
+              idx === results.length && 'bg-accent'
+            )}
+          >
+            <FolderPlus className="size-3.5 shrink-0 text-muted-foreground" />
+            <span className="text-[13px]">Open another folder…</span>
+          </button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 function ActivityIndicator({ activity }: { activity: ChatActivity }): React.JSX.Element | null {
   if (activity.kind === 'idle') return null
 
@@ -356,6 +570,34 @@ export function Sidebar(): React.JSX.Element {
   const setProjectName = useApp((s) => s.setProjectName)
   const projectLabel = (cwd: string): string => projectNames[cwd]?.trim() || basename(cwd)
 
+  const detailed = useApp((s) => s.sidebarDensity) === 'detailed'
+  const sidebarProject = useApp((s) => s.sidebarProject)
+  const setSidebarProject = useApp((s) => s.setSidebarProject)
+  const chatBranches = useApp((s) => s.chatBranches)
+  const refreshChatBranches = useApp((s) => s.refreshChatBranches)
+  // Branches are read for every chat's folder at once, so the trigger is the set
+  // of folders — not each chat. Turn endings and worktree moves refresh it from
+  // the store; this covers a cold start and a project appearing or leaving.
+  const branchKey = detailed ? [...new Set(chats.map((c) => c.cwd))].sort().join('\n') : ''
+  React.useEffect(() => {
+    if (detailed) void refreshChatBranches()
+  }, [detailed, branchKey, refreshChatBranches])
+
+  // `withProject` is false once the list is filtered to one project — the
+  // filter chip already names it, and repeating it on every row is exactly the
+  // noise dropping the project grouping was meant to remove.
+  const chatDetail = (chat: ChatMeta, withProject: boolean): ChatDetail => {
+    // A worktree carries its branch on the chat itself, so those rows are
+    // labelled before any git read lands.
+    const branch = chat.worktree?.branch ?? chatBranches[chat.cwd]
+    if (!branch) return { kind: 'path', text: shortenPath(chat.cwd, window.api.home) }
+    return {
+      kind: 'branch',
+      project: withProject ? projectLabel(projectRoot(chat)) : undefined,
+      text: branch
+    }
+  }
+
   const newChatIn = (cwd: string | null): void => {
     if (cwd) setSelectedCwd(cwd)
     void openChat(null)
@@ -373,6 +615,8 @@ export function Sidebar(): React.JSX.Element {
   const openUsage = useApp((s) => s.openUsage)
   const searchOpen = useApp((s) => s.searchOpen)
   const setSearchOpen = useApp((s) => s.setSearchOpen)
+  const newChatOpen = useApp((s) => s.newChatOpen)
+  const setNewChatOpen = useApp((s) => s.setNewChatOpen)
   const [renaming, setRenaming] = React.useState<ChatMeta | null>(null)
   const [deleting, setDeleting] = React.useState<ChatMeta | null>(null)
   const [deletingWt, setDeletingWt] = React.useState<WorktreeStatus | null>(null)
@@ -419,6 +663,8 @@ export function Sidebar(): React.JSX.Element {
     }
   })
   const [revealedChatBatches, setRevealedChatBatches] = React.useState<Record<string, number>>({})
+  // The same "show more" counter for the detailed mode's single flat list.
+  const [flatBatches, setFlatBatches] = React.useState(0)
 
   // Stored value: true = collapsed, false = expanded. Archived projects
   // default to collapsed, active ones to expanded.
@@ -552,6 +798,98 @@ export function Sidebar(): React.JSX.Element {
   const activeGroups = visibleGroups.filter((g) => !archivedProjects[g.cwd])
   const archivedGroups = visibleGroups.filter((g) => archivedProjects[g.cwd])
 
+  // The new-chat chooser's rows, in *recency* order rather than the sidebar's
+  // manual project order — `chats` arrives newest-first, so the project you
+  // were last in is the first row, and ⌘N-Enter is the common case. Archived
+  // projects are included: choosing one by name is a deliberate act, unlike
+  // browsing the list they were archived out of.
+  const newChatProjects: { cwd: string; label: string; count: number }[] = []
+  for (const chat of chats) {
+    const root = projectRoot(chat)
+    if (hiddenProjects[root] || newChatProjects.some((p) => p.cwd === root)) continue
+    newChatProjects.push({
+      cwd: root,
+      label: projectLabel(root),
+      count: groups.find((g) => g.cwd === root)?.chats.length ?? 0
+    })
+  }
+
+  // Detailed mode is a flat, recency-ordered list, not a project tree: a row
+  // already names its project and branch, so grouping by project would print
+  // the same folder — and, in a repo where nothing is isolated, the same branch
+  // — once per row. Date buckets structure the list by the thing that actually
+  // varies down it. Everything else about a row is identical between modes.
+  //
+  // The filter is what grouping used to give you: one project's chats, on
+  // demand. A saved filter for a project that no longer exists reads as null
+  // rather than an empty sidebar — the project can be deleted from elsewhere.
+  const filterProject =
+    sidebarProject && visibleGroups.some((g) => g.cwd === sidebarProject) ? sidebarProject : null
+  // Filtering to a project explicitly reaches an archived one; the unfiltered
+  // list leaves them out, which is what archiving means.
+  const flatSource = filterProject
+    ? visibleGroups.filter((g) => g.cwd === filterProject)
+    : activeGroups
+  // A filter scopes the whole sidebar, pins included — a pin from another
+  // project showing through would make the list a half-truth.
+  const pinnedShown = filterProject
+    ? pinnedChats.filter((c) => projectRoot(c) === filterProject)
+    : pinnedChats
+  const flatChats = flatSource.flatMap((g) => g.unpinned).sort((a, b) => b.updatedAt - a.updatedAt)
+  const flatShown = flatChats.slice(0, FLAT_BATCH * (flatBatches + 1))
+  const flatHidden = flatChats.length - flatShown.length
+  const flatSections: { label: string; chats: ChatMeta[] }[] = []
+  for (const chat of flatShown) {
+    const label = dateGroup(chat.updatedAt)
+    const last = flatSections[flatSections.length - 1]
+    if (last?.label === label) last.chats.push(chat)
+    else flatSections.push({ label, chats: [chat] })
+  }
+
+  // Everything you can do to a project, in one definition — the project row's
+  // menu in compact mode, and the tail of a chat row's menu in detailed mode,
+  // which has no project rows.
+  const projectMenuItems = (cwd: string, archived: boolean): React.JSX.Element => (
+    <>
+      <ContextMenuItem
+        onClick={() => {
+          setProjectNameValue(projectLabel(cwd))
+          setRenamingProject(cwd)
+        }}
+      >
+        <Pencil /> Rename project…
+      </ContextMenuItem>
+      <ContextMenuItem onClick={() => void window.api.revealPath(cwd)}>
+        <FolderOpen /> {REVEAL_LABEL}
+      </ContextMenuItem>
+      <ContextMenuSeparator />
+      {archived ? (
+        <ContextMenuItem onClick={() => setArchived(cwd, false)}>
+          <ArchiveRestore /> Unarchive project
+        </ContextMenuItem>
+      ) : (
+        <ContextMenuItem onClick={() => setArchived(cwd, true)}>
+          <Archive /> Archive project
+        </ContextMenuItem>
+      )}
+      <ContextMenuItem onClick={() => setProjectHidden(cwd, true)}>
+        <EyeOff /> Hide project
+      </ContextMenuItem>
+      <ContextMenuSeparator />
+      <ContextMenuItem
+        destructive
+        onClick={() =>
+          setRemovingProject({
+            cwd,
+            count: groups.find((g) => g.cwd === cwd)?.chats.length ?? 0
+          })
+        }
+      >
+        <Trash2 /> Delete project…
+      </ContextMenuItem>
+    </>
+  )
+
   // A chat row is identical wherever it appears — in its project group or in the
   // Pinned section — so both sites render through here.
   const renderChatItem = (chat: ChatMeta): React.JSX.Element => (
@@ -561,6 +899,19 @@ export function Sidebar(): React.JSX.Element {
       active={chat.id === activeId}
       activity={chatActivity(statuses[chat.id], backgroundJobs[chat.id], permissions[chat.id])}
       titling={!!titling[chat.id]}
+      detail={detailed ? chatDetail(chat, !filterProject) : null}
+      projectMenu={
+        detailed ? (
+          <>
+            <ContextMenuSeparator />
+            <ContextMenuLabel>{projectLabel(projectRoot(chat))}</ContextMenuLabel>
+            <ContextMenuItem onClick={() => newChatIn(projectRoot(chat))}>
+              <Plus /> New chat here
+            </ContextMenuItem>
+            {projectMenuItems(projectRoot(chat), !!archivedProjects[projectRoot(chat)])}
+          </>
+        ) : null
+      }
       onOpen={() => void openChat(chat.id)}
       onRename={() => {
         setRenameValue(chat.title)
@@ -601,7 +952,10 @@ export function Sidebar(): React.JSX.Element {
       <div className="flex flex-col gap-0.5 px-2 pb-1">
         <button
           type="button"
-          onClick={() => newChatIn(null)}
+          // Asks which project, in both modes. The instant path stays where the
+          // answer is already on screen: compact mode's per-project ＋ and the
+          // "New chat here" on a detailed row's menu.
+          onClick={() => setNewChatOpen(true)}
           className="group flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] text-sidebar-foreground transition-colors hover:bg-sidebar-accent/60"
         >
           <MessageSquarePlus className="size-4 shrink-0 text-muted-foreground" />
@@ -621,7 +975,7 @@ export function Sidebar(): React.JSX.Element {
 
       {/* Pinned chats, above the projects and outside their scroller so they
           stay reachable no matter how far down the project list you are. */}
-      {pinnedChats.length > 0 && (
+      {pinnedShown.length > 0 && (
         <div className="flex max-h-[35vh] shrink-0 flex-col">
           <div className="flex items-center gap-2 px-3.5 pt-3 pb-1">
             <span className="text-[11px] font-medium tracking-wide text-muted-foreground/70">
@@ -629,16 +983,58 @@ export function Sidebar(): React.JSX.Element {
             </span>
           </div>
           <div className="min-h-0 overflow-y-auto px-3">
-            <div className="ml-[22px] space-y-px">{pinnedChats.map(renderChatItem)}</div>
+            <div className={cn('space-y-px', !detailed && 'ml-[22px]')}>
+              {pinnedShown.map(renderChatItem)}
+            </div>
           </div>
         </div>
       )}
 
-      {/* Projects section header with an add-project button */}
+      {/* Section header. Detailed mode has no project rows to head — it gets the
+          project filter instead, which is the thing grouping used to give you.
+          Adding a project folder belongs here in both modes: it's the same act. */}
       <div className="flex items-center gap-2 px-3.5 pt-3 pb-1">
-        <span className="text-[11px] font-medium tracking-wide text-muted-foreground/70">
-          Projects
-        </span>
+        {detailed ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <button
+                  type="button"
+                  aria-label="Filter by project"
+                  className={cn(
+                    '-ml-1 flex min-w-0 items-center gap-1 rounded px-1 py-0.5 text-[11px] font-medium tracking-wide transition-colors hover:bg-sidebar-accent hover:text-foreground',
+                    filterProject ? 'text-sidebar-foreground' : 'text-muted-foreground/70'
+                  )}
+                />
+              }
+            >
+              <span className="truncate">
+                {filterProject ? projectLabel(filterProject) : 'All projects'}
+              </span>
+              <ChevronDown className="size-3 shrink-0 opacity-70" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent className="max-h-80 overflow-y-auto">
+              <DropdownMenuItem onClick={() => setSidebarProject(null)}>
+                <Check className={cn(!filterProject && 'opacity-100', filterProject && 'invisible')} />
+                All projects
+              </DropdownMenuItem>
+              {visibleGroups.length > 0 && <DropdownMenuSeparator />}
+              {visibleGroups.map((g) => (
+                <DropdownMenuItem key={g.cwd} onClick={() => setSidebarProject(g.cwd)}>
+                  <Check className={cn(filterProject !== g.cwd && 'invisible')} />
+                  <span className="min-w-0 truncate">{projectLabel(g.cwd)}</span>
+                  <span className="ml-auto pl-3 text-[11px] text-muted-foreground/60">
+                    {g.chats.length}
+                  </span>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : (
+          <span className="text-[11px] font-medium tracking-wide text-muted-foreground/70">
+            Projects
+          </span>
+        )}
         <div className="flex-1" />
         <WithTooltip label="Add a project folder">
           <button
@@ -647,12 +1043,53 @@ export function Sidebar(): React.JSX.Element {
             aria-label="Add project"
             className="-mr-1 rounded p-1 text-muted-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-foreground"
           >
-            <Plus className="size-3.5" />
+            {/* A folder, not a bare plus: the plus alone is the new-*chat* verb
+                everywhere else in this sidebar, and the two sat one row apart. */}
+            <FolderPlus className="size-3.5" />
           </button>
         </WithTooltip>
       </div>
 
-      {/* Chats grouped by project */}
+      {/* Detailed mode: one flat list, newest first, bucketed by date */}
+      {detailed && (
+        <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-2">
+          {flatChats.length === 0 && pinnedShown.length === 0 && (
+            <div className="px-2 py-8 text-center text-xs text-muted-foreground">
+              {filterProject
+                ? `No chats in ${projectLabel(filterProject)} yet.`
+                : 'Open a project to get started.'}
+            </div>
+          )}
+          {flatSections.map((section, i) => (
+            <React.Fragment key={section.label}>
+              {/* "Today" goes unlabelled: the top of a newest-first list is today
+                  by definition, so the heading would cost a row to say nothing. */}
+              {section.label !== 'Today' && (
+                <div className={cn('flex items-center gap-2 px-1.5 pb-0.5', i === 0 ? 'pt-1' : 'pt-4')}>
+                  <span className="text-[10px] font-semibold tracking-wider text-muted-foreground/60 uppercase">
+                    {section.label}
+                  </span>
+                  <div className="h-px flex-1 bg-sidebar-border" />
+                </div>
+              )}
+              <div className="space-y-px">{section.chats.map(renderChatItem)}</div>
+            </React.Fragment>
+          ))}
+          {flatHidden > 0 && (
+            <button
+              type="button"
+              onClick={() => setFlatBatches((n) => n + 1)}
+              className="mt-1 flex w-full min-w-0 items-center gap-1.5 rounded-md px-2.5 py-1.5 text-left text-[12px] text-sidebar-foreground/55 transition-colors hover:bg-sidebar-accent/60 hover:text-sidebar-foreground/90"
+            >
+              <ChevronRight className="size-3 shrink-0" />
+              Show {Math.min(FLAT_BATCH, flatHidden)} more
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Compact mode: chats grouped by project */}
+      {!detailed && (
       <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-2">
         {activeGroups.length === 0 && archivedGroups.length === 0 && (
           <div className="px-2 py-8 text-center text-xs text-muted-foreground">
@@ -800,37 +1237,7 @@ export function Sidebar(): React.JSX.Element {
                         <ContextMenuSeparator />
                       </>
                     )}
-                    <ContextMenuItem
-                      onClick={() => {
-                        setProjectNameValue(projectLabel(group.cwd))
-                        setRenamingProject(group.cwd)
-                      }}
-                    >
-                      <Pencil /> Rename project…
-                    </ContextMenuItem>
-                    <ContextMenuItem onClick={() => void window.api.revealPath(group.cwd)}>
-                      <FolderOpen /> {REVEAL_LABEL}
-                    </ContextMenuItem>
-                    <ContextMenuSeparator />
-                    {archived ? (
-                      <ContextMenuItem onClick={() => setArchived(group.cwd, false)}>
-                        <ArchiveRestore /> Unarchive project
-                      </ContextMenuItem>
-                    ) : (
-                      <ContextMenuItem onClick={() => setArchived(group.cwd, true)}>
-                        <Archive /> Archive project
-                      </ContextMenuItem>
-                    )}
-                    <ContextMenuItem onClick={() => setProjectHidden(group.cwd, true)}>
-                      <EyeOff /> Hide project
-                    </ContextMenuItem>
-                    <ContextMenuSeparator />
-                    <ContextMenuItem
-                      destructive
-                      onClick={() => setRemovingProject({ cwd: group.cwd, count: group.chats.length })}
-                    >
-                      <Trash2 /> Delete project…
-                    </ContextMenuItem>
+                    {projectMenuItems(group.cwd, archived)}
                   </ContextMenuContent>
                 </ContextMenu>
                 {!isCollapsed && (
@@ -873,6 +1280,7 @@ export function Sidebar(): React.JSX.Element {
           )
         })}
       </div>
+      )}
 
       <UpdateBanner />
 
@@ -901,6 +1309,15 @@ export function Sidebar(): React.JSX.Element {
         onOpenChange={setSearchOpen}
         chats={chats}
         onOpen={(id) => void openChat(id)}
+      />
+
+      {/* Which project a new chat starts in */}
+      <NewChatDialog
+        open={newChatOpen}
+        onOpenChange={setNewChatOpen}
+        projects={newChatProjects}
+        onPick={(cwd) => newChatIn(cwd)}
+        onBrowse={() => void openProject()}
       />
 
       {/* Rename dialog */}

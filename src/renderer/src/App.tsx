@@ -98,7 +98,9 @@ export default function App(): React.JSX.Element {
     const onKey = (e: KeyboardEvent): void => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'n') {
         e.preventDefault()
-        void openChat(null)
+        // Asks which project, same as the sidebar row — it used to silently
+        // start in whatever folder happened to be selected.
+        useApp.getState().setNewChatOpen(true)
       }
       if ((e.metaKey || e.ctrlKey) && e.key === 'b') {
         e.preventDefault()

@@ -61,6 +61,18 @@ export const CHATS_PER_PROJECT_MIN = 3
 export const CHATS_PER_PROJECT_MAX = 20
 export const CHATS_PER_PROJECT_DEFAULT = 10
 
+/**
+ * How much a sidebar chat row says.
+ *
+ * `compact` is one line — the title, and the time or what the chat is doing.
+ * `detailed` adds the things you'd otherwise have to open the chat to learn:
+ * which backend is answering, and which branch (or folder, outside a repo) it
+ * is answering in. The distinction earns its keep because the two facts it adds
+ * are exactly the ones that differ between chats that *look* identical — two
+ * chats on one project, one on a worktree branch and one on main.
+ */
+export type SidebarDensity = 'compact' | 'detailed'
+
 export interface QueuedMessage {
   id: string
   text: string
@@ -278,6 +290,13 @@ interface AppState {
   /** When true the "search chats across projects" dialog is open (⌘K). */
   searchOpen: boolean
   setSearchOpen(open: boolean): void
+  /**
+   * The "which project?" chooser that ⌘N and the sidebar's New chat row open.
+   * State rather than a local `useState` for the same reason `searchOpen` is:
+   * the shortcut is bound in `App`, the dialog lives in `Sidebar`.
+   */
+  newChatOpen: boolean
+  setNewChatOpen(open: boolean): void
   /** When true the file quick-open dialog is open (⌘P). */
   fileSearchOpen: boolean
   setFileSearchOpen(open: boolean): void
@@ -322,6 +341,24 @@ interface AppState {
   /** How many recent chats each project shows in the sidebar before search. */
   chatsPerProject: number
   setChatsPerProject(n: number): void
+  /** How much each sidebar chat row says — see `SidebarDensity`. Persisted. */
+  sidebarDensity: SidebarDensity
+  setSidebarDensity(density: SidebarDensity): void
+  /**
+   * Project (by cwd) the detailed sidebar's flat list is scoped to; null is all
+   * of them. Detailed mode trades project *grouping* for a self-describing row,
+   * so this is what gets you back to one project's chats when you want them.
+   * Persisted, and ignored when the project is gone.
+   */
+  sidebarProject: string | null
+  setSidebarProject(cwd: string | null): void
+  /**
+   * Branch checked out in each chat's cwd (null outside a repo), keyed by cwd —
+   * what the detailed sidebar rows label themselves with. Only populated in
+   * detailed mode; `refreshChatBranches` is a no-op otherwise.
+   */
+  chatBranches: Record<string, string | null>
+  refreshChatBranches(): Promise<void>
   /**
    * Projects the user hid from the sidebar (keyed by cwd). Their chats are kept;
    * re-selecting the folder un-hides it (see `setSelectedCwd`). Persisted.
@@ -995,6 +1032,11 @@ export const useApp = create<AppState>((set, get) => ({
 
   // ---- Search ----
 
+  newChatOpen: false,
+  setNewChatOpen(open) {
+    set({ newChatOpen: open })
+  },
+
   searchOpen: false,
   setSearchOpen(open) {
     set({ searchOpen: open })
@@ -1119,6 +1161,43 @@ export const useApp = create<AppState>((set, get) => ({
     const v = Math.min(CHATS_PER_PROJECT_MAX, Math.max(CHATS_PER_PROJECT_MIN, Math.round(n)))
     localStorage.setItem('chatsPerProject', String(v))
     set({ chatsPerProject: v })
+  },
+
+  sidebarDensity: localStorage.getItem('sidebarDensity') === 'detailed' ? 'detailed' : 'compact',
+
+  setSidebarDensity(density) {
+    localStorage.setItem('sidebarDensity', density)
+    set({ sidebarDensity: density })
+    // Switching *into* detailed is the one moment the branch labels are asked
+    // for and not yet known; the Sidebar's own effect covers a cold start.
+    if (density === 'detailed') void get().refreshChatBranches()
+  },
+
+  sidebarProject: localStorage.getItem('sidebarProject') || null,
+
+  setSidebarProject(cwd) {
+    if (cwd) localStorage.setItem('sidebarProject', cwd)
+    else localStorage.removeItem('sidebarProject')
+    set({ sidebarProject: cwd })
+  },
+
+  chatBranches: {},
+
+  async refreshChatBranches() {
+    // Compact rows never show a branch, so the read is pure cost there. Every
+    // caller (chat list changes, a turn ending, a worktree operation) goes
+    // through this guard rather than repeating it.
+    if (get().sidebarDensity !== 'detailed') return
+    const cwds = [...new Set(get().chats.map((c) => c.cwd))]
+    if (cwds.length === 0) {
+      set({ chatBranches: {} })
+      return
+    }
+    try {
+      set({ chatBranches: await window.api.gitBranches(cwds) })
+    } catch {
+      // A row without a branch falls back to its folder — no worse than before.
+    }
   },
 
   hiddenProjects: (() => {
@@ -2315,6 +2394,10 @@ export const useApp = create<AppState>((set, get) => ({
             }))
             void window.api.send(ev.chatId, next.text, next.attachments, next.label)
           }
+          // A turn can create or switch a branch (the "Create Branch & Commit"
+          // rung, or the agent doing it itself), and that shows in the sidebar
+          // for *any* chat — so this one is not gated on the active chat.
+          void get().refreshChatBranches()
           // Refresh the tree, open files and git status for the active chat so
           // the agent's edits show up.
           if (ev.chatId === s.activeId) {

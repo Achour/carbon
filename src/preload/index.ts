@@ -1,3 +1,4 @@
+import { homedir } from 'node:os'
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type {
   Api,
@@ -110,6 +111,7 @@ const api: Api = {
   gitFetch: (cwd: string) => invoke('git:fetch', cwd),
   gitBranchChanges: (cwd: string, baseBranch?: string) =>
     invoke('git:branch-changes', cwd, baseBranch),
+  gitBranches: (cwds: string[]) => invoke('git:branches', cwds),
   gitInit: (cwd: string) => invoke('git:init', cwd),
   githubState: (cwd: string) => invoke('github:state', cwd),
   githubOpenPr: (cwd: string) => invoke('github:open-pr', cwd),
@@ -129,6 +131,7 @@ const api: Api = {
   setDockIcon: (palette: DockIconPalette) => invoke('window:set-dock-icon', palette),
   setWindowTranslucent: (on: boolean) => invoke('window:set-translucent', on),
   platform: process.platform,
+  home: homedir(),
   terminalCreate: (opts: TerminalCreateOpts) => invoke('terminal:create', opts),
   terminalWrite: (id: string, data: string) => invoke('terminal:write', id, data),
   terminalResize: (id: string, cols: number, rows: number) =>

@@ -78,6 +78,18 @@ The legacy `chats/<id>.json` files are imported once and then **never written, m
 
 Only the active chat's messages are held in memory, and only the window main sent — `messages` is the loaded suffix and `hiddenBefore` counts what is still in the database. Switching chats refetches via `getChat`; the "Load earlier messages" control at the top of `ChatView` prepends the next window and restores the reading position by anchoring on distance from the *bottom* of the scroller, which is the part a prepend does not move. Events for non-active chats still update sidebar metadata and statuses. The right panel hosts file tabs, git diff tabs (tab ids prefixed `diff:`), and the plan panel; an `ExitPlanMode` permission request auto-opens the plan panel. When a chat's status returns to `idle`, open files, the file tree, and git status are refreshed so the agent's edits show up.
 
+### Sidebar modes (`Sidebar.tsx`, `SidebarDensity`)
+
+Two shapes, chosen in Settings → Chats, persisted in `localStorage`. **Compact** is one line per chat grouped by project. **Detailed** is a provider mark, the title, and a second line naming the project and branch (or the folder, outside a repo) — in one flat newest-first list bucketed by date, because grouping *and* naming the project on every row says the same thing twice ("Today" is likewise unlabelled: the top of a newest-first list is today).
+
+With no project rows, two things move: the project **filter** in the header (scopes the list and the Pinned section, and drops the then-redundant project name from each row), and the project actions, appended to a chat row's right-click menu via `projectMenuItems` — the one definition that menu and the compact project row both render.
+
+**Starting a chat asks which project** (`NewChatDialog`, `newChatOpen`): the New chat row and ⌘N both open it, in both modes, because a new chat used to land in whatever folder happened to be selected — invisible state. Same palette shape as the chat search, ordered by recency so ⌘N-Enter is the common case. Instant paths survive where the project is already on screen: compact's per-project ＋, and "New chat here" on a detailed row's menu.
+
+Branches come from `git:branches` → `branchesAt` (`git.ts`): it reads `.git/HEAD` rather than spawning `rev-parse` per row, and follows a worktree's `.git` pointer file so a worktree reports its own branch. Skipped entirely in compact mode; refreshed when the folder set changes or *any* chat's turn ends, since a turn can create a branch.
+
+`--brand-claude` / `--brand-codex` color the marks and are deliberately not `--chart-claude` / `--chart-codex`: the chart pair are assigned hues (a legend, free to be warm/cool), while a logo's color is a fact — Claude's orange, and OpenAI's monochrome mark flipping near-black → near-white by mode.
+
 ### Usage (`src/main/usageScan.ts`, `usageStats.ts`, `components/UsageStats.tsx`)
 
 Two different questions share the word. `usage.ts` + `UsagePanel` (sidebar chip) ask the providers how much **plan headroom** is left right now. The Usage **page** asks what was **spent** over the last 7/30/90 days — history no live API answers — by reading the CLIs' own session logs: `~/.claude/projects/<slug>/<session>.jsonl` and `~/.codex/sessions/<y>/<m>/<d>/rollout-*.jsonl`. Both SDKs drive the real CLIs, so Carbon's own turns are already in those files; summing our `TurnStats` as well would double-count them.

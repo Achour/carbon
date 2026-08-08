@@ -108,6 +108,53 @@ The legacy `chats/<id>.json` files are imported once and then **never written, m
 
 Only the active chat's messages are held in memory, and only the window main sent — `messages` is the loaded suffix and `hiddenBefore` counts what is still in the database. Switching chats refetches via `getChat`; the "Load earlier messages" control at the top of `ChatView` prepends the next window and restores the reading position by anchoring on distance from the *bottom* of the scroller, which is the part a prepend does not move. Events for non-active chats still update sidebar metadata and statuses. The right panel hosts file tabs, git diff tabs (tab ids prefixed `diff:`), and the plan panel; an `ExitPlanMode` permission request auto-opens the plan panel. When a chat's status returns to `idle`, open files, the file tree, and git status are refreshed so the agent's edits show up.
 
+### Sidebar modes (`Sidebar.tsx`, `SidebarDensity`)
+
+The sidebar has two shapes, chosen in Settings → Chats and persisted in
+`localStorage`. They are not two skins of one list — the row format and the
+organising principle change together, because each only makes sense with the
+other:
+
+- **Compact** — one line per chat, **grouped by project**, collapsible, ordered
+  by the user's saved project order.
+- **Detailed** — provider mark, title, and a second line naming the project and
+  branch (or the folder path, outside a repo) — in one **flat, newest-first
+  list** bucketed by date. Grouping by project here would print the same folder,
+  and in a repo where nothing is isolated the same branch, once per row; the
+  date buckets structure the list by what actually varies down it. "Today" goes
+  unlabelled — the top of a newest-first list is today by definition.
+
+Detailed mode has no project rows, so two things move into the header or onto
+the row: the **project filter** (`All projects ▾`, which scopes the list *and*
+the Pinned section, and suppresses the now-redundant project name on each row),
+and the project actions (rename/reveal/archive/hide/delete), appended to a chat
+row's right-click menu under the project's name. `projectMenuItems` is the
+single definition both that menu and the compact project row render.
+
+**Starting a chat asks which project** (`NewChatDialog`, `newChatOpen`) — the
+sidebar's New chat row and ⌘N both open it, in both modes. That question was
+always there and never asked: a new chat landed in whatever folder happened to
+be selected, which is invisible state, and compact mode's per-project ＋ was the
+only place the answer was ever explicit. The dialog is the same palette shape as
+the chat search, ordered by *recency* rather than the sidebar's manual project
+order, so ⌘N-Enter is the common case. The instant paths survive where the
+project is already on screen: compact's per-project ＋, and "New chat here" on a
+detailed row's menu.
+
+Per-chat branches come from `git:branches` → `branchesAt` (`git.ts`), which
+reads `.git/HEAD` directly rather than spawning `rev-parse` per row, and follows
+a worktree's `.git` *pointer file* so a worktree reports its own branch. The
+read is skipped entirely in compact mode (`refreshChatBranches` guards on the
+density), and refreshes when the folder set changes or any chat's turn ends —
+any chat, not just the active one, since a turn can create a branch.
+
+`--brand-claude` / `--brand-codex` (`index.css`) color the provider marks and are
+**not** `--chart-claude` / `--chart-codex`. The chart pair are *assigned* hues, a
+legend for two series, free to be warm/cool because a chart's colors only have to
+be told apart. A logo's color is a fact about the brand: Claude's is that orange,
+OpenAI's mark is monochrome (so it flips near-black → near-white by mode), and a
+blue Codex badge would be wrong however well it paired.
+
 ### Usage (`src/main/usageScan.ts`, `usageStats.ts`, `components/UsageStats.tsx`)
 
 Two different questions wear the word "usage", and they share nothing. `usage.ts`

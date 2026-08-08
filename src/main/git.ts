@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
-import { readFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { readFile, stat } from 'node:fs/promises'
+import { dirname, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import type {
   BranchChanges,
@@ -168,6 +168,62 @@ export async function branchVsDefault(
 /** The branch checked out in `cwd` ('HEAD' when detached). */
 export async function currentBranch(cwd: string): Promise<string> {
   return (await git(cwd, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim()
+}
+
+/**
+ * The `.git` directory governing `cwd`, walking up to the repo root — or null
+ * outside a repo. In a worktree `.git` is a *file* holding `gitdir: <path>`,
+ * which is exactly where that worktree's own HEAD lives, so following it is
+ * what makes a worktree report its own branch rather than the main checkout's.
+ */
+async function gitDirOf(cwd: string): Promise<string | null> {
+  let dir = cwd
+  // Bounded: a path deeper than this is pathological, and an unbounded loop
+  // here would run once per sidebar row.
+  for (let i = 0; i < 64; i++) {
+    const dotGit = join(dir, '.git')
+    try {
+      const st = await stat(dotGit)
+      if (st.isDirectory()) return dotGit
+      const pointer = /^gitdir:\s*(.+)$/m.exec(await readFile(dotGit, 'utf8'))
+      return pointer ? resolve(dir, pointer[1].trim()) : null
+    } catch {
+      // No `.git` here — keep walking up.
+    }
+    const parent = dirname(dir)
+    if (parent === dir) return null
+    dir = parent
+  }
+  return null
+}
+
+/**
+ * The branch checked out in `cwd`, or null when it isn't in a repo. Detached
+ * HEAD reports the short sha, which is at least the thing you're sitting on —
+ * `currentBranch`'s literal 'HEAD' would read as a branch named HEAD.
+ *
+ * This reads `.git/HEAD` instead of spawning git because the caller is the
+ * sidebar asking about *every* chat: a dozen `rev-parse` processes to render a
+ * list is a cost the answer doesn't justify, and HEAD is a file git rewrites on
+ * every checkout anyway.
+ */
+export async function branchAt(cwd: string): Promise<string | null> {
+  const gitDir = await gitDirOf(cwd)
+  if (!gitDir) return null
+  try {
+    const head = (await readFile(join(gitDir, 'HEAD'), 'utf8')).trim()
+    const ref = /^ref:\s*refs\/heads\/(.+)$/.exec(head)
+    return ref ? ref[1] : head.slice(0, 7) || null
+  } catch {
+    return null
+  }
+}
+
+/** `branchAt` for a whole set of folders — one map, unknown folders included as null. */
+export async function branchesAt(cwds: string[]): Promise<Record<string, string | null>> {
+  const unique = [...new Set(cwds)]
+  const branches = await Promise.all(unique.map((cwd) => branchAt(cwd).catch(() => null)))
+  return Object.fromEntries(unique.map((cwd, i) => [cwd, branches[i]]))
 }
 
 /**

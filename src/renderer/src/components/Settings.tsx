@@ -3,6 +3,7 @@ import {
   ArrowDownToLine,
   Bell,
   Info,
+  LayoutList,
   Loader2,
   MessageSquare,
   Minus,
@@ -10,6 +11,7 @@ import {
   Moon,
   Palette,
   Plus,
+  Rows3,
   Sun,
   X
 } from 'lucide-react'
@@ -27,6 +29,7 @@ import {
   CHATS_PER_PROJECT_DEFAULT,
   CHATS_PER_PROJECT_MAX,
   CHATS_PER_PROJECT_MIN,
+  type SidebarDensity,
   useApp
 } from '@/store'
 import {
@@ -261,6 +264,49 @@ const THEME_MODES = [
   { id: 'system', label: 'System', icon: Monitor }
 ] as const
 
+const SIDEBAR_DENSITIES = [
+  { id: 'compact', label: 'Compact', icon: Rows3 },
+  { id: 'detailed', label: 'Detailed', icon: LayoutList }
+] as const
+
+/**
+ * Compact vs detailed sidebar rows. No preview here on purpose — the sidebar is
+ * open next to this control, so it previews itself the moment you click.
+ */
+function SidebarDensityPicker({
+  value,
+  onChange
+}: {
+  value: SidebarDensity
+  onChange: (density: SidebarDensity) => void
+}): React.JSX.Element {
+  return (
+    <div
+      role="group"
+      aria-label="Sidebar rows"
+      className="grid shrink-0 grid-cols-2 gap-1 rounded-xl bg-secondary p-1"
+    >
+      {SIDEBAR_DENSITIES.map((option) => (
+        <button
+          key={option.id}
+          type="button"
+          aria-pressed={value === option.id}
+          onClick={() => onChange(option.id)}
+          className={cn(
+            'flex h-8 items-center justify-center gap-1.5 rounded-lg px-2.5 text-xs font-medium outline-none transition-all focus-visible:ring-2 focus-visible:ring-ring',
+            value === option.id
+              ? 'bg-background text-foreground shadow-sm'
+              : 'text-muted-foreground hover:text-foreground'
+          )}
+        >
+          <option.icon className="size-3.5" />
+          {option.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
 function ThemeModePicker({
   value,
   onChange
@@ -425,6 +471,8 @@ export function Settings(): React.JSX.Element {
   const setTranslucentSidebar = useApp((s) => s.setTranslucentSidebar)
   const chatsPerProject = useApp((s) => s.chatsPerProject)
   const setChatsPerProject = useApp((s) => s.setChatsPerProject)
+  const sidebarDensity = useApp((s) => s.sidebarDensity)
+  const setSidebarDensity = useApp((s) => s.setSidebarDensity)
 
   const [section, setSection] = React.useState<SectionId>('appearance')
 
@@ -540,6 +588,15 @@ export function Settings(): React.JSX.Element {
                   title="Chats"
                   description="How chats are organised in the sidebar."
                 />
+                <Row
+                  label="Sidebar rows"
+                  description="Detailed rows also show the backend answering and the branch — or the folder, outside a repo."
+                >
+                  <SidebarDensityPicker
+                    value={sidebarDensity}
+                    onChange={setSidebarDensity}
+                  />
+                </Row>
                 <Row
                   label="Recent chats per project"
                   description="Each project shows this many recent chats. Find older ones with search."

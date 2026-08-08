@@ -48,6 +48,21 @@
    */
   --chart-claude: oklch(0.6 0.139 45.6);
   --chart-codex: oklch(0.54 0.124 256.5);
+
+  /*
+   * The providers' own marks, wherever a logo is drawn (the sidebar's detailed
+   * rows). Distinct from `--chart-*` above: those are *assigned* hues, a legend
+   * for two series, free to be warm/cool because a chart's colors only have to
+   * be told apart. A logo's color is a fact about the brand — Claude's is that
+   * orange, and OpenAI's mark is monochrome, so a blue Codex badge would simply
+   * be wrong however well it paired.
+   *
+   * Both are stepped per mode against the sidebar rather than tinted from one
+   * value, and each carries its own contrast: the near-black flips to near-white
+   * in dark mode, which is the mark's real dark-mode treatment.
+   */
+  --brand-claude: oklch(0.6 0.139 45.6);
+  --brand-codex: oklch(0.27 0 0);
 }
 
 .dark {
@@ -81,6 +96,8 @@
      same hues re-validated against a dark background. */
   --chart-claude: oklch(0.664 0.143 46.5);
   --chart-codex: oklch(0.644 0.141 252.7);
+  --brand-claude: oklch(0.7 0.135 46);
+  --brand-codex: oklch(0.95 0 0);
 }
 
 @theme inline {
@@ -112,6 +129,8 @@
   --color-warning: var(--warning);
   --color-chart-claude: var(--chart-claude);
   --color-chart-codex: var(--chart-codex);
+  --color-brand-claude: var(--brand-claude);
+  --color-brand-codex: var(--brand-codex);
 
   --font-sans: 'Inter Variable', ui-sans-serif, system-ui, -apple-system, sans-serif;
   --font-mono: 'JetBrains Mono Variable', ui-monospace, 'SF Mono', monospace;

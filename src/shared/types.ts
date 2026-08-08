@@ -1191,6 +1191,12 @@ export interface Api {
   gitFetch(cwd: string): Promise<GitResult>
   /** Branch-scope changes: everything on the current branch vs its base branch. */
   gitBranchChanges(cwd: string, baseBranch?: string): Promise<BranchChanges>
+  /**
+   * The branch checked out in each folder (null outside a repo), for the
+   * sidebar's detailed rows. A set rather than one folder at a time because the
+   * caller always asks about every visible chat at once.
+   */
+  gitBranches(cwds: string[]): Promise<Record<string, string | null>>
   gitInit(cwd: string): Promise<GitResult>
   /** GitHub state (PR + checks) for the cwd's current branch; best-effort. */
   githubState(cwd: string): Promise<GitHubState>
@@ -1236,6 +1242,8 @@ export interface Api {
   setWindowTranslucent(on: boolean): Promise<void>
   /** Host platform (e.g. 'darwin'); gates macOS-only appearance options. */
   readonly platform: string
+  /** The user's home directory, so paths can be shown as `~/…`. */
+  readonly home: string
   // ---- Terminal ----
   terminalCreate(opts: TerminalCreateOpts): Promise<void>
   terminalWrite(id: string, data: string): Promise<void>

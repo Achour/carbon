@@ -54,4 +54,24 @@ function ContextMenuSeparator({
   return <BaseContextMenu.Separator className={cn('my-1 h-px bg-border', className)} {...props} />
 }
 
-export { ContextMenu, ContextMenuTrigger, ContextMenuContent, ContextMenuItem, ContextMenuSeparator }
+/** A heading over a run of items — says what the items below it act on. */
+function ContextMenuLabel({
+  className,
+  ...props
+}: React.ComponentProps<typeof BaseContextMenu.GroupLabel>): React.JSX.Element {
+  return (
+    <BaseContextMenu.GroupLabel
+      className={cn('truncate px-2 py-1 text-[11px] text-muted-foreground/70', className)}
+      {...props}
+    />
+  )
+}
+
+export {
+  ContextMenu,
+  ContextMenuTrigger,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuSeparator
+}
