@@ -1,10 +1,7 @@
 import * as React from 'react'
-import { Select } from '@base-ui/react/select'
 import {
   ArrowDownToLine,
   Bell,
-  Check,
-  ChevronDown,
   Info,
   Loader2,
   MessageSquare,
@@ -22,8 +19,6 @@ import {
   CODE_FONT_MAX,
   CODE_FONT_MIN,
   THEMES,
-  varsForAppearance,
-  type ResolvedAppearance,
   type ThemeDef,
   type ThemeMode
 } from '@/lib/themes'
@@ -300,139 +295,119 @@ function ThemeModePicker({
   )
 }
 
-/** Miniature app mock rendered with the theme's resolved light/dark palette. */
-function ThemePreview({
-  theme,
-  appearance
-}: {
-  theme: ThemeDef
-  appearance: ResolvedAppearance
-}): React.JSX.Element {
-  const vars = varsForAppearance(theme, appearance)
+/**
+ * A scale model of Carbon's own window in one palette: sidebar, a line of text,
+ * a code block, and the composer with the accent on the send button.
+ *
+ * These palettes are built as a *surface ladder* (sidebar → background → card →
+ * code), so the ladder is what the picker should show. A single color chip says
+ * nothing about the chrome that color has to live on, which is exactly how the
+ * old registry shipped 22 themes that turned out to share a light mode.
+ */
+function MiniWindow({ vars }: { vars: Record<string, string> }): React.JSX.Element {
   const v = (name: string): string => vars[name]
   return (
-    <div
-      className="pointer-events-none h-24 w-full overflow-hidden rounded-lg border"
-      style={{ background: v('background'), borderColor: v('border') }}
-    >
-      <div className="flex h-full">
-        <div className="flex w-[30%] flex-col gap-1.5 p-2" style={{ background: v('sidebar') }}>
-          <div
-            className="h-1.5 w-3/4 rounded-full"
-            style={{ background: v('sidebar-foreground'), opacity: 0.55 }}
-          />
-          <div
-            className="h-1.5 w-1/2 rounded-full"
-            style={{ background: v('sidebar-foreground'), opacity: 0.3 }}
-          />
-          <div className="mt-auto h-4 rounded" style={{ background: v('sidebar-accent') }} />
-        </div>
-        <div className="flex min-w-0 flex-1 flex-col gap-1.5 p-2.5">
-          <div className="h-2.5 w-2/5 self-end rounded-full" style={{ background: v('secondary') }} />
-          <div
-            className="h-1.5 w-4/5 rounded-full"
-            style={{ background: v('foreground'), opacity: 0.75 }}
-          />
-          <div
-            className="h-1.5 w-3/5 rounded-full"
-            style={{ background: v('muted-foreground'), opacity: 0.6 }}
-          />
-          <div
-            className="mt-auto flex h-6 items-center justify-between rounded-md border px-1.5"
-            style={{ background: v('card'), borderColor: v('border') }}
-          >
-            <div
-              className="h-1 w-1/3 rounded-full"
-              style={{ background: v('muted-foreground'), opacity: 0.5 }}
-            />
-            <div className="size-3 rounded-full" style={{ background: v('primary') }} />
-          </div>
+    <div className="flex h-full w-full" style={{ background: v('background') }}>
+      <div
+        className="flex w-[30%] shrink-0 flex-col gap-1 p-1.5"
+        style={{ background: v('sidebar') }}
+      >
+        <div
+          className="h-[3px] w-4/5 rounded-full"
+          style={{ background: v('sidebar-foreground'), opacity: 0.5 }}
+        />
+        <div
+          className="h-[3px] w-3/5 rounded-full"
+          style={{ background: v('sidebar-foreground'), opacity: 0.28 }}
+        />
+        <div className="h-2 w-full rounded-sm" style={{ background: v('sidebar-accent') }} />
+      </div>
+      <div className="flex min-w-0 flex-1 flex-col gap-1 p-1.5">
+        <div
+          className="h-[3px] w-3/4 rounded-full"
+          style={{ background: v('foreground'), opacity: 0.72 }}
+        />
+        <div
+          className="h-[3px] w-1/2 rounded-full"
+          style={{ background: v('muted-foreground'), opacity: 0.6 }}
+        />
+        <div className="h-3 w-full rounded-sm" style={{ background: v('code-bg') }} />
+        <div
+          className="mt-auto flex h-3 items-center justify-end rounded-sm border px-1"
+          style={{ background: v('card'), borderColor: v('border') }}
+        >
+          <div className="size-1.5 rounded-full" style={{ background: v('primary') }} />
         </div>
       </div>
     </div>
   )
 }
 
-function ThemeSwatch({
+/**
+ * The two modes as facing pages of one window, joined at a seam — so a card
+ * shows what the theme actually looks like in both, without a badge or a legend.
+ * Light sits on the left in every card, so the column reads as one comparison
+ * rather than six unrelated pictures.
+ */
+function ThemeCard({
   theme,
-  appearance,
-  compact = false
-}: {
-  theme: ThemeDef
-  appearance: ResolvedAppearance
-  compact?: boolean
-}): React.JSX.Element {
-  const vars = varsForAppearance(theme, appearance)
-  return (
-    <span
-      className={cn(
-        'grid shrink-0 place-items-center rounded-lg border font-semibold',
-        compact ? 'size-7 text-[11px]' : 'size-9 text-sm'
-      )}
-      style={{
-        background: vars['code-bg'],
-        borderColor: vars.border,
-        color: vars.primary
-      }}
-      aria-hidden="true"
-    >
-      Aa
-    </span>
-  )
-}
-
-function ThemePicker({
-  theme,
-  appearance,
+  selected,
   onSelect
 }: {
   theme: ThemeDef
-  appearance: ResolvedAppearance
+  selected: boolean
   onSelect: (id: string) => void
 }): React.JSX.Element {
   return (
-    <Select.Root
-      items={THEMES.map((candidate) => ({ value: candidate.id, label: candidate.name }))}
-      value={theme.id}
-      onValueChange={(value) => onSelect(value as string)}
+    <button
+      type="button"
+      aria-pressed={selected}
+      onClick={() => onSelect(theme.id)}
+      className={cn(
+        'group flex flex-col items-stretch gap-2 rounded-xl border p-2 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring',
+        selected
+          ? 'border-primary/70 bg-accent/50'
+          : 'border-border bg-card/40 hover:bg-accent/30'
+      )}
     >
-      <Select.Trigger
-        data-theme-picker
-        className="flex h-11 w-56 items-center gap-2 rounded-xl border border-input bg-card px-2.5 text-left outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring data-[popup-open]:bg-accent"
+      <div
+        className="flex h-[74px] w-full overflow-hidden rounded-lg border border-border"
+        aria-hidden="true"
       >
-        <ThemeSwatch theme={theme} appearance={appearance} compact />
-        <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{theme.name}</span>
-        <Select.Icon>
-          <ChevronDown className="size-4 text-muted-foreground" />
-        </Select.Icon>
-      </Select.Trigger>
-      <Select.Portal>
-        <Select.Positioner
-          side="bottom"
-          align="end"
-          sideOffset={6}
-          collisionPadding={12}
-          className="z-50 outline-none"
-          alignItemWithTrigger={false}
-        >
-          <Select.Popup className="max-h-[min(440px,var(--available-height))] w-72 overflow-y-auto overscroll-contain rounded-2xl border border-border bg-popover p-2 text-popover-foreground shadow-2xl outline-none transition-all duration-150 data-[ending-style]:scale-95 data-[ending-style]:opacity-0 data-[starting-style]:scale-95 data-[starting-style]:opacity-0">
-            {THEMES.map((candidate) => (
-              <Select.Item
-                key={candidate.id}
-                value={candidate.id}
-                className="grid cursor-default grid-cols-[2.25rem_1fr_1rem] items-center gap-2 rounded-xl px-2 py-1.5 text-sm outline-none data-[highlighted]:bg-accent"
-              >
-                <ThemeSwatch theme={candidate} appearance={appearance} compact />
-                <Select.ItemText>{candidate.name}</Select.ItemText>
-                <Select.ItemIndicator>
-                  <Check className="size-4" strokeWidth={2.5} />
-                </Select.ItemIndicator>
-              </Select.Item>
-            ))}
-          </Select.Popup>
-        </Select.Positioner>
-      </Select.Portal>
-    </Select.Root>
+        <div className="w-1/2 border-r border-border">
+          <MiniWindow vars={theme.lightVars} />
+        </div>
+        <div className="w-1/2">
+          <MiniWindow vars={theme.vars} />
+        </div>
+      </div>
+      <span className="px-0.5 text-[13px] font-medium">{theme.name}</span>
+    </button>
+  )
+}
+
+/**
+ * A grid rather than a dropdown: comparing themes side by side *is* the job of
+ * a theme picker, and at six they all fit at once.
+ */
+function ThemeGrid({
+  selected,
+  onSelect
+}: {
+  selected: string
+  onSelect: (id: string) => void
+}): React.JSX.Element {
+  return (
+    <div role="group" aria-label="App theme" className="grid grid-cols-3 gap-2.5">
+      {THEMES.map((candidate) => (
+        <ThemeCard
+          key={candidate.id}
+          theme={candidate}
+          selected={candidate.id === selected}
+          onSelect={onSelect}
+        />
+      ))}
+    </div>
   )
 }
 
@@ -441,7 +416,6 @@ export function Settings(): React.JSX.Element {
   const setTheme = useApp((s) => s.setTheme)
   const themeMode = useApp((s) => s.themeMode)
   const setThemeMode = useApp((s) => s.setThemeMode)
-  const resolvedAppearance = useApp((s) => s.resolvedAppearance)
   const closeSettings = useApp((s) => s.closeSettings)
   const notifyPrefs = useApp((s) => s.notifyPrefs)
   const setNotifyPrefs = useApp((s) => s.setNotifyPrefs)
@@ -451,7 +425,6 @@ export function Settings(): React.JSX.Element {
   const setTranslucentSidebar = useApp((s) => s.setTranslucentSidebar)
   const chatsPerProject = useApp((s) => s.chatsPerProject)
   const setChatsPerProject = useApp((s) => s.setChatsPerProject)
-  const selectedTheme = THEMES.find((candidate) => candidate.id === theme) ?? THEMES[0]
 
   const [section, setSection] = React.useState<SectionId>('appearance')
 
@@ -522,22 +495,13 @@ export function Settings(): React.JSX.Element {
                     <ThemeModePicker value={themeMode} onChange={setThemeMode} />
                   </div>
                   <div className="my-3 h-px bg-border" />
-                  <div className="flex items-center gap-4">
-                    <div className="min-w-0 flex-1">
-                      <div className="text-[13px] font-medium">App theme</div>
-                      <div className="mt-0.5 text-xs text-muted-foreground">
-                        Carbon plus 27 Codex-inspired palettes
-                      </div>
+                  <div className="mb-3">
+                    <div className="text-[13px] font-medium">App theme</div>
+                    <div className="mt-0.5 text-xs text-muted-foreground">
+                      Six palettes, each designed for both light and dark
                     </div>
-                    <ThemePicker
-                      theme={selectedTheme}
-                      appearance={resolvedAppearance}
-                      onSelect={setTheme}
-                    />
                   </div>
-                  <div className="mt-3">
-                    <ThemePreview theme={selectedTheme} appearance={resolvedAppearance} />
-                  </div>
+                  <ThemeGrid selected={theme} onSelect={setTheme} />
                 </div>
 
                 {window.api.platform === 'darwin' && (

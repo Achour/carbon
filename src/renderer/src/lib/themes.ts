@@ -1,9 +1,20 @@
 /**
  * Theme registry — the single source of truth for app themes.
  *
- * Each theme is a full set of the CSS custom properties consumed by
- * index.css / Tailwind. `installThemes` injects one data-attribute block per
- * theme so switching themes never requires a renderer reload.
+ * Six curated themes, each **authored in both modes**. The previous registry
+ * derived every light mode from one `lightThemeVars(accent)` helper that mixed
+ * the accent into a fixed near-white base at 2–10%, so 22 of the 28 themes had
+ * the same light mode wearing a different button. A set this small is small
+ * enough to write both halves properly, which is the whole point of trimming it.
+ *
+ * Themes are picked by **background family**, not by accent — neutral, black,
+ * warm, cool, green, violet. Recoloring one accent over the same gray chrome is
+ * what made the old set feel like one theme in 28 hats.
+ *
+ * Everything is OKLCH so the ladders are perceptually even across hues: a step
+ * of 0.03 L reads as the same step whether the chrome is amber or navy, which
+ * plain hex cannot promise. `installThemes` injects one data-attribute block per
+ * theme × appearance, so switching never requires a renderer reload.
  */
 import type { DockIconPalette } from '@shared/types'
 
@@ -12,596 +23,433 @@ export interface ThemeDef {
   name: string
   /** Dark-mode CSS custom properties, keyed without the leading `--`. */
   vars: Record<string, string>
-  /** Light-mode counterpart; keeps this theme's accent identity. */
+  /** Light-mode counterpart — authored, not derived. */
   lightVars: Record<string, string>
 }
 
 export type ThemeMode = 'dark' | 'light' | 'system'
 export type ResolvedAppearance = 'dark' | 'light'
 
-interface DarkThemePalette {
-  id: string
-  name: string
-  background: string
-  surface: string
-  surfaceRaised: string
-  sidebar: string
-  code: string
-  foreground: string
-  mutedForeground: string
-  primary: string
-  primaryForeground?: string
-  border?: string
-  /** Targeted overrides for light themes that would otherwise look alike. */
-  lightOverrides?: Record<string, string>
-}
-
-const darkBase = {
-  destructive: '#ef6a67',
-  'destructive-foreground': '#fff7f2',
-  success: '#72c48f',
-  warning: '#e5b567'
-}
-
-function lightThemeVars(
-  accent: string,
-  overrides: Record<string, string> = {}
-): Record<string, string> {
-  const primary = `color-mix(in oklab, ${accent} 68%, #111827)`
-  return {
-    background: `color-mix(in oklab, ${accent} 2%, #fbfbfc)`,
-    foreground: '#202124',
-    card: '#ffffff',
-    'card-foreground': '#202124',
-    popover: '#ffffff',
-    'popover-foreground': '#202124',
-    primary,
-    'primary-foreground': '#ffffff',
-    secondary: `color-mix(in oklab, ${accent} 5%, #f1f3f5)`,
-    'secondary-foreground': '#292b2f',
-    muted: `color-mix(in oklab, ${accent} 4%, #f3f4f6)`,
-    'muted-foreground': '#666b73',
-    // A step below `secondary`/`muted` so hovering a secondary button or a
-    // menu item is visible against the surface it sits on.
-    accent: `color-mix(in oklab, ${accent} 9%, #e6eaef)`,
-    'accent-foreground': '#202124',
-    destructive: '#cf222e',
-    'destructive-foreground': '#ffffff',
-    border: `color-mix(in oklab, ${accent} 8%, #daddE2)`,
-    input: `color-mix(in oklab, ${accent} 10%, #d4d7dc)`,
-    ring: `color-mix(in oklab, ${accent} 42%, transparent)`,
-    sidebar: `color-mix(in oklab, ${accent} 4%, #f5f6f8)`,
-    'sidebar-foreground': '#303238',
-    'sidebar-accent': `color-mix(in oklab, ${accent} 9%, #e9ecef)`,
-    'sidebar-border': `color-mix(in oklab, ${accent} 8%, #daddE2)`,
-    'code-bg': `color-mix(in oklab, ${accent} 3%, #f2f3f5)`,
-    success: '#238636',
-    warning: '#9a6700',
-    ...overrides
-  }
-}
-
-function darkTheme(palette: DarkThemePalette): ThemeDef {
-  const border = palette.border ?? 'rgb(255 255 255 / 9%)'
-  // `accent` is the hover/highlight level and must sit a step *above*
-  // `popover`/`secondary`, or every menu highlight and secondary-button hover
-  // repaints the color the surface already has and reads as no hover at all.
-  // Lifting toward the theme's own foreground keeps each palette's tint.
-  const hover = `color-mix(in oklab, ${palette.surfaceRaised} 88%, ${palette.foreground})`
-  return {
-    id: palette.id,
-    name: palette.name,
-    vars: {
-      background: palette.background,
-      foreground: palette.foreground,
-      card: palette.surface,
-      'card-foreground': palette.foreground,
-      popover: palette.surfaceRaised,
-      'popover-foreground': palette.foreground,
-      primary: palette.primary,
-      'primary-foreground': palette.primaryForeground ?? palette.background,
-      secondary: palette.surfaceRaised,
-      'secondary-foreground': palette.foreground,
-      muted: palette.surface,
-      'muted-foreground': palette.mutedForeground,
-      accent: hover,
-      'accent-foreground': palette.foreground,
-      border,
-      input: 'rgb(255 255 255 / 13%)',
-      ring: `color-mix(in oklab, ${palette.primary} 52%, transparent)`,
-      sidebar: palette.sidebar,
-      'sidebar-foreground': palette.foreground,
-      'sidebar-accent': palette.surface,
-      'sidebar-border': border,
-      'code-bg': palette.code,
-      ...darkBase
-    },
-    lightVars: lightThemeVars(palette.primary, palette.lightOverrides)
-  }
+/** OKLCH lightness for each chrome level. Not ordered — named by role. */
+interface Ladder {
+  sidebar: number
+  code: number
+  background: number
+  card: number
+  sidebarAccent: number
+  muted: number
+  popover: number
+  secondary: number
+  /**
+   * Hover/highlight level. Must sit a visible step away from `popover` and
+   * `secondary` in the direction of the foreground, or every menu highlight and
+   * secondary-button hover repaints the color the surface already has and reads
+   * as no hover at all.
+   */
+  hover: number
+  text: number
+  mutedText: number
 }
 
 /**
- * Carbon is intentionally kept byte-for-byte equivalent to the original
- * neutral palette. It remains the default and the first item in the picker.
+ * `primary` does two jobs that pull in opposite directions: it is text/icons on
+ * `background` (~27 call sites) *and* the fill behind `primary-foreground` on
+ * buttons (~26). On a dark theme, satisfying both means a **light** accent with
+ * a **dark** label — a saturated mid-tone reads fine as text but cannot carry a
+ * white one (Iris at L 0.68 scored 2.97:1). Darkening instead doesn't work
+ * either: for blue at C 0.19 the two requirements cross with no L between them,
+ * and lightening past L≈0.64 leaves sRGB entirely. Hence every dark accent here
+ * sits near L 0.74 with the chroma that lightness can actually hold.
  */
-const carbonTheme: ThemeDef = {
-  id: 'carbon',
-  name: 'Carbon',
-  vars: {
-    background: 'oklch(0.2 0 0)',
-    foreground: 'oklch(0.93 0 0)',
-    card: 'oklch(0.23 0 0)',
-    'card-foreground': 'oklch(0.93 0 0)',
-    popover: 'oklch(0.245 0 0)',
-    'popover-foreground': 'oklch(0.93 0 0)',
-    primary: 'oklch(0.93 0 0)',
-    'primary-foreground': 'oklch(0.2 0 0)',
-    secondary: 'oklch(0.27 0 0)',
-    'secondary-foreground': 'oklch(0.9 0 0)',
-    muted: 'oklch(0.255 0 0)',
-    'muted-foreground': 'oklch(0.62 0 0)',
-    accent: 'oklch(0.275 0 0)',
-    'accent-foreground': 'oklch(0.93 0 0)',
-    border: 'oklch(1 0 0 / 9%)',
-    input: 'oklch(1 0 0 / 12%)',
-    ring: 'oklch(0.93 0 0 / 40%)',
-    sidebar: 'oklch(0.178 0 0)',
-    'sidebar-foreground': 'oklch(0.86 0 0)',
-    'sidebar-accent': 'oklch(0.246 0 0)',
-    'sidebar-border': 'oklch(1 0 0 / 7%)',
-    'code-bg': 'oklch(0.165 0 0)',
+interface Accent {
+  l: number
+  c: number
+  h: number
+  /** Which end of the ramp `primary-foreground` comes from. */
+  on: 'light' | 'dark'
+}
+
+interface ModeSpec {
+  ladder: Ladder
+  /**
+   * Chroma carried by the chrome surfaces — the theme's entire personality.
+   * Keep it small: chrome that reads as *paint* competes with the content.
+   */
+  tint: number
+  /** Chroma carried by text. Below `tint`, or long prose looks stained. */
+  textTint: number
+  /** Hue shared by chrome and text. The accent carries its own. */
+  hue: number
+  primary: Accent
+  border?: string
+  input?: string
+  sidebarBorder?: string
+}
+
+interface ThemeSpec {
+  id: string
+  name: string
+  dark: ModeSpec
+  light: ModeSpec
+}
+
+/** Trims float noise (0.93 - 0.07 = 0.8600000000000001) out of the CSS. */
+function round(value: number): number {
+  return Math.round(value * 1000) / 1000
+}
+
+function oklch(l: number, c: number, h: number, alpha?: number): string {
+  const base = `${round(l)} ${round(c)} ${h}`
+  return alpha === undefined ? `oklch(${base})` : `oklch(${base} / ${alpha}%)`
+}
+
+/**
+ * Moves a lightness `amount` toward `target`. Sidebar and secondary text sit a
+ * fixed step *below* body text in contrast, which means a lower L in dark mode
+ * and a higher one in light mode — the same intent, opposite arithmetic.
+ */
+function toward(from: number, target: number, amount: number): number {
+  return from + Math.sign(target - from) * amount
+}
+
+/** Status colors are palette-independent: they must read as red/green/amber. */
+const STATUS: Record<ResolvedAppearance, Record<string, string>> = {
+  dark: {
     destructive: 'oklch(0.62 0.19 27)',
     'destructive-foreground': 'oklch(0.97 0.01 80)',
     success: 'oklch(0.72 0.14 150)',
     warning: 'oklch(0.78 0.14 75)'
   },
-  lightVars: lightThemeVars('#5f6368')
+  light: {
+    destructive: 'oklch(0.53 0.2 27)',
+    'destructive-foreground': 'oklch(0.99 0 0)',
+    success: 'oklch(0.55 0.13 150)',
+    warning: 'oklch(0.58 0.12 75)'
+  }
 }
 
-const codexThemes: ThemeDef[] = [
-  darkTheme({
-    id: 'absolutely',
-    name: 'Absolutely',
-    background: '#1f1f1e',
-    surface: '#2a2927',
-    surfaceRaised: '#373431',
-    sidebar: '#191918',
-    code: '#151514',
-    foreground: '#f4f1ed',
-    mutedForeground: '#aaa39b',
-    primary: '#db8b70'
-  }),
-  darkTheme({
-    id: 'ayu',
-    name: 'Ayu',
-    background: '#0b0e14',
-    surface: '#11151c',
-    surfaceRaised: '#1b202a',
-    sidebar: '#070a0f',
-    code: '#080b10',
-    foreground: '#bfbdb6',
-    mutedForeground: '#6c7380',
-    primary: '#e6b450'
-  }),
-  darkTheme({
-    id: 'catppuccin',
-    name: 'Catppuccin',
-    background: '#1e1e2e',
-    surface: '#313244',
-    surfaceRaised: '#45475a',
-    sidebar: '#181825',
-    code: '#11111b',
-    foreground: '#cdd6f4',
-    mutedForeground: '#7f849c',
-    primary: '#cba6f7'
-  }),
-  darkTheme({
-    id: 'codex',
-    name: 'Codex',
-    background: '#111214',
-    surface: '#1c1e22',
-    surfaceRaised: '#292c31',
-    sidebar: '#0c0d0f',
-    code: '#08090b',
-    foreground: '#f3f4f6',
-    mutedForeground: '#8b9099',
-    primary: '#3b82f6',
-    primaryForeground: '#ffffff'
-  }),
-  darkTheme({
-    id: 'dracula',
-    name: 'Dracula',
-    background: '#282a36',
-    surface: '#343746',
-    surfaceRaised: '#44475a',
-    sidebar: '#21222c',
-    code: '#191a21',
-    foreground: '#f8f8f2',
-    mutedForeground: '#9da0b3',
-    primary: '#ff79c6'
-  }),
-  darkTheme({
-    id: 'everforest',
-    name: 'Everforest',
-    background: '#2d353b',
-    surface: '#343f44',
-    surfaceRaised: '#3d484d',
-    sidebar: '#272e33',
-    code: '#232a2e',
-    foreground: '#d3c6aa',
-    mutedForeground: '#859289',
-    primary: '#a7c080'
-  }),
-  darkTheme({
-    id: 'github',
-    name: 'GitHub',
-    background: '#0d1117',
-    surface: '#161b22',
-    surfaceRaised: '#21262d',
-    sidebar: '#010409',
-    code: '#090c10',
-    foreground: '#e6edf3',
-    mutedForeground: '#7d8590',
-    primary: '#2f81f7',
-    primaryForeground: '#ffffff',
-    border: '#30363d',
-    lightOverrides: {
-      background: '#ffffff',
-      card: '#f6f8fa',
-      popover: '#ffffff',
-      primary: '#0969da',
-      secondary: '#f6f8fa',
-      muted: '#f6f8fa',
-      accent: '#ddf4ff',
-      border: '#d0d7de',
-      input: '#d0d7de',
-      ring: 'rgb(9 105 218 / 35%)',
-      sidebar: '#f6f8fa',
-      'sidebar-accent': '#eaeef2',
-      'sidebar-border': '#d0d7de',
-      'code-bg': '#f6f8fa'
+function modeVars(spec: ModeSpec, appearance: ResolvedAppearance): Record<string, string> {
+  const { ladder, tint, textTint, hue, primary } = spec
+  const surface = (l: number): string => oklch(l, tint, hue)
+  const text = (l: number): string => oklch(l, textTint, hue)
+  const dark = appearance === 'dark'
+
+  return {
+    background: surface(ladder.background),
+    foreground: text(ladder.text),
+    card: surface(ladder.card),
+    'card-foreground': text(ladder.text),
+    popover: surface(ladder.popover),
+    'popover-foreground': text(ladder.text),
+    primary: oklch(primary.l, primary.c, primary.h),
+    'primary-foreground':
+      primary.on === 'light' ? 'oklch(0.99 0 0)' : surface(ladder.background),
+    secondary: surface(ladder.secondary),
+    'secondary-foreground': text(toward(ladder.text, ladder.background, 0.03)),
+    muted: surface(ladder.muted),
+    'muted-foreground': text(ladder.mutedText),
+    accent: surface(ladder.hover),
+    'accent-foreground': text(ladder.text),
+    border: spec.border ?? (dark ? 'oklch(1 0 0 / 9%)' : oklch(0.89, tint, hue)),
+    input: spec.input ?? (dark ? 'oklch(1 0 0 / 12%)' : oklch(0.86, tint, hue)),
+    ring: oklch(primary.l, primary.c, primary.h, 40),
+    sidebar: surface(ladder.sidebar),
+    'sidebar-foreground': text(toward(ladder.text, ladder.background, 0.07)),
+    'sidebar-accent': surface(ladder.sidebarAccent),
+    'sidebar-border':
+      spec.sidebarBorder ?? (dark ? 'oklch(1 0 0 / 7%)' : oklch(0.89, tint, hue)),
+    'code-bg': surface(ladder.code),
+    ...STATUS[appearance]
+  }
+}
+
+function theme(spec: ThemeSpec): ThemeDef {
+  return {
+    id: spec.id,
+    name: spec.name,
+    vars: modeVars(spec.dark, 'dark'),
+    lightVars: modeVars(spec.light, 'light')
+  }
+}
+
+const SPECS: ThemeSpec[] = [
+  /**
+   * Carbon — neutral graphite. The default, and its dark mode is unchanged:
+   * every value below reproduces the original literal exactly. Only the light
+   * mode is new, because Carbon's used to be the generic derived one.
+   */
+  {
+    id: 'carbon',
+    name: 'Carbon',
+    dark: {
+      ladder: {
+        sidebar: 0.178,
+        code: 0.165,
+        background: 0.2,
+        card: 0.23,
+        sidebarAccent: 0.246,
+        muted: 0.255,
+        popover: 0.245,
+        secondary: 0.27,
+        hover: 0.275,
+        text: 0.93,
+        mutedText: 0.62
+      },
+      tint: 0,
+      textTint: 0,
+      hue: 0,
+      primary: { l: 0.93, c: 0, h: 0, on: 'dark' }
+    },
+    light: {
+      ladder: {
+        sidebar: 0.968,
+        code: 0.958,
+        background: 0.985,
+        card: 1,
+        sidebarAccent: 0.93,
+        muted: 0.965,
+        popover: 1,
+        secondary: 0.955,
+        hover: 0.93,
+        text: 0.25,
+        mutedText: 0.5
+      },
+      tint: 0,
+      textTint: 0,
+      hue: 0,
+      primary: { l: 0.32, c: 0, h: 0, on: 'light' }
     }
-  }),
-  darkTheme({
-    id: 'gruvbox',
-    name: 'Gruvbox',
-    background: '#282828',
-    surface: '#3c3836',
-    surfaceRaised: '#504945',
-    sidebar: '#1d2021',
-    code: '#1d2021',
-    foreground: '#ebdbb2',
-    mutedForeground: '#a89984',
-    primary: '#83a598'
-  }),
-  darkTheme({
-    id: 'linear',
-    name: 'Linear',
-    background: '#111113',
-    surface: '#1b1b1f',
-    surfaceRaised: '#28282f',
-    sidebar: '#0b0b0d',
-    code: '#09090b',
-    foreground: '#f5f5f6',
-    mutedForeground: '#8b8b95',
-    primary: '#7c6df2',
-    primaryForeground: '#ffffff',
-    lightOverrides: {
-      background: '#f7f7f8',
-      card: '#ffffff',
-      popover: '#ffffff',
-      primary: '#5e6ad2',
-      secondary: '#efeff2',
-      muted: '#f0f0f2',
-      accent: '#e7e5fb',
-      border: '#d8d8de',
-      input: '#d1d1d8',
-      sidebar: '#efeff2',
-      'sidebar-accent': '#e2e2e8',
-      'sidebar-border': '#d8d8de',
-      'code-bg': '#eeeef1'
+  },
+
+  /**
+   * Obsidian — near-black, high contrast, electric blue. The one place borders
+   * are lifted above the shared default: at this lightness a 9% white hairline
+   * disappears and every panel edge melts into the next.
+   */
+  {
+    id: 'obsidian',
+    name: 'Obsidian',
+    dark: {
+      ladder: {
+        sidebar: 0.105,
+        code: 0.095,
+        background: 0.135,
+        card: 0.175,
+        sidebarAccent: 0.185,
+        muted: 0.18,
+        popover: 0.195,
+        secondary: 0.21,
+        hover: 0.245,
+        text: 0.96,
+        mutedText: 0.6
+      },
+      tint: 0.008,
+      textTint: 0.006,
+      hue: 255,
+      primary: { l: 0.74, c: 0.125, h: 255, on: 'dark' },
+      border: 'oklch(1 0 0 / 11%)',
+      input: 'oklch(1 0 0 / 14%)',
+      sidebarBorder: 'oklch(1 0 0 / 8%)'
+    },
+    light: {
+      ladder: {
+        sidebar: 0.972,
+        code: 0.963,
+        background: 0.99,
+        card: 1,
+        sidebarAccent: 0.935,
+        muted: 0.968,
+        popover: 1,
+        secondary: 0.958,
+        hover: 0.932,
+        text: 0.22,
+        mutedText: 0.48
+      },
+      tint: 0.004,
+      textTint: 0.005,
+      hue: 255,
+      primary: { l: 0.52, c: 0.2, h: 258, on: 'light' }
     }
-  }),
-  darkTheme({
-    id: 'lobster',
-    name: 'Lobster',
-    background: '#111827',
-    surface: '#1f2937',
-    surfaceRaised: '#303b4e',
-    sidebar: '#0b1220',
-    code: '#080e19',
-    foreground: '#f8fafc',
-    mutedForeground: '#8d99ab',
-    primary: '#ff6b6b',
-    lightOverrides: {
-      background: '#fff8f5',
-      card: '#fffdfc',
-      popover: '#fffdfc',
-      primary: '#d94b4b',
-      secondary: '#fbe9e5',
-      muted: '#f9eeeb',
-      accent: '#f7ddd7',
-      border: '#e7cbc4',
-      input: '#dfc2ba',
-      sidebar: '#fceeea',
-      'sidebar-accent': '#f5dcd5',
-      'sidebar-border': '#e7cbc4',
-      'code-bg': '#f7e5df'
+  },
+
+  /** Ember — warm charcoal chrome, amber accent. Low blue light, cozy. */
+  {
+    id: 'ember',
+    name: 'Ember',
+    dark: {
+      ladder: {
+        sidebar: 0.172,
+        code: 0.155,
+        background: 0.202,
+        card: 0.238,
+        sidebarAccent: 0.252,
+        muted: 0.252,
+        popover: 0.258,
+        secondary: 0.282,
+        hover: 0.312,
+        text: 0.93,
+        mutedText: 0.635
+      },
+      tint: 0.016,
+      textTint: 0.012,
+      hue: 62,
+      primary: { l: 0.76, c: 0.135, h: 65, on: 'dark' }
+    },
+    light: {
+      ladder: {
+        sidebar: 0.963,
+        code: 0.952,
+        background: 0.985,
+        card: 0.998,
+        sidebarAccent: 0.928,
+        muted: 0.962,
+        popover: 0.998,
+        secondary: 0.95,
+        hover: 0.925,
+        text: 0.26,
+        mutedText: 0.5
+      },
+      tint: 0.009,
+      textTint: 0.008,
+      hue: 70,
+      primary: { l: 0.55, c: 0.14, h: 55, on: 'light' }
     }
-  }),
-  darkTheme({
-    id: 'material',
-    name: 'Material',
-    background: '#212121',
-    surface: '#2b2b2b',
-    surfaceRaised: '#383838',
-    sidebar: '#191919',
-    code: '#151515',
-    foreground: '#eeffff',
-    mutedForeground: '#9e9e9e',
-    primary: '#80cbc4',
-    lightOverrides: {
-      background: '#f5fbfa',
-      card: '#ffffff',
-      popover: '#ffffff',
-      primary: '#00796b',
-      secondary: '#e0f2f1',
-      muted: '#edf5f4',
-      accent: '#cce9e6',
-      border: '#c6dad8',
-      input: '#b8cfcc',
-      sidebar: '#edf7f6',
-      'sidebar-accent': '#d7ecea',
-      'sidebar-border': '#c6dad8',
-      'code-bg': '#e8f3f2'
+  },
+
+  /** Tide — deep navy chrome, cyan-blue accent. */
+  {
+    id: 'tide',
+    name: 'Tide',
+    dark: {
+      ladder: {
+        sidebar: 0.175,
+        code: 0.158,
+        background: 0.205,
+        card: 0.24,
+        sidebarAccent: 0.254,
+        muted: 0.252,
+        popover: 0.258,
+        secondary: 0.283,
+        hover: 0.313,
+        text: 0.93,
+        mutedText: 0.64
+      },
+      tint: 0.022,
+      textTint: 0.014,
+      hue: 248,
+      primary: { l: 0.72, c: 0.12, h: 225, on: 'dark' }
+    },
+    light: {
+      ladder: {
+        sidebar: 0.962,
+        code: 0.951,
+        background: 0.985,
+        card: 0.999,
+        sidebarAccent: 0.925,
+        muted: 0.961,
+        popover: 0.999,
+        secondary: 0.949,
+        hover: 0.922,
+        text: 0.25,
+        mutedText: 0.49
+      },
+      tint: 0.009,
+      textTint: 0.009,
+      hue: 245,
+      primary: { l: 0.52, c: 0.15, h: 248, on: 'light' }
     }
-  }),
-  darkTheme({
-    id: 'matrix',
-    name: 'Matrix',
-    background: '#020806',
-    surface: '#07120d',
-    surfaceRaised: '#0b1d13',
-    sidebar: '#000302',
-    code: '#000000',
-    foreground: '#b9ffd1',
-    mutedForeground: '#4f8b63',
-    primary: '#63ff87'
-  }),
-  darkTheme({
-    id: 'monokai',
-    name: 'Monokai',
-    background: '#272822',
-    surface: '#34352d',
-    surfaceRaised: '#41423a',
-    sidebar: '#1e1f1a',
-    code: '#181915',
-    foreground: '#f8f8f2',
-    mutedForeground: '#a5a58d',
-    primary: '#e6db74'
-  }),
-  darkTheme({
-    id: 'night-owl',
-    name: 'Night Owl',
-    background: '#011627',
-    surface: '#0b253a',
-    surfaceRaised: '#12344b',
-    sidebar: '#01111d',
-    code: '#00101b',
-    foreground: '#d6deeb',
-    mutedForeground: '#637777',
-    primary: '#82aaff',
-    lightOverrides: {
-      background: '#fbfbfd',
-      foreground: '#403f53',
-      card: '#ffffff',
-      'card-foreground': '#403f53',
-      popover: '#ffffff',
-      'popover-foreground': '#403f53',
-      primary: '#994cc3',
-      secondary: '#f0f0f7',
-      muted: '#f2f2f8',
-      'muted-foreground': '#76758a',
-      accent: '#ece8f3',
-      'accent-foreground': '#403f53',
-      border: '#d9d8e5',
-      input: '#cfcedd',
-      sidebar: '#f0f0f7',
-      'sidebar-foreground': '#403f53',
-      'sidebar-accent': '#e5e4ef',
-      'sidebar-border': '#d9d8e5',
-      'code-bg': '#ededf5'
+  },
+
+  /** Moss — desaturated forest chrome, sage accent. Calm, not Matrix-green. */
+  {
+    id: 'moss',
+    name: 'Moss',
+    dark: {
+      ladder: {
+        sidebar: 0.172,
+        code: 0.155,
+        background: 0.202,
+        card: 0.237,
+        sidebarAccent: 0.251,
+        muted: 0.249,
+        popover: 0.255,
+        secondary: 0.279,
+        hover: 0.308,
+        text: 0.93,
+        mutedText: 0.63
+      },
+      tint: 0.017,
+      textTint: 0.011,
+      hue: 152,
+      primary: { l: 0.75, c: 0.115, h: 150, on: 'dark' }
+    },
+    light: {
+      ladder: {
+        sidebar: 0.961,
+        code: 0.95,
+        background: 0.984,
+        card: 0.998,
+        sidebarAccent: 0.924,
+        muted: 0.96,
+        popover: 0.998,
+        secondary: 0.948,
+        hover: 0.921,
+        text: 0.25,
+        mutedText: 0.49
+      },
+      tint: 0.009,
+      textTint: 0.008,
+      hue: 150,
+      primary: { l: 0.5, c: 0.11, h: 152, on: 'light' }
     }
-  }),
-  darkTheme({
-    id: 'nord',
-    name: 'Nord',
-    background: '#2e3440',
-    surface: '#3b4252',
-    surfaceRaised: '#434c5e',
-    sidebar: '#272c36',
-    code: '#242933',
-    foreground: '#eceff4',
-    mutedForeground: '#8b96ad',
-    primary: '#88c0d0'
-  }),
-  darkTheme({
-    id: 'notion',
-    name: 'Notion',
-    background: '#191919',
-    surface: '#242424',
-    surfaceRaised: '#303030',
-    sidebar: '#121212',
-    code: '#101010',
-    foreground: '#f7f7f5',
-    mutedForeground: '#9b9a97',
-    primary: '#529cca'
-  }),
-  darkTheme({
-    id: 'one',
-    name: 'One',
-    background: '#282c34',
-    surface: '#323842',
-    surfaceRaised: '#3e4451',
-    sidebar: '#21252b',
-    code: '#1e2227',
-    foreground: '#abb2bf',
-    mutedForeground: '#7f848e',
-    primary: '#61afef'
-  }),
-  darkTheme({
-    id: 'oscorange',
-    name: 'Oscorange',
-    background: '#0c0c0d',
-    surface: '#181719',
-    surfaceRaised: '#272429',
-    sidebar: '#060607',
-    code: '#030304',
-    foreground: '#f3eee9',
-    mutedForeground: '#8f8580',
-    primary: '#ff9b5e'
-  }),
-  darkTheme({
-    id: 'raycast',
-    name: 'Raycast',
-    background: '#171719',
-    surface: '#222225',
-    surfaceRaised: '#303034',
-    sidebar: '#101012',
-    code: '#0c0c0e',
-    foreground: '#f8f8f8',
-    mutedForeground: '#96969f',
-    primary: '#ff6363'
-  }),
-  darkTheme({
-    id: 'rose-pine',
-    name: 'Rose Pine',
-    background: '#191724',
-    surface: '#26233a',
-    surfaceRaised: '#393552',
-    sidebar: '#12101c',
-    code: '#0f0e17',
-    foreground: '#e0def4',
-    mutedForeground: '#908caa',
-    primary: '#ebbcba'
-  }),
-  darkTheme({
-    id: 'sentry',
-    name: 'Sentry',
-    background: '#181225',
-    surface: '#241b35',
-    surfaceRaised: '#34264a',
-    sidebar: '#100b19',
-    code: '#0d0915',
-    foreground: '#f5f3f7',
-    mutedForeground: '#9587a6',
-    primary: '#7553ff',
-    primaryForeground: '#ffffff'
-  }),
-  darkTheme({
-    id: 'solarized',
-    name: 'Solarized',
-    background: '#002b36',
-    surface: '#073642',
-    surfaceRaised: '#124754',
-    sidebar: '#00212a',
-    code: '#001e26',
-    foreground: '#eee8d5',
-    mutedForeground: '#839496',
-    primary: '#dc322f',
-    lightOverrides: {
-      background: '#fdf6e3',
-      foreground: '#586e75',
-      card: '#fffaf0',
-      'card-foreground': '#586e75',
-      popover: '#eee8d5',
-      'popover-foreground': '#586e75',
-      primary: '#268bd2',
-      'primary-foreground': '#ffffff',
-      secondary: '#eee8d5',
-      'secondary-foreground': '#586e75',
-      muted: '#eee8d5',
-      'muted-foreground': '#839496',
-      accent: '#e7dfc8',
-      'accent-foreground': '#586e75',
-      border: '#d8cfb8',
-      input: '#cec4aa',
-      ring: 'rgb(38 139 210 / 35%)',
-      sidebar: '#eee8d5',
-      'sidebar-foreground': '#586e75',
-      'sidebar-accent': '#e3dbc4',
-      'sidebar-border': '#d8cfb8',
-      'code-bg': '#eee8d5',
-      success: '#859900',
-      warning: '#b58900'
+  },
+
+  /** Iris — deep plum chrome, violet accent. */
+  {
+    id: 'iris',
+    name: 'Iris',
+    dark: {
+      ladder: {
+        sidebar: 0.175,
+        code: 0.158,
+        background: 0.205,
+        card: 0.24,
+        sidebarAccent: 0.254,
+        muted: 0.252,
+        popover: 0.258,
+        secondary: 0.283,
+        hover: 0.313,
+        text: 0.93,
+        mutedText: 0.64
+      },
+      tint: 0.02,
+      textTint: 0.013,
+      hue: 295,
+      primary: { l: 0.74, c: 0.14, h: 296, on: 'dark' }
+    },
+    light: {
+      ladder: {
+        sidebar: 0.962,
+        code: 0.951,
+        background: 0.985,
+        card: 0.999,
+        sidebarAccent: 0.925,
+        muted: 0.961,
+        popover: 0.999,
+        secondary: 0.949,
+        hover: 0.922,
+        text: 0.25,
+        mutedText: 0.49
+      },
+      tint: 0.009,
+      textTint: 0.009,
+      hue: 295,
+      primary: { l: 0.5, c: 0.19, h: 296, on: 'light' }
     }
-  }),
-  darkTheme({
-    id: 'temple',
-    name: 'Temple',
-    background: '#06100c',
-    surface: '#0d1d16',
-    surfaceRaised: '#173226',
-    sidebar: '#030806',
-    code: '#010403',
-    foreground: '#e4f2c0',
-    mutedForeground: '#7f9d78',
-    primary: '#d4f542'
-  }),
-  darkTheme({
-    id: 'tokyo-night',
-    name: 'Tokyo Night',
-    background: '#1a1b26',
-    surface: '#24283b',
-    surfaceRaised: '#32364d',
-    sidebar: '#13141c',
-    code: '#101117',
-    foreground: '#c0caf5',
-    mutedForeground: '#737aa2',
-    primary: '#7aa2f7'
-  }),
-  darkTheme({
-    id: 'vercel',
-    name: 'Vercel',
-    background: '#000000',
-    surface: '#111111',
-    surfaceRaised: '#1f1f1f',
-    sidebar: '#000000',
-    code: '#000000',
-    foreground: '#ededed',
-    mutedForeground: '#888888',
-    primary: '#0070f3',
-    primaryForeground: '#ffffff',
-    border: '#2e2e2e'
-  }),
-  darkTheme({
-    id: 'vs-code-plus',
-    name: 'VS Code Plus',
-    background: '#1e1e1e',
-    surface: '#252526',
-    surfaceRaised: '#333333',
-    sidebar: '#181818',
-    code: '#151515',
-    foreground: '#d4d4d4',
-    mutedForeground: '#858585',
-    primary: '#3794ff',
-    primaryForeground: '#ffffff'
-  }),
-  darkTheme({
-    id: 'xcode',
-    name: 'Xcode',
-    background: '#1f2430',
-    surface: '#292e3a',
-    surfaceRaised: '#343b49',
-    sidebar: '#191d27',
-    code: '#151820',
-    foreground: '#d7dae0',
-    mutedForeground: '#7f8799',
-    primary: '#4da6ff'
-  })
+  }
 ]
 
-export const THEMES: ThemeDef[] = [carbonTheme, ...codexThemes]
+export const THEMES: ThemeDef[] = SPECS.map(theme)
 
 export const DEFAULT_THEME = 'carbon'
 export const DEFAULT_THEME_MODE: ThemeMode = 'dark'
@@ -610,7 +458,9 @@ export function storedTheme(): string {
   const raw = localStorage.getItem('theme') ?? DEFAULT_THEME
   // Builds before the registry stored appearance names instead of theme IDs.
   const id = raw === 'dark' || raw === 'light' ? DEFAULT_THEME : raw
-  return THEMES.some((theme) => theme.id === id) ? id : DEFAULT_THEME
+  // Also the migration path off a retired theme id: anything not in the
+  // registry lands on Carbon rather than an unstyled app.
+  return THEMES.some((candidate) => candidate.id === id) ? id : DEFAULT_THEME
 }
 
 export function storedThemeMode(): ThemeMode {
@@ -628,23 +478,16 @@ export function resolveAppearance(
   return dark ? 'dark' : 'light'
 }
 
-export function varsForAppearance(
-  theme: ThemeDef,
-  appearance: ResolvedAppearance
-): Record<string, string> {
-  return appearance === 'dark' ? theme.vars : theme.lightVars
-}
-
 export function applyTheme(id: string, mode: ThemeMode): ResolvedAppearance {
-  const theme =
+  const selected =
     THEMES.find((candidate) => candidate.id === id) ??
     THEMES.find((candidate) => candidate.id === DEFAULT_THEME)!
   const appearance = resolveAppearance(mode)
-  document.documentElement.dataset.theme = theme.id
+  document.documentElement.dataset.theme = selected.id
   document.documentElement.dataset.appearance = appearance
   document.documentElement.classList.toggle('dark', appearance === 'dark')
   document.documentElement.style.colorScheme = appearance
-  localStorage.setItem('theme', theme.id)
+  localStorage.setItem('theme', selected.id)
   localStorage.setItem('themeMode', mode)
   return appearance
 }
@@ -724,16 +567,16 @@ export function applyCodeFontSize(px: number): void {
 export function installThemes(): void {
   if (document.getElementById('theme-vars')) return
   const block = (
-    theme: ThemeDef,
+    def: ThemeDef,
     appearance: ResolvedAppearance,
     vars: Record<string, string>
   ): string =>
-    `:root[data-theme='${theme.id}'][data-appearance='${appearance}'] {\n${Object.entries(vars)
+    `:root[data-theme='${def.id}'][data-appearance='${appearance}'] {\n${Object.entries(vars)
       .map(([key, value]) => `  --${key}: ${value};`)
       .join('\n')}\n}`
-  const css = THEMES.flatMap((theme) => [
-    block(theme, 'dark', theme.vars),
-    block(theme, 'light', theme.lightVars)
+  const css = THEMES.flatMap((def) => [
+    block(def, 'dark', def.vars),
+    block(def, 'light', def.lightVars)
   ]).join('\n')
   const style = document.createElement('style')
   style.id = 'theme-vars'
