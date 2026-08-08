@@ -542,45 +542,30 @@ function Breakdown({ report }: { report: UsageReport }): React.JSX.Element {
 }
 
 /**
- * How much of the headline to trust. Every token either matched a published rate
- * or didn't, and a page of dollar figures owes the reader that ratio — a new
- * model slug nobody has a price for would otherwise just make the total quietly
- * too low.
+ * Caveats, and only when there are any.
+ *
+ * The page used to carry a permanent "cost quality" panel reporting the priced
+ * share — which reads `100.0% / 0.0%` on every normal corpus, so it spent a third
+ * of a row saying nothing. The disclosure still has to exist, because a model slug
+ * with no published rate makes the headline quietly too low, but it belongs where
+ * an exception belongs: absent until there is one.
  */
-function CostQuality({ report }: { report: UsageReport }): React.JSX.Element {
-  const t = report.total
-  const all = tokensOf(t)
-  const priced = all - t.unpricedTokens
-  const pct = (n: number): string => `${all > 0 ? ((n / all) * 100).toFixed(1) : '0.0'}%`
+function Caveats({ report }: { report: UsageReport }): React.JSX.Element | null {
+  const all = tokensOf(report.total)
+  const unpriced = report.total.unpricedTokens
+  const lines = [...report.notes]
+  if (unpriced > 0 && all > 0) {
+    lines.unshift(
+      `${((unpriced / all) * 100).toFixed(1)}% of tokens ran on models with no published rate — the total above excludes them.`
+    )
+  }
+  if (!lines.length) return null
   return (
-    <Card>
-      <h2 className="text-[15px] font-semibold">Cost quality</h2>
-      <dl className="mt-3 space-y-2.5 text-[13px]">
-        <div className="flex items-baseline justify-between gap-3">
-          <dt className="text-muted-foreground">Model priced</dt>
-          <dd className="tabular-nums">{pct(priced)}</dd>
-        </div>
-        <div className="flex items-baseline justify-between gap-3">
-          <dt className="text-muted-foreground">Unpriced</dt>
-          <dd className={cn('tabular-nums', t.unpricedTokens > 0 && 'text-warning')}>
-            {pct(t.unpricedTokens)}
-          </dd>
-        </div>
-        <div className="flex items-baseline justify-between gap-3 border-t border-border pt-2.5">
-          <dt className="text-muted-foreground">Cache savings</dt>
-          <dd className="tabular-nums">{formatUsd(t.savingsUsd)}</dd>
-        </div>
-      </dl>
-      <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">
-        Cache savings is what re-sending the same context uncached would have cost on top of
-        what it did.
-      </p>
-      {report.notes.map((note) => (
-        <p key={note} className="mt-2 text-[11px] leading-relaxed text-warning">
-          {note}
-        </p>
+    <div className="px-1 text-[11px] leading-relaxed text-warning">
+      {lines.map((line) => (
+        <p key={line}>{line}</p>
       ))}
-    </Card>
+    </div>
   )
 }
 
@@ -606,44 +591,22 @@ export function UsageStats(): React.JSX.Element {
 
   return (
     <div className="flex min-w-0 flex-1 flex-col">
+      {/* The window strip carries the page's identity and nothing else — the
+          range picker changes what the *content* says, so it belongs with the
+          content, not with the traffic lights. */}
       <header className="drag flex h-[38px] shrink-0 items-center justify-between gap-3 border-b border-border px-4">
         <span className="text-sm font-semibold">Usage</span>
-        <div className="no-drag flex items-center gap-1.5">
-          <div className="flex rounded-md bg-secondary p-0.5">
-            {USAGE_RANGES.map((r) => (
-              <button
-                key={r.days}
-                type="button"
-                aria-pressed={days === r.days}
-                onClick={() => void load(r.days)}
-                className={cn(
-                  'rounded-[5px] px-2 py-0.5 text-[11px] transition-colors',
-                  days === r.days
-                    ? 'bg-card font-medium text-foreground shadow-sm'
-                    : 'text-muted-foreground hover:text-foreground'
-                )}
-              >
-                {r.label}
-              </button>
-            ))}
-          </div>
-          <WithTooltip label="Re-read session logs">
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              aria-label="Refresh usage"
-              disabled={loading}
-              onClick={() => void load(days, true)}
-            >
-              <RefreshCw className={cn('size-3.5', loading && 'animate-spin')} />
-            </Button>
-          </WithTooltip>
-          <WithTooltip label="Close usage  esc">
-            <Button size="icon-sm" variant="ghost" aria-label="Close usage" onClick={closeUsage}>
-              <X />
-            </Button>
-          </WithTooltip>
-        </div>
+        <WithTooltip label="Close usage  esc">
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            className="no-drag"
+            aria-label="Close usage"
+            onClick={closeUsage}
+          >
+            <X />
+          </Button>
+        </WithTooltip>
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
@@ -654,6 +617,45 @@ export function UsageStats(): React.JSX.Element {
           </div>
         ) : (
           <div className="mx-auto max-w-5xl space-y-4 p-6">
+            {/* The window the whole page is about, and the controls that change
+                it — one row, above everything the range applies to. */}
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h1 className="text-[15px] font-semibold">
+                {shortDay(report.from)} to {shortDay(report.to)}
+              </h1>
+              <div className="flex items-center gap-1.5">
+                <div className="flex rounded-md bg-secondary p-0.5">
+                  {USAGE_RANGES.map((r) => (
+                    <button
+                      key={r.days}
+                      type="button"
+                      aria-pressed={days === r.days}
+                      onClick={() => void load(r.days)}
+                      className={cn(
+                        'rounded-[5px] px-2.5 py-1 text-[11px] transition-colors',
+                        days === r.days
+                          ? 'bg-card font-medium text-foreground shadow-sm'
+                          : 'text-muted-foreground hover:text-foreground'
+                      )}
+                    >
+                      {r.label}
+                    </button>
+                  ))}
+                </div>
+                <WithTooltip label="Re-read session logs">
+                  <Button
+                    size="icon-sm"
+                    variant="ghost"
+                    aria-label="Refresh usage"
+                    disabled={loading}
+                    onClick={() => void load(days, true)}
+                  >
+                    <RefreshCw className={cn('size-3.5', loading && 'animate-spin')} />
+                  </Button>
+                </WithTooltip>
+              </div>
+            </div>
+
             <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.6fr)]">
               <Card className="flex flex-col">
                 <Label>Raw token cost</Label>
@@ -701,15 +703,13 @@ export function UsageStats(): React.JSX.Element {
 
             <StatRow report={report} />
 
-            <div className="grid gap-4 lg:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)]">
-              <Breakdown report={report} />
-              <CostQuality report={report} />
-            </div>
+            <Breakdown report={report} />
+
+            <Caveats report={report} />
 
             <div className="flex items-center justify-between px-1 pb-2 text-[11px] text-muted-foreground">
               <span>
-                {shortDay(report.from)} to {shortDay(report.to)} · read from Claude Code and Codex
-                session logs, including turns run outside Carbon
+                Read from Claude Code and Codex session logs, including turns run outside Carbon
               </span>
               <span>{updatedLabel(report.scannedAt)}</span>
             </div>
