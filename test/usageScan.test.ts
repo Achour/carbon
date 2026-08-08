@@ -3,11 +3,16 @@ import assert from 'node:assert/strict'
 import {
   CodexFileReader,
   addSample,
+  cellTokens,
   emptyCell,
   localDay,
   parseClaudeLine,
+  lookupFrom,
+  parseRateFeed,
+  priceCell,
   rateFor
 } from '../src/main/usageScan.ts'
+
 
 // ---------- Claude lines ----------
 
@@ -94,7 +99,8 @@ test('models price by longest matching prefix', () => {
   // Dated snapshots and the 1M-context suffix land on their family.
   assert.equal(rateFor('claude-haiku-4-5-20251001')?.input, 1)
   assert.equal(rateFor('claude-opus-5[1m]')?.input, 5)
-  // Codex-only slugs bill as the GPT-5 family.
+  // With no fetched table, Codex-only slugs fall back to the GPT-5 family — a
+  // guess the live feed exists to correct (it prices gpt-5.6-sol at $5/$30).
   assert.equal(rateFor('gpt-5.6-sol')?.input, 1.25)
   assert.equal(rateFor('gpt-5.4-mini')?.input, 0.25)
   assert.equal(rateFor('codex-auto-review')?.input, 1.25)
@@ -110,6 +116,11 @@ test('an unknown model has no rate rather than a free one', () => {
   assert.equal(rateFor(''), null)
 })
 
+test('sonnet 5 carries its introductory rate while it is in force', () => {
+  assert.equal(rateFor('claude-sonnet-5')?.input, 2)
+  assert.equal(rateFor('claude-sonnet-5')?.output, 10)
+})
+
 test('cache reads and writes bill off the input rate', () => {
   const r = rateFor('claude-opus-5')
   assert.ok(r)
@@ -120,35 +131,72 @@ test('cache reads and writes bill off the input rate', () => {
 
 // ---------- Accumulation ----------
 
-test('a priced sample banks cost and the saving cache bought', () => {
+test('a cell is priced at read time, banking cost and the saving cache bought', () => {
   const cell = emptyCell('claude', 'claude-opus-5', '2026-08-08')
-  addSample(cell, rateFor('claude-opus-5'), {
+  addSample(cell, {
     input: 1_000_000,
     cacheRead: 1_000_000,
     cacheWrite5m: 0,
     cacheWrite1h: 1_000_000,
     output: 1_000_000
   })
-  // 5 + 0.5 + 10 + 25
-  assert.equal(cell.costUsd, 40.5)
-  // The million cached tokens would have cost $5 uncached and cost $0.50.
-  assert.equal(cell.savingsUsd, 4.5)
   assert.equal(cell.responses, 1)
-  assert.equal(cell.unpricedTokens, 0)
+  assert.equal(cellTokens(cell), 4_000_000)
+  const cost = priceCell(cell)
+  // 5 + 0.5 + 10 + 25
+  assert.equal(cost.costUsd, 40.5)
+  // The million cached tokens would have cost $5 uncached and cost $0.50.
+  assert.equal(cost.savingsUsd, 4.5)
+  assert.equal(cost.unpricedTokens, 0)
 })
 
-test('an unpriced sample counts tokens but never invents a cost', () => {
+test('an unpriced cell counts tokens but never invents a cost', () => {
   const cell = emptyCell('codex', 'mystery-model', '2026-08-08')
-  addSample(cell, rateFor('mystery-model'), {
-    input: 10,
-    cacheRead: 20,
-    cacheWrite5m: 5,
-    cacheWrite1h: 0,
-    output: 3
-  })
-  assert.equal(cell.costUsd, 0)
-  assert.equal(cell.unpricedTokens, 38)
+  addSample(cell, { input: 10, cacheRead: 20, cacheWrite5m: 5, cacheWrite1h: 0, output: 3 })
+  const cost = priceCell(cell)
+  assert.equal(cost.costUsd, 0)
+  assert.equal(cost.unpricedTokens, 38)
   assert.equal(cell.output, 3)
+})
+
+test('a fetched rate table wins over the built-in one, and falls back to it', () => {
+  // The case this exists for: the Codex-only slugs are billed well above the
+  // GPT-5 family they are named after, and only the feed knows that.
+  const lookup = lookupFrom({
+    'gpt-5.6-sol': {
+      input: 5,
+      output: 30,
+      cacheRead: 0.5,
+      cacheWrite5m: 6.25,
+      cacheWrite1h: 6.25
+    }
+  })
+  assert.equal(rateFor('gpt-5.6-sol', undefined, lookup)?.input, 5)
+  // Not in the feed: the built-in table still answers rather than nothing.
+  assert.equal(rateFor('claude-opus-5', undefined, lookup)?.input, 5)
+  assert.equal(rateFor('claude-fable-5', undefined, lookup)?.output, 50)
+  assert.equal(rateFor('nothing-anywhere', undefined, lookup), null)
+})
+
+test('fetched rates are matched by longest prefix too, so snapshots resolve', () => {
+  const lookup = lookupFrom({
+    'claude-haiku-4-5': {
+      input: 1,
+      output: 5,
+      cacheRead: 0.1,
+      cacheWrite5m: 1.25,
+      cacheWrite1h: 2
+    }
+  })
+  assert.equal(rateFor('claude-haiku-4-5-20251001', undefined, lookup)?.cacheWrite1h, 2)
+})
+
+test('fast mode overrides any table — it is a SKU, not a model id', () => {
+  const lookup = lookupFrom({
+    'claude-opus-5': { input: 5, output: 25, cacheRead: 0.5, cacheWrite5m: 6.25, cacheWrite1h: 10 }
+  })
+  assert.equal(rateFor('claude-opus-5', 'fast', lookup)?.output, 50)
+  assert.equal(rateFor('claude-opus-5', 'standard', lookup)?.output, 25)
 })
 
 test('days are bucketed in the local zone, not UTC', () => {
@@ -257,4 +305,62 @@ test('take() drains, so a reused reader never double-counts a file', () => {
   ])
   assert.equal(r.take().length, 1)
   assert.equal(r.take().length, 0)
+})
+
+// ---------- Rate feed ----------
+
+test('a feed entry converts per-token dollars into per-million rates', () => {
+  const r = parseRateFeed({
+    'gpt-5.6-sol': {
+      input_cost_per_token: 5e-6,
+      output_cost_per_token: 3e-5,
+      cache_read_input_token_cost: 5e-7
+    }
+  })['gpt-5.6-sol']
+  assert.ok(r)
+  assert.equal(r.input, 5)
+  assert.equal(r.output, 30)
+  assert.equal(r.cacheRead, 0.5)
+  // No write premium published: falls back to the provider convention (1.25x),
+  // and with no 1-hour field the two TTLs collapse — right for OpenAI, which
+  // charges nothing for writes and has no 1-hour tier at all.
+  assert.equal(r.cacheWrite5m, 6.25)
+  assert.equal(r.cacheWrite1h, 6.25)
+})
+
+test('the feed’s 1-hour cache-write field is kept, since Claude Code uses it', () => {
+  const r = parseRateFeed({
+    'claude-fable-5': {
+      input_cost_per_token: 1e-5,
+      output_cost_per_token: 5e-5,
+      cache_creation_input_token_cost: 1.25e-5,
+      cache_creation_input_token_cost_above_1hr: 2e-5
+    }
+  })['claude-fable-5']
+  assert.ok(r)
+  assert.equal(r.cacheWrite5m, 12.5)
+  assert.equal(r.cacheWrite1h, 20)
+})
+
+test('a bare feed key beats a provider-qualified one, whatever the order', () => {
+  const before = parseRateFeed({
+    'vertex_ai/claude-opus-5': { input_cost_per_token: 9e-6, output_cost_per_token: 9e-6 },
+    'claude-opus-5': { input_cost_per_token: 5e-6, output_cost_per_token: 2.5e-5 }
+  })
+  const after = parseRateFeed({
+    'claude-opus-5': { input_cost_per_token: 5e-6, output_cost_per_token: 2.5e-5 },
+    'bedrock/claude-opus-5': { input_cost_per_token: 9e-6, output_cost_per_token: 9e-6 }
+  })
+  assert.equal(before['claude-opus-5'].input, 5)
+  assert.equal(after['claude-opus-5'].input, 5)
+})
+
+test('feed entries that price nothing are dropped rather than costing zero', () => {
+  const r = parseRateFeed({
+    'some-embedding-model': { max_tokens: 8192, mode: 'embedding' },
+    'not-an-object': 7,
+    'negative-nonsense': { input_cost_per_token: -1, output_cost_per_token: -1 }
+  })
+  assert.deepEqual(Object.keys(r), [])
+  assert.equal(lookupFrom(r)('some-embedding-model'), null)
 })

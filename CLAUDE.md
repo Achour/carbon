@@ -136,21 +136,29 @@ same files as a terminal one. That is also why the page does **not** also sum th
   and no model — hence `CodexFileReader`, a per-file cursor that carries the model
   forward from `turn_context` / `thread_settings_applied` and sums only the delta.
   Its `input_tokens` is *inclusive* of `cached_input_tokens`; Claude's is not.
-- **Pricing is a static list-price table** (`rateFor`, longest-prefix match, so
-  dated snapshots and `[1m]` suffixes land on their family). Claude's cache reads
-  and writes derive from the input rate — and the 5-minute/1-hour write split is
-  honored, because at 2× vs 1.25× it is not a rounding error. Fast mode is a
-  different SKU, not a faster tier, and `usage.speed` says which one served the
-  turn. Anything unpriced is counted in tokens and reported as such in the
-  page's "Cost quality" panel rather than silently costing nothing.
-- **Nothing is read twice.** Each file's contribution reduces to a few
-  `(model, day)` cells cached under `(path, mtime, size)` in
-  `userData/usage-cache.json`; session logs are append-only, so an unchanged
-  stamp means unchanged content. A cold scan is ~2 GB and ~5 s, a warm one ~20 ms,
-  and switching range never re-reads (cells are stored per day and re-filtered).
-  `CACHE_VERSION` exists because the cache stores *derived* cells — change the
-  parsing or the price table and it must be bumped, or the fix applies only to
-  sessions written afterwards.
+- **Rates are fetched, not hard-coded** (`usageRates.ts`). A static table cannot
+  price the Codex-only slugs: `gpt-5.6-sol` bills at $5/$30 per MTok, 4× the
+  GPT-5 family it is named after, and guessing the family understated Codex spend
+  by ~4×. They come from LiteLLM's public `model_prices_and_context_window.json`
+  — the feed `ccusage` prices against — cached 24h in `userData/usage-rates.json`,
+  fetched only when the page is opened. The built-in table in `usageScan.ts` is
+  the fallback, not the source: it answers before the first fetch and forever if
+  the fetch never lands, and an id the feed doesn't know falls through to it and
+  then to being reported unpriced rather than silently free.
+- **The 1-hour cache-write rate is applied** (2× input vs 1.25× for 5-minute).
+  Claude Code writes 1-hour caches almost exclusively and they run to ~170M
+  tokens a month, so collapsing the two TTLs understates Claude by ~8%. Fast mode
+  is likewise a different SKU rather than a faster tier — `usage.speed` says which
+  served the turn, and it is part of the cell key for exactly that reason.
+- **Nothing is read twice, and cells hold tokens rather than money.** Each file
+  reduces to a few `(model, speed, day)` cells cached under `(path, mtime, size)`
+  in `userData/usage-cache.json`; session logs are append-only, so an unchanged
+  stamp means unchanged content. Cost is applied at *read* time (`priceCell`) —
+  a cell that stored dollars would freeze one day's rates into a file that never
+  changes again and therefore never gets re-read, which is precisely the bug a
+  refreshing rate feed would otherwise introduce. A cold scan is ~2 GB and ~5 s,
+  a warm one ~20 ms, and switching range never re-reads. `CACHE_VERSION` now
+  tracks only the *parsing* — rate changes reprice for free.
 
 `--chart-claude` / `--chart-codex` (`index.css`) are the one place the app carries
 hue a theme does not set: on a page whose job is "Claude vs Codex" the colors *are*

@@ -23,49 +23,63 @@
 
 // ---------- Buckets ----------
 
-/** One provider+model+day cell. Tokens and the money they cost, together. */
+/**
+ * One provider+model+speed+day cell — **tokens only, never money**.
+ *
+ * Cells are what the per-file cache persists, and rates are refreshed from a
+ * live feed, so a cell that stored dollars would freeze yesterday's prices into
+ * a file whose content never changed and therefore never gets re-read. Tokens
+ * are a fact about the transcript; cost is a function applied at read time.
+ *
+ * `speed` is part of the key because fast mode is billed as a different model
+ * even though the transcript reports the same id.
+ */
 export interface UsageCell {
   provider: 'claude' | 'codex'
   model: string
+  /** `usage.speed` from the transcript — 'fast' bills at a premium SKU. */
+  speed?: string
   /** Local calendar day, `YYYY-MM-DD`. */
   day: string
   /** Input tokens billed at the full rate (cache misses). */
   input: number
-  /** Input tokens served from cache, billed at ~10% (Claude) / 10% (Codex). */
+  /** Input tokens served from cache, billed at ~10% of input. */
   cacheRead: number
-  /** Input tokens written *into* the cache, billed at a premium. */
-  cacheWrite: number
+  /** Cache writes with the 5-minute TTL — 1.25x input on Anthropic. */
+  cacheWrite5m: number
+  /** Cache writes with the 1-hour TTL — 2x input. Claude Code uses these. */
+  cacheWrite1h: number
   output: number
   /** Reasoning tokens — a subset of `output`, reported only by Codex. */
   reasoning: number
-  costUsd: number
-  /** What `cacheRead` would have cost at the full input rate, minus what it did. */
-  savingsUsd: number
   /** Assistant responses (Claude) / sampled turns (Codex) this cell covers. */
   responses: number
-  /** Tokens we had no rate for — `costUsd` excludes them. */
-  unpricedTokens: number
 }
 
 export function emptyCell(
   provider: UsageCell['provider'],
   model: string,
-  day: string
+  day: string,
+  speed?: string
 ): UsageCell {
   return {
     provider,
     model,
+    speed,
     day,
     input: 0,
     cacheRead: 0,
-    cacheWrite: 0,
+    cacheWrite5m: 0,
+    cacheWrite1h: 0,
     output: 0,
     reasoning: 0,
-    costUsd: 0,
-    savingsUsd: 0,
-    responses: 0,
-    unpricedTokens: 0
+    responses: 0
   }
+}
+
+/** Every token in a cell, whatever kind. */
+export function cellTokens(c: UsageCell): number {
+  return c.input + c.cacheRead + c.cacheWrite5m + c.cacheWrite1h + c.output
 }
 
 /** `YYYY-MM-DD` in the *local* zone — the day the user remembers working. */
@@ -117,10 +131,16 @@ function openai(input: number, output: number, cachedInput = input * 0.1): Rate 
 }
 
 /**
- * Published list prices, newest first. Matching is longest-prefix, so a dated
- * snapshot (`claude-haiku-4-5-20251001`) and a context suffix (`…[1m]`) both land
- * on their family, and an unreleased sibling of a known family still prices at
- * the family rate instead of silently costing nothing.
+ * The offline fallback table, newest first. Matching is longest-prefix, so a
+ * dated snapshot (`claude-haiku-4-5-20251001`) and a context suffix (`…[1m]`)
+ * both land on their family, and an unreleased sibling of a known family still
+ * prices at the family rate instead of silently costing nothing.
+ *
+ * Live rates come from LiteLLM (`usageRates.ts`); this is what the page uses
+ * before the first fetch lands and whenever it can't. Anthropic's figures are
+ * published and stable enough to hard-code; the OpenAI ones are the family
+ * defaults, which is exactly why the fetched table has to win — the Codex-only
+ * slugs are priced well above the GPT-5 family they look like.
  *
  * These are *API list prices*. Nobody paying a Max or Plus subscription is billed
  * them — which is the whole reason the UI calls the headline figure "raw token
@@ -138,7 +158,11 @@ const RATES: [prefix: string, rate: Rate][] = [
   ['claude-opus-4', anthropic(15, 75)],
   ['claude-opus-3', anthropic(15, 75)],
   ['claude-3-opus', anthropic(15, 75)],
-  ['claude-sonnet-5', anthropic(3, 15)],
+  // Introductory pricing, through 2026-08-31. Deliberately the intro figure and
+  // not the $3/$15 list: this table prices turns that already happened, and
+  // they happened at the rate in force. It goes stale on its own when LiteLLM
+  // flips, which is the argument for the fetched table being primary.
+  ['claude-sonnet-5', anthropic(2, 10)],
   ['claude-sonnet-4', anthropic(3, 15)],
   ['claude-3-7-sonnet', anthropic(3, 15)],
   ['claude-3-5-sonnet', anthropic(3, 15)],
@@ -164,14 +188,16 @@ const RATES: [prefix: string, rate: Rate][] = [
  */
 const FAST_RATE = anthropic(10, 50)
 
-/** The published rate for a model, or `null` when we have no figure for it. */
-export function rateFor(model: string, speed?: string): Rate | null {
-  const id = model.trim().toLowerCase().replace(/\[1m\]$/, '')
-  if (!id) return null
-  if (speed === 'fast' && id.startsWith('claude-opus-')) return FAST_RATE
+/** A model id, as it appears in a transcript, reduced to a table key. */
+export function normalizeModel(model: string): string {
+  return model.trim().toLowerCase().replace(/\[1m\]$/, '')
+}
+
+/** Longest-prefix match over a rate table. */
+export function matchRate(id: string, table: [string, Rate][]): Rate | null {
   let best: Rate | null = null
   let bestLen = -1
-  for (const [prefix, rate] of RATES) {
+  for (const [prefix, rate] of table) {
     if (id.startsWith(prefix) && prefix.length > bestLen) {
       best = rate
       bestLen = prefix.length
@@ -180,10 +206,35 @@ export function rateFor(model: string, speed?: string): Rate | null {
   return best
 }
 
-/** Add one priced sample to `cell`, or bank it as unpriced when we have no rate. */
+/** The built-in table's answer for a model, or null. */
+export function staticRate(id: string): Rate | null {
+  return matchRate(id, RATES)
+}
+
+/** Where rates come from: the fetched table, or the built-in fallback. */
+export type RateLookup = (id: string) => Rate | null
+
+/**
+ * The published rate for a model, or `null` when nothing has a figure for it.
+ *
+ * Fast mode is checked first and deliberately overrides the table: it is a
+ * separate SKU billed at Fable rates, and no rate feed keys it separately
+ * because it isn't a separate model id — the transcript records it on the turn.
+ */
+export function rateFor(
+  model: string,
+  speed?: string,
+  lookup: RateLookup = staticRate
+): Rate | null {
+  const id = normalizeModel(model)
+  if (!id) return null
+  if (speed === 'fast' && id.startsWith('claude-opus-')) return FAST_RATE
+  return lookup(id)
+}
+
+/** Fold one sample's tokens into `cell`. */
 export function addSample(
   cell: UsageCell,
-  rate: Rate | null,
   s: {
     input: number
     cacheRead: number
@@ -193,27 +244,123 @@ export function addSample(
     reasoning?: number
   }
 ): void {
-  const write = s.cacheWrite5m + s.cacheWrite1h
   cell.input += s.input
   cell.cacheRead += s.cacheRead
-  cell.cacheWrite += write
+  cell.cacheWrite5m += s.cacheWrite5m
+  cell.cacheWrite1h += s.cacheWrite1h
   cell.output += s.output
   cell.reasoning += s.reasoning ?? 0
   cell.responses += 1
-  if (!rate) {
-    cell.unpricedTokens += s.input + s.cacheRead + write + s.output
-    return
-  }
+}
+
+/** What a cell cost, and what caching saved on it. */
+export interface CellCost {
+  costUsd: number
+  /** What `cacheRead` would have cost at the full input rate, minus what it did. */
+  savingsUsd: number
+  /** Tokens with no rate. `costUsd` excludes them rather than counting them free. */
+  unpricedTokens: number
+}
+
+/** Price a cell. Applied at read time, so a rate refresh reprices everything. */
+export function priceCell(cell: UsageCell, lookup: RateLookup = staticRate): CellCost {
+  const rate = rateFor(cell.model, cell.speed, lookup)
+  if (!rate) return { costUsd: 0, savingsUsd: 0, unpricedTokens: cellTokens(cell) }
   const m = 1e6
-  cell.costUsd +=
-    (s.input * rate.input +
-      s.cacheRead * rate.cacheRead +
-      s.cacheWrite5m * rate.cacheWrite5m +
-      s.cacheWrite1h * rate.cacheWrite1h +
-      s.output * rate.output) /
-    m
-  // What re-sending that context uncached would have cost, minus what it did.
-  cell.savingsUsd += (s.cacheRead * (rate.input - rate.cacheRead)) / m
+  return {
+    costUsd:
+      (cell.input * rate.input +
+        cell.cacheRead * rate.cacheRead +
+        cell.cacheWrite5m * rate.cacheWrite5m +
+        cell.cacheWrite1h * rate.cacheWrite1h +
+        cell.output * rate.output) /
+      m,
+    savingsUsd: (cell.cacheRead * (rate.input - rate.cacheRead)) / m,
+    unpricedTokens: 0
+  }
+}
+
+// ---------- Fetched rate tables ----------
+
+/**
+ * A rate table fetched from LiteLLM's `model_prices_and_context_window.json` —
+ * the community-maintained feed `ccusage` and other usage tools price against.
+ * Parsing it lives here, with the built-in table it overrides, so both are
+ * covered by the same tests; the fetching and caching live in `usageRates.ts`.
+ */
+
+/** LiteLLM stores dollars per *token*; everything in `Rate` is per million. */
+const PER_M = 1e6
+
+function feedCost(entry: Record<string, unknown>, key: string): number | null {
+  const v = entry[key]
+  return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v * PER_M : null
+}
+
+/**
+ * One feed entry → a rate, or null when it prices no tokens.
+ *
+ * The cache fields are optional, and the fallbacks are the providers' own
+ * conventions: reads at 10% of input, 5-minute writes at 1.25x. The 1-hour write
+ * field is Anthropic-only and absent for OpenAI, where collapsing it onto the
+ * 5-minute figure is right because OpenAI charges no write premium at all.
+ */
+export function rateFromFeedEntry(entry: Record<string, unknown>): Rate | null {
+  const input = feedCost(entry, 'input_cost_per_token')
+  const output = feedCost(entry, 'output_cost_per_token')
+  if (input == null && output == null) return null
+  const base = input ?? 0
+  const write5m = feedCost(entry, 'cache_creation_input_token_cost') ?? base * 1.25
+  return {
+    input: base,
+    output: output ?? 0,
+    cacheRead: feedCost(entry, 'cache_read_input_token_cost') ?? base * 0.1,
+    cacheWrite5m: write5m,
+    cacheWrite1h: feedCost(entry, 'cache_creation_input_token_cost_above_1hr') ?? write5m
+  }
+}
+
+/**
+ * The feed keys models both bare (`claude-opus-5`) and provider-qualified
+ * (`anthropic/claude-opus-5`, `vertex_ai/…`). We key on the bare name and let a
+ * bare entry win: the qualified variants are the same model resold at a
+ * different price, and the transcripts never say which reseller served a turn.
+ */
+export function parseRateFeed(json: unknown): Record<string, Rate> {
+  const out: Record<string, Rate> = {}
+  if (!json || typeof json !== 'object') return out
+  for (const [key, value] of Object.entries(json as Record<string, unknown>)) {
+    if (!value || typeof value !== 'object') continue
+    const rate = rateFromFeedEntry(value as Record<string, unknown>)
+    if (!rate) continue
+    const qualified = key.includes('/')
+    const id = (qualified ? key.slice(key.lastIndexOf('/') + 1) : key).toLowerCase()
+    if (!id) continue
+    if (!qualified) out[id] = rate
+    else if (!(id in out)) out[id] = rate
+  }
+  return out
+}
+
+/**
+ * A lookup over fetched rates that falls back to the built-in table.
+ *
+ * Exact match first, then longest prefix — a dated snapshot like
+ * `claude-haiku-4-5-20251001` has to find `claude-haiku-4-5`, and a model
+ * released after this build has to find its family rather than nothing.
+ */
+export function lookupFrom(rates: Record<string, Rate>): RateLookup {
+  const entries = Object.entries(rates)
+  // Memoized because the miss path walks ~3,000 feed keys and a scan asks about
+  // the same handful of model ids tens of thousands of times.
+  const memo = new Map<string, Rate | null>()
+  return (id) => {
+    const hit = memo.get(id)
+    if (hit !== undefined) return hit
+    const rate = rates[id] ?? matchRate(id, entries) ?? staticRate(id)
+    memo.set(id, rate)
+    return rate
+  }
 }
 
 // ---------- Claude transcripts ----------
