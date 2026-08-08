@@ -543,7 +543,7 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
         className={cn(
           // pr matches the panel header's px-2.5 so the panel toggle sits at the
           // same inset whether it renders here or over there.
-          'drag flex h-[38px] shrink-0 items-center gap-2 border-b border-border pl-4 pr-2.5',
+          'drag flex h-[38px] shrink-0 items-center gap-2 pl-4 pr-2.5',
           !sidebarOpen && 'pl-[84px]'
         )}
       >

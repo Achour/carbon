@@ -733,7 +733,7 @@ export function RightPanel(): React.JSX.Element | null {
       {/* Tab strip */}
       <header
         className={cn(
-          'drag flex h-[38px] shrink-0 items-center gap-1 border-b border-border px-2.5',
+          'drag flex h-[38px] shrink-0 items-center gap-1 px-2.5',
           panelMaximized && !sidebarOpen && 'pl-[84px]'
         )}
       >
