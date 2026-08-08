@@ -49,6 +49,7 @@ import { Store } from './store'
 import { TerminalManager } from './terminal'
 import { checkForUpdate, installedViaHomebrew } from './updates'
 import { readUsageOverview } from './usage'
+import { readUsageReport } from './usageStats'
 import { hydrateShellPath } from './shellEnv'
 import { dockIconSvg } from './dockIcon'
 import {
@@ -570,6 +571,15 @@ function registerIpc(): void {
   // no project's settings or hooks sit in the path of a plan-limit read.
   ipcMain.handle('usage:overview', (_e, refresh?: boolean) =>
     readUsageOverview(app.getPath('home'), refresh)
+  )
+  // History, not headroom: read off the CLIs' own session logs, so it covers
+  // turns run outside Carbon and needs no chat either.
+  ipcMain.handle('usage:report', (_e, days: number, refresh?: boolean) =>
+    readUsageReport(
+      { home: app.getPath('home'), cacheDir: app.getPath('userData') },
+      days,
+      refresh
+    )
   )
 
   ipcMain.handle('permissions:list', (_e, cwd: string) => getPermissionRules(cwd))

@@ -3,6 +3,7 @@ import {
   Archive,
   ArchiveRestore,
   Bot,
+  ChartColumn,
   ChevronRight,
   EyeOff,
   Folder,
@@ -369,6 +370,7 @@ export function Sidebar(): React.JSX.Element {
   }
 
   const openSettings = useApp((s) => s.openSettings)
+  const openUsage = useApp((s) => s.openUsage)
   const searchOpen = useApp((s) => s.searchOpen)
   const setSearchOpen = useApp((s) => s.setSearchOpen)
   const [renaming, setRenaming] = React.useState<ChatMeta | null>(null)
@@ -877,11 +879,20 @@ export function Sidebar(): React.JSX.Element {
       {/* Footer */}
       <div className="flex shrink-0 items-center justify-between border-t border-sidebar-border px-3 py-2">
         <UsagePanel />
-        <WithTooltip label="Settings  ⌘,">
-          <Button size="icon-sm" variant="ghost" onClick={openSettings} aria-label="Open settings">
-            <Settings />
-          </Button>
-        </WithTooltip>
+        <div className="flex items-center">
+          {/* Next to the plan-limits chip on purpose: same corner, two halves of
+              one question — what's left right now, and where it has been going. */}
+          <WithTooltip label="Usage over time">
+            <Button size="icon-sm" variant="ghost" onClick={openUsage} aria-label="Open usage">
+              <ChartColumn />
+            </Button>
+          </WithTooltip>
+          <WithTooltip label="Settings  ⌘,">
+            <Button size="icon-sm" variant="ghost" onClick={openSettings} aria-label="Open settings">
+              <Settings />
+            </Button>
+          </WithTooltip>
+        </div>
       </div>
 
       {/* Search chats across projects */}

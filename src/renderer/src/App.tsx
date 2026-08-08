@@ -8,6 +8,7 @@ import { RightPanel } from '@/components/RightPanel'
 import { FileSearchDialog } from '@/components/FileSearchDialog'
 import { FindBar } from '@/components/FindBar'
 import { Settings } from '@/components/Settings'
+import { UsageStats } from '@/components/UsageStats'
 import { useApp } from '@/store'
 import { previewForCwd } from '@/lib/previewRegistry'
 
@@ -146,7 +147,11 @@ export default function App(): React.JSX.Element {
 
   const activeChat = chats.find((c) => c.id === activeId) ?? null
   const settingsOpen = useApp((s) => s.settingsOpen)
+  const usageOpen = useApp((s) => s.usageOpen)
   const panelFullscreen = useApp((s) => s.panelOpen && s.panelMaximized)
+  // Both are full-window pages that stand in for the chat, and both hide the
+  // right panel — a diff or file tab belongs to a chat, and neither page has one.
+  const pageOpen = settingsOpen || usageOpen
 
   return (
     <TooltipProvider delay={500}>
@@ -159,6 +164,8 @@ export default function App(): React.JSX.Element {
           <div className="flex min-w-0 flex-1 bg-background">
             {settingsOpen ? (
               <Settings />
+            ) : usageOpen ? (
+              <UsageStats />
             ) : panelFullscreen ? null : loading ? (
               <div className="flex flex-1 items-center justify-center">
                 <span className="shimmer-text text-sm font-medium">Loading…</span>
@@ -168,7 +175,7 @@ export default function App(): React.JSX.Element {
             ) : (
               <NewChat />
             )}
-            {!settingsOpen && <RightPanel />}
+            {!pageOpen && <RightPanel />}
           </div>
         </ErrorBoundary>
       </div>

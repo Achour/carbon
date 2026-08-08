@@ -485,6 +485,75 @@ export interface UsageOverview {
   codex: ProviderUsage
 }
 
+// ---------- Usage history (the Usage page) ----------
+
+/** Windows the Usage page offers, shortest first — the order they're read in. */
+export const USAGE_RANGES = [
+  { days: 7, label: '7 days' },
+  { days: 30, label: '30 days' },
+  { days: 90, label: '90 days' }
+] as const
+
+/** The window the page opens on: a month is the span a habit shows up over. */
+export const USAGE_DEFAULT_DAYS = 30
+
+/** Token counts and their list-price cost, for one slice of the report. */
+export interface UsageTotals {
+  /** Input tokens billed at the full rate (cache misses). */
+  input: number
+  cacheRead: number
+  cacheWrite: number
+  output: number
+  /** Reasoning tokens — a *subset* of `output`; Codex reports them, Claude doesn't. */
+  reasoning: number
+  costUsd: number
+  /** What `cacheRead` would have cost uncached, minus what it did cost. */
+  savingsUsd: number
+  /** Assistant responses (Claude) / sampled turns (Codex). */
+  responses: number
+  /** Tokens with no published rate; excluded from `costUsd`. */
+  unpricedTokens: number
+}
+
+/** One row of the per-model breakdown. */
+export interface UsageModelRow extends UsageTotals {
+  provider: Provider
+  model: string
+}
+
+/** One point on the daily chart. `YYYY-MM-DD`, local. */
+export interface UsageDay {
+  day: string
+  claude: UsageTotals
+  codex: UsageTotals
+}
+
+/**
+ * Token spend over a window, read from the CLIs' own session logs.
+ *
+ * Distinct from `UsageOverview`, which is "how much plan headroom is left right
+ * now". This is history: what was spent, on which models, on which days —
+ * including turns run outside Carbon, because both SDKs drive the same CLIs and
+ * write to the same logs.
+ */
+export interface UsageReport {
+  /** Inclusive local-day bounds, `YYYY-MM-DD`. */
+  from: string
+  to: string
+  days: UsageDay[]
+  /** Sorted by cost, descending. */
+  models: UsageModelRow[]
+  claude: UsageTotals
+  codex: UsageTotals
+  total: UsageTotals
+  /** Distinct session files that contributed to the window. */
+  sessions: number
+  /** When the scan ran (epoch ms). */
+  scannedAt: number
+  /** Sources that couldn't be read at all, in the user's words. */
+  notes: string[]
+}
+
 /**
  * Live rate-limit signal pushed from a `rate_limit_event` mid-session. Surfaced
  * as a warning when approaching or hitting a claude.ai plan limit.
@@ -1094,6 +1163,8 @@ export interface Api {
   usageInfo(chatId: string): Promise<UsageInfo | null>
   /** Account-level plan limits for both providers; needs no chat. */
   usageOverview(refresh?: boolean): Promise<UsageOverview>
+  /** Token spend over the last `days`, read from both CLIs' session logs. */
+  usageReport(days: number, refresh?: boolean): Promise<UsageReport>
   // ---- Persisted permission rules ----
   getPermissionRules(cwd: string): Promise<PermissionRule[]>
   /** Remove a rule from a project settings file (local or project scope only). */

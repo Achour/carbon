@@ -18,7 +18,7 @@ import { formatCost, formatDuration } from '@/lib/format'
 import { invalidateLocalImages } from '@/lib/imageCache'
 import { gitAction, gitActionPrompt, type GitActionId } from '@/lib/gitActions'
 import { changedPathsFromParts } from '@/lib/turnChanges'
-import { projectRoot, providerForModel } from '@shared/types'
+import { USAGE_DEFAULT_DAYS, projectRoot, providerForModel } from '@shared/types'
 import type {
   AppDefaults,
   AssistantMessage,
@@ -50,6 +50,7 @@ import type {
   SlashCommand,
   UpdateInfo,
   UsageOverview,
+  UsageReport,
   WorktreeDisposition,
   WorktreeInfo,
   WorktreeTarget
@@ -283,6 +284,21 @@ interface AppState {
   /** When true the find-in-page bar is open (⌘F). */
   findOpen: boolean
   setFindOpen(open: boolean): void
+
+  // ---- Usage page ----
+  /**
+   * When true the main area shows the usage page. Mutually exclusive with
+   * `settingsOpen` — both are full-window pages that replace the chat.
+   */
+  usageOpen: boolean
+  /** Window the page is showing, in days (see `USAGE_RANGES`). */
+  usageDays: number
+  usageReport: UsageReport | null
+  usageReportLoading: boolean
+  openUsage(): void
+  closeUsage(): void
+  /** `refresh` re-reads every session log instead of trusting the file cache. */
+  loadUsageReport(days?: number, refresh?: boolean): Promise<void>
 
   // ---- Settings ----
   /** When true the main area shows the settings page instead of a chat. */
@@ -992,6 +1008,40 @@ export const useApp = create<AppState>((set, get) => ({
     set({ findOpen: open })
   },
 
+  // ---- Usage page ----
+
+  usageOpen: false,
+  usageDays: USAGE_DEFAULT_DAYS,
+  usageReport: null,
+  usageReportLoading: false,
+
+  openUsage() {
+    set({ usageOpen: true, settingsOpen: false })
+    void get().loadUsageReport()
+  },
+
+  closeUsage() {
+    set({ usageOpen: false })
+  },
+
+  async loadUsageReport(days, refresh = false) {
+    const want = days ?? get().usageDays
+    // The range buttons are also the loading surface, so commit the choice
+    // before the await — otherwise the pressed button doesn't look pressed
+    // until a cold scan finishes seconds later.
+    set({ usageDays: want, usageReportLoading: true })
+    try {
+      const report = await window.api.usageReport(want, refresh)
+      // A range switched mid-scan wins: the report that lands is stale.
+      if (get().usageDays !== want) return
+      set({ usageReport: report })
+    } catch (err) {
+      console.error('usage report failed:', err)
+    } finally {
+      if (get().usageDays === want) set({ usageReportLoading: false })
+    }
+  },
+
   // ---- Settings ----
 
   settingsOpen: false,
@@ -1000,7 +1050,7 @@ export const useApp = create<AppState>((set, get) => ({
   resolvedAppearance: resolveAppearance(initialThemeMode),
 
   openSettings() {
-    set({ settingsOpen: true })
+    set({ settingsOpen: true, usageOpen: false })
   },
 
   closeSettings() {
@@ -1658,6 +1708,7 @@ export const useApp = create<AppState>((set, get) => ({
         hiddenBefore: 0,
         planPanel: null,
         settingsOpen: false,
+        usageOpen: false,
         panelMaximized: false,
         // The right panel is per chat; a fresh/draft chat starts collapsed.
         panelOpen: false
@@ -1677,6 +1728,7 @@ export const useApp = create<AppState>((set, get) => ({
       loadingOlder: false,
       planPanel: null,
       settingsOpen: false,
+      usageOpen: false,
       panelMaximized: false,
       // Panel visibility is per chat; unvisited chats start closed.
       panelOpen: s.panelOpenByChat[id] ?? false
@@ -1776,6 +1828,7 @@ export const useApp = create<AppState>((set, get) => ({
         loadingOlder: false,
         planPanel: null,
         settingsOpen: false,
+        usageOpen: false,
         panelMaximized: false,
         defaults: s.defaults
           ? {

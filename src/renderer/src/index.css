@@ -33,6 +33,21 @@
   --code-bg: oklch(0.955 0 0);
   --success: oklch(0.6 0.13 150);
   --warning: oklch(0.72 0.15 75);
+  /*
+   * Series identity for the Usage charts, and the one place the app carries hue
+   * that a theme does not set. Deliberately theme-independent: on a page whose
+   * whole job is "Claude vs Codex", the two colors *are* the labels, so they have
+   * to stay the same across all six themes — an accent that moves with the theme
+   * would relabel the chart every time someone changed their chrome.
+   *
+   * Warm/cool rather than two shades of one hue, because these two are the only
+   * pair that has to survive color-vision deficiency: validated for lightness
+   * band, chroma floor, adjacent CVD separation (ΔE ≥ 20 across protan/deutan/
+   * tritan) and 3:1 against the surface, in both modes. Not interchangeable with
+   * `--warning` / `--success` / `--destructive`, which mean *state*, not identity.
+   */
+  --chart-claude: oklch(0.6 0.139 45.6);
+  --chart-codex: oklch(0.54 0.124 256.5);
 }
 
 .dark {
@@ -62,6 +77,10 @@
   --code-bg: oklch(0.165 0 0);
   --success: oklch(0.72 0.14 150);
   --warning: oklch(0.78 0.14 75);
+  /* Re-stepped for the dark surface, not lightened from the light pair — the
+     same hues re-validated against a dark background. */
+  --chart-claude: oklch(0.664 0.143 46.5);
+  --chart-codex: oklch(0.644 0.141 252.7);
 }
 
 @theme inline {
@@ -91,6 +110,8 @@
   --color-code: var(--code-bg);
   --color-success: var(--success);
   --color-warning: var(--warning);
+  --color-chart-claude: var(--chart-claude);
+  --color-chart-codex: var(--chart-codex);
 
   --font-sans: 'Inter Variable', ui-sans-serif, system-ui, -apple-system, sans-serif;
   --font-mono: 'JetBrains Mono Variable', ui-monospace, 'SF Mono', monospace;

@@ -58,6 +58,32 @@ export function formatCost(usd: number): string {
   return `$${usd.toFixed(2)}`
 }
 
+/**
+ * Cost with thousands separators, for the Usage page where a figure can run to
+ * five digits and `formatCost`'s bare `12500.95` becomes unreadable.
+ */
+export function formatUsd(usd: number): string {
+  if (usd > 0 && usd < 0.01) return `$${usd.toFixed(4)}`
+  return `$${usd.toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  })}`
+}
+
+/**
+ * Token counts at a glance: `8.60B`, `130M`, `50.9K`. Three significant figures
+ * up to 100, then whole units — enough to compare two rows without the width of
+ * a full digit group.
+ */
+export function formatTokens(n: number): string {
+  const unit = (value: number, suffix: string): string =>
+    `${value >= 100 ? Math.round(value) : Number(value.toFixed(value >= 10 ? 1 : 2))}${suffix}`
+  if (n >= 1e9) return unit(n / 1e9, 'B')
+  if (n >= 1e6) return unit(n / 1e6, 'M')
+  if (n >= 1e3) return unit(n / 1e3, 'K')
+  return String(Math.round(n))
+}
+
 export function greeting(): string {
   const h = new Date().getHours()
   if (h < 5) return 'Up late'

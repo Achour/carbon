@@ -108,6 +108,56 @@ The legacy `chats/<id>.json` files are imported once and then **never written, m
 
 Only the active chat's messages are held in memory, and only the window main sent — `messages` is the loaded suffix and `hiddenBefore` counts what is still in the database. Switching chats refetches via `getChat`; the "Load earlier messages" control at the top of `ChatView` prepends the next window and restores the reading position by anchoring on distance from the *bottom* of the scroller, which is the part a prepend does not move. Events for non-active chats still update sidebar metadata and statuses. The right panel hosts file tabs, git diff tabs (tab ids prefixed `diff:`), and the plan panel; an `ExitPlanMode` permission request auto-opens the plan panel. When a chat's status returns to `idle`, open files, the file tree, and git status are refreshed so the agent's edits show up.
 
+### Usage (`src/main/usageScan.ts`, `usageStats.ts`, `components/UsageStats.tsx`)
+
+Two different questions wear the word "usage", and they share nothing. `usage.ts`
++ `UsagePanel` ask the providers **how much plan headroom is left right now** —
+answered live, off a throwaway process, shown as a chip in the sidebar footer.
+`usageStats.ts` + the Usage **page** ask **what was spent, on what, over the last
+7/30/90 days** — a history question no live API answers, since neither provider
+bills a subscription per token.
+
+The only durable record is the CLIs' own session logs, so that is the source:
+`~/.claude/projects/<slug>/<session>.jsonl` and
+`~/.codex/sessions/<y>/<m>/<d>/rollout-*.jsonl`. Reading them covers Carbon's own
+turns *for free* — both SDKs drive the real CLIs, so an in-app chat lands in the
+same files as a terminal one. That is also why the page does **not** also sum the
+`TurnStats` on our own event messages: it would double every in-app turn.
+
+- **Subagents are separate files.** A Task/subagent turn is written to
+  `<session>/subagents/agent-*.jsonl` (and one level deeper under
+  `subagents/workflows/<id>/`), sharing no message ids with the parent and leaving
+  no `isSidechain` copy in it. Stopping the directory walk at the session file
+  silently omitted ~16% of spend, which is why `collectJsonl` descends 6 levels.
+- **Dedupe is per file, on `message.id` + `requestId`.** One API response is
+  written once per content block, so a turn with text *and* a tool call appears
+  twice carrying identical usage.
+- **Codex reports a running total and a per-call delta** on `token_count` events,
+  and no model — hence `CodexFileReader`, a per-file cursor that carries the model
+  forward from `turn_context` / `thread_settings_applied` and sums only the delta.
+  Its `input_tokens` is *inclusive* of `cached_input_tokens`; Claude's is not.
+- **Pricing is a static list-price table** (`rateFor`, longest-prefix match, so
+  dated snapshots and `[1m]` suffixes land on their family). Claude's cache reads
+  and writes derive from the input rate — and the 5-minute/1-hour write split is
+  honored, because at 2× vs 1.25× it is not a rounding error. Fast mode is a
+  different SKU, not a faster tier, and `usage.speed` says which one served the
+  turn. Anything unpriced is counted in tokens and reported as such in the
+  page's "Cost quality" panel rather than silently costing nothing.
+- **Nothing is read twice.** Each file's contribution reduces to a few
+  `(model, day)` cells cached under `(path, mtime, size)` in
+  `userData/usage-cache.json`; session logs are append-only, so an unchanged
+  stamp means unchanged content. A cold scan is ~2 GB and ~5 s, a warm one ~20 ms,
+  and switching range never re-reads (cells are stored per day and re-filtered).
+  `CACHE_VERSION` exists because the cache stores *derived* cells — change the
+  parsing or the price table and it must be bumped, or the fix applies only to
+  sessions written afterwards.
+
+`--chart-claude` / `--chart-codex` (`index.css`) are the one place the app carries
+hue a theme does not set: on a page whose job is "Claude vs Codex" the colors *are*
+the labels, so they must not move when the theme does. Warm/cool, and validated for
+CVD separation and contrast in both modes — they are not interchangeable with
+`--warning` / `--success`, which mean state rather than identity.
+
 ### Git worktrees (`src/main/worktree.ts`)
 
 A chat can run in an isolated worktree. **The app creates the worktree itself** (`git worktree add`) rather than delegating to Claude Code's `.claude/worktrees/` or Codex's equivalent — a worktree is just a directory, so owning creation is what makes the feature provider-neutral. `chat.cwd` points at the worktree and `chat.worktree` carries the metadata (`repoRoot`, `branch`); **the provider adapters are untouched**, since both already take `chat.cwd`. Preserve that property: cwd is the only seam.
