@@ -166,8 +166,14 @@ function DailyChart({
 
   const plotW = Math.max(0, width - PAD.left - PAD.right)
   const plotH = CHART_H - PAD.top - PAD.bottom
-  const totals = days.map((d) => valueOf(d.claude, measure) + valueOf(d.codex, measure))
-  const peak = Math.max(...totals, 0)
+  // Each series from the baseline, not stacked on the one below it. Stacking
+  // draws the smaller series at the *total's* height, so a day of $200 Claude
+  // and $15 Codex puts the two lines almost on top of each other and reads as
+  // "they cost about the same" — the exact opposite of the data. Overlaid, a
+  // line's height is its own number and the comparison is the glance.
+  const series = SERIES.map((s) => ({ ...s, values: days.map((d) => valueOf(d[s.key], measure)) }))
+  const totals = days.map((_, i) => series.reduce((sum, s) => sum + s.values[i], 0))
+  const peak = Math.max(0, ...series.flatMap((s) => s.values))
   // A flat zero range would divide by zero; give it a nominal ceiling so the
   // empty chart draws a baseline rather than NaN paths.
   const ceiling = niceCeiling(peak || (measure === 'cost' ? 1 : 1000))
@@ -176,24 +182,15 @@ function DailyChart({
     PAD.left + (days.length <= 1 ? plotW / 2 : (i / (days.length - 1)) * plotW)
   const y = (v: number): number => PAD.top + plotH - (v / ceiling) * plotH
 
-  // Cumulative tops, bottom series first — the stack.
-  const bands = SERIES.map((s, si) => ({
-    ...s,
-    tops: days.map((d) =>
-      SERIES.slice(0, si + 1).reduce((sum, prev) => sum + valueOf(d[prev.key], measure), 0)
-    )
-  }))
+  // Larger series behind, so the smaller one is never buried under its fill.
+  const sum = (values: number[]): number => values.reduce((a, b) => a + b, 0)
+  const drawOrder = [...series].sort((a, b) => sum(b.values) - sum(a.values))
 
-  const line = (tops: number[]): string =>
-    tops.map((v, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ')
-  /** Up the series' own top, back down the one below it — the band between. */
-  const area = (tops: number[], floor: number[]): string => {
-    const back: string[] = []
-    for (let i = floor.length - 1; i >= 0; i--) {
-      back.push(`L${x(i).toFixed(1)},${y(floor[i]).toFixed(1)}`)
-    }
-    return `${line(tops)} ${back.join(' ')} Z`
-  }
+  const line = (values: number[]): string =>
+    values.map((v, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ')
+  /** The line, closed down to the baseline at both ends. */
+  const area = (values: number[]): string =>
+    `${line(values)} L${x(values.length - 1).toFixed(1)},${y(0).toFixed(1)} L${x(0).toFixed(1)},${y(0).toFixed(1)} Z`
 
   const ticks = [0, 0.5, 1].map((f) => f * ceiling)
   const active = hover != null && hover >= 0 && hover < days.length ? hover : null
@@ -238,31 +235,29 @@ function DailyChart({
         ))}
 
         {width > 0 &&
-          [...bands].reverse().map((band, ri) => {
-            const si = bands.length - 1 - ri
-            const floor = si === 0 ? days.map(() => 0) : bands[si - 1].tops
-            return (
-              <g key={band.key}>
-                <path d={area(band.tops, floor)} fill={band.color} fillOpacity={0.22} />
-                {/* Surface-colored underlay first: the 2px gap between bands. */}
-                <path
-                  d={line(band.tops)}
-                  fill="none"
-                  className="stroke-card"
-                  strokeWidth={5}
-                  strokeLinejoin="round"
-                />
-                <path
-                  d={line(band.tops)}
-                  fill="none"
-                  stroke={band.color}
-                  strokeWidth={2}
-                  strokeLinejoin="round"
-                  strokeLinecap="round"
-                />
-              </g>
-            )
-          })}
+          drawOrder.map((s) => (
+            <g key={s.key}>
+              <path d={area(s.values)} fill={s.color} fillOpacity={0.16} />
+              {/* Surface-colored underlay: keeps the two lines legible where
+                  they run close together or cross. */}
+              <path
+                d={line(s.values)}
+                fill="none"
+                className="stroke-card"
+                strokeWidth={5}
+                strokeLinejoin="round"
+                strokeOpacity={0.7}
+              />
+              <path
+                d={line(s.values)}
+                fill="none"
+                stroke={s.color}
+                strokeWidth={2}
+                strokeLinejoin="round"
+                strokeLinecap="round"
+              />
+            </g>
+          ))}
 
         {active != null && (
           <g pointerEvents="none">
@@ -275,13 +270,13 @@ function DailyChart({
               strokeWidth={1}
               strokeDasharray="3 3"
             />
-            {bands.map((band) => (
+            {series.map((s) => (
               <circle
-                key={band.key}
+                key={s.key}
                 cx={x(active)}
-                cy={y(band.tops[active])}
+                cy={y(s.values[active])}
                 r={3.5}
-                fill={band.color}
+                fill={s.color}
                 className="stroke-card"
                 strokeWidth={2}
               />
