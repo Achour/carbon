@@ -23,7 +23,8 @@ import {
   Plus,
   Search,
   Settings,
-  Trash2
+  Trash2,
+  X
 } from 'lucide-react'
 import type { ChatMeta, WorktreeStatus } from '@shared/types'
 import { PROVIDER_LABELS, projectRoot } from '@shared/types'
@@ -410,22 +411,32 @@ function SearchChatsDialog({
  * Enter to start. Ordered by recency (the chat list arrives newest-first), so
  * the project you were last in is the default pick and the common case is
  * ⌘N-Enter.
+ *
+ * It is also where projects get **pruned**, because it is the only place the
+ * whole list appears as rows — detailed mode has no project rows, so removal
+ * otherwise means finding a chat that happens to belong to the project you want
+ * gone. The ✕ hands off to the same confirm dialog the sidebar menu opens; a
+ * palette where Enter starts a chat has no business deleting anything on one
+ * click.
  */
 function NewChatDialog({
   open,
   onOpenChange,
   projects,
   onPick,
-  onBrowse
+  onBrowse,
+  onRemove
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   projects: { cwd: string; label: string; count: number }[]
   onPick: (cwd: string) => void
   onBrowse: () => void
+  onRemove: (cwd: string, count: number) => void
 }): React.JSX.Element {
   const [q, setQ] = React.useState('')
   const [idx, setIdx] = React.useState(0)
+  const [missing, setMissing] = React.useState<Record<string, boolean>>({})
   const inputRef = React.useRef<HTMLInputElement>(null)
 
   React.useEffect(() => {
@@ -436,15 +447,41 @@ function NewChatDialog({
     return () => clearTimeout(t)
   }, [open])
 
+  // Which folders are gone. Checked on open rather than held in the store: it's
+  // one stat per project against a list this size, and a folder can vanish
+  // between two openings of the same dialog. A project whose folder is missing
+  // is never *hidden* — its chats are still readable, and the row is the only
+  // handle for deleting them.
+  React.useEffect(() => {
+    if (!open) return
+    let alive = true
+    void Promise.all(
+      projects.map(async (p) => [p.cwd, (await window.api.statPath(p.cwd)) !== 'dir'] as const)
+    ).then((pairs) => {
+      if (alive) setMissing(Object.fromEntries(pairs.filter(([, gone]) => gone)))
+    })
+    return () => {
+      alive = false
+    }
+    // Deliberately keyed on `open` alone: re-running per keystroke would stat
+    // the same folders on every filter change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open])
+
   const results = React.useMemo(() => {
     const term = q.trim().toLowerCase()
     if (!term) return projects
     // Path as well as label: a project renamed in the sidebar is still findable
-    // by the folder it actually is.
+    // by the folder it actually is. "missing" matches the dead ones as a group,
+    // which is the whole reason someone opens this list to prune it.
+    const byWord = term.length >= 3 && 'missing'.startsWith(term)
     return projects.filter(
-      (p) => p.label.toLowerCase().includes(term) || p.cwd.toLowerCase().includes(term)
+      (p) =>
+        p.label.toLowerCase().includes(term) ||
+        p.cwd.toLowerCase().includes(term) ||
+        (byWord && missing[p.cwd])
     )
-  }, [q, projects])
+  }, [q, projects, missing])
 
   React.useEffect(() => setIdx(0), [q])
 
@@ -477,6 +514,14 @@ function NewChatDialog({
               } else if (e.key === 'Enter') {
                 e.preventDefault()
                 choose(idx)
+              } else if ((e.key === 'Backspace' || e.key === 'Delete') && e.metaKey) {
+                // ⌘⌫ on the selected row: the ✕ is visible on it, so a keyboard
+                // walk down the list can prune without reaching for the mouse.
+                const p = results[idx]
+                if (p) {
+                  e.preventDefault()
+                  onRemove(p.cwd, p.count)
+                }
               }
             }}
             placeholder="Start a chat in…"
@@ -486,25 +531,63 @@ function NewChatDialog({
         </div>
         <div className="max-h-80 overflow-y-auto p-1.5">
           {results.map((p, i) => (
-            <button
+            <div
               key={p.cwd}
-              type="button"
               onMouseEnter={() => setIdx(i)}
-              onClick={() => choose(i)}
               className={cn(
-                'flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left transition-colors',
+                'flex w-full items-center rounded-md transition-colors',
                 i === idx && 'bg-accent'
               )}
             >
-              <Folder className="size-3.5 shrink-0 text-muted-foreground" />
-              <span className="min-w-0 flex-1 truncate text-[13px]">{p.label}</span>
-              <span className="max-w-56 shrink-0 truncate text-[11px] text-muted-foreground/60">
-                {shortenPath(p.cwd, window.api.home)}
-              </span>
-              <span className="w-6 shrink-0 text-right text-[11px] text-muted-foreground/50">
-                {p.count}
-              </span>
-            </button>
+              <button
+                type="button"
+                onClick={() => choose(i)}
+                className="flex min-w-0 flex-1 items-center gap-2 py-2 pl-2.5 text-left"
+              >
+                <Folder
+                  className={cn(
+                    'size-3.5 shrink-0 text-muted-foreground',
+                    missing[p.cwd] && 'text-muted-foreground/50'
+                  )}
+                />
+                <span
+                  className={cn(
+                    'min-w-0 truncate text-[13px]',
+                    missing[p.cwd] && 'text-muted-foreground'
+                  )}
+                >
+                  {p.label}
+                </span>
+                {missing[p.cwd] && (
+                  <span
+                    className="shrink-0 rounded bg-warning/10 px-1.5 py-px text-[10px] text-warning"
+                    title="This folder no longer exists on disk"
+                  >
+                    missing
+                  </span>
+                )}
+                <span className="flex-1" />
+                <span className="max-w-56 shrink-0 truncate text-[11px] text-muted-foreground/60">
+                  {shortenPath(p.cwd, window.api.home)}
+                </span>
+                <span className="w-6 shrink-0 text-right text-[11px] text-muted-foreground/50">
+                  {p.count}
+                </span>
+              </button>
+              <WithTooltip label="Remove project  ⌘⌫">
+                <button
+                  type="button"
+                  aria-label={`Remove ${p.label}`}
+                  onClick={() => onRemove(p.cwd, p.count)}
+                  className={cn(
+                    'mr-1.5 ml-1 shrink-0 rounded p-1 text-muted-foreground transition-opacity hover:bg-secondary hover:text-destructive',
+                    i === idx ? 'opacity-100' : 'opacity-0'
+                  )}
+                >
+                  <X className="size-3.5" />
+                </button>
+              </WithTooltip>
+            </div>
           ))}
           <button
             type="button"
@@ -1321,6 +1404,7 @@ export function Sidebar(): React.JSX.Element {
         projects={newChatProjects}
         onPick={(cwd) => newChatIn(cwd)}
         onBrowse={() => void openProject()}
+        onRemove={(cwd, count) => setRemovingProject({ cwd, count })}
       />
 
       {/* Rename dialog */}

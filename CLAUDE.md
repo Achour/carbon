@@ -166,6 +166,16 @@ order, so ⌘N-Enter is the common case. The instant paths survive where the
 project is already on screen: compact's per-project ＋, and "New chat here" on a
 detailed row's menu.
 
+That dialog is also where projects get **pruned**, because it is the only place
+the whole list appears as rows — detailed mode has no project rows, so removal
+otherwise means hunting for a chat that happens to belong to the project you
+want gone. A ✕ on the selected row (⌘⌫ from the keyboard) hands off to the same
+confirm the sidebar menu opens; a palette where Enter starts a chat has no
+business deleting on one click. Rows whose folder no longer exists are tagged
+`missing` — one `statPath` each, on open rather than in the store, since a
+folder can vanish between two openings — and typing "missing" filters to exactly
+that set, which is the state the list is usually opened in.
+
 Per-chat branches come from `git:branches` → `branchesAt` (`git.ts`), which
 reads `.git/HEAD` directly rather than spawning `rev-parse` per row, and follows
 a worktree's `.git` *pointer file* so a worktree reports its own branch. The
