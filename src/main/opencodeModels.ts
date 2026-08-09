@@ -1,4 +1,4 @@
-import type { ModelOption } from '@shared/types'
+import type { EffortId, ModelOption } from '@shared/types'
 import { OPENCODE_DEFAULT_MODEL, OPENCODE_MODEL_PREFIX } from '../shared/types.ts'
 
 /**
@@ -48,6 +48,30 @@ interface RawModelInfo {
   limit?: { context?: number; output?: number }
   /** Present on Zen's free tier; used only to sort the free ones last. */
   cost?: { input?: number; output?: number }
+  /**
+   * Reasoning levels this exact model offers, keyed by the name to send back as
+   * the prompt's `variant` — OpenCode's word for what Carbon calls effort.
+   */
+  variants?: Record<string, unknown>
+}
+
+/**
+ * OpenCode variant names that are Carbon efforts.
+ *
+ * The catalog also carries `none` (reason as little as possible), `thinking`
+ * and `default`, which have no Carbon equivalent: `default` is already the ''
+ * row, and the other two would need a new member on the shared `EffortId` union
+ * that Claude and Codex would then have to exclude. Dropping them costs those
+ * few models a level rather than mistranslating one — sending `high` where the
+ * user asked for `none` would be worse than not offering it.
+ */
+const VARIANT_EFFORTS = new Set<EffortId>(['minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
+
+/** A model's variants as Carbon efforts, in the picker's own order. */
+export function variantEfforts(variants: Record<string, unknown> | undefined): EffortId[] {
+  if (!variants) return []
+  const named = new Set(Object.keys(variants))
+  return [...VARIANT_EFFORTS].filter((effort) => named.has(effort))
 }
 
 interface RawProvider {
@@ -96,9 +120,10 @@ export function opencodeDefaultOption(): ModelOption {
 /**
  * Picker rows for every model the server reports.
  *
- * No `supportedEfforts`: OpenCode has no effort concept at all, and an empty
- * list is how the composer knows to collapse that menu to "Default" rather than
- * inheriting Claude's levels.
+ * `supportedEfforts` comes from each model's own `variants` — OpenCode's word
+ * for reasoning effort. It is per *model*, not per provider: one Zen model
+ * offers low/high/max, another offers nothing at all, so a provider-wide list
+ * would offer levels half the catalog would reject.
  */
 export function mapProviderList(raw: RawProviderList | null | undefined): ModelOption[] {
   const providers = raw?.providers ?? raw?.all ?? []
@@ -117,6 +142,7 @@ export function mapProviderList(raw: RawProviderList | null | undefined): ModelO
       const modelID = info.id ?? key
       if (!modelID) continue
       const free = isFreeModel(modelID)
+      const efforts = variantEfforts(info.variants)
       rows.push({
         id: opencodeModelId(providerID, modelID),
         // Zen names its free models "… Free", and the row already carries a Free
@@ -125,6 +151,7 @@ export function mapProviderList(raw: RawProviderList | null | undefined): ModelO
         description: provider.name || providerID,
         provider: 'opencode',
         ...(info.limit?.context ? { contextWindow: info.limit.context } : {}),
+        ...(efforts.length ? { supportedEfforts: efforts } : {}),
         ...(free ? { free: true } : {})
       })
     }

@@ -64,8 +64,8 @@ export function PlanContent({
   const supportedBuildEfforts = new Set<EffortId>(
     buildModelOption?.supportedEfforts ??
       resolvedBuildModelOption?.supportedEfforts ??
-      // OpenCode has no effort concept, so it advertises none and the menu
-      // collapses to the Default row alone.
+      // OpenCode declares its levels per model, so there is no provider-wide
+      // fallback to offer: a model that advertised none gets Default alone.
       (buildProvider === 'opencode'
         ? []
         : buildProvider === 'codex'
@@ -81,7 +81,7 @@ export function PlanContent({
               ...option,
               description:
                 buildProvider === 'opencode'
-                  ? 'OpenCode has no effort setting'
+                  ? 'The model’s own default'
                   : `Uses your ${PROVIDER_LABELS[buildProvider]} config`
             }
           : option

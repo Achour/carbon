@@ -5,6 +5,7 @@ import type {
   Attachment,
   ChatData,
   ChatStatus,
+  EffortId,
   McpServerInfo,
   ModelOption,
   OpResult,
@@ -78,6 +79,7 @@ interface PendingTurn {
   userMessageId: string
   permissionMode: PermissionModeId
   model: string | undefined
+  effort: EffortId | undefined
 }
 
 interface PendingPermission {
@@ -248,7 +250,8 @@ export class OpencodeSession implements AgentSession {
       attachments,
       userMessageId: messageId,
       permissionMode: this.chat.permissionMode,
-      model: this.chat.model
+      model: this.chat.model,
+      effort: this.chat.effort
     }
     this.chainQueued.add(turn)
     this.sendChain = this.sendChain.then(async () => {
@@ -273,7 +276,8 @@ export class OpencodeSession implements AgentSession {
       attachments: [],
       userMessageId,
       permissionMode: mode ?? this.chat.permissionMode,
-      model: this.chat.model
+      model: this.chat.model,
+      effort: this.chat.effort
     })
     void this.drain()
   }
@@ -303,6 +307,8 @@ export class OpencodeSession implements AgentSession {
     return {
       ...(ref ? { model: ref } : {}),
       ...(agent ? { agent } : {}),
+      // '' means "the model's own default", which is the absence of a variant.
+      ...(turn.effort ? { variant: turn.effort } : {}),
       parts: [
         { type: 'text', text: turn.text },
         // Images ride as data URLs; OpenCode stores the part and hands the model

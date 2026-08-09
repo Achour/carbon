@@ -64,6 +64,8 @@ export interface OpencodeSessionCreate {
 export interface OpencodePromptBody {
   model?: { providerID: string; modelID: string }
   agent?: string
+  /** OpenCode's name for reasoning effort — a level the model itself declares. */
+  variant?: string
   system?: string
   parts: { type: string; text?: string; mime?: string; url?: string; filename?: string }[]
 }

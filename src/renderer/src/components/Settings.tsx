@@ -2,8 +2,6 @@ import * as React from 'react'
 import {
   ArrowDownToLine,
   Bell,
-  Eye,
-  EyeOff,
   Info,
   LayoutList,
   Loader2,
@@ -90,9 +88,19 @@ function ModelVisibility(): React.JSX.Element {
     () => allModelOptions(dynamicModels, codexConfigModel),
     [dynamicModels, codexConfigModel]
   )
-  const groups = (Object.keys(PROVIDER_LABELS) as Provider[])
-    .map((provider) => ({ provider, models: all.filter((m) => m.provider === provider) }))
-    .filter((g) => g.models.length > 0)
+  const groups = React.useMemo(
+    () =>
+      (Object.keys(PROVIDER_LABELS) as Provider[])
+        .map((provider) => ({ provider, models: all.filter((m) => m.provider === provider) }))
+        .filter((g) => g.models.length > 0),
+    [all]
+  )
+
+  const [tab, setTab] = React.useState<Provider | null>(null)
+  // A provider's tab can vanish under the selection — OpenCode's whole catalog
+  // disappears if its CLI stops answering — so the active tab is validated
+  // against what is actually here rather than trusted.
+  const active = groups.find((g) => g.provider === tab) ?? groups[0]
 
   if (!all.length) {
     return (
@@ -102,81 +110,103 @@ function ModelVisibility(): React.JSX.Element {
     )
   }
 
+  const ids = active.models.map((m) => m.id)
+  const shown = ids.filter((id) => !hiddenModels.has(id)).length
+
   return (
-    <div className="space-y-5">
-      {groups.map(({ provider, models }) => {
-        const ids = models.map((m) => m.id)
-        const shown = ids.filter((id) => !hiddenModels.has(id)).length
-        return (
-          <section key={provider}>
-            <div className="mb-1 flex items-center justify-between gap-3 px-2">
-              <div className="flex items-center gap-2">
-                <ProviderMark
-                  provider={provider}
-                  className="size-3"
-                  style={{ color: PROVIDER_COLOR[provider] }}
-                />
-                <span className="text-[13px] font-medium">{PROVIDER_LABELS[provider]}</span>
-                <span className="text-[11px] text-muted-foreground tabular-nums">
-                  {shown}/{ids.length}
-                </span>
+    <div>
+      {/* One tab per provider. Stacked sections meant scrolling past two whole
+          catalogs to reach the third, and OpenCode's alone runs to 22 rows. */}
+      <div
+        role="tablist"
+        aria-label="Provider"
+        className="mb-4 flex items-center gap-1 border-b border-border px-2"
+      >
+        {groups.map(({ provider, models }) => {
+          const isActive = provider === active.provider
+          const visible = models.filter((m) => !hiddenModels.has(m.id)).length
+          return (
+            <button
+              key={provider}
+              type="button"
+              role="tab"
+              aria-selected={isActive}
+              onClick={() => setTab(provider)}
+              className={cn(
+                'relative flex items-center gap-2 px-2.5 pb-2 text-[13px] transition-colors',
+                isActive
+                  ? 'font-medium text-foreground'
+                  : 'text-muted-foreground hover:text-foreground'
+              )}
+            >
+              <ProviderMark
+                provider={provider}
+                className="size-3.5"
+                style={{ color: PROVIDER_COLOR[provider] }}
+              />
+              {PROVIDER_LABELS[provider]}
+              <span className="text-[11px] tabular-nums text-muted-foreground">
+                {visible}/{models.length}
+              </span>
+              {isActive && (
+                <span className="absolute inset-x-0 -bottom-px h-0.5 rounded-full bg-primary" />
+              )}
+            </button>
+          )
+        })}
+      </div>
+
+      <div className="mb-1 flex items-center justify-between gap-3 px-2">
+        <span className="text-xs text-muted-foreground">
+          {shown === 0
+            ? 'Every model hidden — the picker falls back to this chat’s own.'
+            : `${shown} of ${ids.length} shown in the picker`}
+        </span>
+        <button
+          type="button"
+          onClick={() => setModelsHidden(ids, shown > 0)}
+          className="rounded-md px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        >
+          {shown > 0 ? 'Hide all' : 'Show all'}
+        </button>
+      </div>
+
+      <div className="rounded-lg border border-border">
+        {active.models.map((model, i) => {
+          const visible = !hiddenModels.has(model.id)
+          return (
+            <button
+              key={model.id}
+              type="button"
+              role="switch"
+              aria-checked={visible}
+              aria-label={model.label}
+              onClick={() => toggleModelHidden(model.id)}
+              className={cn(
+                'flex w-full items-center gap-3 px-2.5 py-2.5 text-left transition-colors hover:bg-accent/40',
+                i > 0 && 'border-t border-border/60'
+              )}
+            >
+              <div className="min-w-0 flex-1">
+                <div className={cn('truncate text-[13px]', !visible && 'text-muted-foreground')}>
+                  {model.label}
+                </div>
+                {model.description && (
+                  <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                    {model.description}
+                  </div>
+                )}
               </div>
-              <button
-                type="button"
-                onClick={() => setModelsHidden(ids, shown > 0)}
-                className="rounded-md px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-              >
-                {shown > 0 ? 'Hide all' : 'Show all'}
-              </button>
-            </div>
-            <div className="rounded-lg border border-border">
-              {models.map((model, i) => {
-                const hidden = hiddenModels.has(model.id)
-                return (
-                  <button
-                    key={model.id}
-                    type="button"
-                    role="switch"
-                    aria-checked={!hidden}
-                    aria-label={model.label}
-                    onClick={() => toggleModelHidden(model.id)}
-                    className={cn(
-                      'flex w-full items-center gap-3 px-2.5 py-2 text-left transition-colors hover:bg-accent/40',
-                      i > 0 && 'border-t border-border/60'
-                    )}
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div
-                        className={cn(
-                          'truncate text-[13px]',
-                          hidden && 'text-muted-foreground line-through'
-                        )}
-                      >
-                        {model.label}
-                      </div>
-                      {model.description && (
-                        <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
-                          {model.description}
-                        </div>
-                      )}
-                    </div>
-                    {model.free && (
-                      <span className="shrink-0 rounded bg-success/15 px-1.5 py-px text-[10px] font-semibold text-success">
-                        Free
-                      </span>
-                    )}
-                    {hidden ? (
-                      <EyeOff className="size-3.5 shrink-0 text-muted-foreground" />
-                    ) : (
-                      <Eye className="size-3.5 shrink-0 text-muted-foreground/70" />
-                    )}
-                  </button>
-                )
-              })}
-            </div>
-          </section>
-        )
-      })}
+              {model.free && (
+                <span className="shrink-0 rounded bg-success/15 px-1.5 py-px text-[10px] font-semibold text-success">
+                  Free
+                </span>
+              )}
+              <SwitchTrack checked={visible} />
+            </button>
+          )
+        })}
+      </div>
     </div>
   )
 }
@@ -373,20 +403,32 @@ function Toggle({
         <div className="text-[13px] font-medium">{label}</div>
         <div className="mt-0.5 text-xs text-muted-foreground">{description}</div>
       </div>
+      <SwitchTrack checked={checked} />
+    </button>
+  )
+}
+
+/**
+ * The switch itself, without a row around it. Extracted so the model list can
+ * use the same control as every other setting — a second switch drawn slightly
+ * differently is the kind of thing that makes a settings page feel assembled
+ * rather than designed.
+ */
+function SwitchTrack({ checked }: { checked: boolean }): React.JSX.Element {
+  return (
+    <span
+      className={cn(
+        'relative h-[18px] w-8 shrink-0 rounded-full transition-colors',
+        checked ? 'bg-primary' : 'bg-secondary'
+      )}
+    >
       <span
         className={cn(
-          'relative h-[18px] w-8 shrink-0 rounded-full transition-colors',
-          checked ? 'bg-primary' : 'bg-secondary'
+          'absolute top-[2px] left-[2px] size-3.5 rounded-full bg-background shadow-sm transition-transform',
+          checked && 'translate-x-[14px]'
         )}
-      >
-        <span
-          className={cn(
-            'absolute top-[2px] left-[2px] size-3.5 rounded-full bg-background shadow-sm transition-transform',
-            checked && 'translate-x-[14px]'
-          )}
-        />
-      </span>
-    </button>
+      />
+    </span>
   )
 }
 

@@ -4,9 +4,14 @@ import {
   isFreeModel,
   mapProviderList,
   opencodeModelId,
-  parseOpencodeModelId
+  parseOpencodeModelId,
+  variantEfforts
 } from '../src/main/opencodeModels.ts'
-import { OPENCODE_DEFAULT_MODEL, providerForModel } from '../src/shared/types.ts'
+import {
+  OPENCODE_DEFAULT_MODEL,
+  effortForProvider,
+  providerForModel
+} from '../src/shared/types.ts'
 
 test('a model id round-trips through the codec', () => {
   const id = opencodeModelId('openai', 'gpt-5.6-luna')
@@ -141,4 +146,59 @@ test('isFreeModel only matches the -free suffix', () => {
   assert.equal(isFreeModel('ling-3.0-tiny-free'), true)
   assert.equal(isFreeModel('free-willy'), false, 'a leading "free" is part of a name')
   assert.equal(isFreeModel('gpt-5.6-sol'), false)
+})
+
+test('a model’s variants become its supported efforts', () => {
+  const rows = mapProviderList({
+    providers: [
+      {
+        id: 'opencode',
+        name: 'OpenCode Zen',
+        models: {
+          'deepseek-v4-flash-free': {
+            id: 'deepseek-v4-flash-free',
+            name: 'DeepSeek V4 Flash Free',
+            // Exactly what the live server reports for this model.
+            variants: { low: { reasoningEffort: 'low' }, high: {}, max: {} }
+          },
+          'plain-model': { id: 'plain-model', name: 'Plain' }
+        }
+      }
+    ]
+  })
+  const deepseek = rows.find((r) => r.id === 'opencode:opencode/deepseek-v4-flash-free')
+  assert.deepEqual(deepseek?.supportedEfforts, ['low', 'high', 'max'])
+  // A model with no variants advertises none, and the composer then shows the
+  // Default row alone — the same path Codex takes.
+  assert.equal(rows.find((r) => r.id === 'opencode:opencode/plain-model')?.supportedEfforts, undefined)
+})
+
+test('variant names are ordered by the picker, not by the server', () => {
+  // The menu reads minimal → max whatever order the object arrived in.
+  assert.deepEqual(variantEfforts({ max: {}, low: {}, xhigh: {}, medium: {} }), [
+    'low',
+    'medium',
+    'xhigh',
+    'max'
+  ])
+  assert.deepEqual(variantEfforts(undefined), [])
+  assert.deepEqual(variantEfforts({}), [])
+})
+
+test('variants with no Carbon equivalent are dropped rather than mistranslated', () => {
+  // 'none' (reason as little as possible), 'thinking' and 'default' have no
+  // EffortId. Sending 'high' where the user asked for 'none' would be worse
+  // than not offering the level at all.
+  assert.deepEqual(variantEfforts({ none: {}, thinking: {}, default: {} }), [])
+  assert.deepEqual(variantEfforts({ none: {}, high: {} }), ['high'])
+})
+
+test('effort survives a switch into OpenCode, except Claude-only ultra', () => {
+  // Which levels a given OpenCode model accepts is a per-model question its
+  // supportedEfforts answers; the only provider-wide rule is that 'ultra' is
+  // Claude's alone.
+  assert.equal(effortForProvider('high', 'opencode'), 'high')
+  assert.equal(effortForProvider('minimal', 'opencode'), 'minimal')
+  assert.equal(effortForProvider('ultra', 'opencode'), undefined)
+  assert.equal(effortForProvider(undefined, 'opencode'), undefined)
 })

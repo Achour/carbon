@@ -643,15 +643,17 @@ export function Composer({
   const codexEfforts = new Set(
     selectedModelOption?.supportedEfforts ?? ['low', 'medium', 'high', 'xhigh']
   )
-  // OpenCode takes a model and an agent and nothing else, so it gets the
-  // Default row alone. That is not a stub: `invalidEffort` below then coerces a
-  // stale effort inherited from another provider to '' with `remember: false`,
-  // which is exactly the behavior an empty menu should have.
+  // OpenCode calls these *variants* and declares them per model — one Zen model
+  // offers low/high/max, another none at all — so it takes the same
+  // model-specific path as Codex rather than a provider-wide list. A model with
+  // no variants gets the Default row alone, and `invalidEffort` below then
+  // coerces a stale effort inherited from another provider to '' with
+  // `remember: false`.
+  const opencodeEfforts = new Set(selectedModelOption?.supportedEfforts ?? [])
   const effortOptions = isOpencode
-    ? EFFORT_OPTIONS.filter((e) => e.id === '').map((e) => ({
-        ...e,
-        description: 'OpenCode has no effort setting'
-      }))
+    ? EFFORT_OPTIONS.filter((e) => e.id === '' || opencodeEfforts.has(e.id as EffortId)).map((e) =>
+        e.id === '' ? { ...e, description: 'The model’s own default' } : e
+      )
     : isCodex
       ? EFFORT_OPTIONS.filter((e) => e.id === '' || codexEfforts.has(e.id as EffortId)).map((e) =>
           e.id === '' ? { ...e, description: 'Uses your Codex config' } : e

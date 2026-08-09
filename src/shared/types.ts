@@ -16,6 +16,8 @@ export type PermissionModeId = 'default' | 'acceptEdits' | 'plan' | 'auto' | 'by
 export type EffortId = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra'
 export type ClaudeEffortId = Exclude<EffortId, 'minimal' | 'ultra'>
 export type CodexEffortId = Exclude<EffortId, 'minimal'>
+/** OpenCode declares levels per model; 'ultra' is Claude's alone. */
+export type OpencodeEffortId = Exclude<EffortId, 'ultra'>
 
 export const EFFORT_OPTIONS: { id: EffortId | ''; label: string; description: string }[] = [
   { id: '', label: 'Default', description: 'Uses your provider config' },
@@ -37,16 +39,19 @@ export function effortForProvider(
   effort: EffortId | undefined,
   provider: 'codex'
 ): CodexEffortId | undefined
-export function effortForProvider(effort: EffortId | undefined, provider: 'opencode'): undefined
+export function effortForProvider(
+  effort: EffortId | undefined,
+  provider: 'opencode'
+): OpencodeEffortId | undefined
 export function effortForProvider(
   effort: EffortId | undefined,
   provider: Provider
 ): EffortId | undefined
 export function effortForProvider(effort: EffortId | undefined, provider: Provider): EffortId | undefined {
-  // OpenCode has no reasoning-effort concept: the server takes a model and an
-  // agent, and nothing else. Dropping the effort here is what keeps a stale
-  // 'ultra' from riding a provider switch into a prompt that can't express it.
-  if (provider === 'opencode') return undefined
+  // OpenCode calls these *variants* and declares them per model, so the only
+  // provider-wide statement to make is that 'ultra' is Claude's alone. Which of
+  // the rest a given model accepts comes from its own `supportedEfforts`.
+  if (provider === 'opencode') return effort === 'ultra' ? undefined : effort
   if (provider === 'codex' && effort === 'minimal') return undefined
   if (provider === 'claude' && (effort === 'minimal' || effort === 'ultra')) return undefined
   return effort

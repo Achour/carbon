@@ -447,3 +447,34 @@ test('the session exposes no service tier, which is how the manager knows to res
   // is the capability flag, so this is load-bearing rather than an omission.
   assert.equal((session as { setServiceTier?: unknown }).setServiceTier, undefined)
 })
+
+test('the chosen effort rides the turn as OpenCode’s variant', async () => {
+  const { session, client } = harness(makeChat({ effort: 'high' }))
+  session.send('go')
+  await waitFor(() => client.prompts.length === 1)
+  assert.equal(client.prompts[0].body.variant, 'high')
+  client.finishTurn()
+})
+
+test('the Default effort sends no variant, leaving the model’s own', async () => {
+  const { session, client } = harness(makeChat())
+  session.send('go')
+  await waitFor(() => client.prompts.length === 1)
+  assert.equal(client.prompts[0].body.variant, undefined)
+  client.finishTurn()
+})
+
+test('a turn keeps the effort it was sent with, not a later change', async () => {
+  const { session, client } = harness(makeChat({ effort: 'low' }))
+  let release!: (v: string) => void
+  const brief = new Promise<string>((r) => {
+    release = r
+  })
+  session.send('first', [], undefined, brief)
+  // Changing effort mid-flight must not rewrite a turn already committed.
+  await session.setModel('opencode:openai/gpt-5.6-luna')
+  release('ctx')
+  await waitFor(() => client.prompts.length === 1)
+  assert.equal(client.prompts[0].body.variant, 'low')
+  client.finishTurn()
+})

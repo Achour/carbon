@@ -406,6 +406,16 @@ price through the shared table like the other two, which is why `normalizeModel`
 strips the `opencode:<providerID>/` wrapper — a longest-prefix match against the
 full id finds nothing and reports every turn unpriced, i.e. free.
 
+**Effort is per model, and OpenCode calls it a `variant`.** Each model in the
+catalog declares its own (`deepseek-v4-flash-free` offers low/high/max, GPT-5.6
+Sol offers low/medium/high/xhigh/max, several Zen models offer none), so it
+arrives as `ModelOption.supportedEfforts` and rides the turn as the prompt's
+`variant` — the same model-specific path Codex takes, not a provider-wide list.
+`effortForProvider` therefore only drops `ultra`, which is Claude's alone. The
+catalog also uses `none`, `thinking` and `default`, which have no `EffortId`;
+they are dropped rather than mapped, since sending `high` where the user asked
+for `none` is worse than not offering the level.
+
 Model ids are `opencode:<providerID>/<modelID>` plus an `opencode-default`
 sentinel. The prefix is load-bearing: `providerForModel` falls back to `'claude'`,
 and every OpenCode model is runtime-discovered, so an id that cannot name its own
