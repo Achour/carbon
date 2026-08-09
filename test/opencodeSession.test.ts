@@ -1,13 +1,19 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import type { ChatData, ChatEvent, PermissionRequestPayload } from '../src/shared/types.ts'
+import type {
+  ChatData,
+  ChatEvent,
+  EventMessage,
+  PermissionRequestPayload
+} from '../src/shared/types.ts'
 import type { Store } from '../src/main/store.ts'
 import { OpencodeSession } from '../src/main/opencode.ts'
 import type {
   OpencodeClientLike,
   OpencodeEvent,
   OpencodePromptBody,
-  OpencodeSessionCreate
+  OpencodeSessionCreate,
+  OpencodeStoredMessage
 } from '../src/main/opencodeServer.ts'
 
 /**
@@ -86,8 +92,11 @@ class FakeOpencode implements OpencodeClientLike {
     this.replies.push({ permissionID, reply, message })
   }
 
-  async listMessages(): Promise<{ parts?: never[] }[]> {
-    return []
+  /** What `GET /session/{id}/message` answers with; a test scripts it for resync. */
+  stored: OpencodeStoredMessage[] = []
+
+  async listMessages(): Promise<OpencodeStoredMessage[]> {
+    return this.stored
   }
 
   async listProviders(): Promise<unknown> {
@@ -497,6 +506,163 @@ test('the Default effort sends no variant, leaving the model’s own', async () 
   await waitFor(() => client.prompts.length === 1)
   assert.equal(client.prompts[0].body.variant, undefined)
   client.finishTurn()
+})
+
+test('a resync applies this turn’s messages and re-renders none of the history', async () => {
+  // The reconnect path's whole risk: `listMessages` answers with the entire
+  // session, so a naive replay appends every earlier turn — and on a chat
+  // resumed across a restart, turns this process never saw at all — onto the
+  // assistant message currently on screen.
+  const chat = makeChat({ sessionId: 'ses_prev' })
+  const { session, client } = harness(chat)
+  const t0 = Date.now()
+  session.send('carry on')
+  await waitFor(() => client.prompts.length === 1)
+
+  // Announced before the stream dropped, so this one is known to the turn.
+  client.emit({ type: 'message.updated', messageID: 'msg_now', role: 'assistant' })
+  client.emit({
+    type: 'message.part.updated',
+    part: { id: 'p-now', messageID: 'msg_now', type: 'text', text: 'partial' }
+  })
+
+  client.stored = [
+    {
+      info: { id: 'msg_old_user', role: 'user', time: { created: t0 - 60_000 } },
+      parts: [{ id: 'p-old-u', messageID: 'msg_old_user', type: 'text', text: 'ancient question' }]
+    },
+    {
+      info: { id: 'msg_old', role: 'assistant', time: { created: t0 - 60_000 } },
+      parts: [{ id: 'p-old', messageID: 'msg_old', type: 'text', text: 'ancient answer' }]
+    },
+    {
+      info: { id: 'msg_now', role: 'assistant', time: { created: t0 + 60_000 } },
+      parts: [{ id: 'p-now', messageID: 'msg_now', type: 'text', text: 'partial, then the rest' }]
+    },
+    {
+      // Started during the gap, so the stream never announced it.
+      info: { id: 'msg_gap', role: 'assistant', time: { created: t0 + 60_000 } },
+      parts: [
+        {
+          id: 'p-gap',
+          messageID: 'msg_gap',
+          type: 'tool',
+          tool: 'read',
+          state: { status: 'completed', input: { filePath: 'a.txt' }, output: 'ok' }
+        }
+      ]
+    }
+  ]
+  client.emit({ type: 'resync' })
+  await waitFor(
+    () =>
+      !!chat.messages
+        .find((m) => m.role === 'assistant')
+        ?.parts.some((p) => p.type === 'tool'),
+    'the gap’s tool call to be picked up'
+  )
+
+  const assistant = chat.messages.find((m) => m.role === 'assistant')
+  assert.ok(assistant)
+  const texts = assistant.parts.flatMap((p) => (p.type === 'text' ? [p.text] : []))
+  // The known part updated in place, the gap's part is new, and nothing that
+  // predates the turn was re-rendered.
+  assert.deepEqual(texts, ['partial, then the rest'])
+  assert.equal(assistant.parts.length, 2, 'no history is appended')
+  assert.equal(chat.messages.filter((m) => m.role === 'assistant').length, 1)
+
+  client.finishTurn()
+})
+
+test('a resync outside a turn adds nothing, since nothing was streaming', async () => {
+  const chat = makeChat({ sessionId: 'ses_prev' })
+  const { session, client, events } = harness(chat)
+  session.send('go')
+  await waitFor(() => client.prompts.length === 1)
+  client.emit({ type: 'message.updated', messageID: 'm1', role: 'assistant' })
+  client.emit({
+    type: 'message.part.updated',
+    part: { id: 'p1', messageID: 'm1', type: 'text', text: 'done' }
+  })
+  client.finishTurn()
+  await waitFor(() => statuses(events).at(-1) === 'idle', 'the turn to finish')
+
+  client.stored = [
+    {
+      info: { id: 'm2', role: 'assistant', time: { created: Date.now() } },
+      parts: [{ id: 'p2', messageID: 'm2', type: 'text', text: 'stray' }]
+    }
+  ]
+  client.emit({ type: 'resync' })
+  await new Promise((r) => setTimeout(r, 20))
+
+  const texts = chat.messages.flatMap((m) =>
+    m.role === 'assistant' ? m.parts.flatMap((p) => (p.type === 'text' ? [p.text] : [])) : []
+  )
+  assert.deepEqual(texts, ['done'])
+})
+
+test('files and picked elements reach the model, not just images', async () => {
+  const { session, client } = harness()
+  session.send('look at this', [
+    { id: 'a1', kind: 'file', name: 'notes.md', path: '/tmp/notes.md' },
+    {
+      id: 'a2',
+      kind: 'element',
+      name: 'Save button',
+      mediaType: 'image/png',
+      data: 'AAAA',
+      element: {
+        url: 'http://localhost:5173/',
+        tag: 'button',
+        selector: 'button.primary',
+        label: 'Save',
+        source: { file: 'src/App.tsx', line: 42, column: 7 }
+      }
+    },
+    { id: 'a3', kind: 'image', name: 'shot.png', mediaType: 'image/png', data: 'BBBB' }
+  ])
+  await waitFor(() => client.prompts.length === 1)
+
+  const parts = client.prompts[0].body.parts
+  const text = parts[0].text ?? ''
+  assert.match(text, /Attached files:\n- \/tmp\/notes\.md/)
+  assert.match(text, /Selected UI element/)
+  assert.match(text, /src\/App\.tsx:42:7/)
+  assert.match(text, /button\.primary/)
+  // An element's screenshot is an image; its kind names where it came from.
+  assert.equal(parts.filter((p) => p.type === 'file').length, 2, 'both shots ride as images')
+
+  client.finishTurn()
+})
+
+test('reasoning tokens are counted within output, as Carbon counts them', async () => {
+  const { session, client, chat } = harness()
+  session.send('think hard')
+  await waitFor(() => client.prompts.length === 1)
+
+  // OpenCode reports reasoning *alongside* output — input + output + reasoning
+  // + cache is the turn's total — so leaving it out drops the largest number a
+  // thinking turn produces.
+  client.emit({
+    type: 'message.part.updated',
+    part: {
+      id: 'sf',
+      type: 'step-finish',
+      tokens: { input: 100, output: 20, reasoning: 900, cache: { read: 50, write: 10 } }
+    }
+  })
+  client.finishTurn()
+  await waitFor(
+    () => chat.messages.some((m) => m.role === 'event' && m.kind === 'turn'),
+    'the turn-stats row'
+  )
+
+  const row = chat.messages.find(
+    (m) => m.role === 'event' && m.kind === 'turn'
+  ) as EventMessage
+  assert.equal(row.stats?.outputTokens, 920)
+  assert.equal(row.stats?.inputTokens, 160, 'cache reads and writes fold into input')
 })
 
 test('a turn keeps the effort it was sent with, not a later change', async () => {

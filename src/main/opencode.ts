@@ -21,7 +21,12 @@ import type {
   TurnStats
 } from '@shared/types'
 import type { Store } from './store'
-import { composePrompt, type AgentSession, type Emit } from './session.ts'
+import {
+  appendAttachmentContext,
+  composePrompt,
+  type AgentSession,
+  type Emit
+} from './session.ts'
 import { DeltaCoalescer } from './deltaCoalescer.ts'
 import { buildTitlePrompt, cleanTitle, deriveTitle, firstUserText, TITLE_SYSTEM } from './titles.ts'
 import {
@@ -309,11 +314,14 @@ export class OpencodeSession implements AgentSession {
       // '' means "the model's own default", which is the absence of a variant.
       ...(turn.effort ? { variant: turn.effort } : {}),
       parts: [
-        { type: 'text', text: turn.text },
+        // Files and picked elements have no part type here, so they ride the
+        // text the same way they do on the other two providers.
+        { type: 'text', text: appendAttachmentContext(turn.text, turn.attachments) },
         // Images ride as data URLs; OpenCode stores the part and hands the model
-        // whatever its provider supports.
+        // whatever its provider supports. An element's screenshot is an image
+        // too — its `kind` names where it came from, not what it is.
         ...turn.attachments
-          .filter((a) => a.kind === 'image' && a.data)
+          .filter((a) => (a.kind === 'image' || a.kind === 'element') && a.data)
           .map((a) => ({
             type: 'file',
             mime: a.mediaType ?? 'image/png',
@@ -396,7 +404,10 @@ export class OpencodeSession implements AgentSession {
       }
     }
     const usage = this.turnUsage
-    const tokens = usage.input + usage.output + usage.cacheRead + usage.cacheWrite
+    // Every field is disjoint here — OpenCode reports `input + output +
+    // reasoning + cache` as the turn's total — so the gate sums all of them.
+    const tokens =
+      usage.input + usage.output + usage.reasoning + usage.cacheRead + usage.cacheWrite
     if (tokens < TURN_STATS_MIN_TOKENS || this.disposed) return
     this.pushMessage({
       id: randomUUID(),
@@ -405,13 +416,19 @@ export class OpencodeSession implements AgentSession {
       text: '',
       ts: Date.now(),
       stats: {
+        // Zero on a subscription, which is what the server reports and what the
+        // turn row is built to hide — the same as Codex on ChatGPT and Claude on
+        // a plan. The Usage page is where these tokens get a notional price.
         costUsd: usage.costUsd,
         durationMs: Date.now() - this.turnStart,
         numTurns: 1,
         // Cache reads are folded into input: TurnStats has no cache fields, and
         // dropping them would under-report a cached turn by an order of magnitude.
         inputTokens: usage.input + usage.cacheRead + usage.cacheWrite,
-        outputTokens: usage.output,
+        // Reasoning is folded into output for the same reason `opencodeUsage.ts`
+        // folds it: OpenCode reports it *alongside* output where Carbon counts it
+        // *within*, so leaving it out drops a thinking turn's largest number.
+        outputTokens: usage.output + usage.reasoning,
         ...(this.turnModel ? { model: this.turnModel } : {})
       }
     })
@@ -449,7 +466,7 @@ export class OpencodeSession implements AgentSession {
       case 'permission.replied':
         // Also fires for a reply made from the user's own TUI against this
         // session — resolve our card rather than leaving it stranded.
-        this.resolvePermission(event.permissionID, false)
+        this.resolvePermission(event.permissionID)
         break
       case 'session.error':
         this.pushEvent('error', event.message)
@@ -536,13 +553,37 @@ export class OpencodeSession implements AgentSession {
    * Re-read authoritative state after the event stream reconnected.
    *
    * The bus replays nothing, so anything that happened during the gap is only
-   * visible by asking. Parts are keyed by id, so replaying them is idempotent.
+   * visible by asking. Replaying a part is idempotent *within a turn*, because
+   * `partLoc` remembers where it went — but `listMessages` answers with the
+   * **whole session**, including turns this process never saw at all (a chat
+   * resumed across a restart). Those parts are in no map, so applying them would
+   * append the entire conversation onto the message currently on screen.
+   *
+   * So only this turn's messages are applied, on either of two signals: the
+   * stream already announced the message (it is in `messageRoles`), or the
+   * server dates it at or after the turn began. A message that answers to
+   * neither is old, and one whose age can't be established is left alone —
+   * missing one reconnect's updates is recoverable, re-rendering the history
+   * underneath the user is not.
    */
   private async resync(): Promise<void> {
-    if (!this.sessionId || this.disposed) return
+    // Nothing streams outside a turn, so there is nothing to have missed.
+    if (!this.sessionId || this.disposed || !this.running) return
+    const turnStart = this.turnStart
     try {
       const messages = await this.client.listMessages(this.sessionId)
+      // A turn that ended (or restarted) while the read was in flight would have
+      // cleared the maps this decision rests on.
+      if (this.disposed || this.turnStart !== turnStart) return
       for (const message of messages) {
+        const info = message.info ?? {}
+        const id = info.id ?? ''
+        const created = typeof info.time?.created === 'number' ? info.time.created : null
+        const known = !!id && this.messageRoles.has(id)
+        if (!known && !(created !== null && created >= turnStart)) continue
+        // Recorded before its parts are applied: the user's own prompt comes
+        // back as a text part, and `applyPart` filters it by exactly this map.
+        if (id && info.role && !known) this.messageRoles.set(id, info.role)
         for (const part of message.parts ?? []) this.applyPart(part)
       }
     } catch {
@@ -586,11 +627,14 @@ export class OpencodeSession implements AgentSession {
     this.setStatus('waiting-permission')
   }
 
-  private resolvePermission(id: string, emitResolved = true): void {
+  /**
+   * Drop a permission card. Always emits: the delete above is the guard, so
+   * whoever answered first — us, or the user's own TUI against this session —
+   * dismisses the card exactly once and the loser returns early.
+   */
+  private resolvePermission(id: string): void {
     if (!this.pendingPermissions.delete(id)) return
-    if (emitResolved || true) {
-      this.emit({ type: 'permission-resolved', chatId: this.chat.id, requestId: id })
-    }
+    this.emit({ type: 'permission-resolved', chatId: this.chat.id, requestId: id })
     if (!this.disposed && this.pendingPermissions.size === 0 && this.running) {
       this.setStatus('streaming')
     }

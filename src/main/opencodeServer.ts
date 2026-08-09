@@ -59,6 +59,25 @@ export interface OpencodeSessionCreate {
   agent?: string
 }
 
+/**
+ * A stored message's envelope, as `GET /session/{id}/message` returns it.
+ *
+ * `time.created` is declared because it is the only thing that dates a message
+ * the event stream never announced — which is exactly what a resync has to sort
+ * out. See `OpencodeSession.resync`.
+ */
+export interface OpencodeMessageInfo {
+  id?: string
+  role?: string
+  sessionID?: string
+  time?: { created?: number; completed?: number }
+}
+
+export interface OpencodeStoredMessage {
+  info?: OpencodeMessageInfo
+  parts?: OpencodePart[]
+}
+
 export interface OpencodePromptBody {
   model?: { providerID: string; modelID: string }
   agent?: string
@@ -79,7 +98,7 @@ export interface OpencodeClientLike {
   prompt(sessionID: string, body: OpencodePromptBody): Promise<unknown>
   abort(sessionID: string): Promise<void>
   replyPermission(permissionID: string, reply: string, message?: string): Promise<void>
-  listMessages(sessionID: string): Promise<{ info?: Record<string, unknown>; parts?: OpencodePart[] }[]>
+  listMessages(sessionID: string): Promise<OpencodeStoredMessage[]>
   listProviders(): Promise<unknown>
   /** Every agent the server knows, primary and subagent alike; filtered above. */
   listAgents(): Promise<unknown>

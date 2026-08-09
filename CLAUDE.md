@@ -365,7 +365,14 @@ swap stays contained. Four facts from the running server shape everything above 
 - **`/event` is a global bus.** One SSE stream per server fans out by `sessionID`,
   buffering events for sessions that haven't attached yet (the prompt POST can
   return before the route is registered). The bus replays nothing on reconnect,
-  so routes are told to `resync` and re-read their messages instead.
+  so routes are told to `resync` and re-read their messages instead. **A resync
+  applies only the running turn's messages** — `listMessages` answers with the
+  whole session, so replaying it wholesale appends every earlier turn, and on a
+  chat resumed across a restart the entire conversation, onto the message on
+  screen. This turn's are the ones the stream already announced (they're in
+  `messageRoles`) plus anything the server dates at or after the turn began;
+  a message that answers to neither is left alone, since missing one reconnect's
+  updates is recoverable and re-rendering the history underneath the user is not.
 - **The prompt endpoint is synchronous** — `POST /session/{id}/message` resolves
   when the turn is over, which is the turn-completion signal, raced against
   `session.idle` so whichever lands first ends it once.
