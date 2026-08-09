@@ -191,6 +191,19 @@ other:
   date buckets structure the list by what actually varies down it. "Today" goes
   unlabelled — the top of a newest-first list is today by definition.
 
+**The order is the array, and the array moves once per turn.** `chats` in the
+renderer store is held *in sidebar order*: seeded newest-first by `listChats`,
+then mutated only when a chat is created, deleted, or **starts a turn**
+(`hoistChat` — to the front, timestamp bumped with it so a row can't sit above a
+newer one carrying an older date bucket). Re-sorting on `updatedAt` as messages
+arrived meant a running turn reordered the sidebar several times a second, and
+two streaming chats simply traded places forever. Compact mode hid most of it —
+a bump only shuffled within a project, and the project order was already
+pinned — but detailed mode is one flat list, so every bump crossed the whole
+sidebar. `updatedAt` still tracks the last message: it is what a row's timestamp
+shows and how the next launch seeds the order. It just no longer decides
+position while you're looking at it.
+
 Detailed mode has no project rows, so two things move into the header or onto
 the row: the **project filter** (`All projects ▾`, which scopes the list *and*
 the Pinned section, and suppresses the now-redundant project name on each row),

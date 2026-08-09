@@ -613,6 +613,31 @@ function notifyTurnDone(
 }
 
 /**
+ * Move one chat to the front of the list, leaving every other row where it is.
+ *
+ * `chats` is stored in *sidebar order*, not re-sorted on read: it arrives from
+ * `listChats` newest-first and is then only ever mutated at moments the user can
+ * attribute — a chat created (prepended), deleted (removed), or starting a turn
+ * (this). Sorting by `updatedAt` on every incoming message is what it replaces,
+ * and that read as constant churn in detailed mode, where one flat list means a
+ * bump crosses the *whole* sidebar rather than shuffling within one project.
+ * `updatedAt` is still kept current — it is what a row's timestamp shows and how
+ * the next launch seeds the order — it just no longer drives position live.
+ */
+function hoistChat(chats: ChatMeta[], id: string): ChatMeta[] {
+  const i = chats.findIndex((c) => c.id === id)
+  if (i === -1) return chats
+  const next = chats.slice()
+  const [chat] = next.splice(i, 1)
+  // Position and timestamp move together, so the row can never sit above a
+  // newer one carrying an older date — which is what the date buckets in
+  // detailed mode read off. A turn that dies before its first message would
+  // otherwise leave a stale date at the top of the list.
+  next.unshift({ ...chat, updatedAt: Date.now() })
+  return next
+}
+
+/**
  * With no chat open, `selectedCwd` means the *project* — it's what the home
  * screen labels and where the next chat starts. A chat may run in a worktree,
  * so falling back to one's raw `cwd` would offer a worktree as if it were a
@@ -2303,15 +2328,19 @@ export const useApp = create<AppState>((set, get) => ({
     switch (ev.type) {
       case 'message': {
         // Single state update per message: upsert the active chat's messages
-        // (when this event is for it) and keep sidebar ordering fresh, in one
+        // (when this event is for it) and refresh the row's timestamp, in one
         // set() so each message causes one render pass instead of two.
+        //
+        // `updatedAt` moves, the row does NOT. The array's own order is the
+        // sidebar's order (see `hoistChat`) — re-sorting here is what made a
+        // running turn shuffle the list under the cursor several times a
+        // second, and with two chats streaming they simply traded places
+        // forever.
         set((st) => ({
           ...(ev.chatId === st.activeId
             ? { messages: upsertMessage(st.messages, ev.message) }
             : {}),
-          chats: st.chats
-            .map((c) => (c.id === ev.chatId ? { ...c, updatedAt: Date.now() } : c))
-            .sort((a, b) => b.updatedAt - a.updatedAt)
+          chats: st.chats.map((c) => (c.id === ev.chatId ? { ...c, updatedAt: Date.now() } : c))
         }))
         // Turn finished: chime + background notification (already fired at
         // park time when this is a replay).
@@ -2362,9 +2391,10 @@ export const useApp = create<AppState>((set, get) => ({
 
       case 'meta': {
         set((st) => ({
-          chats: st.chats
-            .map((c) => (c.id === ev.chatId ? { ...c, ...ev.patch } : c))
-            .sort((a, b) => b.updatedAt - a.updatedAt),
+          // Patch in place. A title landing, a model change or a branch switch
+          // is not a reason to move the row — and sorting on `updatedAt` here
+          // would replay all the churn `message` no longer causes.
+          chats: st.chats.map((c) => (c.id === ev.chatId ? { ...c, ...ev.patch } : c)),
           // Any options patch invalidates a Fast reading — it always carries the
           // tier, and a model change can flip Fast support on its own. Drop it
           // and wait for the session to report again; it re-inits on a live
@@ -2403,7 +2433,17 @@ export const useApp = create<AppState>((set, get) => ({
         break
       }
       case 'status': {
-        set((st) => ({ statuses: { ...st.statuses, [ev.chatId]: ev.status } }))
+        set((st) => ({
+          statuses: { ...st.statuses, [ev.chatId]: ev.status },
+          // The one moment a chat is allowed to change place: the start of a
+          // turn — which is the user's own send, so the move is theirs and
+          // lands before they look away. Everything after it (every streamed
+          // message, every tool result) leaves the list exactly as it was.
+          chats:
+            ev.status !== 'idle' && (st.statuses[ev.chatId] ?? 'idle') === 'idle'
+              ? hoistChat(st.chats, ev.chatId)
+              : st.chats
+        }))
         // Any non-idle status means a live session (a new chat's first turn is
         // 'starting', not 'streaming') — load both live model catalogs once so
         // aliases, capabilities and provider-default resolutions are current.

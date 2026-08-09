@@ -839,10 +839,11 @@ export function Sidebar(): React.JSX.Element {
     localStorage.removeItem('sidebarWidth')
   }
 
-  // Group chats by project folder. Chats within a project stay sorted by
-  // updatedAt (the chat list is pre-sorted), but the PROJECT order is fixed by
-  // the user's saved order — so a chat bump no longer yanks its project to the
-  // top. Projects not yet in the saved order keep their discovery order.
+  // Group chats by project folder. Chats within a project keep the order they
+  // arrive in — `chats` *is* the sidebar order (store.ts `hoistChat`), which
+  // moves only when a turn starts — and the PROJECT order is fixed by the
+  // user's saved order, so a chat bump yanks neither the row nor its project to
+  // the top. Projects not yet in the saved order keep their discovery order.
   // Pinned chats are pulled out into a section of their own at the top, so they
   // render once, not twice — but they stay in `group.chats`, which is what the
   // delete-project count means. `unpinned` is what the group actually lists;
@@ -919,14 +920,23 @@ export function Sidebar(): React.JSX.Element {
   const pinnedShown = filterProject
     ? pinnedChats.filter((c) => projectRoot(c) === filterProject)
     : pinnedChats
-  const flatChats = flatSource.flatMap((g) => g.unpinned).sort((a, b) => b.updatedAt - a.updatedAt)
+  // Take the rows from `chats` rather than from the groups: `chats` is already
+  // in sidebar order (store.ts `hoistChat`) and flattening the groups would
+  // impose the project grouping this mode exists to not have. Order is the
+  // store's business — the list re-sorts when a turn starts, and at no other
+  // time, so a streaming chat no longer walks up and down the sidebar.
+  const flatCwds = new Set(flatSource.map((g) => g.cwd))
+  const flatChats = chats.filter((c) => c.pinnedAt === undefined && flatCwds.has(projectRoot(c)))
   const flatShown = flatChats.slice(0, FLAT_BATCH * (flatBatches + 1))
   const flatHidden = flatChats.length - flatShown.length
+  // Keyed by label, not by adjacency: order is frozen between turns while
+  // `updatedAt` keeps moving, so a chat can outlive its bucket (a turn running
+  // across midnight) and print a second "Yesterday" under the first.
   const flatSections: { label: string; chats: ChatMeta[] }[] = []
   for (const chat of flatShown) {
     const label = dateGroup(chat.updatedAt)
-    const last = flatSections[flatSections.length - 1]
-    if (last?.label === label) last.chats.push(chat)
+    const section = flatSections.find((s) => s.label === label)
+    if (section) section.chats.push(chat)
     else flatSections.push({ label, chats: [chat] })
   }
 
@@ -1078,8 +1088,13 @@ export function Sidebar(): React.JSX.Element {
 
       {/* Section header. Detailed mode has no project rows to head — it gets the
           project filter instead, which is the thing grouping used to give you.
-          Adding a project folder belongs here in both modes: it's the same act. */}
-      <div className="flex items-center gap-2 px-3.5 pt-3 pb-1">
+          Adding a project folder belongs here in both modes: it's the same act.
+
+          Compact's "Projects" is a section *label* and stays label-sized; the
+          filter is a control, and the only one detailed mode has for the thing
+          compact spends a whole row on — so it's sized to be clicked, matching
+          the chat titles beneath it rather than the divider text. */}
+      <div className={cn('flex items-center gap-2 px-3.5 pb-1', detailed ? 'pt-2' : 'pt-3')}>
         {detailed ? (
           <DropdownMenu>
             <DropdownMenuTrigger
@@ -1088,8 +1103,8 @@ export function Sidebar(): React.JSX.Element {
                   type="button"
                   aria-label="Filter by project"
                   className={cn(
-                    '-ml-1 flex min-w-0 items-center gap-1 rounded px-1 py-0.5 text-[11px] font-medium tracking-wide transition-colors hover:bg-sidebar-accent hover:text-foreground',
-                    filterProject ? 'text-sidebar-foreground' : 'text-muted-foreground/70'
+                    '-ml-1.5 flex min-w-0 items-center gap-1 rounded-md px-1.5 py-1 text-[13px] font-medium transition-colors hover:bg-sidebar-accent hover:text-foreground',
+                    filterProject ? 'text-sidebar-foreground' : 'text-sidebar-foreground/65'
                   )}
                 />
               }
@@ -1097,7 +1112,7 @@ export function Sidebar(): React.JSX.Element {
               <span className="truncate">
                 {filterProject ? projectLabel(filterProject) : 'All projects'}
               </span>
-              <ChevronDown className="size-3 shrink-0 opacity-70" />
+              <ChevronDown className="size-3.5 shrink-0 opacity-70" />
             </DropdownMenuTrigger>
             <DropdownMenuContent className="max-h-80 overflow-y-auto">
               <DropdownMenuItem onClick={() => setSidebarProject(null)}>
@@ -1127,11 +1142,17 @@ export function Sidebar(): React.JSX.Element {
             type="button"
             onClick={() => void openProject()}
             aria-label="Add project"
-            className="-mr-1 rounded p-1 text-muted-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-foreground"
+            className={cn(
+              '-mr-1.5 rounded-md text-sidebar-foreground/65 transition-colors hover:bg-sidebar-accent hover:text-foreground',
+              // Detailed mode pairs it with a 13px control, so it gets a real
+              // hit target instead of the label-sized one compact's section
+              // heading can carry.
+              detailed ? 'p-1.5' : 'p-1'
+            )}
           >
             {/* A folder, not a bare plus: the plus alone is the new-*chat* verb
                 everywhere else in this sidebar, and the two sat one row apart. */}
-            <FolderPlus className="size-3.5" />
+            <FolderPlus className={detailed ? 'size-4' : 'size-3.5'} />
           </button>
         </WithTooltip>
       </div>
