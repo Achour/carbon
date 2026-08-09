@@ -39,6 +39,7 @@ import type {
 } from '@shared/types'
 import { effortForProvider } from '@shared/types'
 import { shutdownOpencodeServers } from './opencodeServer'
+import { fetchOpencodeAgents } from './opencode'
 import { ChatManager } from './claude'
 import { readCodexConfigModel } from './codexConfig'
 import { listDir, readFileContent, searchFiles, statPath } from './files'
@@ -370,6 +371,7 @@ function registerIpc(): void {
         effort?: EffortId
         serviceTier?: ServiceTier
         permissionMode?: PermissionModeId
+        opencodeAgent?: string
         worktree?: WorktreeTarget
       }
     ) => {
@@ -402,6 +404,10 @@ function registerIpc(): void {
       effort,
       serviceTier: opts.serviceTier ?? 'standard',
       permissionMode: opts.permissionMode ?? store.getDefaults().permissionMode,
+      // Only meaningful for OpenCode, and only when the picker named one.
+      ...(provider === 'opencode' && opts.opencodeAgent
+        ? { opencodeAgent: opts.opencodeAgent }
+        : {}),
       worktree,
       createdAt: now,
       updatedAt: now,
@@ -567,6 +573,9 @@ function registerIpc(): void {
   )
   ipcMain.handle('codex:config-model', () => readCodexConfigModel())
   ipcMain.handle('session:agents', (_e, chatId: string) => manager.listAgents(chatId))
+  // Per directory, not per chat: the OpenCode server is pooled by cwd, and the
+  // new-chat screen needs the list before a chat exists.
+  ipcMain.handle('opencode:agents', (_e, cwd: string) => fetchOpencodeAgents(cwd))
   ipcMain.handle('session:account', (_e, chatId: string) => manager.accountInfo(chatId))
   ipcMain.handle('session:usage', (_e, chatId: string) => manager.usageInfo(chatId))
   // Account-level, so it deliberately takes no chat id — and runs from home so

@@ -8,6 +8,7 @@ import type {
   EffortId,
   McpServerInfo,
   ModelOption,
+  OpencodeAgentInfo,
   OpResult,
   PermissionDecision,
   PermissionModeId,
@@ -41,7 +42,7 @@ import {
   type OpencodePermissionAsked,
   type TurnUsage
 } from './opencodeEvents.ts'
-import { agentForMode, decisionToReply } from './opencodeMode.ts'
+import { agentForChat, decisionToReply, primaryAgents } from './opencodeMode.ts'
 import { buildApprovedPlanPrompt, buildPlanFeedbackPrompt } from './opencodePlan.ts'
 import { mapProviderList, parseOpencodeModelId } from './opencodeModels.ts'
 import { missingBinaryError, probeOpencode } from './opencodeBinary.ts'
@@ -73,6 +74,8 @@ interface PendingTurn {
   attachments: Attachment[]
   userMessageId: string
   permissionMode: PermissionModeId
+  /** Resolved primary agent — plan mode overrides the chat's stored pick. */
+  agent: string
   model: string | undefined
   effort: EffortId | undefined
 }
@@ -245,6 +248,7 @@ export class OpencodeSession implements AgentSession {
       attachments,
       userMessageId: messageId,
       permissionMode: this.chat.permissionMode,
+      agent: agentForChat(this.chat.opencodeAgent, this.chat.permissionMode),
       model: this.chat.model,
       effort: this.chat.effort
     }
@@ -271,17 +275,18 @@ export class OpencodeSession implements AgentSession {
       attachments: [],
       userMessageId,
       permissionMode: mode ?? this.chat.permissionMode,
+      agent: agentForChat(this.chat.opencodeAgent, mode ?? this.chat.permissionMode),
       model: this.chat.model,
       effort: this.chat.effort
     })
     void this.drain()
   }
 
-  private async ensureSession(mode: PermissionModeId): Promise<string> {
+  private async ensureSession(agent: string): Promise<string> {
     if (this.sessionId) return this.sessionId
     const created = await this.client.createSession({
       ...(this.chat.title ? { title: this.chat.title } : {}),
-      agent: agentForMode(mode)
+      agent
     })
     this.sessionId = created.id
     this.chat.sessionId = created.id
@@ -299,8 +304,8 @@ export class OpencodeSession implements AgentSession {
     const ref = parseOpencodeModelId(turn.model)
     return {
       ...(ref ? { model: ref } : {}),
-      // Per turn, so switching build↔plan takes effect without a new session.
-      agent: agentForMode(turn.permissionMode),
+      // Per turn, so switching agent takes effect without a new session.
+      agent: turn.agent,
       // '' means "the model's own default", which is the absence of a variant.
       ...(turn.effort ? { variant: turn.effort } : {}),
       parts: [
@@ -352,7 +357,7 @@ export class OpencodeSession implements AgentSession {
 
     let sessionID: string
     try {
-      sessionID = await this.ensureSession(turn.permissionMode)
+      sessionID = await this.ensureSession(turn.agent)
     } catch (err) {
       this.pushEvent('error', err instanceof Error ? err.message : String(err))
       return
@@ -877,6 +882,24 @@ export async function fetchOpencodeModels(cwd: string): Promise<ModelOption[]> {
   if (!probe.installed) return []
   try {
     return mapProviderList((await opencodeClient(cwd).listProviders()) as never)
+  } catch {
+    return []
+  }
+}
+
+/**
+ * OpenCode's primary agents for a directory — what the mode picker offers.
+ *
+ * Empty means "couldn't ask", not "none": the renderer falls back to
+ * `OPENCODE_BUILTIN_AGENTS` rather than showing an empty picker, and keeps no
+ * cache entry, so the next chat in a directory that does have OpenCode retries.
+ */
+export async function fetchOpencodeAgents(cwd: string): Promise<OpencodeAgentInfo[]> {
+  const probe = await probeOpencode()
+  knownMissing = !probe.installed
+  if (!probe.installed) return []
+  try {
+    return primaryAgents(await opencodeClient(cwd).listAgents())
   } catch {
     return []
   }

@@ -38,6 +38,7 @@ import type {
   GitHubState,
   GitStatus,
   ModelOption,
+  OpencodeAgentInfo,
   OpResult,
   PermissionDecision,
   PermissionRequestPayload,
@@ -211,6 +212,15 @@ interface AppState {
   models: ModelOption[]
   /** Fetches the session's model list once and caches it (feeds the composer picker). */
   loadModels(chatId?: string, cwd?: string): Promise<void>
+  /**
+   * OpenCode's primary agents, keyed by the directory whose server reported
+   * them — its modes *are* its agents, and a user's `opencode.json` can define
+   * more than the built-in build/plan pair. Per directory because the server is
+   * pooled that way and the answer can genuinely differ between projects.
+   */
+  opencodeAgents: Record<string, OpencodeAgentInfo[]>
+  /** Fetches a directory's agent list once and caches it (feeds the mode picker). */
+  loadOpencodeAgents(cwd: string): Promise<void>
   /** User-level Codex default, kept separate from Claude's dynamic model rows. */
   codexConfigModel: string | null | undefined
   loadCodexConfigModel(): Promise<void>
@@ -485,6 +495,8 @@ interface AppState {
       effort?: EffortId
       serviceTier?: ServiceTier
       permissionMode?: ChatMeta['permissionMode']
+      /** OpenCode's primary agent; ignored by the other providers. */
+      opencodeAgent?: string
       attachments?: Attachment[]
       /** Display label for an app-initiated first message (e.g. "Commit"). */
       label?: string
@@ -831,6 +843,9 @@ let codexConfigModelLoad: Promise<string | null> | null = null
 let modelsLoad: Promise<ModelOption[]> | null = null
 let modelsRetryAt = 0
 const MODELS_RETRY_MS = 30_000
+// In-flight agent reads, per directory: the composer and the new-chat screen can
+// ask for the same folder at once, and the first answer is cached in the store.
+const opencodeAgentsLoad = new Set<string>()
 // GitHub reads are deduped per project, not globally. A request for project A
 // must not suppress the refresh kicked off when the user switches to project B.
 const githubRequests = new Map<string, Promise<GitHubState>>()
@@ -865,6 +880,7 @@ export const useApp = create<AppState>((set, get) => ({
   usage: null,
   fastMode: {},
   models: [],
+  opencodeAgents: {},
   codexConfigModel: undefined,
   permissions: {},
   queued: {},
@@ -2164,6 +2180,25 @@ export const useApp = create<AppState>((set, get) => ({
       // Keep the last good provider rows and static fallback for the missing one.
     } finally {
       if (modelsLoad === request) modelsLoad = null
+    }
+  },
+
+  async loadOpencodeAgents(cwd) {
+    if (!cwd || get().opencodeAgents[cwd]) return
+    if (opencodeAgentsLoad.has(cwd)) return
+    opencodeAgentsLoad.add(cwd)
+    try {
+      const agents = await window.api.opencodeAgents(cwd)
+      // An empty answer means OpenCode isn't installed here; leaving the entry
+      // unset lets the picker keep its built-in pair and lets a later chat in a
+      // machine that does have it try again.
+      if (agents.length) {
+        set((s) => ({ opencodeAgents: { ...s.opencodeAgents, [cwd]: agents } }))
+      }
+    } catch {
+      // Same fallback as an empty answer: the composer's built-in pair.
+    } finally {
+      opencodeAgentsLoad.delete(cwd)
     }
   },
 

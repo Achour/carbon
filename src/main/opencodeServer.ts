@@ -81,6 +81,8 @@ export interface OpencodeClientLike {
   replyPermission(permissionID: string, reply: string, message?: string): Promise<void>
   listMessages(sessionID: string): Promise<{ info?: Record<string, unknown>; parts?: OpencodePart[] }[]>
   listProviders(): Promise<unknown>
+  /** Every agent the server knows, primary and subagent alike; filtered above. */
+  listAgents(): Promise<unknown>
   deleteSession(sessionID: string): Promise<void>
   subscribe(sessionID: string, handler: OpencodeEventHandler): () => void
 }
@@ -488,6 +490,9 @@ export function opencodeClient(cwd: string): OpencodeClientLike {
     },
     async listProviders() {
       return await request(entry, 'GET', '/config/providers')
+    },
+    async listAgents() {
+      return await request(entry, 'GET', '/agent')
     },
     async deleteSession(sessionID) {
       await request(entry, 'DELETE', `/session/${sessionID}`).catch(() => undefined)

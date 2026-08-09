@@ -94,6 +94,13 @@ class FakeOpencode implements OpencodeClientLike {
     return this.providers
   }
 
+  async listAgents(): Promise<unknown> {
+    return [
+      { name: 'build', mode: 'primary' },
+      { name: 'plan', mode: 'primary' }
+    ]
+  }
+
   async deleteSession(sessionID: string): Promise<void> {
     this.deleted.push(sessionID)
   }
@@ -325,6 +332,28 @@ test('Carbon sends no permission ruleset — that is the user’s own config', a
   await waitFor(() => permissionRequests(events).length === 1, 'the card')
   assert.equal(client.replies.length, 0, 'nothing is auto-answered')
 
+  client.finishTurn()
+})
+
+test('a custom agent from the user’s opencode.json runs the turn', async () => {
+  // OpenCode's modes are its agents, and the list is the user's — a chat set to
+  // one of their own must open the session as it and keep sending it per turn,
+  // exactly as build and plan do.
+  const { session, client } = harness(makeChat({ opencodeAgent: 'reviewer' }))
+  session.send('review this')
+  await waitFor(() => client.prompts.length === 1)
+  assert.equal(client.sessions[0].agent, 'reviewer')
+  assert.equal(client.prompts[0].body.agent, 'reviewer')
+  client.finishTurn()
+})
+
+test('plan mode overrides a custom agent, since the review gate reads the mode', async () => {
+  const { session, client } = harness(
+    makeChat({ opencodeAgent: 'reviewer', permissionMode: 'plan' })
+  )
+  session.send('plan this')
+  await waitFor(() => client.prompts.length === 1)
+  assert.equal(client.prompts[0].body.agent, 'plan', 'a read-only turn must run the read-only agent')
   client.finishTurn()
 })
 

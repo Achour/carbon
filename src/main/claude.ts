@@ -2525,6 +2525,11 @@ export class ChatManager {
         this.emit({ type: 'permission-resolved', chatId, requestId })
       }
     }
+    if (patch.opencodeAgent !== undefined) {
+      // No session call: OpenCode carries the agent on each prompt, so the next
+      // turn simply reads the new value — nothing to tear down or notify.
+      chat.opencodeAgent = patch.opencodeAgent || undefined
+    }
     if (patch.effort !== undefined && (patch.effort || undefined) !== chat.effort) {
       chat.effort = effortForProvider(patch.effort || undefined, chat.provider)
       // Effort has no live setter — drop the session; the next send resumes
@@ -2570,6 +2575,7 @@ export class ChatManager {
         effort: chat.effort,
         serviceTier: chat.serviceTier,
         permissionMode: chat.permissionMode,
+        opencodeAgent: chat.opencodeAgent,
         pendingPlanReview: chat.pendingPlanReview
       }
     })

@@ -867,6 +867,15 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
             }
             permissionMode={chat.permissionMode}
             onPermissionModeChange={(permissionMode) => void setChatOptions({ permissionMode })}
+            opencodeAgent={chat.opencodeAgent}
+            // One patch, both halves: the mode has to follow the agent, since
+            // the plan-review gate reads the mode rather than the agent name.
+            onOpencodeAgentChange={(opencodeAgent) =>
+              void setChatOptions({
+                opencodeAgent,
+                permissionMode: opencodeAgent === 'plan' ? 'plan' : 'default'
+              })
+            }
             contextTokens={chat.contextTokens}
             contextWindow={chat.contextWindow}
             provider={composerProvider}

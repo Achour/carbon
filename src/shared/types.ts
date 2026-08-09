@@ -124,6 +124,14 @@ export interface ChatMeta {
   /** Provider processing tier; older chats without this field use Standard. */
   serviceTier?: ServiceTier
   permissionMode: PermissionModeId
+  /**
+   * OpenCode only: the primary agent this chat runs as. OpenCode's modes *are*
+   * its agents, and a user can define their own, so the name is carried
+   * verbatim rather than squeezed into `permissionMode`'s closed union. The two
+   * agree by construction — picking `plan` also sets `permissionMode: 'plan'`,
+   * which is what the plan-review gate reads. Undefined means `build`.
+   */
+  opencodeAgent?: string
   /** Mode the chat was in before switching to plan; restored on plan approval. */
   modeBeforePlan?: PermissionModeId
   /** Codex plan awaiting approval; persisted so review survives an app restart. */
@@ -449,6 +457,32 @@ export interface AgentInfo {
   model?: string
 }
 
+/**
+ * One of OpenCode's *primary* agents — what its mode picker offers.
+ *
+ * Not `AgentInfo`, which is Claude's subagent list: these are the top-level
+ * agents a turn runs as. The set is read from the running server rather than
+ * hardcoded, because `opencode.json` can define more of them; a default install
+ * answers with exactly `build` and `plan`.
+ */
+export interface OpencodeAgentInfo {
+  name: string
+  description?: string
+}
+
+/**
+ * The agents every OpenCode install has, used when the server can't be asked
+ * (not installed, not reachable, an unrecognizable payload). Descriptions are
+ * OpenCode's own, so a fallback row reads exactly like the real one.
+ */
+export const OPENCODE_BUILTIN_AGENTS: OpencodeAgentInfo[] = [
+  {
+    name: 'build',
+    description: 'The default agent. Executes tools based on configured permissions.'
+  },
+  { name: 'plan', description: 'Plan mode. Disallows all edit tools.' }
+]
+
 /** Authenticated account, from `accountInfo()`. */
 export interface AccountInfo {
   email?: string
@@ -697,6 +731,8 @@ export interface ChatOptionsPatch {
   effort?: EffortId | ''
   serviceTier?: ServiceTier
   permissionMode?: PermissionModeId
+  /** OpenCode's primary agent; see `ChatMeta.opencodeAgent`. */
+  opencodeAgent?: string
   /**
    * Whether the change also becomes the default for future chats. Defaults to
    * true, since a change is normally something the user picked. The composer
@@ -1176,6 +1212,8 @@ export interface Api {
     effort?: EffortId
     serviceTier?: ServiceTier
     permissionMode?: PermissionModeId
+    /** OpenCode's primary agent; see `ChatMeta.opencodeAgent`. */
+    opencodeAgent?: string
     /** Where the chat runs; omitted or `local` means `cwd` itself. */
     worktree?: WorktreeTarget
   }): Promise<ChatMeta>
@@ -1232,6 +1270,12 @@ export interface Api {
   /** User-level Codex model from $CODEX_HOME/config.toml; separate from Claude's model list. */
   codexConfigModel(): Promise<string | null>
   listAgents(chatId: string): Promise<AgentInfo[]>
+  /**
+   * OpenCode's primary agents for a directory — the modes its picker offers.
+   * Keyed by cwd rather than chat because the server is pooled per directory
+   * and the new-chat screen has no chat yet. Empty when OpenCode isn't installed.
+   */
+  opencodeAgents(cwd: string): Promise<OpencodeAgentInfo[]>
   accountInfo(chatId: string): Promise<AccountInfo | null>
   usageInfo(chatId: string): Promise<UsageInfo | null>
   /** Account-level plan limits for both providers; needs no chat. */
