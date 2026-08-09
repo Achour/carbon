@@ -2,6 +2,8 @@ import * as React from 'react'
 import {
   ArrowDownToLine,
   Bell,
+  Eye,
+  EyeOff,
   Info,
   LayoutList,
   Loader2,
@@ -12,10 +14,14 @@ import {
   Palette,
   Plus,
   Rows3,
+  Sparkles,
   Sun,
   X
 } from 'lucide-react'
+import { PROVIDER_LABELS, type Provider } from '@shared/types'
 import { cn } from '@/lib/utils'
+import { allModelOptions } from '@/lib/models'
+import { PROVIDER_COLOR, ProviderMark } from '@/components/ui/provider-mark'
 import {
   CODE_FONT_DEFAULT,
   CODE_FONT_MAX,
@@ -43,11 +49,137 @@ import { WithTooltip } from '@/components/ui/tooltip'
 const SECTIONS = [
   { id: 'appearance', label: 'Appearance', icon: Palette },
   { id: 'chats', label: 'Chats', icon: MessageSquare },
+  { id: 'models', label: 'Models', icon: Sparkles },
   { id: 'notifications', label: 'Notifications', icon: Bell },
   { id: 'about', label: 'About', icon: Info }
 ] as const
 
 type SectionId = (typeof SECTIONS)[number]['id']
+
+/**
+ * Which models the picker offers.
+ *
+ * A catalog of three backends runs to dozens of rows — OpenCode alone
+ * contributes every model of every provider the user has configured — and the
+ * composer's picker is a menu you scan mid-thought. Hiding is per-model rather
+ * than per-provider because the useless rows are scattered: a handful of frontier
+ * models are worth reaching for and the rest are noise, and which is which is
+ * personal.
+ *
+ * Nothing here disables a backend. A hidden model that is already a chat's model
+ * keeps running and stays visible in that chat's own picker (see
+ * `assembleModelOptions`' `keep`), because the alternative is a composer that
+ * shows no model at all.
+ */
+function ModelVisibility(): React.JSX.Element {
+  const dynamicModels = useApp((s) => s.models)
+  const codexConfigModel = useApp((s) => s.codexConfigModel)
+  const hiddenModels = useApp((s) => s.hiddenModels)
+  const toggleModelHidden = useApp((s) => s.toggleModelHidden)
+  const setModelsHidden = useApp((s) => s.setModelsHidden)
+  const loadModels = useApp((s) => s.loadModels)
+
+  // Settings can be the first thing opened in a session, before any chat has
+  // warmed the catalog. loadModels is a no-op once it is complete, so asking
+  // here costs nothing on the common path.
+  React.useEffect(() => {
+    void loadModels()
+  }, [loadModels])
+
+  const all = React.useMemo(
+    () => allModelOptions(dynamicModels, codexConfigModel),
+    [dynamicModels, codexConfigModel]
+  )
+  const groups = (Object.keys(PROVIDER_LABELS) as Provider[])
+    .map((provider) => ({ provider, models: all.filter((m) => m.provider === provider) }))
+    .filter((g) => g.models.length > 0)
+
+  if (!all.length) {
+    return (
+      <p className="px-2 text-[13px] text-muted-foreground">
+        No models loaded yet. Open a chat once and they will appear here.
+      </p>
+    )
+  }
+
+  return (
+    <div className="space-y-5">
+      {groups.map(({ provider, models }) => {
+        const ids = models.map((m) => m.id)
+        const shown = ids.filter((id) => !hiddenModels.has(id)).length
+        return (
+          <section key={provider}>
+            <div className="mb-1 flex items-center justify-between gap-3 px-2">
+              <div className="flex items-center gap-2">
+                <ProviderMark
+                  provider={provider}
+                  className="size-3"
+                  style={{ color: PROVIDER_COLOR[provider] }}
+                />
+                <span className="text-[13px] font-medium">{PROVIDER_LABELS[provider]}</span>
+                <span className="text-[11px] text-muted-foreground tabular-nums">
+                  {shown}/{ids.length}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setModelsHidden(ids, shown > 0)}
+                className="rounded-md px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              >
+                {shown > 0 ? 'Hide all' : 'Show all'}
+              </button>
+            </div>
+            <div className="rounded-lg border border-border">
+              {models.map((model, i) => {
+                const hidden = hiddenModels.has(model.id)
+                return (
+                  <button
+                    key={model.id}
+                    type="button"
+                    role="switch"
+                    aria-checked={!hidden}
+                    aria-label={model.label}
+                    onClick={() => toggleModelHidden(model.id)}
+                    className={cn(
+                      'flex w-full items-center gap-3 px-2.5 py-2 text-left transition-colors hover:bg-accent/40',
+                      i > 0 && 'border-t border-border/60'
+                    )}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div
+                        className={cn(
+                          'truncate text-[13px]',
+                          hidden && 'text-muted-foreground line-through'
+                        )}
+                      >
+                        {model.label}
+                      </div>
+                      {model.description && (
+                        <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                          {model.description}
+                        </div>
+                      )}
+                    </div>
+                    {model.free && (
+                      <span className="shrink-0 rounded bg-success/15 px-1.5 py-px text-[10px] font-semibold text-success">
+                        Free
+                      </span>
+                    )}
+                    {hidden ? (
+                      <EyeOff className="size-3.5 shrink-0 text-muted-foreground" />
+                    ) : (
+                      <Eye className="size-3.5 shrink-0 text-muted-foreground/70" />
+                    )}
+                  </button>
+                )
+              })}
+            </div>
+          </section>
+        )
+      })}
+    </div>
+  )
+}
 
 function SectionHeader({
   icon: Icon,
@@ -609,6 +741,17 @@ export function Settings(): React.JSX.Element {
                     onReset={() => setChatsPerProject(CHATS_PER_PROJECT_DEFAULT)}
                   />
                 </Row>
+              </section>
+            )}
+
+            {section === 'models' && (
+              <section>
+                <SectionHeader
+                  icon={Sparkles}
+                  title="Models"
+                  description="Which models the composer's picker offers. Hiding one never disables a backend — a chat already using it keeps running."
+                />
+                <ModelVisibility />
               </section>
             )}
 

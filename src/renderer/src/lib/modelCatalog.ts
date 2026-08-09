@@ -16,6 +16,22 @@ export function hasCompleteModelCatalog(models: ModelOption[]): boolean {
   )
 }
 
+/**
+ * Drop the models the user hid in Settings.
+ *
+ * `keep` survives hiding: it is the model the chat is currently on, and a picker
+ * that omits its own selection shows no model at all and reads as broken. Hiding
+ * trims the menu; it does not take a model away from a chat already using it.
+ */
+export function visibleModels(
+  all: ModelOption[],
+  hidden: ReadonlySet<string> | undefined,
+  keep?: string
+): ModelOption[] {
+  if (!hidden?.size) return all
+  return all.filter((option) => !hidden.has(option.id) || option.id === keep)
+}
+
 /** Replace only providers present in a response, retaining the other good catalog. */
 export function mergeModelCatalogs(
   current: ModelOption[],

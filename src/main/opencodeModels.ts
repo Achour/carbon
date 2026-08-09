@@ -66,6 +66,23 @@ export interface RawProviderList {
   default?: Record<string, string>
 }
 
+/**
+ * Whether a model costs nothing to run.
+ *
+ * Taken from OpenCode Zen's own `-free` id suffix rather than from the reported
+ * `cost`, which is **0 for every model** the server lists — paid ones included
+ * (`gpt-5.6-sol` reports 0/0 alongside `deepseek-v4-flash-free`), because on a
+ * subscription nothing is billed per token. Badging from cost would therefore
+ * mark the whole catalog free, which is exactly the claim not to get wrong.
+ *
+ * The suffix under-claims instead: a free model without it (Zen's `big-pickle`)
+ * simply goes unbadged. A missing badge costs the user nothing; a wrong one
+ * tells them a paid model is free.
+ */
+export function isFreeModel(modelID: string): boolean {
+  return /-free$/i.test(modelID)
+}
+
 /** The sentinel row: run OpenCode on whatever its own config selects. */
 export function opencodeDefaultOption(): ModelOption {
   return {
@@ -99,12 +116,16 @@ export function mapProviderList(raw: RawProviderList | null | undefined): ModelO
     for (const [key, info] of Object.entries(provider.models ?? {})) {
       const modelID = info.id ?? key
       if (!modelID) continue
+      const free = isFreeModel(modelID)
       rows.push({
         id: opencodeModelId(providerID, modelID),
-        label: info.name || modelID,
+        // Zen names its free models "… Free", and the row already carries a Free
+        // badge — printing both reads as a stutter ("DeepSeek V4 Flash Free  Free").
+        label: free ? (info.name || modelID).replace(/\s+free$/i, '') : info.name || modelID,
         description: provider.name || providerID,
         provider: 'opencode',
-        ...(info.limit?.context ? { contextWindow: info.limit.context } : {})
+        ...(info.limit?.context ? { contextWindow: info.limit.context } : {}),
+        ...(free ? { free: true } : {})
       })
     }
   }

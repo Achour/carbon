@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  isFreeModel,
   mapProviderList,
   opencodeModelId,
   parseOpencodeModelId
@@ -96,4 +97,48 @@ test('`connected` filters the list when the endpoint sends it', () => {
     !rows.some((r) => r.id.startsWith('opencode:opencode/')),
     'a provider the user has no credentials for must not be offered'
   )
+})
+
+test('free models are marked from the id suffix, never from reported cost', () => {
+  const rows = mapProviderList({
+    providers: [
+      {
+        id: 'opencode',
+        name: 'OpenCode Zen',
+        models: {
+          // Every model the server lists reports cost 0 on a subscription —
+          // paid ones included — so cost cannot be the signal.
+          'deepseek-v4-flash-free': {
+            id: 'deepseek-v4-flash-free',
+            name: 'DeepSeek V4 Flash Free',
+            cost: { input: 0, output: 0 }
+          },
+          'big-pickle': { id: 'big-pickle', name: 'Big Pickle', cost: { input: 0, output: 0 } }
+        }
+      },
+      {
+        id: 'openai',
+        name: 'OpenAI',
+        models: { 'gpt-5.6-sol': { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol', cost: { input: 0, output: 0 } } }
+      }
+    ]
+  })
+  const free = rows.find((r) => r.id === 'opencode:opencode/deepseek-v4-flash-free')
+  assert.equal(free?.free, true)
+  // The name already ends in "Free"; the badge carries it, so the label doesn't
+  // repeat it.
+  assert.equal(free?.label, 'DeepSeek V4 Flash')
+
+  // A paid model reporting cost 0 must never be badged free.
+  assert.equal(rows.find((r) => r.id === 'opencode:openai/gpt-5.6-sol')?.free, undefined)
+  // And a free model without the suffix simply goes unbadged — under-claiming
+  // is the safe direction.
+  assert.equal(rows.find((r) => r.id === 'opencode:opencode/big-pickle')?.free, undefined)
+})
+
+test('isFreeModel only matches the -free suffix', () => {
+  assert.equal(isFreeModel('deepseek-v4-flash-free'), true)
+  assert.equal(isFreeModel('ling-3.0-tiny-free'), true)
+  assert.equal(isFreeModel('free-willy'), false, 'a leading "free" is part of a name')
+  assert.equal(isFreeModel('gpt-5.6-sol'), false)
 })

@@ -25,6 +25,7 @@ export function PlanContent({
   const chat = useApp((s) => s.chats.find((c) => c.id === s.activeId) ?? null)
   const dynamicModels = useApp((s) => s.models)
   const codexConfigModel = useApp((s) => s.codexConfigModel)
+  const hiddenModels = useApp((s) => s.hiddenModels)
   const modelEfforts = useApp((s) => s.defaults?.modelEfforts)
   const [feedback, setFeedback] = React.useState('')
   const [autoAccept, setAutoAccept] = React.useState(false)
@@ -44,11 +45,12 @@ export function PlanContent({
   const buildOptions = React.useMemo(
     () =>
       chat
-        ? assembleModelOptions(dynamicModels, codexConfigModel).filter(
-            (option) => !option.disabled
-          )
+        ? assembleModelOptions(dynamicModels, codexConfigModel, {
+            hidden: hiddenModels,
+            keep: chat.model ?? ''
+          }).filter((option) => !option.disabled)
         : [],
-    [chat, dynamicModels, codexConfigModel]
+    [chat, dynamicModels, codexConfigModel, hiddenModels]
   )
   const currentModel = chat ? canonicalModelId(chat.model ?? '', buildOptions) : ''
   const buildModel = buildPick ?? currentModel

@@ -721,6 +721,8 @@ export interface ModelOption {
   supportedEfforts?: EffortId[]
   /** Whether this model advertises provider Fast mode; undefined means unknown. */
   supportsFastMode?: boolean
+  /** Costs nothing to run — currently only OpenCode Zen's free tier. */
+  free?: boolean
 }
 
 const canonicalModelName = (model?: string): string =>

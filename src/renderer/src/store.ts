@@ -342,6 +342,17 @@ interface AppState {
   /** How many recent chats each project shows in the sidebar before search. */
   chatsPerProject: number
   setChatsPerProject(n: number): void
+  /**
+   * Model ids hidden from the picker, chosen in Settings.
+   *
+   * A UI preference, so it lives in localStorage next to the other picker-shape
+   * settings rather than in `defaults`: main never consults it, and a hidden
+   * model that is still selected keeps working — hiding trims the menu, it does
+   * not disable a backend.
+   */
+  hiddenModels: ReadonlySet<string>
+  toggleModelHidden(id: string): void
+  setModelsHidden(ids: string[], hidden: boolean): void
   /** How much each sidebar chat row says — see `SidebarDensity`. Persisted. */
   sidebarDensity: SidebarDensity
   setSidebarDensity(density: SidebarDensity): void
@@ -1178,6 +1189,32 @@ export const useApp = create<AppState>((set, get) => ({
       saveNotifyPrefs(notifyPrefs)
       return { notifyPrefs }
     })
+  },
+
+  hiddenModels: (() => {
+    try {
+      const raw = JSON.parse(localStorage.getItem('hiddenModels') ?? '[]') as unknown
+      return new Set(Array.isArray(raw) ? raw.filter((x): x is string => typeof x === 'string') : [])
+    } catch {
+      return new Set<string>()
+    }
+  })(),
+
+  toggleModelHidden(id) {
+    const next = new Set(get().hiddenModels)
+    if (!next.delete(id)) next.add(id)
+    localStorage.setItem('hiddenModels', JSON.stringify([...next]))
+    set({ hiddenModels: next })
+  },
+
+  setModelsHidden(ids, hidden) {
+    const next = new Set(get().hiddenModels)
+    for (const id of ids) {
+      if (hidden) next.add(id)
+      else next.delete(id)
+    }
+    localStorage.setItem('hiddenModels', JSON.stringify([...next]))
+    set({ hiddenModels: next })
   },
 
   chatsPerProject: (() => {

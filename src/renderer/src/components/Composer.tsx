@@ -427,6 +427,11 @@ function ModelSettingsPicker({
                         {resolved}
                       </span>
                     )}
+                    {option.free && (
+                      <span className="shrink-0 rounded bg-success/15 px-1.5 py-px text-[10px] font-semibold text-success">
+                        Free
+                      </span>
+                    )}
                     {option.contextWindow && (
                       <span className="shrink-0 text-[10px] text-muted-foreground">
                         {fmtContextWindow(option.contextWindow)}
@@ -616,7 +621,13 @@ export function Composer({
   // Both providers' models are always offered — picking one from the other
   // provider switches the chat's backend mid-conversation, and main hands the
   // context over via a handoff brief (see ChatManager.startHandoffBrief).
-  const modelOptions = assembleModelOptions(dynamicModels, codexConfigModel)
+  const hiddenModels = useApp((s) => s.hiddenModels)
+  // `keep` so hiding the model this chat is already on trims it from everyone
+  // else's menu without blanking its own picker.
+  const modelOptions = assembleModelOptions(dynamicModels, codexConfigModel, {
+    hidden: hiddenModels,
+    keep: model
+  })
 
   const selectedModel = React.useMemo(
     () => canonicalModelId(model, modelOptions),
