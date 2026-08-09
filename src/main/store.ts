@@ -1816,6 +1816,7 @@ export class Store {
   rememberOptions(
     patch: {
       model?: string
+      modelProvider?: AppDefaults['modelProvider']
       effort?: EffortId | ''
       serviceTier?: ServiceTier
       permissionMode?: PermissionModeId
@@ -1824,7 +1825,13 @@ export class Store {
   ): void {
     const defaults = this.settings.defaults
     if (patch.permissionMode !== undefined) defaults.permissionMode = patch.permissionMode
-    if (patch.model !== undefined) defaults.model = patch.model || undefined
+    if (patch.model !== undefined) {
+      defaults.model = patch.model || undefined
+      // `modelProvider` is additive for dynamic model ids. Preserve the last
+      // known provider when an older or future caller changes only the model;
+      // otherwise a partial patch silently destroys routing information.
+      if (patch.modelProvider !== undefined) defaults.modelProvider = patch.modelProvider
+    }
     if (patch.effort !== undefined) defaults.effort = patch.effort || undefined
     if (patch.serviceTier !== undefined) defaults.serviceTier = patch.serviceTier
     if (patch.effort !== undefined) {

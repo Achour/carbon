@@ -18,6 +18,7 @@ import { formatCost, formatDuration } from '@/lib/format'
 import { invalidateLocalImages } from '@/lib/imageCache'
 import { gitAction, gitActionPrompt, type GitActionId } from '@/lib/gitActions'
 import { changedPathsFromParts } from '@/lib/turnChanges'
+import { hasCompleteModelCatalog, mergeModelCatalogs } from '@/lib/modelCatalog'
 import { USAGE_DEFAULT_DAYS, projectRoot, providerForModel } from '@shared/types'
 import type {
   AppDefaults,
@@ -206,7 +207,7 @@ interface AppState {
    * rather than "fine".
    */
   fastMode: Record<string, FastModeStatus>
-  /** Models reported by the live session; empty until loaded (falls back to the static list). */
+  /** Models reported by both provider control APIs; empty until loaded. */
   models: ModelOption[]
   /** Fetches the session's model list once and caches it (feeds the composer picker). */
   loadModels(chatId?: string, cwd?: string): Promise<void>
@@ -787,10 +788,13 @@ export function scopedChanges(
 
 const initialThemeMode = storedThemeMode()
 let codexConfigModelLoad: Promise<string | null> | null = null
-// One Claude model-list probe per app run: every composer mount asks (Codex
-// chats included, for the cross-provider picker rows), and a missing or broken
-// Claude CLI must not be re-spawned on every chat switch.
+// Model-list probes are shared while in flight. A partial result is retried
+// after a cooldown: permanent provider failures must not spawn a process on
+// every composer mount, but a transient failure must not freeze the fallback
+// catalog until the whole app restarts.
 let modelsLoad: Promise<ModelOption[]> | null = null
+let modelsRetryAt = 0
+const MODELS_RETRY_MS = 30_000
 // GitHub reads are deduped per project, not globally. A request for project A
 // must not suppress the refresh kicked off when the user switches to project B.
 const githubRequests = new Map<string, Promise<GitHubState>>()
@@ -1015,7 +1019,8 @@ export const useApp = create<AppState>((set, get) => ({
     const prov =
       provider ??
       s.chats.find((c) => c.id === s.activeId)?.provider ??
-      (s.defaults?.model ? providerForModel(s.defaults.model) : 'claude')
+      (s.defaults?.modelProvider ??
+        (s.defaults?.model ? providerForModel(s.defaults.model, s.models) : 'claude'))
     const key = cwd ? `${cwd}::${prov}` : null
     // Already loaded (or loading) for this exact provider+project — nothing to do.
     if (s.commandsKey === key) return
@@ -1264,7 +1269,11 @@ export const useApp = create<AppState>((set, get) => ({
     }
     // No active chat yet on boot — derive the provider from the saved default
     // model so a Codex default never warms a Claude command session.
-    get().loadCommands(cwd, defaults?.model ? providerForModel(defaults.model) : 'claude')
+    get().loadCommands(
+      cwd,
+      defaults?.modelProvider ??
+        (defaults?.model ? providerForModel(defaults.model, get().models) : 'claude')
+    )
   },
 
   setSelectedCwd(cwd) {
@@ -2059,17 +2068,40 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   async loadModels(chatId, cwd) {
-    if (get().models.length) return // the list is stable per app run (account-level)
+    if (hasCompleteModelCatalog(get().models)) return
     const id = chatId ?? get().activeId
+    const folder =
+      cwd ??
+      (id ? get().chats.find((chat) => chat.id === id)?.cwd : undefined) ??
+      get().selectedCwd ??
+      undefined
     // Either identifies a folder to read the list from — a chat via its cwd, or
     // the new-chat screen's picked folder directly.
-    if (!id && !cwd) return
-    modelsLoad ??= window.api.listModels(id ?? '', cwd)
+    if (!id && !folder) return
+    if (modelsLoad) {
+      try {
+        await modelsLoad
+      } catch {
+        // The owner of the in-flight request applies the retry policy.
+      }
+      return
+    }
+    if (Date.now() < modelsRetryAt) return
+    const request = window.api.listModels(id ?? '', folder)
+    modelsLoad = request
     try {
-      const models = await modelsLoad
-      if (models.length) set({ models })
+      const models = await request
+      if (models.length) {
+        set((state) => ({ models: mergeModelCatalogs(state.models, models) }))
+      }
+      modelsRetryAt = hasCompleteModelCatalog(get().models)
+        ? Number.POSITIVE_INFINITY
+        : Date.now() + MODELS_RETRY_MS
     } catch {
-      // One failed probe per run; the picker keeps the static fallback list.
+      modelsRetryAt = Date.now() + MODELS_RETRY_MS
+      // Keep the last good provider rows and static fallback for the missing one.
+    } finally {
+      if (modelsLoad === request) modelsLoad = null
     }
   },
 
@@ -2373,9 +2405,8 @@ export const useApp = create<AppState>((set, get) => ({
       case 'status': {
         set((st) => ({ statuses: { ...st.statuses, [ev.chatId]: ev.status } }))
         // Any non-idle status means a live session (a new chat's first turn is
-        // 'starting', not 'streaming') — load the SDK model list (once, cached)
-        // so the picker shows the real "1M context" descriptions rather than the
-        // static fallback. loadModels waits for init internally.
+        // 'starting', not 'streaming') — load both live model catalogs once so
+        // aliases, capabilities and provider-default resolutions are current.
         if (ev.status !== 'idle') void get().loadModels(ev.chatId)
         // main dedups consecutive statuses, so an `idle` here is a real
         // transition (the interrupt()+result double-`idle` is collapsed there).

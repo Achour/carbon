@@ -129,6 +129,8 @@ export interface ChatMeta {
    * shows this model (and its provider's controls) while it waits.
    */
   pendingModel?: string
+  /** Provider for a dynamic `pendingModel` that is not in the static catalog. */
+  pendingProvider?: Provider
   /**
    * Transient: shown in a locked composer while the handoff context for a
    * just-sent provider switch is being generated. Set as the switch applies,
@@ -139,6 +141,14 @@ export interface ChatMeta {
   switchingNote?: string
   /** Tokens currently in the model's context (from the last API call). */
   contextTokens?: number
+  /**
+   * Semantics marker for persisted context usage. Older Codex builds stored a
+   * cumulative turn total in `contextTokens`; values written from App Server's
+   * last model call carry version 1 so that legacy values can be cleared once.
+   * Claude does not need the marker because its field has always meant live
+   * context occupancy.
+   */
+  contextTokensVersion?: 1
   /** Context window size of the model in use. */
   contextWindow?: number
   /** Present when `cwd` is a git worktree the app manages or attached to. */
@@ -336,6 +346,8 @@ export type PermissionDecision =
        * plan was written with.
        */
       model?: string
+      /** Provider of `model`, needed for runtime-discovered model ids. */
+      provider?: Provider
       /**
        * Plan approvals only: reasoning effort for the implementation turn.
        * An empty string uses the provider default; undefined keeps the effort
@@ -371,6 +383,8 @@ export interface UserQuestion {
   header: string
   options: { label: string; description?: string }[]
   multiSelect?: boolean
+  /** Optional elicitation fields may be submitted without a value. Defaults true. */
+  required?: boolean
   /** Defaults to true for Claude's existing AskUserQuestion behavior. */
   allowOther?: boolean
   /** Request that a free-form answer be visually concealed. */
@@ -395,7 +409,7 @@ export interface BackgroundJob {
 }
 
 /** Generic ok/error result for main-process operations that can fail. */
-export type OpResult = { ok: true } | { ok: false; error: string }
+export type OpResult = { ok: true; url?: string } | { ok: false; error: string }
 
 // ---------- Session introspection (MCP, models, agents, usage) ----------
 
@@ -642,6 +656,8 @@ export type ChatEvent =
 
 export interface AppDefaults {
   model?: string
+  /** Provider of the remembered model; older settings infer it from the catalog. */
+  modelProvider?: Provider
   effort?: EffortId
   serviceTier?: ServiceTier
   permissionMode: PermissionModeId
@@ -658,6 +674,8 @@ export interface AppDefaults {
 /** A live change to a chat's inference options. */
 export interface ChatOptionsPatch {
   model?: string
+  /** Provider of `model`, needed for runtime-discovered model ids. */
+  modelProvider?: Provider
   effort?: EffortId | ''
   serviceTier?: ServiceTier
   permissionMode?: PermissionModeId
@@ -766,13 +784,16 @@ export const MODEL_OPTIONS: ModelOption[] = [
 ]
 
 /**
- * Which provider a model id belongs to. Codex model ids are all listed in
- * MODEL_OPTIONS; anything else (including the '' default and the SDK's dynamic
- * Claude aliases, which aren't in this static list) is Claude. Used to set a new
- * chat's provider from its picked model, and to detect a provider switch.
+ * Which provider a model id belongs to. Callers with a live catalog pass it so
+ * runtime-discovered Codex ids route correctly; the static catalog remains the
+ * fallback for startup, older settings and known aliases.
  */
-export function providerForModel(id: string): Provider {
-  return MODEL_OPTIONS.find((m) => m.id === id)?.provider ?? 'claude'
+export function providerForModel(id: string, options: ModelOption[] = MODEL_OPTIONS): Provider {
+  return (
+    options.find((m) => m.id === id)?.provider ??
+    MODEL_OPTIONS.find((m) => m.id === id)?.provider ??
+    'claude'
+  )
 }
 
 /**

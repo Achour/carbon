@@ -103,12 +103,17 @@ interface CodexAccountResponse {
 }
 
 interface CodexRateLimitsResponse {
-  rateLimits?: {
-    primary?: CodexWindow | null
-    secondary?: CodexWindow | null
-    planType?: string | null
-  } | null
+  rateLimits?: CodexRateLimitSnapshot | null
+  rateLimitsByLimitId?: Record<string, CodexRateLimitSnapshot> | null
   rateLimitResetCredits?: { availableCount?: number | null } | null
+}
+
+interface CodexRateLimitSnapshot {
+  limitId?: string | null
+  limitName?: string | null
+  primary?: CodexWindow | null
+  secondary?: CodexWindow | null
+  planType?: string | null
 }
 
 /**
@@ -119,23 +124,34 @@ async function readCodex(): Promise<ProviderUsage> {
   const client = new CodexAppServerClient()
   try {
     const [account, limits] = (await Promise.all([
-      client.request('account/read', {}),
-      // This one is declared with a unit param — `{}` is rejected as a type error.
-      client.request('account/rateLimits/read', null)
+      client.request('account/read', { refreshToken: false }),
+      client.request('account/rateLimits/read', undefined)
     ])) as [CodexAccountResponse, CodexRateLimitsResponse]
 
     if (!account?.account) return unavailable('codex', 'Not signed in to Codex.')
 
     const rl = limits?.rateLimits
-    const windows = [codexWindow(rl?.primary), codexWindow(rl?.secondary)].filter(
-      (w): w is RateLimitWindow => w !== null
+    const buckets = Object.entries(limits?.rateLimitsByLimitId ?? {})
+    const snapshots: Array<[string, CodexRateLimitSnapshot]> = buckets.length
+      ? buckets
+      : rl
+        ? [[rl.limitName || rl.limitId || '', rl]]
+        : []
+    const prefix = snapshots.length > 1
+    const windows = snapshots.flatMap(([key, snapshot]) =>
+      [codexWindow(snapshot.primary), codexWindow(snapshot.secondary)]
+        .filter((w): w is RateLimitWindow => w !== null)
+        .map((window) => ({
+          ...window,
+          label: prefix && key ? `${key} · ${window.label}` : window.label
+        }))
     )
 
     return {
       provider: 'codex',
       available: windows.length > 0,
       note: windows.length > 0 ? undefined : 'No plan limit windows reported.',
-      plan: rl?.planType ?? account.account.planType ?? null,
+      plan: rl?.planType ?? snapshots[0]?.[1].planType ?? account.account.planType ?? null,
       windows,
       resetCredits: limits?.rateLimitResetCredits?.availableCount ?? 0
     }

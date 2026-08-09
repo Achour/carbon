@@ -53,7 +53,8 @@ import {
 import { CODEX_SLASH_COMMANDS, parseCodexSlashCommand } from '@shared/codexCommands'
 import type { Store } from './store'
 import type { PreviewManager } from './preview'
-import { CodexSession, generateCodexText } from './codex'
+import { CodexSession, fetchCodexModels, generateCodexText } from './codex'
+import { CodexAppServerClient } from './codexAppServer'
 import { composePrompt, withTimeout, type AgentSession, type Emit } from './session'
 import { DeltaCoalescer } from './deltaCoalescer'
 import { TITLE_SYSTEM, buildTitlePrompt, cleanTitle, deriveTitle, firstUserText } from './titles'
@@ -1764,6 +1765,26 @@ export class ChatManager {
     }
   }
 
+  private async warmCodexModels(): Promise<ModelOption[]> {
+    const client = new CodexAppServerClient({})
+    try {
+      return await fetchCodexModels(client)
+    } catch {
+      return []
+    } finally {
+      client.dispose()
+    }
+  }
+
+  private mergeModels(options: ModelOption[]): void {
+    if (!options.length) return
+    const providers = new Set(options.map((option) => option.provider))
+    this.models = [
+      ...(this.models ?? []).filter((option) => !providers.has(option.provider)),
+      ...options
+    ]
+  }
+
   private createSession(chat: ChatData): AgentSession {
     const onDead = (): void => {
       if (this.sessions.get(chat.id)?.dead) this.sessions.delete(chat.id)
@@ -1816,16 +1837,26 @@ export class ChatManager {
     const pending = chat.pendingModel
     if (pending === undefined) return null
     chat.pendingModel = undefined
-    const nextProvider = providerForModel(pending)
+    const nextProvider =
+      chat.pendingProvider ?? providerForModel(pending, this.models ?? MODEL_OPTIONS)
+    chat.pendingProvider = undefined
     if (nextProvider === chat.provider) {
       // Stale pick that ended up back home — just make sure the model applies.
       chat.model = pending || undefined
-      this.emit({ type: 'meta', chatId: chat.id, patch: { pendingModel: undefined, model: chat.model } })
+      this.emit({
+        type: 'meta',
+        chatId: chat.id,
+        patch: { pendingModel: undefined, pendingProvider: undefined, model: chat.model }
+      })
       return null
     }
     const prevModel = chat.model
     chat.model = pending || undefined
-    this.emit({ type: 'meta', chatId: chat.id, patch: { pendingModel: undefined, model: chat.model } })
+    this.emit({
+      type: 'meta',
+      chatId: chat.id,
+      patch: { pendingModel: undefined, pendingProvider: undefined, model: chat.model }
+    })
     return this.switchProvider(chat, nextProvider, prevModel)
   }
 
@@ -2059,7 +2090,9 @@ export class ChatManager {
         case 'model': {
           if (!command.argument) {
             const current =
-              MODEL_OPTIONS.find((model) => model.id === (chat.model ?? CODEX_DEFAULT_MODEL))?.label ??
+              (this.models ?? MODEL_OPTIONS).find(
+                (model) => model.id === (chat.model ?? CODEX_DEFAULT_MODEL)
+              )?.label ??
               chat.model ??
               'Codex default'
             this.pushCommandResult(chat, command.original, `Current model: **${current}**.`)
@@ -2074,7 +2107,9 @@ export class ChatManager {
           }
           const requested = command.argument.toLowerCase()
           const modelId = aliases[requested] ?? command.argument
-          const model = MODEL_OPTIONS.find((option) => option.provider === 'codex' && option.id === modelId)
+          const model = (this.models ?? MODEL_OPTIONS).find(
+            (option) => option.provider === 'codex' && option.id === modelId
+          )
           if (!model) {
             this.pushCommandResult(
               chat,
@@ -2084,7 +2119,7 @@ export class ChatManager {
             )
             return
           }
-          await this.setOptions(chat.id, { model: model.id })
+          await this.setOptions(chat.id, { model: model.id, modelProvider: 'codex' })
           this.pushCommandResult(chat, command.original, `Model changed to **${model.label}**.`)
           return
         }
@@ -2099,7 +2134,7 @@ export class ChatManager {
             return
           }
           const effort = command.argument.toLowerCase()
-          const model = MODEL_OPTIONS.find((option) => option.id === chat.model)
+          const model = (this.models ?? MODEL_OPTIONS).find((option) => option.id === chat.model)
           const supported = model?.supportedEfforts ?? ['low', 'medium', 'high', 'xhigh']
           if (effort !== 'default' && !supported.includes(effort as EffortId)) {
             this.pushCommandResult(
@@ -2196,9 +2231,7 @@ export class ChatManager {
 
         case 'status': {
           const context =
-            chat.provider === 'codex'
-              ? 'Unavailable through the embedded Codex SDK'
-              : chat.contextTokens != null && chat.contextWindow
+            chat.contextTokens != null && chat.contextWindow
               ? `${chat.contextTokens.toLocaleString()} / ${chat.contextWindow.toLocaleString()} tokens`
               : 'Not available until a turn completes'
           this.pushCommandResult(
@@ -2287,26 +2320,25 @@ export class ChatManager {
   }
 
   /**
-   * The account's models. Prefers the chat's live session; otherwise warms a
-   * throwaway one, so a chat that hasn't had a turn yet still gets the real list
-   * — without it the renderer falls back to the static MODEL_OPTIONS, whose
-   * "Default" row carries no `resolvedModel` and so leaves the composer chip
-   * reading "Default" instead of naming the model behind it. The list is
-   * account-level, so one warm-up serves every chat and every cwd; `cwd` covers
-   * the new-chat screen, which has a folder but no chat yet.
+   * Both accounts' current model catalogs. A live session supplies its provider;
+   * throwaway control-only clients fill the other provider (and both on the new-
+   * chat screen). The merged list is account-level and cached for the app run.
    */
   async listModels(chatId: string, cwd?: string): Promise<ModelOption[]> {
     const live = await this.sessionFor(chatId)?.listModels()
-    if (live?.length) return live
-    if (this.models) return this.models
+    if (live?.length) this.mergeModels(live)
+    const haveClaude = this.models?.some((option) => option.provider === 'claude')
+    const haveCodex = this.models?.some((option) => option.provider === 'codex')
+    if (haveClaude && haveCodex) return this.models!
     const folder = this.store.getMeta(chatId)?.cwd || cwd
-    if (!folder) return []
-    this.modelWarmup ??= this.warmModels(folder)
-      .then((options) => {
-        // An empty list means the agent never started, not an account with no
-        // models — leave the cache unset so the next caller retries.
-        if (options.length) this.models = options
-        return options
+    if (!folder) return this.models ?? []
+    this.modelWarmup ??= Promise.all([
+      haveClaude ? Promise.resolve([]) : this.warmModels(folder),
+      haveCodex ? Promise.resolve([]) : this.warmCodexModels()
+    ])
+      .then(([claude, codex]) => {
+        this.mergeModels([...claude, ...codex])
+        return this.models ?? []
       })
       .finally(() => {
         this.modelWarmup = null
@@ -2357,7 +2389,8 @@ export class ChatManager {
       chat &&
       decision.behavior === 'allow' &&
       decision.model !== undefined &&
-      providerForModel(decision.model) !== chat.provider
+      (decision.provider ?? providerForModel(decision.model, this.models ?? MODEL_OPTIONS)) !==
+        chat.provider
     ) {
       const plan = this.planForRequest(chat, requestId)
       if (plan !== null) {
@@ -2399,7 +2432,8 @@ export class ChatManager {
     decision: Extract<PermissionDecision, { behavior: 'allow' }>,
     plan: string
   ): void {
-    const nextProvider = providerForModel(decision.model!)
+    const nextProvider =
+      decision.provider ?? providerForModel(decision.model!, this.models ?? MODEL_OPTIONS)
     const fromLabel = this.label(chat.model, chat.provider)
     // Same restore rule as the in-provider approvals: back to the mode the
     // chat was in before plan mode, with 'default' for a chat *created* in
@@ -2413,6 +2447,7 @@ export class ChatManager {
     const prevModel = chat.model
     chat.model = decision.model || undefined
     chat.pendingModel = undefined
+    chat.pendingProvider = undefined
     const handoff = this.switchProvider(chat, nextProvider, prevModel)
     this.emit({
       type: 'meta',
@@ -2420,6 +2455,7 @@ export class ChatManager {
       patch: {
         model: chat.model,
         pendingModel: undefined,
+        pendingProvider: undefined,
         permissionMode: chat.permissionMode,
         modeBeforePlan: undefined
       }
@@ -2442,14 +2478,18 @@ export class ChatManager {
     if (!chat) return
     const session = this.sessionFor(chatId)
     if (patch.model !== undefined) {
-      if (providerForModel(patch.model) !== chat.provider) {
+      const pickedProvider =
+        patch.modelProvider ?? providerForModel(patch.model, this.models ?? MODEL_OPTIONS)
+      if (pickedProvider !== chat.provider) {
         // Crossing providers has real side effects (session teardown, a
         // handoff brief), so a pick only *arms* the switch — it applies on
         // the next send (see applyPendingSwitch). A misclick costs nothing.
         chat.pendingModel = patch.model
+        chat.pendingProvider = pickedProvider
       } else {
         // Picking back into the current provider cancels any armed switch.
         chat.pendingModel = undefined
+        chat.pendingProvider = undefined
         chat.model = patch.model || undefined
         await session?.setModel(chat.model)
       }
@@ -2510,6 +2550,7 @@ export class ChatManager {
       patch: {
         model: chat.model,
         pendingModel: chat.pendingModel,
+        pendingProvider: chat.pendingProvider,
         effort: chat.effort,
         serviceTier: chat.serviceTier,
         permissionMode: chat.permissionMode,

@@ -17,6 +17,7 @@ import type {
   Attachment,
   EffortId,
   PermissionModeId,
+  Provider,
   ServiceTier,
   WorktreeTarget
 } from '@shared/types'
@@ -78,6 +79,13 @@ export function NewChat(): React.JSX.Element {
   const commands = useApp((s) => s.commands)
 
   const [model, setModel] = React.useState(defaults?.model ?? '')
+  const [modelProvider, setModelProvider] = React.useState<Provider>(
+    defaults?.modelProvider ?? providerForModel(defaults?.model ?? '')
+  )
+  const changeModel = (next: string, provider: Provider): void => {
+    setModel(next)
+    setModelProvider(provider)
+  }
   const [effort, setEffort] = React.useState<EffortId | ''>(defaults?.effort ?? '')
   // Per-model effort memory for this compose session, seeded from the persisted
   // defaults. Switching models restores each one's last effort (via the
@@ -159,7 +167,7 @@ export function NewChat(): React.JSX.Element {
     setStarting(true)
     try {
       await newChat(root, text, {
-        provider: providerForModel(model),
+        provider: modelProvider,
         model: model || undefined,
         effort: effort || undefined,
         serviceTier: tierCorrected.current ? undefined : serviceTier,
@@ -245,7 +253,7 @@ export function NewChat(): React.JSX.Element {
                   // can put the draft back if starting the chat fails.
                   onSend={(text, attachments) => start(text, attachments)}
                   model={model}
-                  onModelChange={setModel}
+                  onModelChange={changeModel}
                   effort={effort}
                   onEffortChange={changeEffort}
                   modelEfforts={modelEfforts}
@@ -253,7 +261,7 @@ export function NewChat(): React.JSX.Element {
                   onServiceTierChange={changeServiceTier}
                   permissionMode={permissionMode}
                   onPermissionModeChange={setPermissionMode}
-                  provider={providerForModel(model)}
+                  provider={modelProvider}
                   cwd={cwd}
                   commands={commands}
                   placeholder={`Start working in ${basename(cwd)}…`}

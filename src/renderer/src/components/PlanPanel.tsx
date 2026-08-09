@@ -111,7 +111,7 @@ export function PlanContent({
     void respondPermission(panel.requestId, {
       behavior: 'allow',
       always: autoAccept && hasSuggestions,
-      ...(buildModel !== currentModel ? { model: buildModel } : {}),
+      ...(buildModel !== currentModel ? { model: buildModel, provider: buildProvider } : {}),
       ...(shouldOverrideBuildEffort ? { effort: buildEffort } : {})
     })
   }

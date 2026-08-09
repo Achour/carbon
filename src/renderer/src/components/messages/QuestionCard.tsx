@@ -126,13 +126,16 @@ export function QuestionCard({
     return labels
   }
 
-  const complete = questions.length > 0 && questions.every((_q, i) => answerValues(i) !== null)
+  const complete =
+    questions.length > 0 &&
+    questions.every((question, i) => question.required === false || answerValues(i) !== null)
 
   const submit = (): void => {
     const answers: Record<string, string> = {}
     const answersById: Record<string, string[]> = {}
     questions.forEach((q, i) => {
-      const values = answerValues(i)!
+      const values = answerValues(i)
+      if (!values) return
       answers[q.question] = values.join(', ')
       if (q.id) answersById[q.id] = values
     })

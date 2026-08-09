@@ -45,12 +45,18 @@ import { DeltaCoalescer } from './deltaCoalescer.ts'
 import { IMAGE_EXT, pickTurnImages } from './imageScan.ts'
 import { isMissingCodexThreadError } from './codexResume.ts'
 import { parseCodexPlan } from './codexMode.ts'
+import { codexWindow, type CodexWindow } from './usageWindows.ts'
 import {
   CodexAppServerClient,
   type AppServerThreadOptions,
   type CodexClientLike,
+  type CodexTurnUsage,
+  isCodexCompactionItem,
+  isCodexImageViewItem,
   isCodexPlanItem,
+  type NativeApprovalRequest,
   type CodexThreadLike,
+  type NativeMcpElicitationRequest,
   type NativeUserInputRequest
 } from './codexAppServer.ts'
 import {
@@ -125,6 +131,83 @@ export function codexOptionsForServiceTier(
   }
 }
 
+interface RawCodexModel {
+  id: string
+  model?: string
+  displayName?: string
+  description?: string
+  hidden?: boolean
+  isDefault?: boolean
+  supportedReasoningEfforts?: Array<{ reasoningEffort?: string }>
+  additionalSpeedTiers?: string[]
+  serviceTiers?: Array<{ id?: string }>
+}
+
+function codexModelOptions(raw: RawCodexModel[]): ModelOption[] {
+  const visible = raw.filter((model) => !model.hidden)
+  const options = visible.map((model): ModelOption => {
+    const resolved = model.model || model.id
+    const fallback = MODEL_OPTIONS.find(
+      (option) => option.id === model.id || option.id === resolved
+    )
+    const supportedEfforts = model.supportedReasoningEfforts
+      ?.map((value) => value.reasoningEffort)
+      .filter((value): value is EffortId =>
+        ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(value ?? '')
+      )
+    return {
+      id: model.id,
+      label: model.displayName || fallback?.label || model.id,
+      description: model.description || fallback?.description || 'OpenAI Codex',
+      provider: 'codex',
+      ...(resolved !== model.id ? { resolvedModel: resolved } : {}),
+      ...(fallback?.contextWindow ? { contextWindow: fallback.contextWindow } : {}),
+      ...(supportedEfforts?.length ? { supportedEfforts } : {}),
+      supportsFastMode:
+        (model.serviceTiers?.some((tier) => tier.id === 'fast') ?? false) ||
+        (model.additionalSpeedTiers?.includes('fast') ?? false)
+    }
+  })
+  const configured = visible.find((model) => model.isDefault)
+  const configuredOption = options.find((option) => option.id === configured?.id)
+  return [
+    {
+      id: CODEX_DEFAULT_MODEL,
+      label: 'Codex (default)',
+      description: 'Model from your Codex config',
+      provider: 'codex',
+      ...(configured ? { resolvedModel: configured.model || configured.id } : {}),
+      ...(configuredOption?.contextWindow
+        ? { contextWindow: configuredOption.contextWindow }
+        : {}),
+      ...(configuredOption?.supportedEfforts
+        ? { supportedEfforts: configuredOption.supportedEfforts }
+        : {}),
+      ...(configuredOption?.supportsFastMode != null
+        ? { supportsFastMode: configuredOption.supportsFastMode }
+        : {})
+    },
+    ...options
+  ]
+}
+
+/** Fetch the complete current Codex model catalog from App Server. */
+export async function fetchCodexModels(client: CodexClientLike): Promise<ModelOption[]> {
+  if (!client.request) return []
+  const raw: RawCodexModel[] = []
+  let cursor: string | null = null
+  do {
+    const page = (await client.request('model/list', {
+      cursor,
+      limit: 100,
+      includeHidden: false
+    })) as { data?: RawCodexModel[]; nextCursor?: string | null }
+    raw.push(...(page.data ?? []))
+    cursor = page.nextCursor ?? null
+  } while (cursor)
+  return codexModelOptions(raw)
+}
+
 interface PendingTurn {
   input: Input
   temps: string[]
@@ -138,12 +221,24 @@ interface PendingTurn {
 interface PendingNativeQuestions {
   requestId: string
   questions: UserQuestion[]
+  isBlocking: boolean
+}
+
+interface PendingNativeApproval {
+  requestId: string
+  kind: NativeApprovalRequest['kind']
+}
+
+interface PendingMcpElicitation {
+  requestId: string
+  mode: NativeMcpElicitationRequest['mode']
+  schema?: Record<string, unknown>
 }
 
 /**
- * Carbon's permission modes map onto App Server's native sandbox policy. Carbon
- * still chooses the sandbox up front and runs with approvalPolicy `never`; Plan
- * additionally selects App Server's built-in Plan collaboration mode.
+ * Carbon's permission modes map onto App Server's native sandbox policy. Plan
+ * and Full Access are intentionally non-interactive; workspace modes let App
+ * Server ask before an operation needs privileges outside that sandbox.
  */
 function sandboxForMode(mode: PermissionModeId): SandboxMode {
   switch (mode) {
@@ -155,6 +250,16 @@ function sandboxForMode(mode: PermissionModeId): SandboxMode {
       // default | acceptEdits | auto — Codex may edit within the workspace.
       return 'workspace-write'
   }
+}
+
+function approvalPolicyForMode(mode: PermissionModeId): 'never' | 'on-request' {
+  return mode === 'plan' || mode === 'bypassPermissions' ? 'never' : 'on-request'
+}
+
+function approvalsReviewerForMode(
+  mode: PermissionModeId
+): AppServerThreadOptions['approvalsReviewer'] {
+  return mode === 'auto' ? 'auto_review' : 'user'
 }
 
 /**
@@ -305,6 +410,10 @@ export class CodexSession implements AgentSession {
   private nativePlan: string | null = null
   /** Live App Server request_user_input call blocking the current Codex turn. */
   private userQuestions: PendingNativeQuestions | null = null
+  /** Native command/file/permission approvals can overlap within a turn. */
+  private nativeApprovals = new Map<string, PendingNativeApproval>()
+  private mcpElicitations = new Map<string, PendingMcpElicitation>()
+  private compactedItems = new Set<string>()
   private activeTurn: PendingTurn | null = null
   private interrupted = false
   private lastEmittedStatus: ChatStatus | null = null
@@ -364,20 +473,28 @@ export class CodexSession implements AgentSession {
       codex ??
       new CodexAppServerClient({
         onUserInput: (request) => this.handleNativeUserInput(request),
-        onUserInputResolved: (requestId) => this.resolveNativeUserInput(requestId)
+        onUserInputResolved: (requestId) => this.resolveNativeUserInput(requestId),
+        onApproval: (request) => this.handleNativeApproval(request),
+        onApprovalResolved: (requestId) => this.resolveNativeApproval(requestId),
+        onMcpElicitation: (request) => this.handleMcpElicitation(request),
+        onMcpElicitationResolved: (requestId) => this.resolveMcpElicitation(requestId)
       })
     this.rolloutWatcher = rolloutWatcherFactory((event) => this.handleRolloutEvent(event))
     this.threadId = chat.sessionId ?? null
     this.planReview = chat.pendingPlanReview ?? null
     this.titledResumed = !!chat.sessionId
-    // Codex's turn.completed usage is cumulative across every model call made
-    // during the turn. It is useful for turn statistics, but it is not the
-    // number of tokens currently occupying the model's context window and can
-    // legitimately exceed that window. Clear values persisted by older builds
-    // so the renderer does not show a misleading context meter.
-    if (chat.contextTokens != null) {
+    // Before App Server exposed the last model call's token total, Carbon put
+    // cumulative per-turn usage in this field. Chats that were not opened by
+    // the intervening clearing build can still carry that value. Clear it once
+    // instead of showing an impossible context meter until another turn ends.
+    if (chat.contextTokens != null && chat.contextTokensVersion !== 1) {
       chat.contextTokens = undefined
-      this.emit({ type: 'meta', chatId: chat.id, patch: { contextTokens: undefined } })
+      chat.contextTokensVersion = 1
+      this.emit({
+        type: 'meta',
+        chatId: chat.id,
+        patch: { contextTokens: undefined, contextTokensVersion: 1 }
+      })
       this.store.saveChatSoon(chat.id)
     }
     void this.onDead
@@ -452,6 +569,7 @@ export class CodexSession implements AgentSession {
     // A freeform message supersedes a blocking native question. Resolve it with
     // an empty answer so App Server can finish that turn before the new one runs.
     this.clearUserQuestions(true)
+    this.clearMcpElicitations(true)
     if (!this.chat.title) {
       // Instant placeholder from the first message; the AI title is generated in
       // parallel with the turn (see maybeGenerateTitle) and swaps it in.
@@ -568,7 +686,8 @@ export class CodexSession implements AgentSession {
       // Carbon opens arbitrary folders (not always git repos); don't block on it.
       skipGitRepoCheck: true,
       sandboxMode: sandboxForMode(permissionMode),
-      approvalPolicy: 'never',
+      approvalPolicy: approvalPolicyForMode(permissionMode),
+      approvalsReviewer: approvalsReviewerForMode(permissionMode),
       modelReasoningEffort: effortForCodex(effort),
       collaborationMode: permissionMode === 'plan' ? 'plan' : 'default',
       serviceTier: this.chat.serviceTier ?? 'standard'
@@ -655,6 +774,7 @@ export class CodexSession implements AgentSession {
     this.activeUserMessageId = turn.userMessageId
     this.activeTurn = turn
     this.itemLoc.clear()
+    this.compactedItems.clear()
     this.lastText.clear()
     this.codexAgents.clear()
     this.codexChildTools.clear()
@@ -962,17 +1082,29 @@ export class CodexSession implements AgentSession {
 
   private onTurnCompleted(usage: Usage | null, turn: PendingTurn): void {
     this.surfaceTurnImages()
-    const window = turn.contextWindow
+    const codexUsage = usage as CodexTurnUsage | null
+    const window = codexUsage?.context_window ?? turn.contextWindow
+    const contextTokens = codexUsage?.context_tokens
+    const meta: Partial<ChatMeta> = {}
     if (this.chat.contextWindow !== window) {
       this.chat.contextWindow = window
-      this.emit({ type: 'meta', chatId: this.chat.id, patch: { contextWindow: window } })
+      meta.contextWindow = window
     }
+    if (contextTokens != null && this.chat.contextTokens !== contextTokens) {
+      this.chat.contextTokens = contextTokens
+      meta.contextTokens = contextTokens
+    }
+    if (contextTokens != null && this.chat.contextTokensVersion !== 1) {
+      this.chat.contextTokensVersion = 1
+      meta.contextTokensVersion = 1
+    }
+    if (Object.keys(meta).length) this.emit({ type: 'meta', chatId: this.chat.id, patch: meta })
     const stats: TurnStats = {
       // ChatGPT-subscription usage has no per-turn dollar cost to report.
       costUsd: 0,
       durationMs: Date.now() - this.turnStart,
       numTurns: 1,
-      model: turn.model || 'Codex',
+      model: codexUsage?.model || turn.model || 'Codex',
       inputTokens: usage?.input_tokens,
       outputTokens: usage?.output_tokens
     }
@@ -1043,7 +1175,21 @@ export class CodexSession implements AgentSession {
     this.setStatus('waiting-permission')
   }
 
-  /** Surface App Server's native blocking request_user_input call in Carbon. */
+  private hasBlockingNativeRequest(): boolean {
+    return (
+      this.nativeApprovals.size > 0 ||
+      this.mcpElicitations.size > 0 ||
+      this.userQuestions?.isBlocking === true
+    )
+  }
+
+  private restoreStreamingAfterNativeRequest(): void {
+    if (this.running && !this.disposed && !this.hasBlockingNativeRequest()) {
+      this.setStatus('streaming')
+    }
+  }
+
+  /** Surface App Server's native request_user_input call in Carbon. */
   private handleNativeUserInput(request: NativeUserInputRequest): void {
     if (this.disposed || (this.threadId != null && request.threadId !== this.threadId)) {
       this.codex.dismissUserInput?.(request.requestId)
@@ -1064,7 +1210,11 @@ export class CodexSession implements AgentSession {
       allowOther: question.isOther || !question.options?.length,
       isSecret: question.isSecret
     }))
-    this.userQuestions = { requestId: request.requestId, questions }
+    this.userQuestions = {
+      requestId: request.requestId,
+      questions,
+      isBlocking: request.isBlocking !== false
+    }
     this.emit({
       type: 'permission-request',
       chatId: this.chat.id,
@@ -1076,22 +1226,238 @@ export class CodexSession implements AgentSession {
         input: { questions },
         title: 'Answer questions',
         displayName: 'Codex questions',
-        description: 'Codex needs your input to continue.',
+        description: request.isBlocking === false
+          ? 'Codex requested input; the turn can continue while you answer.'
+          : 'Codex needs your input to continue.',
         hasSuggestions: false
       }
     })
-    this.setStatus('waiting-permission')
+    if (request.isBlocking !== false) this.setStatus('waiting-permission')
   }
 
   private resolveNativeUserInput(requestId: string): void {
     if (this.userQuestions?.requestId !== requestId) return
     this.clearUserQuestions(false)
-    if (this.running && !this.disposed) this.setStatus('streaming')
+    this.restoreStreamingAfterNativeRequest()
+  }
+
+  private handleNativeApproval(request: NativeApprovalRequest): void {
+    if (this.disposed || (this.threadId != null && request.threadId !== this.threadId)) {
+      this.codex.respondToApproval?.(request.requestId, false)
+      return
+    }
+    const { params } = request
+    const command = typeof params.command === 'string' ? params.command : ''
+    const cwd = typeof params.cwd === 'string' ? params.cwd : this.chat.cwd
+    const reason = typeof params.reason === 'string' ? params.reason : undefined
+    const grantRoot = typeof params.grantRoot === 'string' ? params.grantRoot : undefined
+    const permissionInput =
+      params.permissions && typeof params.permissions === 'object' ? params.permissions : {}
+    const input =
+      request.kind === 'command'
+        ? { command, cwd, commandActions: params.commandActions ?? [] }
+        : request.kind === 'file-change'
+          ? { file_path: grantRoot, grantRoot }
+          : { cwd, permissions: permissionInput }
+    const title =
+      request.kind === 'command'
+        ? 'Approve command'
+        : request.kind === 'file-change'
+          ? 'Approve file access'
+          : 'Approve additional access'
+    const displayName =
+      request.kind === 'command'
+        ? 'Codex command'
+        : request.kind === 'file-change'
+          ? 'Codex file change'
+          : 'Codex permissions'
+    this.nativeApprovals.set(request.requestId, {
+      requestId: request.requestId,
+      kind: request.kind
+    })
+    this.emit({
+      type: 'permission-request',
+      chatId: this.chat.id,
+      request: {
+        id: request.requestId,
+        chatId: this.chat.id,
+        toolUseId: request.itemId,
+        toolName:
+          request.kind === 'command'
+            ? 'Bash'
+            : request.kind === 'file-change'
+              ? 'Edit'
+              : 'RequestPermissions',
+        input,
+        title,
+        displayName,
+        description: reason,
+        decisionReason: reason,
+        hasSuggestions: true
+      }
+    })
+    this.setStatus('waiting-permission')
+  }
+
+  private resolveNativeApproval(requestId: string): void {
+    if (!this.nativeApprovals.delete(requestId)) return
+    this.emit({ type: 'permission-resolved', chatId: this.chat.id, requestId })
+    this.restoreStreamingAfterNativeRequest()
+  }
+
+  private handleMcpElicitation(request: NativeMcpElicitationRequest): void {
+    if (this.disposed || (this.threadId != null && request.threadId !== this.threadId)) {
+      this.codex.respondToMcpElicitation?.(request.requestId, false)
+      return
+    }
+    this.mcpElicitations.set(request.requestId, {
+      requestId: request.requestId,
+      mode: request.mode,
+      ...(request.requestedSchema ? { schema: request.requestedSchema } : {})
+    })
+    if (request.mode === 'url') {
+      this.emit({
+        type: 'permission-request',
+        chatId: this.chat.id,
+        request: {
+          id: request.requestId,
+          chatId: this.chat.id,
+          toolUseId: `mcp-elicitation-${request.requestId}`,
+          toolName: 'McpElicitation',
+          input: { server: request.serverName, url: request.url },
+          title: `${request.serverName} needs authorization`,
+          displayName: 'MCP authorization',
+          description: request.message,
+          hasSuggestions: false
+        }
+      })
+    } else {
+      const properties =
+        request.requestedSchema?.properties &&
+        typeof request.requestedSchema.properties === 'object'
+          ? (request.requestedSchema.properties as Record<string, unknown>)
+          : {}
+      const required = new Set(
+        Array.isArray(request.requestedSchema?.required)
+          ? request.requestedSchema.required.map(String)
+          : []
+      )
+      const questions: UserQuestion[] = Object.entries(properties).map(([id, value]) => {
+        const schema = (value ?? {}) as Record<string, unknown>
+        const items =
+          schema.items && typeof schema.items === 'object'
+            ? (schema.items as Record<string, unknown>)
+            : {}
+        const enumValues = Array.isArray(schema.enum)
+          ? schema.enum
+          : Array.isArray(items.enum)
+            ? items.enum
+            : []
+        return {
+          id,
+          header: typeof schema.title === 'string' ? schema.title : id,
+          question:
+            typeof schema.description === 'string' ? schema.description : `Enter ${id}`,
+          options: enumValues.map((entry) => ({ label: String(entry) })),
+          required: required.has(id),
+          allowOther: enumValues.length === 0,
+          multiSelect: schema.type === 'array',
+          isSecret: schema.format === 'password'
+        }
+      })
+      this.emit({
+        type: 'permission-request',
+        chatId: this.chat.id,
+        request: {
+          id: request.requestId,
+          chatId: this.chat.id,
+          toolUseId: `mcp-elicitation-${request.requestId}`,
+          toolName: questions.length ? 'AskUserQuestion' : 'McpElicitation',
+          input: questions.length
+            ? { questions }
+            : { server: request.serverName, schema: request.requestedSchema },
+          title: `${request.serverName} needs input`,
+          displayName: 'MCP form',
+          description: request.message,
+          hasSuggestions: false
+        }
+      })
+    }
+    this.setStatus('waiting-permission')
+  }
+
+  private mcpElicitationContent(
+    pending: PendingMcpElicitation,
+    updatedInput: Record<string, unknown> | undefined
+  ): Record<string, unknown> | null {
+    if (pending.mode === 'url') return null
+    const answers =
+      updatedInput?.answersById && typeof updatedInput.answersById === 'object'
+        ? (updatedInput.answersById as Record<string, unknown>)
+        : {}
+    const properties =
+      pending.schema?.properties && typeof pending.schema.properties === 'object'
+        ? (pending.schema.properties as Record<string, unknown>)
+        : {}
+    const content: Record<string, unknown> = {}
+    for (const [id, raw] of Object.entries(answers)) {
+      const values = Array.isArray(raw) ? raw.map(String) : [String(raw)]
+      const schema = (properties[id] ?? {}) as Record<string, unknown>
+      const value = values[0] ?? ''
+      if (schema.type === 'boolean') content[id] = value.toLowerCase() === 'true'
+      else if (schema.type === 'number' || schema.type === 'integer') content[id] = Number(value)
+      else if (schema.type === 'array') content[id] = values
+      else {
+        const enumValues = Array.isArray(schema.enum) ? schema.enum : []
+        content[id] = enumValues.find((entry) => String(entry) === value) ?? value
+      }
+    }
+    return content
+  }
+
+  private resolveMcpElicitation(requestId: string): void {
+    if (!this.mcpElicitations.delete(requestId)) return
+    this.emit({ type: 'permission-resolved', chatId: this.chat.id, requestId })
+    this.restoreStreamingAfterNativeRequest()
   }
 
   // ---------- Item → part mapping ----------
 
   private upsertItem(item: ThreadItem, terminal: boolean): void {
+    if (isCodexCompactionItem(item as unknown)) {
+      if (!terminal || this.compactedItems.has(item.id)) return
+      this.compactedItems.add(item.id)
+      this.pushMessage({
+        id: randomUUID(),
+        role: 'event',
+        kind: 'compact',
+        text: 'Codex compacted the conversation context.',
+        ts: Date.now()
+      })
+      return
+    }
+    if (isCodexImageViewItem(item as unknown)) {
+      const image = item as unknown as { id: string; path: string }
+      const part: ToolPart = {
+        type: 'tool',
+        toolUseId: image.id,
+        name: 'Read',
+        input: { file_path: image.path },
+        status: terminal ? 'success' : 'running'
+      }
+      const message = this.ensureCurrent()
+      const loc = this.itemLoc.get(image.id)
+      if (loc) {
+        loc.message.parts[loc.index] = part
+        this.emitPart(loc.message, loc.index)
+      } else {
+        const index = message.parts.length
+        message.parts[index] = part
+        this.itemLoc.set(image.id, { message, index })
+        this.emitPart(message, index)
+      }
+      return
+    }
     if (isCodexPlanItem(item as unknown)) {
       const plan = (item as unknown as { text: string }).text
       this.nativePlan = plan
@@ -1429,7 +1795,7 @@ export class CodexSession implements AgentSession {
           name: 'Edit', // renders as the Edit card; summary is the first path
           input: { file_path: item.changes[0]?.path, changes: item.changes },
           output: item.changes.map((c) => `${c.kind.padEnd(6)} ${c.path}`).join('\n'),
-          status: item.status === 'completed' ? 'success' : 'error'
+          status: cmdStatus(item.status)
         }
       case 'mcp_tool_call':
         return {
@@ -1472,15 +1838,19 @@ export class CodexSession implements AgentSession {
     }
   }
 
-  private mcpOutput(item: { result?: { content?: unknown }; error?: { message: string } }): string | undefined {
+  private mcpOutput(item: {
+    result?: { content?: unknown; structured_content?: unknown }
+    error?: { message: string }
+  }): string | undefined {
     if (item.error) return item.error.message
     const content = item.result?.content
-    if (!Array.isArray(content)) return undefined
-    const text = content
+    const text = (Array.isArray(content) ? content : [])
       .map((c: { type?: string; text?: string }) => (c?.type === 'text' ? (c.text ?? '') : ''))
       .filter(Boolean)
       .join('\n')
-    return text ? cap(text) : undefined
+    if (text) return cap(text)
+    const structured = item.result?.structured_content
+    return structured == null ? undefined : cap(JSON.stringify(structured, null, 2))
   }
 
   /** Pulls image blocks out of an MCP tool result (MCP shape: {data, mimeType}). */
@@ -1494,7 +1864,12 @@ export class CodexSession implements AgentSession {
       if (c?.type !== 'image') continue
       const data = typeof c.data === 'string' ? c.data : undefined
       if (!data) continue
-      const mediaType = typeof c.mimeType === 'string' ? c.mimeType : 'image/png'
+      const mediaType =
+        typeof c.mimeType === 'string'
+          ? c.mimeType
+          : typeof c.mime_type === 'string'
+            ? c.mime_type
+            : 'image/png'
       images.push({ mediaType, data })
     }
     return images.length ? images : undefined
@@ -1547,6 +1922,8 @@ export class CodexSession implements AgentSession {
     this.abort?.abort()
     this.clearPlanReview()
     this.clearUserQuestions(true)
+    this.clearNativeApprovals(true)
+    this.clearMcpElicitations(true)
     // An active run still has terminalization/checkpoint cleanup to finish. Let
     // drain() publish idle afterward so the renderer cannot send into that gap.
     if (!this.running) this.setStatus('idle')
@@ -1585,6 +1962,26 @@ export class CodexSession implements AgentSession {
       } else {
         this.codex.dismissUserInput?.(requestId)
       }
+      return
+    }
+    const approval = this.nativeApprovals.get(requestId)
+    if (approval) {
+      this.codex.respondToApproval?.(
+        requestId,
+        decision.behavior === 'allow',
+        decision.behavior === 'allow' && decision.always === true
+      )
+      return
+    }
+    const elicitation = this.mcpElicitations.get(requestId)
+    if (elicitation) {
+      this.codex.respondToMcpElicitation?.(
+        requestId,
+        decision.behavior === 'allow',
+        decision.behavior === 'allow'
+          ? this.mcpElicitationContent(elicitation, decision.updatedInput)
+          : null
+      )
       return
     }
     const review = this.planReview ?? this.chat.pendingPlanReview ?? null
@@ -1695,6 +2092,22 @@ export class CodexSession implements AgentSession {
     if (dismissProvider) this.codex.dismissUserInput?.(requestId)
   }
 
+  private clearNativeApprovals(declineProvider = false): void {
+    for (const requestId of [...this.nativeApprovals.keys()]) {
+      this.nativeApprovals.delete(requestId)
+      this.emit({ type: 'permission-resolved', chatId: this.chat.id, requestId })
+      if (declineProvider) this.codex.respondToApproval?.(requestId, false)
+    }
+  }
+
+  private clearMcpElicitations(declineProvider = false): void {
+    for (const requestId of [...this.mcpElicitations.keys()]) {
+      this.mcpElicitations.delete(requestId)
+      this.emit({ type: 'permission-resolved', chatId: this.chat.id, requestId })
+      if (declineProvider) this.codex.respondToMcpElicitation?.(requestId, false)
+    }
+  }
+
   private clearPlanReview(): void {
     const review = this.planReview ?? this.chat.pendingPlanReview
     if (!review) return
@@ -1732,12 +2145,105 @@ export class CodexSession implements AgentSession {
     return rewindWorkspaceCheckpoint(this.chat.cwd, checkpoint, dryRun)
   }
 
-  async mcpStatus(): Promise<McpServerInfo[]> {
-    return []
+  private async controlRequest<T>(method: string, params: unknown): Promise<T> {
+    if (!this.codex.request) throw new Error('This Codex transport does not support control requests.')
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      return await Promise.race([
+        this.codex.request(method, params) as Promise<T>,
+        new Promise<T>((_resolve, reject) => {
+          timer = setTimeout(() => reject(new Error(`Codex ${method} timed out.`)), 8_000)
+        })
+      ])
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
   }
 
-  async mcpReconnect(): Promise<OpResult> {
-    return { ok: false, error: 'Not supported for Codex sessions.' }
+  async mcpStatus(): Promise<McpServerInfo[]> {
+    interface RawTool {
+      name?: string
+      description?: string
+      annotations?: { readOnlyHint?: boolean }
+    }
+    interface RawServer {
+      name?: string
+      serverInfo?: unknown
+      authStatus?: string
+      tools?: Record<string, RawTool>
+    }
+    const servers: RawServer[] = []
+    let cursor: string | null = null
+    try {
+      do {
+        const page: { data?: RawServer[]; nextCursor?: string | null } =
+          await this.controlRequest<{
+            data?: RawServer[]
+            nextCursor?: string | null
+          }>('mcpServerStatus/list', {
+            cursor,
+            limit: 100,
+            detail: 'toolsAndAuthOnly',
+            threadId: this.threadId
+          })
+        servers.push(...(page.data ?? []))
+        cursor = page.nextCursor ?? null
+      } while (cursor)
+    } catch {
+      return []
+    }
+    return servers.map((server) => {
+      const tools = Object.entries(server.tools ?? {}).map(([key, tool]) => ({
+        name: tool.name || key,
+        ...(tool.description ? { description: tool.description } : {}),
+        ...(tool.annotations?.readOnlyHint != null
+          ? { readOnly: tool.annotations.readOnlyHint }
+          : {})
+      }))
+      const name = server.name || 'MCP server'
+      const startup = this.codex.mcpStartupStatus?.(name, this.threadId)
+      const needsAuth =
+        server.authStatus === 'notLoggedIn' ||
+        startup?.failureReason === 'reauthenticationRequired'
+      const failed = startup?.status === 'failed' || startup?.status === 'cancelled'
+      const connected =
+        startup?.status === 'ready' || server.serverInfo != null || tools.length > 0
+      return {
+        name,
+        status: needsAuth
+          ? ('needs-auth' as const)
+          : failed
+            ? ('failed' as const)
+            : connected
+              ? ('connected' as const)
+              : ('pending' as const),
+        ...(failed
+          ? {
+              error:
+                startup?.error ||
+                (startup?.status === 'cancelled' ? 'Startup cancelled.' : 'Startup failed.')
+            }
+          : {}),
+        ...(tools.length ? { tools } : {})
+      }
+    })
+  }
+
+  async mcpReconnect(name: string): Promise<OpResult> {
+    try {
+      const server = (await this.mcpStatus()).find((value) => value.name === name)
+      if (server?.status === 'needs-auth') {
+        const login = await this.controlRequest<{ authorizationUrl?: string }>(
+          'mcpServer/oauth/login',
+          { name, threadId: this.threadId }
+        )
+        return login.authorizationUrl ? { ok: true, url: login.authorizationUrl } : { ok: true }
+      }
+      await this.controlRequest('config/mcpServer/reload', undefined)
+      return { ok: true }
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+    }
   }
 
   async mcpToggle(): Promise<OpResult> {
@@ -1745,9 +2251,11 @@ export class CodexSession implements AgentSession {
   }
 
   async listModels(): Promise<ModelOption[]> {
-    // No SDK model list; the renderer falls back to the static MODEL_OPTIONS,
-    // which carries the Codex entries.
-    return []
+    try {
+      return await fetchCodexModels(this.codex)
+    } catch {
+      return []
+    }
   }
 
   async listAgents(): Promise<AgentInfo[]> {
@@ -1755,16 +2263,82 @@ export class CodexSession implements AgentSession {
   }
 
   async accountInfo(): Promise<AccountInfo | null> {
-    return null
+    try {
+      const response = await this.controlRequest<{
+        account?:
+          | { type: 'chatgpt'; email?: string | null; planType?: string }
+          | { type: 'apiKey' }
+          | { type: 'amazonBedrock'; usesCodexManagedCredentials?: boolean }
+          | null
+      }>('account/read', { refreshToken: false })
+      const account = response.account
+      if (!account) return null
+      if (account.type === 'chatgpt') {
+        return {
+          ...(account.email ? { email: account.email } : {}),
+          subscriptionType: account.planType,
+          apiProvider: 'chatgpt'
+        }
+      }
+      if (account.type === 'apiKey') return { apiProvider: 'apiKey' }
+      return {
+        ...(account.usesCodexManagedCredentials
+          ? { subscriptionType: 'Codex-managed credentials' }
+          : {}),
+        apiProvider: 'amazonBedrock'
+      }
+    } catch {
+      return null
+    }
   }
 
   async usageInfo(): Promise<UsageInfo | null> {
-    return null
+    try {
+      interface Snapshot {
+        limitId?: string | null
+        limitName?: string | null
+        primary?: CodexWindow | null
+        secondary?: CodexWindow | null
+        planType?: string | null
+      }
+      const response = await this.controlRequest<{
+        rateLimits?: Snapshot
+        rateLimitsByLimitId?: Record<string, Snapshot> | null
+      }>('account/rateLimits/read', undefined)
+      const limits = response.rateLimits
+      const buckets = Object.entries(response.rateLimitsByLimitId ?? {})
+      const snapshots: Array<[string, Snapshot]> = buckets.length
+        ? buckets
+        : limits
+          ? [[limits.limitName || limits.limitId || '', limits]]
+          : []
+      const prefix = snapshots.length > 1
+      const windows = snapshots.flatMap(([key, snapshot]) =>
+        [codexWindow(snapshot.primary), codexWindow(snapshot.secondary)]
+          .filter((value): value is NonNullable<typeof value> => value != null)
+          .map((value) => ({
+            ...value,
+            label: prefix && key ? `${key} · ${value.label}` : value.label
+          }))
+      )
+      return {
+        costUsd: 0,
+        linesAdded: 0,
+        linesRemoved: 0,
+        subscriptionType: limits?.planType ?? snapshots[0]?.[1].planType,
+        rateLimitsAvailable: windows.length > 0,
+        windows
+      }
+    } catch {
+      return null
+    }
   }
 
   dispose(): void {
     this.setTitlePending(false)
     this.clearUserQuestions(false)
+    this.clearNativeApprovals(false)
+    this.clearMcpElicitations(false)
     this.disposed = true
     this.dead = true
     this.abort?.abort()

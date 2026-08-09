@@ -411,6 +411,7 @@ function registerIpc(): void {
     store.rememberDir(worktree?.repoRoot ?? opts.cwd)
     store.rememberOptions({
       model: opts.model ?? '',
+      modelProvider: provider,
       effort: effort ?? '',
       serviceTier: opts.serviceTier,
       permissionMode: chat.permissionMode

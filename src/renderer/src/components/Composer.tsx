@@ -51,19 +51,19 @@ import { SessionPanel } from '@/components/SessionPanel'
 const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024
 
-// Codex runs non-interactively (its SDK has no per-tool approval callback), so
-// most Codex permission choices are sandbox policies rather than Claude-style
-// approval modes. Plan combines a planning collaboration instruction with the
-// read-only sandbox; the other two map directly to Codex sandbox policies.
+// Codex App Server exposes native command, file and additional-permission
+// approvals. Plan and Full Access remain non-interactive; Auto asks App Server's
+// reviewer to classify approval requests before escalating them to the user.
 const CODEX_PERMISSION_MODES: { id: PermissionModeId; label: string; description: string }[] = [
   { id: 'plan', label: 'Plan mode', description: 'Investigates and plans without making changes' },
-  { id: 'default', label: 'Workspace write', description: 'Edits within the project — Codex won’t prompt' },
+  { id: 'default', label: 'Ask to approve', description: 'Prompts when work needs extra access' },
+  { id: 'acceptEdits', label: 'Accept edits', description: 'Edits in the project; asks on escalation' },
+  { id: 'auto', label: 'Auto', description: 'Codex reviews approval requests before escalating' },
   { id: 'bypassPermissions', label: 'Full access', description: 'No sandbox — use with care' }
 ]
 
-/** Collapse Codex's equivalent modes (accept-edits / auto) onto 'workspace write'. */
 function codexPermissionValue(mode: PermissionModeId): PermissionModeId {
-  return mode === 'plan' || mode === 'bypassPermissions' ? mode : 'default'
+  return mode
 }
 
 type PermissionAppearance = {
@@ -307,7 +307,7 @@ function ModelSettingsPicker({
   disabled
 }: {
   model: string
-  onModelChange: (model: string) => void
+  onModelChange: (model: string, provider: Provider) => void
   models: ModelOption[]
   effort: EffortId | ''
   onEffortChange: (effort: EffortId | '') => void
@@ -399,7 +399,7 @@ function ModelSettingsPicker({
                       setSpeedOpen(false)
                     }}
                     onClick={() => {
-                      onModelChange(option.id)
+                      onModelChange(option.id, option.provider)
                       setOpen(false)
                     }}
                     className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-sm outline-none transition-colors hover:bg-accent focus-visible:bg-accent disabled:opacity-45"
@@ -545,7 +545,7 @@ export function Composer({
   streaming?: boolean
   onStop?: () => void
   model: string
-  onModelChange: (model: string) => void
+  onModelChange: (model: string, provider: Provider) => void
   effort: EffortId | ''
   /** `remember: false` marks an app-generated correction — see `ChatOptionsPatch`. */
   onEffortChange: (effort: EffortId | '', opts?: { remember?: boolean }) => void
@@ -627,8 +627,8 @@ export function Composer({
   // between models doesn't force the user to re-pick effort every time. Falls
   // back to leaving effort as-is when the target model has no remembered value.
   const handleModelChange = React.useCallback(
-    (next: string) => {
-      onModelChange(next)
+    (next: string, nextProvider: Provider) => {
+      onModelChange(next, nextProvider)
       // `remember: false`: the value is already stored for this model — replaying
       // it only applies it to the chat, and must not be re-keyed to the model we
       // just switched away from.
@@ -638,12 +638,10 @@ export function Composer({
     },
     [onModelChange, onEffortChange, modelEfforts, modelOptions, effort]
   )
-  // The SDK *omits* `supportsFastMode` on models that lack it rather than
-  // sending false, so "not true" is the real signal — but it only means
-  // anything once the SDK list has loaded. The static fallback carries no
-  // capability data, and Codex advertises none per-model; in both cases we
-  // don't know, so leave Fast on offer rather than hiding a working option.
-  const knowsFastSupport = !isCodex && dynamicModels.length > 0
+  // Capability flags only become authoritative once this provider's live
+  // catalog has loaded. Static fallbacks may omit them, so keep Fast available
+  // in that case rather than hiding a working option.
+  const knowsFastSupport = dynamicModels.some((option) => option.provider === provider)
   const serviceTierOptions =
     knowsFastSupport && selectedModelOption?.supportsFastMode !== true
       ? SERVICE_TIER_OPTIONS.filter((tier) => tier.id === 'standard')

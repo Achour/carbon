@@ -19,10 +19,22 @@ export function PermissionCard({
   const respondPermission = useApp((s) => s.respondPermission)
   const [busy, setBusy] = React.useState(false)
   const summary = summarize(request)
+  const authorizationUrl =
+    request.toolName === 'McpElicitation' &&
+    typeof (request.input as Record<string, unknown> | null)?.url === 'string'
+      ? ((request.input as Record<string, unknown>).url as string)
+      : null
 
-  const respond = (decision: Parameters<typeof respondPermission>[1]): void => {
+  const respond = async (decision: Parameters<typeof respondPermission>[1]): Promise<void> => {
     setBusy(true)
-    void respondPermission(request.id, decision)
+    if (decision.behavior === 'allow' && authorizationUrl) {
+      try {
+        await window.api.openExternal(authorizationUrl)
+      } catch {
+        // The protocol response must still be resolved if the OS rejects the URL.
+      }
+    }
+    await respondPermission(request.id, decision)
   }
 
   return (
@@ -60,7 +72,7 @@ export function PermissionCard({
         </div>
       </div>
       <div className="flex items-center justify-end gap-2 px-3.5 py-2.5">
-        <Button size="sm" variant="ghost" disabled={busy} onClick={() => respond({ behavior: 'deny' })}>
+        <Button size="sm" variant="ghost" disabled={busy} onClick={() => void respond({ behavior: 'deny' })}>
           Deny
         </Button>
         {request.hasSuggestions && (
@@ -68,13 +80,13 @@ export function PermissionCard({
             size="sm"
             variant="secondary"
             disabled={busy}
-            onClick={() => respond({ behavior: 'allow', always: true })}
+            onClick={() => void respond({ behavior: 'allow', always: true })}
           >
             Always allow
           </Button>
         )}
-        <Button size="sm" disabled={busy} onClick={() => respond({ behavior: 'allow' })}>
-          Allow
+        <Button size="sm" disabled={busy} onClick={() => void respond({ behavior: 'allow' })}>
+          {authorizationUrl ? 'Open & continue' : 'Allow'}
         </Button>
       </div>
     </div>

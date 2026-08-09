@@ -64,9 +64,8 @@ export function SessionPanel(): React.JSX.Element {
   const cwd = useApp((s) => s.selectedCwd)
   const rateLimit = useApp((s) => (s.activeId ? s.rateLimits[s.activeId] : undefined))
   const loadModels = useApp((s) => s.loadModels)
-  // Everything below except the model list is Claude-only (account/usage, MCP,
-  // subagents, and .claude permission rules). Codex exposes none of it — showing
-  // it (or letting it delete .claude rules) would misrepresent the session.
+  // Permission rules and the subagent catalog remain Claude-specific. Codex App
+  // Server does expose account, rate-limit and MCP status control requests.
   const provider = useApp((s) => s.chats.find((c) => c.id === s.activeId)?.provider) ?? 'claude'
   const isCodex = provider === 'codex'
 
@@ -126,7 +125,8 @@ export function SessionPanel(): React.JSX.Element {
   }
   const reconnect = async (name: string): Promise<void> => {
     if (!chatId) return
-    await window.api.mcpReconnect(chatId, name)
+    const result = await window.api.mcpReconnect(chatId, name)
+    if (result.ok && result.url) await window.api.openExternal(result.url)
     await refreshMcp()
   }
   const removeRule = async (rule: PermissionRule): Promise<void> => {
@@ -179,12 +179,11 @@ export function SessionPanel(): React.JSX.Element {
           )}
           {isCodex && (
             <div className="text-[11px] leading-relaxed text-muted-foreground/70">
-              Signed in via Codex. Live account, usage, MCP and subagent introspection aren’t
-              available for Codex sessions.
+              Signed in via Codex. Session cost and line counts aren’t reported; plan limits
+              and MCP status are live.
             </div>
           )}
-          {/* Account & usage — Claude-only; Codex shows the note above instead. */}
-          {live !== false && !isCodex && (
+          {live !== false && (
           <>
           <section>
             <SectionTitle icon={CircleUser}>Account &amp; usage</SectionTitle>
@@ -194,9 +193,9 @@ export function SessionPanel(): React.JSX.Element {
             <div className="mt-0.5 text-[11px] text-muted-foreground">
               {[account?.organization, account?.subscriptionType || usage?.subscriptionType]
                 .filter(Boolean)
-                .join(' · ') || 'Signed in via Claude Code'}
+                .join(' · ') || (isCodex ? 'Signed in via Codex' : 'Signed in via Claude Code')}
             </div>
-            {usage && (
+            {usage && !isCodex && (
               <div className="mt-2 flex items-center justify-between rounded-md bg-secondary/40 px-2 py-1.5 text-[11px] tabular-nums text-muted-foreground">
                 <span>Session cost {formatCost(usage.costUsd)}</span>
                 <span className="text-emerald-500">+{usage.linesAdded}</span>
@@ -262,6 +261,7 @@ export function SessionPanel(): React.JSX.Element {
                         </Button>
                       </WithTooltip>
                     )}
+                    {!isCodex && (
                     <WithTooltip label={s.status === 'disabled' ? 'Enable' : 'Disable'}>
                       <Button
                         size="icon-sm"
@@ -273,6 +273,7 @@ export function SessionPanel(): React.JSX.Element {
                         <Power className="size-3" />
                       </Button>
                     </WithTooltip>
+                    )}
                   </div>
                 ))}
               </div>
@@ -280,7 +281,7 @@ export function SessionPanel(): React.JSX.Element {
           </section>
 
           {/* Subagents */}
-          <section className="border-t border-border pt-3">
+          {!isCodex && <section className="border-t border-border pt-3">
             <SectionTitle icon={Bot}>Subagents</SectionTitle>
             {agents == null ? (
               <div className="text-[11px] text-muted-foreground">Loading…</div>
@@ -299,7 +300,7 @@ export function SessionPanel(): React.JSX.Element {
                 ))}
               </div>
             )}
-          </section>
+          </section>}
 
           </>
           )}

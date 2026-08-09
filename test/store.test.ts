@@ -126,6 +126,18 @@ test('listChats sorts by updatedAt and never parses message bodies', async () =>
   rmSync(dir, { recursive: true, force: true })
 })
 
+test('a model-only defaults patch preserves its dynamic provider', async () => {
+  const dir = userDir()
+  const store = new Store(dir)
+  store.rememberOptions({ model: 'gpt-live', modelProvider: 'codex' })
+  store.rememberOptions({ model: 'gpt-next' })
+
+  assert.equal(store.getDefaults().model, 'gpt-next')
+  assert.equal(store.getDefaults().modelProvider, 'codex')
+  await store.flushAll()
+  rmSync(dir, { recursive: true, force: true })
+})
+
 // ---------- Identity (hard constraint 2) ----------
 
 test('getChat returns the same object a live holder is mutating, even after eviction', async () => {

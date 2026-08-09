@@ -57,6 +57,12 @@ class FakeCodex {
     answers: Record<string, { answers: string[] }>
   }[] = []
   readonly dismissedUserInputs: string[] = []
+  readonly approvalResponses: { requestId: string; allow: boolean; always: boolean }[] = []
+  readonly elicitationResponses: {
+    requestId: string
+    allow: boolean
+    content: Record<string, unknown> | null
+  }[] = []
   runStreamedCalls = 0
   private readonly turns: TurnFactory[]
 
@@ -102,6 +108,18 @@ class FakeCodex {
 
   dismissUserInput(requestId: string): void {
     this.dismissedUserInputs.push(requestId)
+  }
+
+  respondToApproval(requestId: string, allow: boolean, always = false): void {
+    this.approvalResponses.push({ requestId, allow, always })
+  }
+
+  respondToMcpElicitation(
+    requestId: string,
+    allow: boolean,
+    content: Record<string, unknown> | null = null
+  ): void {
+    this.elicitationResponses.push({ requestId, allow, content })
   }
 }
 
@@ -213,8 +231,75 @@ test('a running turn keeps its original model attribution and thread options', a
   await waitFor(() => h.events.some((event) => event.type === 'status' && event.status === 'idle'))
 
   assert.equal(h.codex.resumeCalls[0]?.options?.model, 'gpt-5.6-sol')
+  assert.equal(h.codex.resumeCalls[0]?.options?.approvalPolicy, 'on-request')
+  assert.equal(h.codex.resumeCalls[0]?.options?.approvalsReviewer, 'user')
   const turn = h.chat.messages.find((message) => message.role === 'event' && message.kind === 'turn')
   assert.equal(turn?.stats?.model, 'gpt-5.6-sol')
+  cleanup(h)
+})
+
+test('App Server context usage and rerouted model reach chat metadata and turn stats', async () => {
+  const h = harness([
+    async function* () {
+      yield { type: 'thread.started', thread_id: 'thread-1' }
+      yield {
+        type: 'turn.completed',
+        usage: {
+          ...usage,
+          context_tokens: 12_345,
+          context_window: 64_000,
+          model: 'gpt-rerouted'
+        }
+      }
+    }
+  ])
+  h.session.send('Measure this turn')
+  await waitFor(() => h.events.some((event) => event.type === 'status' && event.status === 'idle'))
+
+  assert.equal(h.chat.contextTokens, 12_345)
+  assert.equal(h.chat.contextTokensVersion, 1)
+  assert.equal(h.chat.contextWindow, 64_000)
+  const turn = h.chat.messages.find((message) => message.role === 'event' && message.kind === 'turn')
+  assert.equal(turn?.stats?.model, 'gpt-rerouted')
+  assert.equal(
+    h.events.some(
+      (event) =>
+        event.type === 'meta' &&
+        event.patch.contextTokens === 12_345 &&
+        event.patch.contextWindow === 64_000
+    ),
+    true
+  )
+  cleanup(h)
+})
+
+test('legacy cumulative Codex context usage is cleared before it reaches the meter', () => {
+  const h = harness([], { contextTokens: 450_000, contextWindow: 200_000 })
+
+  assert.equal(h.chat.contextTokens, undefined)
+  assert.equal(h.chat.contextTokensVersion, 1)
+  assert.equal(
+    h.events.some(
+      (event) =>
+        event.type === 'meta' &&
+        event.patch.contextTokens === undefined &&
+        event.patch.contextTokensVersion === 1
+    ),
+    true
+  )
+  assert.deepEqual(h.saved, ['chat-1'])
+  cleanup(h)
+})
+
+test('versioned Codex context usage survives session construction', () => {
+  const h = harness([], {
+    contextTokens: 12_345,
+    contextTokensVersion: 1,
+    contextWindow: 64_000
+  })
+
+  assert.equal(h.chat.contextTokens, 12_345)
+  assert.equal(h.saved.length, 0)
   cleanup(h)
 })
 
@@ -489,6 +574,264 @@ test('a native App Server question is answered inside the same Codex turn', asyn
     h.events.some((event) => event.type === 'permission-resolved' && event.requestId === 'rpc-7'),
     true
   )
+  cleanup(h)
+})
+
+test('native App Server approvals use Carbon permission decisions', async () => {
+  const gate = deferred()
+  const h = harness([
+    async function* () {
+      yield { type: 'thread.started', thread_id: 'thread-1' }
+      await gate.promise
+      yield { type: 'turn.completed', usage }
+    }
+  ])
+  h.session.send('Run the release check')
+  await waitFor(() => h.codex.runStreamedCalls === 1)
+
+  ;(
+    h.session as unknown as { handleNativeApproval(request: Record<string, unknown>): void }
+  ).handleNativeApproval({
+    requestId: 'approval-1',
+    kind: 'command',
+    threadId: 'thread-1',
+    turnId: 'turn-1',
+    itemId: 'command-1',
+    params: {
+      command: 'npm run build',
+      cwd: h.cwd,
+      reason: 'Needs access outside the current sandbox.'
+    }
+  })
+
+  const request = h.events.find(
+    (event) => event.type === 'permission-request' && event.request.id === 'approval-1'
+  )
+  assert.equal(request?.type === 'permission-request' && request.request.toolName, 'Bash')
+  assert.equal(request?.type === 'permission-request' && request.request.hasSuggestions, true)
+  assert.equal(h.events.filter((event) => event.type === 'status').at(-1)?.status, 'waiting-permission')
+
+  h.session.respondPermission('approval-1', { behavior: 'allow', always: true })
+  assert.deepEqual(h.codex.approvalResponses, [
+    { requestId: 'approval-1', allow: true, always: true }
+  ])
+  ;(
+    h.session as unknown as { resolveNativeApproval(requestId: string): void }
+  ).resolveNativeApproval('approval-1')
+  assert.equal(
+    h.events.some(
+      (event) => event.type === 'permission-resolved' && event.requestId === 'approval-1'
+    ),
+    true
+  )
+
+  gate.resolve()
+  await waitFor(() => h.events.some((event) => event.type === 'status' && event.status === 'idle'))
+  cleanup(h)
+})
+
+test('Codex Auto mode routes approvals to App Server auto review', async () => {
+  const h = harness(
+    [
+      async function* () {
+        yield { type: 'thread.started', thread_id: 'thread-1' }
+        yield { type: 'turn.completed', usage }
+      }
+    ],
+    { permissionMode: 'auto' }
+  )
+  h.session.send('Safely inspect the project')
+  await waitFor(() => h.events.some((event) => event.type === 'status' && event.status === 'idle'))
+  assert.equal(h.codex.resumeCalls[0]?.options?.approvalPolicy, 'on-request')
+  assert.equal(h.codex.resumeCalls[0]?.options?.approvalsReviewer, 'auto_review')
+  cleanup(h)
+})
+
+test('MCP form elicitations round-trip typed content through the question card', async () => {
+  const gate = deferred()
+  const h = harness([
+    async function* () {
+      yield { type: 'thread.started', thread_id: 'thread-1' }
+      await gate.promise
+      yield { type: 'turn.completed', usage }
+    }
+  ])
+  h.session.send('Configure the MCP action')
+  await waitFor(() => h.codex.runStreamedCalls === 1)
+  ;(
+    h.session as unknown as { handleMcpElicitation(request: Record<string, unknown>): void }
+  ).handleMcpElicitation({
+    requestId: 'mcp-form-1',
+    threadId: 'thread-1',
+    turnId: 'turn-1',
+    serverName: 'deploy',
+    mode: 'form',
+    message: 'Choose deployment settings.',
+    requestedSchema: {
+      type: 'object',
+      properties: {
+        region: { type: 'string', enum: ['eu', 'us'], description: 'Region' },
+        replicas: { type: 'integer', description: 'Replica count' }
+      }
+    }
+  })
+  const request = h.events.find(
+    (event) => event.type === 'permission-request' && event.request.id === 'mcp-form-1'
+  )
+  assert.equal(request?.type === 'permission-request' && request.request.toolName, 'AskUserQuestion')
+
+  h.session.respondPermission('mcp-form-1', {
+    behavior: 'allow',
+    updatedInput: { answersById: { region: ['eu'], replicas: ['3'] } }
+  })
+  assert.deepEqual(h.codex.elicitationResponses, [
+    {
+      requestId: 'mcp-form-1',
+      allow: true,
+      content: { region: 'eu', replicas: 3 }
+    }
+  ])
+  ;(
+    h.session as unknown as { resolveMcpElicitation(requestId: string): void }
+  ).resolveMcpElicitation('mcp-form-1')
+  gate.resolve()
+  await waitFor(() => h.events.some((event) => event.type === 'status' && event.status === 'idle'))
+  cleanup(h)
+})
+
+test('Codex session introspection uses App Server control requests', async () => {
+  const h = harness([])
+  const calls: string[] = []
+  ;(h.codex as unknown as { request(method: string): Promise<unknown> }).request = async (
+    method: string
+  ) => {
+    calls.push(method)
+    if (method === 'model/list') {
+      return {
+        data: [
+          {
+            id: 'gpt-live',
+            model: 'gpt-live',
+            displayName: 'GPT Live',
+            description: 'Current catalog',
+            hidden: false,
+            isDefault: true,
+            supportedReasoningEfforts: [{ reasoningEffort: 'high' }],
+            serviceTiers: [{ id: 'fast' }]
+          }
+        ],
+        nextCursor: null
+      }
+    }
+    if (method === 'account/read') {
+      return { account: { type: 'chatgpt', email: 'dev@example.com', planType: 'plus' } }
+    }
+    if (method === 'account/rateLimits/read') {
+      return {
+        rateLimits: {
+          planType: 'plus',
+          primary: { usedPercent: 25, windowDurationMins: 300, resetsAt: 2_000_000_000 },
+          secondary: null
+        }
+      }
+    }
+    if (method === 'mcpServerStatus/list') {
+      return {
+        data: [
+          {
+            name: 'docs',
+            serverInfo: { name: 'Docs', version: '1' },
+            authStatus: 'oAuth',
+            tools: {
+              search: {
+                name: 'search',
+                description: 'Search docs',
+                annotations: { readOnlyHint: true }
+              }
+            }
+          },
+          {
+            name: 'computer-use',
+            serverInfo: null,
+            authStatus: 'unsupported',
+            tools: { use: { name: 'use' } }
+          },
+          {
+            name: 'broken',
+            serverInfo: null,
+            authStatus: 'bearerToken',
+            tools: {}
+          },
+          {
+            name: 'reauth',
+            serverInfo: null,
+            authStatus: 'bearerToken',
+            tools: {}
+          }
+        ],
+        nextCursor: null
+      }
+    }
+    if (method === 'config/mcpServer/reload') return {}
+    throw new Error(`Unexpected method ${method}`)
+  }
+  ;(
+    h.codex as unknown as {
+      mcpStartupStatus(name: string):
+        | {
+            threadId: string
+            name: string
+            status: 'failed'
+            error: string
+            failureReason: 'reauthenticationRequired' | null
+          }
+        | undefined
+    }
+  ).mcpStartupStatus = (name) =>
+    name === 'broken'
+      ? {
+          threadId: 'thread-1',
+          name,
+          status: 'failed',
+          error: 'Could not start helper.',
+          failureReason: null
+        }
+      : name === 'reauth'
+        ? {
+            threadId: 'thread-1',
+            name,
+            status: 'failed',
+            error: 'Sign in again.',
+            failureReason: 'reauthenticationRequired'
+          }
+        : undefined
+
+  const [models, account, info, servers, reconnect] = await Promise.all([
+    h.session.listModels(),
+    h.session.accountInfo(),
+    h.session.usageInfo(),
+    h.session.mcpStatus(),
+    h.session.mcpReconnect('docs')
+  ])
+  assert.equal(models[0]?.resolvedModel, 'gpt-live')
+  assert.deepEqual(account, {
+    email: 'dev@example.com',
+    subscriptionType: 'plus',
+    apiProvider: 'chatgpt'
+  })
+  assert.equal(info?.windows[0]?.label, '5-hour')
+  assert.deepEqual(servers[0]?.tools, [
+    { name: 'search', description: 'Search docs', readOnly: true }
+  ])
+  assert.equal(servers.find((server) => server.name === 'computer-use')?.status, 'connected')
+  assert.deepEqual(servers.find((server) => server.name === 'broken'), {
+    name: 'broken',
+    status: 'failed',
+    error: 'Could not start helper.'
+  })
+  assert.equal(servers.find((server) => server.name === 'reauth')?.status, 'needs-auth')
+  assert.deepEqual(reconnect, { ok: true })
+  assert.equal(calls.includes('model/list'), true)
   cleanup(h)
 })
 

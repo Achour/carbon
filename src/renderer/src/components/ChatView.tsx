@@ -18,7 +18,7 @@ import {
   X
 } from 'lucide-react'
 import type { AssistantMessage, ChatMessage, ChatMeta, ToolPart } from '@shared/types'
-import { projectRoot, providerForModel } from '@shared/types'
+import { projectRoot } from '@shared/types'
 import { cn } from '@/lib/utils'
 import { basename } from '@/lib/format'
 import { useApp } from '@/store'
@@ -361,7 +361,7 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
   // previews its provider (efforts, placeholder, labels) while the chat itself
   // stays on the current backend.
   const composerProvider =
-    chat.pendingModel !== undefined ? providerForModel(chat.pendingModel) : chat.provider
+    chat.pendingModel !== undefined ? (chat.pendingProvider ?? chat.provider) : chat.provider
   const renameChat = useApp((s) => s.renameChat)
   const deleteChat = useApp((s) => s.deleteChat)
 
@@ -855,7 +855,9 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
             // composer previews it (chip, efforts, placeholder) while the chat
             // itself stays on its current backend.
             model={chat.pendingModel ?? chat.model ?? ''}
-            onModelChange={(model) => void setChatOptions({ model })}
+            onModelChange={(model, modelProvider) =>
+              void setChatOptions({ model, modelProvider })
+            }
             effort={chat.effort ?? ''}
             onEffortChange={(effort, opts) => void setChatOptions({ effort, ...opts })}
             modelEfforts={modelEfforts}

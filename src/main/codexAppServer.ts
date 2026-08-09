@@ -49,6 +49,7 @@ interface AppServerUserInputRequest {
   turnId: string
   itemId: string
   questions: AppServerQuestion[]
+  isBlocking: boolean
   autoResolutionMs: number | null
 }
 
@@ -56,11 +57,72 @@ export interface NativeUserInputRequest extends AppServerUserInputRequest {
   requestId: string
 }
 
+export type NativeApprovalKind = 'command' | 'file-change' | 'permissions'
+
+export interface NativeApprovalRequest {
+  requestId: string
+  kind: NativeApprovalKind
+  threadId: string
+  turnId: string
+  itemId: string
+  params: Record<string, unknown>
+}
+
+export interface NativeMcpElicitationRequest {
+  requestId: string
+  threadId: string
+  turnId: string | null
+  serverName: string
+  mode: 'form' | 'openai/form' | 'url'
+  message: string
+  url?: string
+  requestedSchema?: Record<string, unknown>
+}
+
+export interface NativeMcpStartupStatus {
+  threadId: string | null
+  name: string
+  status: 'starting' | 'ready' | 'failed' | 'cancelled'
+  error: string | null
+  failureReason: 'reauthenticationRequired' | null
+}
+
 /** App Server's native plan item, kept distinct from an assistant message. */
 export interface CodexPlanItem {
   id: string
   type: 'codex_plan'
   text: string
+}
+
+/** App Server context-compaction marker, kept out of assistant prose. */
+export interface CodexCompactionItem {
+  id: string
+  type: 'codex_compaction'
+}
+
+export interface CodexImageViewItem {
+  id: string
+  type: 'codex_image_view'
+  path: string
+}
+
+export function isCodexCompactionItem(value: unknown): value is CodexCompactionItem {
+  if (!value || typeof value !== 'object') return false
+  const item = value as Record<string, unknown>
+  return item.type === 'codex_compaction' && typeof item.id === 'string'
+}
+
+export function isCodexImageViewItem(value: unknown): value is CodexImageViewItem {
+  if (!value || typeof value !== 'object') return false
+  const item = value as Record<string, unknown>
+  return item.type === 'codex_image_view' && typeof item.id === 'string'
+}
+
+/** Usage fields App Server exposes beyond the public SDK's Usage shape. */
+export interface CodexTurnUsage extends Usage {
+  context_tokens?: number
+  context_window?: number
+  model?: string
 }
 
 export function isCodexPlanItem(value: unknown): value is CodexPlanItem {
@@ -72,6 +134,7 @@ export function isCodexPlanItem(value: unknown): value is CodexPlanItem {
 export interface AppServerThreadOptions extends ThreadOptions {
   collaborationMode?: 'default' | 'plan'
   serviceTier?: 'standard' | 'fast'
+  approvalsReviewer?: 'user' | 'auto_review' | 'guardian_subagent'
 }
 
 export interface CodexThreadLike {
@@ -91,12 +154,24 @@ export interface CodexClientLike {
     answers: Record<string, { answers: string[] }>
   ): void
   dismissUserInput?(requestId: string): void
+  respondToApproval?(requestId: string, allow: boolean, always?: boolean): void
+  respondToMcpElicitation?(
+    requestId: string,
+    allow: boolean,
+    content?: Record<string, unknown> | null
+  ): void
+  mcpStartupStatus?(name: string, threadId?: string | null): NativeMcpStartupStatus | undefined
+  request?(method: string, params: unknown): Promise<unknown>
   dispose?(): void
 }
 
 export interface CodexAppServerCallbacks {
   onUserInput?: (request: NativeUserInputRequest) => void
   onUserInputResolved?: (requestId: string) => void
+  onApproval?: (request: NativeApprovalRequest) => void
+  onApprovalResolved?: (requestId: string) => void
+  onMcpElicitation?: (request: NativeMcpElicitationRequest) => void
+  onMcpElicitationResolved?: (requestId: string) => void
   onError?: (error: Error) => void
 }
 
@@ -117,8 +192,10 @@ interface NativeItem {
 }
 
 interface TokenBreakdown {
+  totalTokens?: number
   inputTokens?: number
   cachedInputTokens?: number
+  cacheWriteInputTokens?: number
   outputTokens?: number
   reasoningOutputTokens?: number
 }
@@ -126,6 +203,7 @@ interface TokenBreakdown {
 interface TurnUsage {
   total?: TokenBreakdown
   last?: TokenBreakdown
+  modelContextWindow?: number | null
 }
 
 interface BufferedNotification {
@@ -185,11 +263,14 @@ class AppServerTurn {
   readonly items = new Map<string, NativeItem>()
   readonly threadId: string
   readonly turnId: string
-  usage: Usage | null = null
+  usage: CodexTurnUsage | null = null
+  model: string | null
+  planSeen = false
 
-  constructor(threadId: string, turnId: string) {
+  constructor(threadId: string, turnId: string, model: string | null) {
     this.threadId = threadId
     this.turnId = turnId
+    this.model = model
   }
 }
 
@@ -312,7 +393,7 @@ function stringify(value: unknown): string {
   }
 }
 
-function normalizeItem(item: NativeItem): ThreadItem | null {
+export function normalizeAppServerItem(item: NativeItem): ThreadItem | null {
   switch (item.type) {
     case 'agentMessage':
       return { id: item.id, type: 'agent_message', text: String(item.text ?? '') }
@@ -350,22 +431,25 @@ function normalizeItem(item: NativeItem): ThreadItem | null {
               }
             })
           : [],
-        status: item.status === 'completed' ? 'completed' : 'failed'
-      }
-    case 'mcpToolCall':
-    case 'dynamicToolCall':
+        status: statusForSdk(item.status)
+      } as unknown as ThreadItem
+    case 'mcpToolCall': {
+      const result =
+        item.result && typeof item.result === 'object'
+          ? (item.result as Record<string, unknown>)
+          : null
       return {
         id: item.id,
         type: 'mcp_tool_call',
-        server: String(item.server ?? item.namespace ?? 'dynamic'),
+        server: String(item.server ?? 'mcp'),
         tool: String(item.tool ?? 'tool'),
         arguments: item.arguments,
-        ...(item.result != null
+        ...(result
           ? {
               result: {
-                content: [],
-                structured_content: item.result,
-                _meta: undefined
+                content: Array.isArray(result.content) ? result.content : [],
+                structured_content: result.structuredContent ?? null,
+                _meta: result._meta ?? null
               }
             }
           : {}),
@@ -374,6 +458,29 @@ function normalizeItem(item: NativeItem): ThreadItem | null {
           : {}),
         status: statusForSdk(item.status)
       } as ThreadItem
+    }
+    case 'dynamicToolCall': {
+      const contentItems = Array.isArray(item.contentItems)
+        ? (item.contentItems as Array<Record<string, unknown>>)
+        : []
+      const content = contentItems.flatMap((entry) => {
+        if (entry.type === 'inputText') return [{ type: 'text', text: String(entry.text ?? '') }]
+        if (entry.type === 'inputImage') {
+          return [{ type: 'text', text: String(entry.imageUrl ?? '') }]
+        }
+        return []
+      })
+      return {
+        id: item.id,
+        type: 'mcp_tool_call',
+        server: String(item.namespace ?? 'dynamic'),
+        tool: String(item.tool ?? 'tool'),
+        arguments: item.arguments,
+        ...(content.length ? { result: { content } } : {}),
+        ...(item.success === false ? { error: { message: 'The dynamic tool call failed.' } } : {}),
+        status: statusForSdk(item.status)
+      } as ThreadItem
+    }
     case 'collabAgentToolCall': {
       const states: Record<string, { status: string; message?: string | null }> = {}
       if (item.agentsStates && typeof item.agentsStates === 'object') {
@@ -407,34 +514,79 @@ function normalizeItem(item: NativeItem): ThreadItem | null {
     case 'webSearch':
       return { id: item.id, type: 'web_search', query: String(item.query ?? '') }
     case 'imageGeneration':
+      return typeof item.savedPath === 'string' && item.savedPath
+        ? { id: item.id, type: 'agent_message', text: `![generated image](${item.savedPath})` }
+        : null
+    case 'imageView':
       return {
         id: item.id,
-        type: 'agent_message',
-        text:
-          typeof item.savedPath === 'string' && item.savedPath
-            ? `![generated image](${item.savedPath})`
-            : ''
-      }
+        type: 'codex_image_view',
+        path: String(item.path ?? '')
+      } as unknown as ThreadItem
     case 'contextCompaction':
       return {
         id: item.id,
-        type: 'agent_message',
-        text: 'Context compacted.'
-      }
+        type: 'codex_compaction'
+      } as unknown as ThreadItem
     default:
       return null
   }
 }
 
-function usageFromNotification(raw: TurnUsage): Usage {
-  const value = raw.last ?? raw.total ?? {}
+function usageBreakdown(raw: TokenBreakdown | undefined): Usage {
+  const value = raw ?? {}
   return {
     input_tokens: value.inputTokens ?? 0,
     cached_input_tokens: value.cachedInputTokens ?? 0,
-    cache_write_input_tokens: 0,
+    cache_write_input_tokens: value.cacheWriteInputTokens ?? 0,
     output_tokens: value.outputTokens ?? 0,
     reasoning_output_tokens: value.reasoningOutputTokens ?? 0
   }
+}
+
+export function accumulateAppServerUsage(
+  current: CodexTurnUsage | null,
+  raw: TurnUsage,
+  model?: string | null
+): CodexTurnUsage {
+  const delta = usageBreakdown(raw.last ?? raw.total)
+  const context = raw.last?.totalTokens
+  return {
+    input_tokens: (current?.input_tokens ?? 0) + delta.input_tokens,
+    cached_input_tokens: (current?.cached_input_tokens ?? 0) + delta.cached_input_tokens,
+    cache_write_input_tokens:
+      (current?.cache_write_input_tokens ?? 0) + delta.cache_write_input_tokens,
+    output_tokens: (current?.output_tokens ?? 0) + delta.output_tokens,
+    reasoning_output_tokens:
+      (current?.reasoning_output_tokens ?? 0) + delta.reasoning_output_tokens,
+    ...(context != null ? { context_tokens: context } : {}),
+    ...(raw.modelContextWindow != null ? { context_window: raw.modelContextWindow } : {}),
+    ...(model || current?.model ? { model: model || current?.model } : {})
+  }
+}
+
+export function appServerApprovalResponse(
+  method: string,
+  params: Record<string, unknown>,
+  allow: boolean,
+  always = false
+): Record<string, unknown> {
+  if (method === 'execCommandApproval' || method === 'applyPatchApproval') {
+    return {
+      decision: allow
+        ? always
+          ? 'approved_for_session'
+          : 'approved'
+        : { denied: { rejection: 'Denied by the user.' } }
+    }
+  }
+  if (method === 'item/permissions/requestApproval') {
+    return {
+      permissions: allow ? (params.permissions ?? {}) : {},
+      scope: always ? 'session' : 'turn'
+    }
+  }
+  return { decision: allow ? (always ? 'acceptForSession' : 'accept') : 'decline' }
 }
 
 function updateItemFromDelta(item: NativeItem, method: string, params: Record<string, unknown>): void {
@@ -501,6 +653,7 @@ class CodexAppServerThread implements CodexThreadLike {
         serviceTier: this.options.serviceTier === 'fast' ? 'fast' : 'default',
         cwd: this.options.workingDirectory ?? null,
         approvalPolicy: this.options.approvalPolicy ?? 'never',
+        approvalsReviewer: this.options.approvalsReviewer ?? 'user',
         sandbox: this.options.sandboxMode ?? null,
         config: serviceTierConfig(this.options.serviceTier)
       })) as { thread: NativeThread; model: string }
@@ -512,6 +665,7 @@ class CodexAppServerThread implements CodexThreadLike {
         serviceTier: this.options.serviceTier === 'fast' ? 'fast' : 'default',
         cwd: this.options.workingDirectory ?? null,
         approvalPolicy: this.options.approvalPolicy ?? 'never',
+        approvalsReviewer: this.options.approvalsReviewer ?? 'user',
         sandbox: this.options.sandboxMode ?? null,
         config: serviceTierConfig(this.options.serviceTier),
         ephemeral: false
@@ -534,6 +688,7 @@ class CodexAppServerThread implements CodexThreadLike {
       input: inputForAppServer(input),
       cwd: this.options.workingDirectory ?? null,
       approvalPolicy: this.options.approvalPolicy ?? 'never',
+      approvalsReviewer: this.options.approvalsReviewer ?? 'user',
       model: this.options.model ?? null,
       serviceTier: this.options.serviceTier === 'fast' ? 'fast' : 'default',
       effort: this.options.modelReasoningEffort ?? null,
@@ -546,7 +701,11 @@ class CodexAppServerThread implements CodexThreadLike {
         }
       }
     })) as { turn: NativeTurn }
-    const run = this.client.attachTurn(threadId, response.turn.id)
+    const run = this.client.attachTurn(
+      threadId,
+      response.turn.id,
+      this.resolvedModel ?? this.options.model ?? null
+    )
     run.queue.push({ type: 'thread.started', thread_id: threadId })
     run.queue.push({ type: 'turn.started' })
     this.client.drainBuffered(run)
@@ -619,8 +778,15 @@ export class CodexAppServerClient implements CodexClientLike {
   private readonly buffered = new Map<string, BufferedNotification[]>()
   private readonly serverRequests = new Map<
     string,
-    { id: JsonRpcId; params: AppServerUserInputRequest; timer?: ReturnType<typeof setTimeout> }
+    {
+      id: JsonRpcId
+      method: string
+      params: Record<string, unknown>
+      timer?: ReturnType<typeof setTimeout>
+    }
   >()
+  /** Latest process-local startup state, keyed by thread and server name. */
+  private readonly mcpStartupStatuses = new Map<string, NativeMcpStartupStatus>()
   private disposed = false
   processGeneration = 0
 
@@ -640,11 +806,25 @@ export class CodexAppServerClient implements CodexClientLike {
     return `${threadId}:${turnId}`
   }
 
-  attachTurn(threadId: string, turnId: string): AppServerTurn {
+  private mcpStatusKey(name: string, threadId: string | null): string {
+    return `${threadId ?? '*'}\u0000${name}`
+  }
+
+  mcpStartupStatus(
+    name: string,
+    threadId: string | null = null
+  ): NativeMcpStartupStatus | undefined {
+    return (
+      this.mcpStartupStatuses.get(this.mcpStatusKey(name, threadId)) ??
+      this.mcpStartupStatuses.get(this.mcpStatusKey(name, null))
+    )
+  }
+
+  attachTurn(threadId: string, turnId: string, model: string | null): AppServerTurn {
     const key = this.turnKey(threadId, turnId)
     const existing = this.turns.get(key)
     if (existing) return existing
-    const run = new AppServerTurn(threadId, turnId)
+    const run = new AppServerTurn(threadId, turnId, model)
     this.turns.set(key, run)
     return run
   }
@@ -691,16 +871,22 @@ export class CodexAppServerClient implements CodexClientLike {
       windowsHide: true
     })
     this.process = child
+    let failed = false
+    const failChild = (error: Error): void => {
+      if (failed || this.process !== child) return
+      failed = true
+      this.failProcess(error)
+    }
     createInterface({ input: child.stdout }).on('line', (line) => this.handleLine(line))
     child.stderr.setEncoding('utf8')
     child.stderr.on('data', (chunk: string) => {
       const text = chunk.trim()
       if (text) console.warn(`[codex app-server] ${text}`)
     })
-    child.once('error', (error) => this.failProcess(error))
+    child.once('error', failChild)
     child.once('exit', (code, signal) => {
       if (!this.disposed) {
-        this.failProcess(
+        failChild(
           new Error(
             `Codex App Server exited unexpectedly${code != null ? ` (code ${code})` : ''}${
               signal ? ` (${signal})` : ''
@@ -711,7 +897,12 @@ export class CodexAppServerClient implements CodexClientLike {
     })
     await this.rawRequest('initialize', {
       clientInfo: { name: 'carbon', title: 'Carbon', version: '0.1.0' },
-      capabilities: { experimentalApi: true, requestAttestation: false }
+      capabilities: {
+        experimentalApi: true,
+        requestAttestation: false,
+        mcpServerOpenaiFormElicitation: true,
+        extensions: { 'openai/form': {} }
+      }
     })
     this.notify('initialized', {})
     this.processGeneration += 1
@@ -768,25 +959,80 @@ export class CodexAppServerClient implements CodexClientLike {
   }
 
   private handleServerRequest(id: JsonRpcId, method: string, raw: unknown): void {
-    if (method !== 'item/tool/requestUserInput') {
+    const supported = new Set([
+      'item/tool/requestUserInput',
+      'item/commandExecution/requestApproval',
+      'item/fileChange/requestApproval',
+      'item/permissions/requestApproval',
+      'mcpServer/elicitation/request',
+      'execCommandApproval',
+      'applyPatchApproval'
+    ])
+    if (!supported.has(method)) {
       this.write({
         id,
         error: { code: -32601, message: `Carbon does not support App Server request ${method}.` }
       })
       return
     }
-    const params = raw as AppServerUserInputRequest
+    const params = (raw ?? {}) as Record<string, unknown>
     const requestId = String(id)
     const record: {
       id: JsonRpcId
-      params: AppServerUserInputRequest
+      method: string
+      params: Record<string, unknown>
       timer?: ReturnType<typeof setTimeout>
-    } = { id, params }
-    if (typeof params.autoResolutionMs === 'number' && params.autoResolutionMs > 0) {
+    } = { id, method, params }
+    if (
+      method === 'item/tool/requestUserInput' &&
+      typeof params.autoResolutionMs === 'number' &&
+      params.autoResolutionMs > 0
+    ) {
       record.timer = setTimeout(() => this.dismissUserInput(requestId), params.autoResolutionMs)
     }
     this.serverRequests.set(requestId, record)
-    this.callbacks.onUserInput?.({ ...params, requestId })
+    if (method === 'item/tool/requestUserInput') {
+      this.callbacks.onUserInput?.({
+        ...(params as unknown as AppServerUserInputRequest),
+        requestId
+      })
+      return
+    }
+    if (method === 'mcpServer/elicitation/request') {
+      const mode =
+        params.mode === 'url' || params.mode === 'openai/form' ? params.mode : 'form'
+      this.callbacks.onMcpElicitation?.({
+        requestId,
+        threadId: String(params.threadId ?? ''),
+        turnId: typeof params.turnId === 'string' ? params.turnId : null,
+        serverName: String(params.serverName ?? 'MCP server'),
+        mode,
+        message: String(params.message ?? 'This MCP server needs input.'),
+        ...(typeof params.url === 'string' ? { url: params.url } : {}),
+        ...(params.requestedSchema && typeof params.requestedSchema === 'object'
+          ? { requestedSchema: params.requestedSchema as Record<string, unknown> }
+          : {})
+      })
+      return
+    }
+    const kind: NativeApprovalKind =
+      method === 'item/commandExecution/requestApproval' || method === 'execCommandApproval'
+        ? 'command'
+        : method === 'item/fileChange/requestApproval' || method === 'applyPatchApproval'
+          ? 'file-change'
+          : 'permissions'
+    const normalizedParams =
+      method === 'execCommandApproval' && Array.isArray(params.command)
+        ? { ...params, command: params.command.map(String).join(' ') }
+        : params
+    this.callbacks.onApproval?.({
+      requestId,
+      kind,
+      threadId: String(params.threadId ?? params.conversationId ?? ''),
+      turnId: String(params.turnId ?? ''),
+      itemId: String(params.itemId ?? params.callId ?? ''),
+      params: normalizedParams
+    })
   }
 
   respondToUserInput(
@@ -805,14 +1051,75 @@ export class CodexAppServerClient implements CodexClientLike {
     this.respondToUserInput(requestId, {})
   }
 
+  respondToApproval(requestId: string, allow: boolean, always = false): void {
+    const pending = this.serverRequests.get(requestId)
+    if (
+      !pending ||
+      pending.method === 'item/tool/requestUserInput' ||
+      pending.method === 'mcpServer/elicitation/request'
+    )
+      return
+    this.serverRequests.delete(requestId)
+    const result = appServerApprovalResponse(pending.method, pending.params, allow, always)
+    this.write({ id: pending.id, result })
+    this.callbacks.onApprovalResolved?.(requestId)
+  }
+
+  respondToMcpElicitation(
+    requestId: string,
+    allow: boolean,
+    content: Record<string, unknown> | null = null
+  ): void {
+    const pending = this.serverRequests.get(requestId)
+    if (!pending || pending.method !== 'mcpServer/elicitation/request') return
+    this.serverRequests.delete(requestId)
+    this.write({
+      id: pending.id,
+      result: { action: allow ? 'accept' : 'decline', content: allow ? content : null, _meta: null }
+    })
+    this.callbacks.onMcpElicitationResolved?.(requestId)
+  }
+
   private handleNotification(method: string, raw: unknown): void {
     const params = (raw ?? {}) as Record<string, unknown>
+    if (method === 'mcpServer/startupStatus/updated') {
+      const name = typeof params.name === 'string' ? params.name : ''
+      const status = params.status
+      if (
+        name &&
+        (status === 'starting' ||
+          status === 'ready' ||
+          status === 'failed' ||
+          status === 'cancelled')
+      ) {
+        const value: NativeMcpStartupStatus = {
+          threadId: typeof params.threadId === 'string' ? params.threadId : null,
+          name,
+          status,
+          error: typeof params.error === 'string' ? params.error : null,
+          failureReason:
+            params.failureReason === 'reauthenticationRequired'
+              ? 'reauthenticationRequired'
+              : null
+        }
+        this.mcpStartupStatuses.set(this.mcpStatusKey(name, value.threadId), value)
+      }
+      return
+    }
     if (method === 'serverRequest/resolved') {
       const requestId = String(params.requestId ?? '')
       const pending = this.serverRequests.get(requestId)
       if (pending?.timer) clearTimeout(pending.timer)
       this.serverRequests.delete(requestId)
-      if (requestId) this.callbacks.onUserInputResolved?.(requestId)
+      if (requestId) {
+        if (pending?.method === 'item/tool/requestUserInput') {
+          this.callbacks.onUserInputResolved?.(requestId)
+        } else if (pending?.method === 'mcpServer/elicitation/request') {
+          this.callbacks.onMcpElicitationResolved?.(requestId)
+        } else {
+          this.callbacks.onApprovalResolved?.(requestId)
+        }
+      }
       return
     }
     const threadId = typeof params.threadId === 'string' ? params.threadId : null
@@ -844,7 +1151,7 @@ export class CodexAppServerClient implements CodexClientLike {
       const item = params.item as NativeItem | undefined
       if (!item?.id) return
       run.items.set(item.id, item)
-      const normalized = normalizeItem(item)
+      const normalized = normalizeAppServerItem(item)
       if (normalized) {
         run.queue.push({
           type: method === 'item/started' ? 'item.started' : 'item.completed',
@@ -864,12 +1171,40 @@ export class CodexAppServerClient implements CodexClientLike {
       const item = run.items.get(itemId)
       if (!item) return
       updateItemFromDelta(item, method, params)
-      const normalized = normalizeItem(item)
+      const normalized = normalizeAppServerItem(item)
       if (normalized) run.queue.push({ type: 'item.updated', item: normalized })
       return
     }
     if (method === 'thread/tokenUsage/updated') {
-      run.usage = usageFromNotification((params.tokenUsage ?? {}) as TurnUsage)
+      run.usage = accumulateAppServerUsage(
+        run.usage,
+        (params.tokenUsage ?? {}) as TurnUsage,
+        run.model
+      )
+      return
+    }
+    if (method === 'model/rerouted') {
+      const toModel = typeof params.toModel === 'string' ? params.toModel : null
+      if (toModel) {
+        run.model = toModel
+        if (run.usage) run.usage.model = toModel
+      }
+      return
+    }
+    if (method === 'turn/plan/updated') {
+      const steps = Array.isArray(params.plan)
+        ? (params.plan as Array<Record<string, unknown>>)
+        : []
+      const item = {
+        id: `codex-plan-steps-${run.turnId}`,
+        type: 'todo_list',
+        items: steps.map((step) => ({
+          text: String(step.step ?? ''),
+          completed: step.status === 'completed'
+        }))
+      } as unknown as ThreadItem
+      run.queue.push({ type: run.planSeen ? 'item.updated' : 'item.started', item })
+      run.planSeen = true
       return
     }
     if (method === 'turn/completed') {
@@ -884,7 +1219,7 @@ export class CodexAppServerClient implements CodexClientLike {
       } else {
         run.queue.push({
           type: 'turn.completed',
-          usage: run.usage ?? usageFromNotification({})
+          usage: run.usage ?? accumulateAppServerUsage(null, {}, run.model)
         })
       }
       run.queue.end()
@@ -899,9 +1234,17 @@ export class CodexAppServerClient implements CodexClientLike {
     this.pending.clear()
     for (const run of this.turns.values()) run.queue.fail(error)
     this.turns.clear()
+    this.buffered.clear()
+    this.mcpStartupStatuses.clear()
     for (const [requestId, pending] of this.serverRequests) {
       if (pending.timer) clearTimeout(pending.timer)
-      this.callbacks.onUserInputResolved?.(requestId)
+      if (pending.method === 'item/tool/requestUserInput') {
+        this.callbacks.onUserInputResolved?.(requestId)
+      } else if (pending.method === 'mcpServer/elicitation/request') {
+        this.callbacks.onMcpElicitationResolved?.(requestId)
+      } else {
+        this.callbacks.onApprovalResolved?.(requestId)
+      }
     }
     this.serverRequests.clear()
     this.callbacks.onError?.(error)
@@ -916,6 +1259,8 @@ export class CodexAppServerClient implements CodexClientLike {
     this.serverRequests.clear()
     for (const run of this.turns.values()) run.queue.end()
     this.turns.clear()
+    this.buffered.clear()
+    this.mcpStartupStatuses.clear()
     for (const pending of this.pending.values()) {
       pending.reject(new Error('Codex App Server was disposed.'))
     }
