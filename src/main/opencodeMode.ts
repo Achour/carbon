@@ -41,43 +41,46 @@ export interface OpencodePermissionRule {
   action: OpencodeAction
 }
 
-/** Everything that only observes the workspace — never gated in any mode. */
-const READ_ONLY: OpencodePermission[] = [
-  'read',
-  'glob',
-  'grep',
-  'list',
-  'lsp',
-  'skill',
-  'todowrite',
-  'question'
-]
-
-/** Everything that changes files or reaches outside the workspace. */
-const MUTATING: OpencodePermission[] = ['edit', 'bash', 'task', 'external_directory', 'doom_loop']
-
-/** Network reads: not mutations, but they leave the machine. */
-const NETWORK: OpencodePermission[] = ['webfetch', 'websearch']
-
-function rules(map: Partial<Record<OpencodePermission, OpencodeAction>>): OpencodePermissionRule[] {
-  return OPENCODE_PERMISSIONS.filter((p) => map[p] !== undefined).map((permission) => ({
-    permission,
-    pattern: '**',
-    action: map[permission] as OpencodeAction
-  }))
+/**
+ * A ruleset: allow everything, then narrow.
+ *
+ * `*` is OpenCode's own idiom — its built-in `build` agent ships
+ * `[{*: allow}, {doom_loop: ask}, {external_directory: ask}]` — and the array is
+ * ordered with later rules winning. Written this way rather than by enumerating
+ * the taxonomy so a permission key OpenCode adds later is covered by the
+ * wildcard instead of silently falling outside every mode.
+ */
+function ruleset(
+  base: OpencodeAction,
+  overrides: Partial<Record<OpencodePermission, OpencodeAction>> = {}
+): OpencodePermissionRule[] {
+  return [
+    { permission: '*', pattern: '**', action: base },
+    ...OPENCODE_PERMISSIONS.filter((p) => overrides[p] !== undefined).map((permission) => ({
+      permission,
+      pattern: '**',
+      action: overrides[permission] as OpencodeAction
+    }))
+  ]
 }
 
-function fill(
-  permissions: OpencodePermission[],
-  action: OpencodeAction
-): Partial<Record<OpencodePermission, OpencodeAction>> {
-  return Object.fromEntries(permissions.map((p) => [p, action]))
+/** Everything that changes files or reaches outside the workspace. */
+const GATED: Partial<Record<OpencodePermission, OpencodeAction>> = {
+  edit: 'ask',
+  bash: 'ask',
+  task: 'ask',
+  external_directory: 'ask',
+  doom_loop: 'ask',
+  webfetch: 'ask',
+  websearch: 'ask'
 }
 
 /**
- * The agent a turn runs as. `plan` is OpenCode's own read-only agent — Carbon
- * layers its plan *review* on top of it, so the model genuinely cannot edit
- * while planning rather than merely being asked not to.
+ * The agent a turn runs as.
+ *
+ * OpenCode has exactly two primary agents a user drives — `build` and `plan` —
+ * so this is the only place a Carbon mode maps onto one of *its* concepts.
+ * Everything else a mode expresses is carried by the ruleset.
  */
 export function agentForMode(mode: PermissionModeId): string | undefined {
   return mode === 'plan' ? 'plan' : undefined
@@ -87,31 +90,19 @@ export function agentForMode(mode: PermissionModeId): string | undefined {
 export function rulesetForMode(mode: PermissionModeId): OpencodePermissionRule[] {
   switch (mode) {
     case 'plan':
-      // Belt and braces over the plan agent: if a future OpenCode lets the plan
-      // agent write, the ruleset still refuses rather than silently allowing it.
-      return rules({ ...fill(READ_ONLY, 'allow'), ...fill(MUTATING, 'deny'), ...fill(NETWORK, 'ask') })
+      // Belt and braces over the plan agent, which already disallows edit tools:
+      // if a future OpenCode loosens it, the ruleset still refuses.
+      return ruleset('allow', { ...GATED, edit: 'deny', bash: 'deny', task: 'deny' })
     case 'acceptEdits':
-      return rules({
-        ...fill(READ_ONLY, 'allow'),
-        ...fill(MUTATING, 'ask'),
-        ...fill(NETWORK, 'ask'),
-        edit: 'allow'
-      })
+    // 'auto' is not offered for OpenCode — there is no classifier to defer to,
+    // so it would be Accept edits under another name. Kept here only because a
+    // chat switched in from Claude can still carry the mode.
     case 'auto':
-      // No classifier exists on this backend, so "auto" is the honest subset:
-      // edits and reads go through, anything that runs a command or leaves the
-      // machine still asks. Named the same as Claude's mode because it occupies
-      // the same slot, but it is deliberately more conservative.
-      return rules({
-        ...fill(READ_ONLY, 'allow'),
-        ...fill(MUTATING, 'ask'),
-        ...fill(NETWORK, 'ask'),
-        edit: 'allow'
-      })
+      return ruleset('allow', { ...GATED, edit: 'allow' })
     case 'bypassPermissions':
-      return rules(fill([...READ_ONLY, ...MUTATING, ...NETWORK], 'allow'))
+      return ruleset('allow')
     default:
-      return rules({ ...fill(READ_ONLY, 'allow'), ...fill(MUTATING, 'ask'), ...fill(NETWORK, 'ask') })
+      return ruleset('allow', GATED)
   }
 }
 

@@ -377,15 +377,28 @@ across `pending → running → completed`. The server also echoes the user's ow
 prompt back as a text part, so parts are filtered by the role recorded from
 `message.updated` — without that every turn renders twice.
 
-**Permission modes are per-session rulesets** (`opencodeMode.ts`): `{permission,
-pattern, action}` over OpenCode's own taxonomy (`read`/`edit`/`bash`/`webfetch`/…
-× `allow|deny|ask`), passed at session creation. The obvious way to implement
-"full access" is to edit the server's permission config, but that config is
-global and the server is shared with the user's TUI — a ruleset cannot leak. It
-is also immutable for the session's life, which is why leaving plan mode drops
-the session and opens another; the transcript is Carbon's, so nothing is lost.
-`auto` is deliberately no broader than `acceptEdits` here: there is no classifier
-to defer to, and approving commands on a guess is worse than not offering it.
+**OpenCode offers two primary agents — `build` and `plan` — and a per-session
+permission ruleset**, and that is the whole of what a Carbon mode maps onto
+(`opencodeMode.ts`). Rulesets are `{permission, pattern, action}` over OpenCode's
+taxonomy, written as a wildcard base plus narrower overrides (`[{*: allow},
+{edit: ask}, …]`) because that is the server's own idiom — its built-in `build`
+agent ships exactly that shape — the array is ordered with later rules winning,
+and a permission key a later release adds is then governed by the wildcard
+instead of falling outside every mode. Verified live: under that ruleset `read`
+runs ungated and `edit` raises `permission.asked`.
+
+The obvious way to implement "full access" is to edit the server's permission
+config, but that config is global and the server is shared with the user's TUI —
+a ruleset cannot leak. It is also immutable for the session's life, which is why
+leaving plan mode drops the session and opens another; the transcript is
+Carbon's, so nothing is lost.
+
+**Four modes, not five: `auto` is not offered.** Claude defers it to a classifier
+and Codex to App Server's reviewer; OpenCode has neither, so an Auto here could
+only be `acceptEdits` under another name, and two menu rows doing the same thing
+are worse than one honest row. It stays mapped in `rulesetForMode` because a chat
+switched in from Claude can still carry it, and the composer normalizes such a
+chat onto Accept edits the way it normalizes an unsupported effort.
 
 Plan review is synthesized the Codex way (persisted `PersistedPlanReview` + a fake
 `ExitPlanMode` request) on top of OpenCode's native read-only `plan` agent.

@@ -9,10 +9,18 @@ import {
 } from '../src/main/opencodeMode.ts'
 import { buildApprovedPlanPrompt, buildPlanFeedbackPrompt } from '../src/main/opencodePlan.ts'
 
+/**
+ * The action the server would land on: rules are an ordered array where later
+ * entries win, and `*` matches everything. Resolving it here tests what a mode
+ * *does* rather than how the ruleset happens to be spelled.
+ */
 function actionFor(mode: Parameters<typeof rulesetForMode>[0], permission: string): OpencodeAction {
-  const rule = rulesetForMode(mode).find((r) => r.permission === permission)
-  assert.ok(rule, `${mode} should carry a rule for ${permission}`)
-  return rule.action
+  let action: OpencodeAction | null = null
+  for (const rule of rulesetForMode(mode)) {
+    if (rule.permission === '*' || rule.permission === permission) action = rule.action
+  }
+  assert.ok(action, `${mode} should resolve an action for ${permission}`)
+  return action
 }
 
 test('plan mode runs the plan agent and refuses mutations outright', () => {
@@ -41,12 +49,22 @@ test('acceptEdits allows edits but still gates running commands', () => {
   assert.equal(actionFor('acceptEdits', 'webfetch'), 'ask')
 })
 
-test('auto is deliberately no broader than acceptEdits on this backend', () => {
-  // Claude's Auto defers to a classifier. OpenCode has none, so rather than
-  // approving commands on a guess, Auto occupies the same slot with the same
-  // guarantees — the honest subset.
-  assert.equal(actionFor('auto', 'edit'), 'allow')
-  assert.equal(actionFor('auto', 'bash'), 'ask')
+test('auto is not offered, and a chat carrying it lands on Accept edits', () => {
+  // Claude defers Auto to a classifier and Codex to App Server's reviewer.
+  // OpenCode has neither, so offering Auto could only mean Accept edits under
+  // another name. It stays mapped for chats switched in from another provider,
+  // but the composer does not list it.
+  assert.deepEqual(rulesetForMode('auto'), rulesetForMode('acceptEdits'))
+})
+
+test('the wildcard covers permission keys the taxonomy does not name', () => {
+  // OpenCode's own build agent is written this way, and it means a key added by
+  // a later release is governed rather than falling outside every mode.
+  for (const mode of ['default', 'acceptEdits', 'plan', 'bypassPermissions'] as const) {
+    assert.equal(rulesetForMode(mode)[0].permission, '*', `${mode} should start from a wildcard`)
+  }
+  assert.equal(actionFor('default', 'some_future_permission'), 'allow')
+  assert.equal(actionFor('plan', 'some_future_permission'), 'allow')
 })
 
 test('bypassPermissions allows everything and asks for nothing', () => {
