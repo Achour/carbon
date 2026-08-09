@@ -24,7 +24,6 @@ import type {
   ChatOptionsPatch,
   ChatStatus,
   EffortId,
-  ElementRef,
   FastModeState,
   FastModeStatus,
   McpServerInfo,
@@ -56,7 +55,13 @@ import type { PreviewManager } from './preview'
 import { CodexSession, fetchCodexModels, generateCodexText } from './codex'
 import { OpencodeSession, fetchOpencodeModels, generateOpencodeText } from './opencode'
 import { CodexAppServerClient } from './codexAppServer'
-import { composePrompt, withTimeout, type AgentSession, type Emit } from './session'
+import {
+  appendAttachmentContext,
+  composePrompt,
+  withTimeout,
+  type AgentSession,
+  type Emit
+} from './session'
 import { DeltaCoalescer } from './deltaCoalescer'
 import { TITLE_SYSTEM, buildTitlePrompt, cleanTitle, deriveTitle, firstUserText } from './titles'
 import {
@@ -153,20 +158,6 @@ function extractImages(content: unknown): { mediaType: string; data: string }[] 
     images.push({ mediaType, data })
   }
   return images.length ? images : undefined
-}
-
-/** Renders a picked UI element as a text block the agent can act on. */
-function describeElement(el: ElementRef): string {
-  const lines = [`Selected UI element from the running app (${el.url}):`]
-  if (el.source?.file) {
-    const col = el.source.column != null ? `:${el.source.column}` : ''
-    const loc = el.source.line != null ? `${el.source.file}:${el.source.line}${col}` : el.source.file
-    lines.push(`- Source: ${loc}`)
-  }
-  if (el.label) lines.push(`- Text: ${JSON.stringify(el.label)}`)
-  if (el.selector) lines.push(`- Selector: ${el.selector}`)
-  if (el.html) lines.push(`- HTML: ${el.html}`)
-  return lines.join('\n')
 }
 
 interface InputQueue {
@@ -525,11 +516,9 @@ class ClaudeSession implements AgentSession {
     this.setStatus(this.chat.sessionId ? 'streaming' : 'starting')
     this.turnActive = true
 
-    // Images go to the model as base64 blocks; other files are referenced by
-    // path so Claude can Read them itself. Picked UI elements contribute a
-    // screenshot (if captured) plus a text description of where they live.
+    // Images go to the model as base64 blocks; files and picked elements have no
+    // native form and are folded into the prompt text instead.
     const content: Array<Record<string, unknown>> = []
-    const elementBlocks: string[] = []
     for (const a of attachments) {
       if ((a.kind === 'image' || a.kind === 'element') && a.data && a.mediaType) {
         content.push({
@@ -537,20 +526,11 @@ class ClaudeSession implements AgentSession {
           source: { type: 'base64', media_type: a.mediaType, data: a.data }
         })
       }
-      if (a.kind === 'element' && a.element) elementBlocks.push(describeElement(a.element))
     }
-    const filePaths = attachments.filter((a) => a.kind === 'file' && a.path).map((a) => a.path!)
     const epoch = this.sendEpoch
     const finish = (ctx?: string): void => {
       if (this.disposed || epoch !== this.sendEpoch) return
-      let prompt = composePrompt(text, ctx)
-      if (filePaths.length) {
-        const list = filePaths.map((p) => `- ${p}`).join('\n')
-        prompt = `${prompt ? `${prompt}\n\n` : ''}Attached files:\n${list}`
-      }
-      if (elementBlocks.length) {
-        prompt = `${prompt ? `${prompt}\n\n` : ''}${elementBlocks.join('\n\n')}`
-      }
+      const prompt = appendAttachmentContext(composePrompt(text, ctx), attachments)
       if (prompt || content.length === 0) content.push({ type: 'text', text: prompt })
       this.input.push({
         type: 'user',

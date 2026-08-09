@@ -24,7 +24,6 @@ import type {
   ChatMeta,
   ChatStatus,
   EffortId,
-  ElementRef,
   McpServerInfo,
   ModelOption,
   OpResult,
@@ -40,7 +39,12 @@ import type {
   UsageInfo
 } from '@shared/types'
 import type { Store } from './store'
-import { composePrompt, type AgentSession, type Emit } from './session.ts'
+import {
+  appendAttachmentContext,
+  composePrompt,
+  type AgentSession,
+  type Emit
+} from './session.ts'
 import { DeltaCoalescer } from './deltaCoalescer.ts'
 import { IMAGE_EXT, pickTurnImages } from './imageScan.ts'
 import { isMissingCodexThreadError } from './codexResume.ts'
@@ -341,20 +345,6 @@ function cleanupStaleTempFiles(): void {
   }
 }
 
-/** Renders a picked UI element as a text block the agent can act on. */
-function describeElement(el: ElementRef): string {
-  const lines = [`Selected UI element from the running app (${el.url}):`]
-  if (el.source?.file) {
-    const col = el.source.column != null ? `:${el.source.column}` : ''
-    const loc = el.source.line != null ? `${el.source.file}:${el.source.line}${col}` : el.source.file
-    lines.push(`- Source: ${loc}`)
-  }
-  if (el.label) lines.push(`- Text: ${JSON.stringify(el.label)}`)
-  if (el.selector) lines.push(`- Selector: ${el.selector}`)
-  if (el.html) lines.push(`- HTML: ${el.html}`)
-  return lines.join('\n')
-}
-
 /**
  * One Codex conversation for a chat. Unlike `ClaudeSession` (a single long-lived
  * SDK process fed by an input queue), Codex uses one native `codex app-server`
@@ -635,8 +625,6 @@ export class CodexSession implements AgentSession {
   ): { input: Input; temps: string[] } {
     const images: UserInput[] = []
     const temps: string[] = []
-    const filePaths: string[] = []
-    const elementNotes: string[] = []
     for (const a of attachments) {
       if ((a.kind === 'image' || a.kind === 'element') && a.data && a.mediaType) {
         // Codex takes images by file path, so materialize base64 blobs to temp
@@ -648,18 +636,8 @@ export class CodexSession implements AgentSession {
           temps.push(path)
         }
       }
-      if (a.kind === 'element' && a.element) elementNotes.push(describeElement(a.element))
-      if (a.kind === 'file' && a.path) filePaths.push(a.path)
     }
-    let prompt = text
-    if (filePaths.length) {
-      prompt = `${prompt ? `${prompt}\n\n` : ''}Attached files:\n${filePaths
-        .map((p) => `- ${p}`)
-        .join('\n')}`
-    }
-    if (elementNotes.length) {
-      prompt = `${prompt ? `${prompt}\n\n` : ''}${elementNotes.join('\n\n')}`
-    }
+    const prompt = appendAttachmentContext(text, attachments)
     const blocks: UserInput[] = [{ type: 'text', text: prompt }, ...images]
     return { input: blocks, temps }
   }
