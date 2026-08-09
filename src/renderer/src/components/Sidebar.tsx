@@ -880,8 +880,23 @@ export function Sidebar(): React.JSX.Element {
     persistOrder(ordered)
   }
   const visibleGroups = groups.filter((g) => !hiddenProjects[g.cwd])
-  const activeGroups = visibleGroups.filter((g) => !archivedProjects[g.cwd])
-  const archivedGroups = visibleGroups.filter((g) => archivedProjects[g.cwd])
+
+  // "Show me one project" — the same question in both modes, so the same
+  // control answers it. Detailed has no project rows and nothing else to ask
+  // with; compact's answer used to be collapsing the other rows by hand. A
+  // saved filter naming a project that no longer exists reads as null rather
+  // than an empty sidebar — the project can be deleted from elsewhere.
+  const filterProject =
+    sidebarProject && visibleGroups.some((g) => g.cwd === sidebarProject) ? sidebarProject : null
+  // Filtering to a project explicitly reaches an archived one; the unfiltered
+  // list leaves them out, which is what archiving means. Compact still heads it
+  // with the "Archived" divider, which is the only thing left saying so once
+  // the list is down to that one project.
+  const shownGroups = filterProject
+    ? visibleGroups.filter((g) => g.cwd === filterProject)
+    : visibleGroups
+  const activeGroups = shownGroups.filter((g) => !archivedProjects[g.cwd])
+  const archivedGroups = shownGroups.filter((g) => archivedProjects[g.cwd])
 
   // The new-chat chooser's rows, in *recency* order rather than the sidebar's
   // manual project order — `chats` arrives newest-first, so the project you
@@ -904,19 +919,12 @@ export function Sidebar(): React.JSX.Element {
   // the same folder — and, in a repo where nothing is isolated, the same branch
   // — once per row. Date buckets structure the list by the thing that actually
   // varies down it. Everything else about a row is identical between modes.
-  //
-  // The filter is what grouping used to give you: one project's chats, on
-  // demand. A saved filter for a project that no longer exists reads as null
-  // rather than an empty sidebar — the project can be deleted from elsewhere.
-  const filterProject =
-    sidebarProject && visibleGroups.some((g) => g.cwd === sidebarProject) ? sidebarProject : null
-  // Filtering to a project explicitly reaches an archived one; the unfiltered
-  // list leaves them out, which is what archiving means.
-  const flatSource = filterProject
-    ? visibleGroups.filter((g) => g.cwd === filterProject)
-    : activeGroups
+  const flatSource = filterProject ? shownGroups : activeGroups
   // A filter scopes the whole sidebar, pins included — a pin from another
-  // project showing through would make the list a half-truth.
+  // project showing through would make the list a half-truth. This is the one
+  // part that was already shared: compact reads `pinnedShown` too, so before
+  // the filter appeared in both modes a pick made in detailed silently scoped
+  // compact's pins with nothing on screen to clear it.
   const pinnedShown = filterProject
     ? pinnedChats.filter((c) => projectRoot(c) === filterProject)
     : pinnedChats
@@ -995,7 +1003,10 @@ export function Sidebar(): React.JSX.Element {
       titling={!!titling[chat.id]}
       detail={detailed ? chatDetail(chat, !filterProject) : null}
       projectMenu={
-        detailed ? (
+        // Whenever no project row is on screen to carry them — always in
+        // detailed, and in compact once a filter has collapsed the list to one
+        // project and its row along with it.
+        detailed || filterProject ? (
           <>
             <ContextMenuSeparator />
             <ContextMenuGroup>
@@ -1079,63 +1090,63 @@ export function Sidebar(): React.JSX.Element {
             </span>
           </div>
           <div className="min-h-0 overflow-y-auto px-3">
-            <div className={cn('space-y-px', !detailed && 'ml-[22px]')}>
+            {/* Matches whatever the list below does: compact indents under its
+                project rows, and has none to indent under once filtered. */}
+            <div className={cn('space-y-px', !detailed && !filterProject && 'ml-[22px]')}>
               {pinnedShown.map(renderChatItem)}
             </div>
           </div>
         </div>
       )}
 
-      {/* Section header. Detailed mode has no project rows to head — it gets the
-          project filter instead, which is the thing grouping used to give you.
-          Adding a project folder belongs here in both modes: it's the same act.
+      {/* Section header, and the project filter is it in BOTH modes.
+          Detailed mode has no project rows, so the filter is the only project
+          control it has — but "show me one project" is not a thing only a flat
+          list wants, and compact's answer to it was collapsing the other nine
+          rows by hand. The two modes were also already sharing the *state*:
+          `sidebarProject` persists, and the Pinned section reads it either way,
+          so a filter set in detailed used to quietly scope compact's pins with
+          no control on screen to clear it.
 
-          Compact's "Projects" is a section *label* and stays label-sized; the
-          filter is a control, and the only one detailed mode has for the thing
-          compact spends a whole row on — so it's sized to be clicked, matching
-          the chat titles beneath it rather than the divider text. */}
+          It's sized to be clicked — 13px, matching the chat titles beneath it
+          rather than the divider text — because it is a control, not the
+          section label it replaces. */}
       <div className="flex items-center gap-2 px-3.5 pt-2 pb-1">
-        {detailed ? (
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={
-                <button
-                  type="button"
-                  aria-label="Filter by project"
-                  className={cn(
-                    '-ml-1.5 flex min-w-0 items-center gap-1 rounded-md px-1.5 py-1 text-[13px] font-medium transition-colors hover:bg-sidebar-accent hover:text-foreground',
-                    filterProject ? 'text-sidebar-foreground' : 'text-sidebar-foreground/65'
-                  )}
-                />
-              }
-            >
-              <span className="truncate">
-                {filterProject ? projectLabel(filterProject) : 'All projects'}
-              </span>
-              <ChevronDown className="size-3.5 shrink-0 opacity-70" />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent className="max-h-80 overflow-y-auto">
-              <DropdownMenuItem onClick={() => setSidebarProject(null)}>
-                <Check className={cn(!filterProject && 'opacity-100', filterProject && 'invisible')} />
-                All projects
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <button
+                type="button"
+                aria-label="Filter by project"
+                className={cn(
+                  '-ml-1.5 flex min-w-0 items-center gap-1 rounded-md px-1.5 py-1 text-[13px] font-medium transition-colors hover:bg-sidebar-accent hover:text-foreground',
+                  filterProject ? 'text-sidebar-foreground' : 'text-sidebar-foreground/65'
+                )}
+              />
+            }
+          >
+            <span className="truncate">
+              {filterProject ? projectLabel(filterProject) : 'All projects'}
+            </span>
+            <ChevronDown className="size-3.5 shrink-0 opacity-70" />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent className="max-h-80 overflow-y-auto">
+            <DropdownMenuItem onClick={() => setSidebarProject(null)}>
+              <Check className={cn(!filterProject && 'opacity-100', filterProject && 'invisible')} />
+              All projects
+            </DropdownMenuItem>
+            {visibleGroups.length > 0 && <DropdownMenuSeparator />}
+            {visibleGroups.map((g) => (
+              <DropdownMenuItem key={g.cwd} onClick={() => setSidebarProject(g.cwd)}>
+                <Check className={cn(filterProject !== g.cwd && 'invisible')} />
+                <span className="min-w-0 truncate">{projectLabel(g.cwd)}</span>
+                <span className="ml-auto pl-3 text-[11px] text-muted-foreground/60">
+                  {g.chats.length}
+                </span>
               </DropdownMenuItem>
-              {visibleGroups.length > 0 && <DropdownMenuSeparator />}
-              {visibleGroups.map((g) => (
-                <DropdownMenuItem key={g.cwd} onClick={() => setSidebarProject(g.cwd)}>
-                  <Check className={cn(filterProject !== g.cwd && 'invisible')} />
-                  <span className="min-w-0 truncate">{projectLabel(g.cwd)}</span>
-                  <span className="ml-auto pl-3 text-[11px] text-muted-foreground/60">
-                    {g.chats.length}
-                  </span>
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        ) : (
-          <span className="text-[11px] font-medium tracking-wide text-muted-foreground/70">
-            Projects
-          </span>
-        )}
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
         <div className="flex-1" />
         <WithTooltip label="Add a project folder">
           {/* One control, one size in both modes. It sits next to a section
@@ -1206,8 +1217,18 @@ export function Sidebar(): React.JSX.Element {
           ...activeGroups.map((g) => ({ group: g, archived: false })),
           ...archivedGroups.map((g) => ({ group: g, archived: true }))
         ].map(({ group, archived }, i) => {
-          // Archived projects default to collapsed.
-          const isCollapsed = collapsedProjects[group.cwd] ?? archived
+          // Filtered to this project, the header already names it — a row
+          // repeating it below is the sidebar saying "ai-gui" twice in 30px.
+          // Its collapse toggle would empty the sidebar, its drag handle has
+          // nothing to trade places with, and the two things it does carry
+          // (New chat here, the project menu) move onto the chat rows via
+          // `projectMenu` — the mechanism detailed mode already uses for
+          // exactly this, having no project rows either.
+          const headed = !filterProject
+          // Archived projects default to collapsed. Collapse can't apply with
+          // no row to click, and would otherwise hide the list you just
+          // filtered down to.
+          const isCollapsed = headed && (collapsedProjects[group.cwd] ?? archived)
           // Pinned chats show their own indicator up top, so rolling them into
           // the collapsed project's would just say the same thing twice.
           const collapsedActivity = projectActivity(
@@ -1242,7 +1263,7 @@ export function Sidebar(): React.JSX.Element {
               <div className={cn('relative', archived && 'opacity-70')}>
                 {/* Insertion line: shows exactly where the dragged project lands
                     (above or below this row) — reads as reorder, not nesting. */}
-                {dropCwd === group.cwd && dragCwd && dragCwd !== group.cwd && (
+                {headed && dropCwd === group.cwd && dragCwd && dragCwd !== group.cwd && (
                   <div
                     className={cn(
                       'pointer-events-none absolute inset-x-1.5 z-10 h-0.5 rounded-full bg-primary',
@@ -1250,6 +1271,7 @@ export function Sidebar(): React.JSX.Element {
                     )}
                   />
                 )}
+                {headed && (
                 <ContextMenu>
                   <ContextMenuTrigger
                     render={
@@ -1346,8 +1368,11 @@ export function Sidebar(): React.JSX.Element {
                     {projectMenuItems(group.cwd, archived)}
                   </ContextMenuContent>
                 </ContextMenu>
+                )}
                 {!isCollapsed && (
-                  <div className="ml-[22px] space-y-px pb-1">
+                  // The indent is the project row's hanging indent; with no row
+                  // above them the chats sit flush, exactly as detailed's do.
+                  <div className={cn('space-y-px pb-1', headed && 'ml-[22px]')}>
                     {cappedChats.map(renderChatItem)}
                     {(hiddenChatCount > 0 || revealedBatches > 0) && (
                       <div className="flex items-center">

@@ -204,12 +204,25 @@ sidebar. `updatedAt` still tracks the last message: it is what a row's timestamp
 shows and how the next launch seeds the order. It just no longer decides
 position while you're looking at it.
 
-Detailed mode has no project rows, so two things move into the header or onto
-the row: the **project filter** (`All projects ▾`, which scopes the list *and*
-the Pinned section, and suppresses the now-redundant project name on each row),
-and the project actions (rename/reveal/archive/hide/delete), appended to a chat
-row's right-click menu under the project's name. `projectMenuItems` is the
-single definition both that menu and the compact project row render.
+The **project filter** (`All projects ▾`) heads the list in **both** modes. It
+was detailed-only at first, on the reasoning that compact's project rows already
+are the filter — but "show me one project" is not a question only a flat list
+asks, and compact's answer to it was collapsing the other nine rows by hand. The
+two modes were also already sharing the state: `sidebarProject` persists, and
+the Pinned section scopes off it either way, so a filter set in detailed used to
+quietly scope compact's pins with no control on screen to clear it. It is a
+control, not the section label it replaced, so it is sized like the chat titles
+below it rather than like a divider.
+
+**A filtered compact list drops its project row.** The header already names the
+project; a row repeating it 30px lower is the sidebar saying it twice, its
+collapse toggle would empty the sidebar, and its drag handle has nothing to
+trade places with. The two things it does carry — "New chat here" and the
+project actions (rename/reveal/archive/hide/delete) — move onto the chat rows'
+right-click menu via `projectMenu`, which is the mechanism detailed mode already
+uses for having no project rows either; the chats then sit flush, since the
+indent was that row's hanging indent. `projectMenuItems` is the single
+definition all three sites render.
 
 **Starting a chat asks which project** (`NewChatDialog`, `newChatOpen`) — the
 sidebar's New chat row and ⌘N both open it, in both modes. That question was
