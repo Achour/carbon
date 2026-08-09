@@ -171,9 +171,12 @@ async function startServer(entry: Pooled): Promise<ServerHandle> {
   const token = randomBytes(24).toString('hex')
   const child = spawn('opencode', ['serve', '--port', String(port), '--hostname', '127.0.0.1'], {
     cwd: entry.cwd,
-    // Own process group, so the whole tree can be signalled on quit — same
-    // reasoning as pty.ts killTree, which this deliberately mirrors.
-    detached: true,
+    // Deliberately *not* detached, unlike the pty in terminal.ts. A pty needs its
+    // own process group so a shell's grandchildren can be reaped; `opencode serve`
+    // is a single binary with nothing under it, so a group buys nothing — and it
+    // would cost the server its one safety net, since a detached child no longer
+    // receives the group signal that kills the app when it goes down abnormally
+    // (before-quit, and so shutdownOpencodeServers, never runs then).
     stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, OPENCODE_SERVER_PASSWORD: token }
   })
@@ -204,16 +207,13 @@ async function startServer(entry: Pooled): Promise<ServerHandle> {
   return handle
 }
 
+/**
+ * Stop a server. A plain signal, not a group kill: the child shares our process
+ * group (see the spawn above), so `kill(-pid)` would either find no such group
+ * or, worse, name someone else's after PID reuse.
+ */
 function killTree(child: ChildProcess | null): void {
   if (!child) return
-  const pid = child.pid
-  if (typeof pid === 'number' && pid > 1) {
-    try {
-      process.kill(-pid, 'SIGTERM')
-    } catch {
-      // group already gone
-    }
-  }
   try {
     child.kill('SIGTERM')
   } catch {
