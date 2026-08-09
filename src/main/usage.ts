@@ -1,6 +1,7 @@
 import { query } from '@anthropic-ai/claude-agent-sdk'
 import type { ProviderUsage, RateLimitWindow, UsageOverview } from '@shared/types'
 import { CodexAppServerClient } from './codexAppServer'
+import { probeOpencode } from './opencodeBinary'
 import { withTimeout } from './session'
 import { codexWindow, type CodexWindow } from './usageWindows'
 
@@ -36,6 +37,28 @@ function unavailable(provider: ProviderUsage['provider'], note: string): Provide
   return { provider, available: false, note, windows: [] }
 }
 
+
+// ---------- OpenCode ----------
+
+/**
+ * OpenCode reports no plan headroom, so this is a presence check rather than a
+ * reading: a row that names the provider and says why it has no numbers, or
+ * nothing at all when the CLI isn't there.
+ *
+ * The Go plan does meter spend ($12 / 5h and so on), but nothing in the server
+ * API exposes the remaining balance. Reporting a guess next to two providers'
+ * real numbers would be worse than reporting none.
+ */
+async function readOpencode(): Promise<ProviderUsage | null> {
+  const probe = await probeOpencode()
+  if (!probe.installed) return null
+  return {
+    provider: 'opencode',
+    available: false,
+    note: 'OpenCode doesn’t report plan limits. See the Usage page for spend.',
+    windows: []
+  }
+}
 
 // ---------- Claude ----------
 
@@ -175,11 +198,15 @@ export function readUsageOverview(cwd: string, refresh = false): Promise<UsageOv
   if (inflight) return inflight
   const run = (async (): Promise<UsageOverview> => {
     // Independent so one provider being signed out never blanks the other.
-    const [claude, codex] = await Promise.all([
+    const [claude, codex, opencode] = await Promise.all([
       withTimeout(readClaude(cwd), TIMEOUT_MS, unavailable('claude', 'Timed out reading Claude usage.')),
-      withTimeout(readCodex(), TIMEOUT_MS, unavailable('codex', 'Timed out reading Codex usage.'))
+      withTimeout(readCodex(), TIMEOUT_MS, unavailable('codex', 'Timed out reading Codex usage.')),
+      readOpencode()
     ])
-    const value: UsageOverview = { claude, codex }
+    // `opencode` is omitted when the CLI isn't installed: an absent provider
+    // draws nothing, where a row saying "unavailable" would tell the majority of
+    // users about a backend they have never heard of.
+    const value: UsageOverview = { claude, codex, ...(opencode ? { opencode } : {}) }
     cached = { at: Date.now(), value }
     return value
   })()

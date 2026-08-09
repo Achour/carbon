@@ -12,6 +12,7 @@ import {
   type CellCost,
   type UsageCell
 } from './usageScan'
+import { opencodeDbPath, readOpencodeCells } from './opencodeUsage'
 import { loadRates } from './usageRates'
 
 /**
@@ -301,8 +302,13 @@ async function scan(opts: UsageStatsOptions, days: number, refresh: boolean): Pr
     loadRates(opts.cacheDir)
   ])
   const notes: string[] = []
-  if (!sources.length) {
-    notes.push('No Claude Code or Codex session logs found in your home directory.')
+  // OpenCode keeps history in one SQLite file rather than append-only logs, so
+  // it is read directly instead of going through the (path, mtime, size) cache
+  // — that cache's premise is that an unchanged stamp means unchanged content,
+  // which a single continuously-written database does not satisfy.
+  const opencodeCells: UsageCell[] = readOpencodeCells(opencodeDbPath(opts.home), start.getTime())
+  if (!sources.length && !opencodeCells.length) {
+    notes.push('No agent session logs found in your home directory.')
   }
 
   // An append-only log last written before the window began can hold nothing
@@ -380,6 +386,21 @@ async function scan(opts: UsageStatsOptions, days: number, refresh: boolean): Pr
   }
   const total = emptyTotals()
   let sessions = 0
+
+  for (const cell of opencodeCells) {
+    if (cell.day < from || cell.day > to) continue
+    const cost = priceCell(cell, rates)
+    const dayRow = byDay.get(cell.day)
+    if (dayRow) accumulate(dayRow[cell.provider], cell, cost)
+    const key = `${cell.provider} ${cell.model}`
+    let row = byModel.get(key)
+    if (!row) {
+      byModel.set(key, (row = { provider: cell.provider, model: cell.model, ...emptyTotals() }))
+    }
+    accumulate(row, cell, cost)
+    accumulate(totals[cell.provider], cell, cost)
+    accumulate(total, cell, cost)
+  }
 
   for (const [path, entry] of live) {
     let counted = false

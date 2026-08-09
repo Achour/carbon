@@ -204,12 +204,16 @@ export function UsagePanel(): React.JSX.Element {
               Reading plan limits…
             </div>
           ) : (
-            <>
-              <ProviderSection usage={overview.claude} />
-              <div className="border-t border-border pt-3">
-                <ProviderSection usage={overview.codex} />
+            // Mapped rather than written out, so the divider stays between
+            // sections however many the overview actually carries.
+            providerUsages(overview).map((usage, i) => (
+              <div
+                key={usage.provider}
+                className={cn(i > 0 && 'border-t border-border pt-3')}
+              >
+                <ProviderSection usage={usage} />
               </div>
-            </>
+            ))
           )}
         </div>
       </PopoverContent>
