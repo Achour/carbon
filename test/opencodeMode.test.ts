@@ -1,88 +1,55 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  OPENCODE_AGENTS,
   agentForMode,
   decisionToReply,
-  isSilentMode,
-  rulesetForMode,
-  type OpencodeAction
+  modeForAgent,
+  supportedModes
 } from '../src/main/opencodeMode.ts'
 import { buildApprovedPlanPrompt, buildPlanFeedbackPrompt } from '../src/main/opencodePlan.ts'
 
 /**
- * The action the server would land on: rules are an ordered array where later
- * entries win, and `*` matches everything. Resolving it here tests what a mode
- * *does* rather than how the ruleset happens to be spelled.
+ * OpenCode has two modes and they are its own: build and plan.
+ *
+ * An earlier version of this file tested four modes synthesized out of
+ * per-session permission rulesets. They worked, but they were Carbon's
+ * invention — an OpenCode user has an agent, and what gets approved is their
+ * own `opencode.json`. These tests exist mostly to keep that from creeping back.
  */
-function actionFor(mode: Parameters<typeof rulesetForMode>[0], permission: string): OpencodeAction {
-  let action: OpencodeAction | null = null
-  for (const rule of rulesetForMode(mode)) {
-    if (rule.permission === '*' || rule.permission === permission) action = rule.action
-  }
-  assert.ok(action, `${mode} should resolve an action for ${permission}`)
-  return action
-}
 
-test('plan mode runs the plan agent and refuses mutations outright', () => {
+test('the two modes are OpenCode’s two primary agents', () => {
+  assert.deepEqual([...OPENCODE_AGENTS], ['build', 'plan'])
   assert.equal(agentForMode('plan'), 'plan')
-  assert.equal(actionFor('plan', 'edit'), 'deny')
-  assert.equal(actionFor('plan', 'bash'), 'deny')
-  assert.equal(actionFor('plan', 'read'), 'allow')
+  assert.equal(agentForMode('default'), 'build')
 })
 
-test('every other mode runs the default agent', () => {
-  for (const mode of ['default', 'acceptEdits', 'auto', 'bypassPermissions'] as const) {
-    assert.equal(agentForMode(mode), undefined)
+test('an agent is always named, never left to the server’s default', () => {
+  // The server's default is build today; naming it means a turn can't quietly
+  // change meaning if that ever moves.
+  for (const mode of ['default', 'plan', 'acceptEdits', 'auto', 'bypassPermissions'] as const) {
+    assert.ok(OPENCODE_AGENTS.includes(agentForMode(mode)), `${mode} must resolve to an agent`)
   }
 })
 
-test('default mode asks before edits and commands but never before reads', () => {
-  assert.equal(actionFor('default', 'edit'), 'ask')
-  assert.equal(actionFor('default', 'bash'), 'ask')
-  assert.equal(actionFor('default', 'read'), 'allow')
-  assert.equal(actionFor('default', 'grep'), 'allow')
+test('modes Carbon has but OpenCode does not all fall to build', () => {
+  // acceptEdits / auto / bypassPermissions are permission policy, which on this
+  // backend is the user's config rather than a per-chat choice. A chat switched
+  // in from Claude carrying one runs as the default agent.
+  assert.equal(agentForMode('acceptEdits'), 'build')
+  assert.equal(agentForMode('auto'), 'build')
+  assert.equal(agentForMode('bypassPermissions'), 'build')
 })
 
-test('acceptEdits allows edits but still gates running commands', () => {
-  assert.equal(actionFor('acceptEdits', 'edit'), 'allow')
-  assert.equal(actionFor('acceptEdits', 'bash'), 'ask')
-  assert.equal(actionFor('acceptEdits', 'webfetch'), 'ask')
-})
-
-test('auto is not offered, and a chat carrying it lands on Accept edits', () => {
-  // Claude defers Auto to a classifier and Codex to App Server's reviewer.
-  // OpenCode has neither, so offering Auto could only mean Accept edits under
-  // another name. It stays mapped for chats switched in from another provider,
-  // but the composer does not list it.
-  assert.deepEqual(rulesetForMode('auto'), rulesetForMode('acceptEdits'))
-})
-
-test('the wildcard covers permission keys the taxonomy does not name', () => {
-  // OpenCode's own build agent is written this way, and it means a key added by
-  // a later release is governed rather than falling outside every mode.
-  for (const mode of ['default', 'acceptEdits', 'plan', 'bypassPermissions'] as const) {
-    assert.equal(rulesetForMode(mode)[0].permission, '*', `${mode} should start from a wildcard`)
-  }
-  assert.equal(actionFor('default', 'some_future_permission'), 'allow')
-  assert.equal(actionFor('plan', 'some_future_permission'), 'allow')
-})
-
-test('bypassPermissions allows everything and asks for nothing', () => {
-  const ruleset = rulesetForMode('bypassPermissions')
-  assert.ok(ruleset.length > 0)
-  assert.ok(
-    ruleset.every((r) => r.action === 'allow'),
-    'no rule may be ask or deny under full access'
-  )
-  assert.ok(isSilentMode('bypassPermissions'))
-  assert.ok(!isSilentMode('default'))
-})
-
-test('rules are scoped to the session, so patterns are broad but the ruleset is not global', () => {
-  for (const rule of rulesetForMode('default')) assert.equal(rule.pattern, '**')
+test('the picker offers exactly the modes the agents map back to', () => {
+  assert.deepEqual(supportedModes(), ['default', 'plan'])
+  assert.equal(modeForAgent('build'), 'default')
+  assert.equal(modeForAgent('plan'), 'plan')
 })
 
 test('a Carbon decision becomes an OpenCode reply, with no "deny always"', () => {
+  // Requests still reach the user — the build agent gates a few things by
+  // default and their config may gate more — so answering them is still ours.
   assert.equal(decisionToReply({ behavior: 'allow' }), 'once')
   assert.equal(decisionToReply({ behavior: 'allow', always: true }), 'always')
   assert.equal(decisionToReply({ behavior: 'deny' }), 'reject')

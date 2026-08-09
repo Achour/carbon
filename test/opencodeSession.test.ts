@@ -306,18 +306,24 @@ test('a denial carries its message through as OpenCode has no "deny always"', as
   client.finishTurn()
 })
 
-test('full access answers permissions itself and never draws a card', async () => {
-  const { session, client, events } = harness(makeChat({ permissionMode: 'bypassPermissions' }))
+test('Carbon sends no permission ruleset — that is the user’s own config', async () => {
+  const { session, client, events } = harness()
   session.send('do it')
   await waitFor(() => client.prompts.length === 1)
 
-  // The session ruleset already allows everything; anything that still asks is
-  // answered silently, because the mode promises not to interrupt.
-  assert.ok(client.sessions[0].permission?.every((r) => r.action === 'allow'))
+  // The server is shared with the user's TUI, and their opencode.json is what
+  // governs approvals. Carbon picks the agent and nothing else.
+  assert.equal(
+    (client.sessions[0] as { permission?: unknown }).permission,
+    undefined,
+    'no ruleset may be sent'
+  )
+  assert.equal(client.sessions[0].agent, 'build')
+
+  // A request their config raises still reaches the user.
   client.emit({ type: 'permission.asked', request: { id: 'per_3', permission: 'bash' } })
-  await waitFor(() => client.replies.length === 1, 'the silent reply')
-  assert.equal(client.replies[0].reply, 'once')
-  assert.equal(permissionRequests(events).length, 0, 'no card is drawn')
+  await waitFor(() => permissionRequests(events).length === 1, 'the card')
+  assert.equal(client.replies.length, 0, 'nothing is auto-answered')
 
   client.finishTurn()
 })
@@ -346,7 +352,7 @@ test('plan mode runs the plan agent and ends in a review, not a finished turn', 
   assert.equal(session.idle, false)
 })
 
-test('approving a plan restores the mode and rebuilds the session with a new ruleset', async () => {
+test('approving a plan restores the mode and builds on the same session', async () => {
   const chat = makeChat({ permissionMode: 'plan', modeBeforePlan: 'acceptEdits' })
   const { session, client, chat: live } = harness(chat)
   session.send('plan it')
@@ -361,11 +367,11 @@ test('approving a plan restores the mode and rebuilds the session with a new rul
   assert.equal(live.permissionMode, 'acceptEdits')
   assert.equal(live.pendingPlanReview, undefined)
   assert.match(client.prompts[1].body.parts[0].text ?? '', /<approved_plan>\nTHE PLAN/)
-  // A ruleset is fixed at session creation, so leaving plan mode needs a new
-  // session — the old one would go on denying every edit.
-  assert.equal(client.sessions.length, 2)
-  assert.equal(client.sessions[1].agent, undefined)
-  assert.equal(client.sessions[1].permission?.find((r) => r.permission === 'edit')?.action, 'allow')
+  // The agent rides each prompt, so implementation runs as `build` on the same
+  // session — keeping the server's own memory of the planning conversation.
+  assert.equal(client.sessions.length, 1, 'no new session is opened')
+  assert.equal(client.prompts[0].body.agent, 'plan')
+  assert.equal(client.prompts[1].body.agent, 'build')
 })
 
 test('rejecting a plan with notes stays in plan mode and asks again', async () => {

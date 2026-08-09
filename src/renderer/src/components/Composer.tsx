@@ -66,18 +66,14 @@ function codexPermissionValue(mode: PermissionModeId): PermissionModeId {
   return mode
 }
 
-// OpenCode has two primary agents a user drives — `build` and `plan` — and a
-// per-session permission ruleset. Four modes, not five: **Auto is deliberately
-// absent**. Claude defers it to a classifier and Codex to App Server's reviewer;
-// OpenCode has neither, so an Auto here could only be Accept edits under another
-// name, and two rows doing the same thing is worse than one honest row.
-// The ruleset is scoped to the session, so the user's own TUI — talking to the
-// same server — is unaffected by any of this.
+// OpenCode's two modes are its two primary agents, named as it names them.
+// Carbon deliberately adds nothing here: an earlier version synthesized four
+// modes out of per-session permission rulesets, which worked but invented a
+// taxonomy no OpenCode user recognizes. What gets approved is governed by the
+// user's own opencode.json, exactly as it is in their TUI.
 const OPENCODE_PERMISSION_MODES: { id: PermissionModeId; label: string; description: string }[] = [
-  { id: 'plan', label: 'Plan mode', description: 'Runs OpenCode’s plan agent — reads only, never edits' },
-  { id: 'default', label: 'Ask to approve', description: 'Prompts before edits, commands and fetches' },
-  { id: 'acceptEdits', label: 'Accept edits', description: 'Edits without asking; still asks to run commands' },
-  { id: 'bypassPermissions', label: 'Full access', description: 'Approves everything in this chat — use with care' }
+  { id: 'default', label: 'Build', description: 'OpenCode’s default agent — asks per your opencode.json' },
+  { id: 'plan', label: 'Plan', description: 'OpenCode’s plan agent — reads and plans, never edits' }
 ]
 
 type PermissionAppearance = {
@@ -122,9 +118,10 @@ function permissionAppearance(
       }
     default:
       return {
-        // Codex's default mode still edits inside its sandbox, so it reads as a
-        // pencil; Claude's and OpenCode's ask first, which is the question shield.
-        Icon: provider === 'codex' ? PencilLine : ShieldQuestion,
+        // Codex's default mode edits inside its sandbox and OpenCode's build
+        // agent edits per the user's own config, so both read as a pencil;
+        // Claude's asks first, which is the question shield.
+        Icon: provider === 'claude' ? ShieldQuestion : PencilLine,
         iconClassName: 'text-muted-foreground',
         triggerClassName: ''
       }
@@ -712,19 +709,19 @@ export function Composer({
     : isCodex
       ? CODEX_PERMISSION_MODES
       : PERMISSION_MODES
-  // A chat can arrive carrying a mode this provider doesn't offer — switching in
-  // from Claude on Auto, which OpenCode has no equivalent for. Fall back to the
-  // nearest real one rather than leaving the chip blank. Same shape as
-  // `invalidEffort` above, and likewise not remembered as a deliberate choice.
+  // A chat can arrive carrying a mode this provider doesn't have — switching in
+  // from Claude on Auto or Accept edits, neither of which OpenCode expresses.
+  // Fall back to its default agent rather than leaving the chip blank. Same
+  // shape as `invalidEffort` above.
   const rawPermission = isCodex ? codexPermissionValue(permissionMode) : permissionMode
   const invalidPermission = !permissionOptions.some((m) => m.id === rawPermission)
-  const permissionValue = invalidPermission ? 'acceptEdits' : rawPermission
+  const permissionValue = invalidPermission ? permissionOptions[0].id : rawPermission
   const selectedPermissionAppearance = permissionAppearance(permissionValue, provider)
   // Persist the correction, so the chat's stored mode matches what it actually
   // runs under rather than a mode this backend silently reinterprets.
   React.useEffect(() => {
-    if (invalidPermission) onPermissionModeChange('acceptEdits')
-  }, [invalidPermission, onPermissionModeChange])
+    if (invalidPermission) onPermissionModeChange(permissionValue)
+  }, [invalidPermission, permissionValue, onPermissionModeChange])
 
   const inbox = useApp((s) => s.attachmentInbox)
   React.useEffect(() => {

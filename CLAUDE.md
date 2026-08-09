@@ -377,28 +377,27 @@ across `pending → running → completed`. The server also echoes the user's ow
 prompt back as a text part, so parts are filtered by the role recorded from
 `message.updated` — without that every turn renders twice.
 
-**OpenCode offers two primary agents — `build` and `plan` — and a per-session
-permission ruleset**, and that is the whole of what a Carbon mode maps onto
-(`opencodeMode.ts`). Rulesets are `{permission, pattern, action}` over OpenCode's
-taxonomy, written as a wildcard base plus narrower overrides (`[{*: allow},
-{edit: ask}, …]`) because that is the server's own idiom — its built-in `build`
-agent ships exactly that shape — the array is ordered with later rules winning,
-and a permission key a later release adds is then governed by the wildcard
-instead of falling outside every mode. Verified live: under that ruleset `read`
-runs ungated and `edit` raises `permission.asked`.
+**OpenCode has two modes and they are its own: `build` and `plan`** — the two
+primary agents (`compaction`/`summary`/`title` are internal, `explore`/`general`
+are subagents). Carbon picks the agent and sends **no permission ruleset**: what
+gets approved comes from the user's `opencode.json` and the agent's own
+declaration, so a chat here behaves exactly like the same prompt in their TUI.
 
-The obvious way to implement "full access" is to edit the server's permission
-config, but that config is global and the server is shared with the user's TUI —
-a ruleset cannot leak. It is also immutable for the session's life, which is why
-leaving plan mode drops the session and opens another; the transcript is
-Carbon's, so nothing is lost.
+An earlier version synthesized four Carbon modes out of per-session rulesets
+(`{permission, pattern, action}` triples). It worked — verified live, `read`
+ungated and `edit` raising `permission.asked` — but it invented a taxonomy no
+OpenCode user recognizes, and it could not express a custom agent at all. The
+trade it makes is real and worth knowing: "accept edits" and "full access" are
+no longer per-chat here. They are global config, which is also why Carbon must
+not write them — that config is shared with every other client on the server.
 
-**Four modes, not five: `auto` is not offered.** Claude defers it to a classifier
-and Codex to App Server's reviewer; OpenCode has neither, so an Auto here could
-only be `acceptEdits` under another name, and two menu rows doing the same thing
-are worse than one honest row. It stays mapped in `rulesetForMode` because a chat
-switched in from Claude can still carry it, and the composer normalizes such a
-chat onto Accept edits the way it normalizes an unsupported effort.
+The agent rides **each prompt**, not just session creation (verified: a session
+opened as `plan` accepted `agent: build` on the next turn and wrote the file), so
+switching modes and approving a plan both continue on the same session rather
+than dropping it. Permission requests still reach the user, because the build
+agent gates a few things by default and their config may gate more —
+`decisionToReply` maps Carbon's answer onto `once`/`always`/`reject`, with no
+"deny always" since OpenCode has no persistent denial.
 
 Plan review is synthesized the Codex way (persisted `PersistedPlanReview` + a fake
 `ExitPlanMode` request) on top of OpenCode's native read-only `plan` agent.

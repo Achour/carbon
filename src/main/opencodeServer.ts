@@ -2,7 +2,6 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { createServer } from 'node:net'
 import { randomBytes } from 'node:crypto'
 import type { OpencodePart, OpencodePermissionAsked, OpencodeTodo } from './opencodeEvents.ts'
-import type { OpencodePermissionRule } from './opencodeMode.ts'
 import { missingBinaryError } from './opencodeBinary.ts'
 
 /**
@@ -58,7 +57,6 @@ export type OpencodeEventHandler = (event: OpencodeEvent) => void
 export interface OpencodeSessionCreate {
   title?: string
   agent?: string
-  permission?: OpencodePermissionRule[]
 }
 
 export interface OpencodePromptBody {
@@ -456,10 +454,11 @@ export function opencodeClient(cwd: string): OpencodeClientLike {
   const entry = poolFor(cwd)
   return {
     async createSession(opts) {
+      // No `permission`: the ruleset is the user's own config to set, not
+      // Carbon's to override — and this server is shared with their TUI.
       return await request(entry, 'POST', '/session', {
         ...(opts.title ? { title: opts.title } : {}),
-        ...(opts.agent ? { agent: opts.agent } : {}),
-        ...(opts.permission?.length ? { permission: opts.permission } : {})
+        ...(opts.agent ? { agent: opts.agent } : {})
       })
     },
     async prompt(sessionID, body) {

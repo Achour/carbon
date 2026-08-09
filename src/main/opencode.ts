@@ -41,12 +41,7 @@ import {
   type OpencodePermissionAsked,
   type TurnUsage
 } from './opencodeEvents.ts'
-import {
-  agentForMode,
-  decisionToReply,
-  isSilentMode,
-  rulesetForMode
-} from './opencodeMode.ts'
+import { agentForMode, decisionToReply } from './opencodeMode.ts'
 import { buildApprovedPlanPrompt, buildPlanFeedbackPrompt } from './opencodePlan.ts'
 import { mapProviderList, parseOpencodeModelId } from './opencodeModels.ts'
 import { missingBinaryError, probeOpencode } from './opencodeBinary.ts'
@@ -286,8 +281,7 @@ export class OpencodeSession implements AgentSession {
     if (this.sessionId) return this.sessionId
     const created = await this.client.createSession({
       ...(this.chat.title ? { title: this.chat.title } : {}),
-      ...(agentForMode(mode) ? { agent: agentForMode(mode) } : {}),
-      permission: rulesetForMode(mode)
+      agent: agentForMode(mode)
     })
     this.sessionId = created.id
     this.chat.sessionId = created.id
@@ -303,10 +297,10 @@ export class OpencodeSession implements AgentSession {
 
   private promptBody(turn: PendingTurn): OpencodePromptBody {
     const ref = parseOpencodeModelId(turn.model)
-    const agent = agentForMode(turn.permissionMode)
     return {
       ...(ref ? { model: ref } : {}),
-      ...(agent ? { agent } : {}),
+      // Per turn, so switching build↔plan takes effect without a new session.
+      agent: agentForMode(turn.permissionMode),
       // '' means "the model's own default", which is the absence of a variant.
       ...(turn.effort ? { variant: turn.effort } : {}),
       parts: [
@@ -563,13 +557,6 @@ export class OpencodeSession implements AgentSession {
   private async handlePermission(request: OpencodePermissionAsked): Promise<void> {
     const id = request.id
     if (!id || this.disposed) return
-    // Under full access the ruleset already allowed everything, so anything that
-    // still asks (a tool outside the taxonomy, a plugin's own gate) is answered
-    // here rather than drawn — the mode promises never to interrupt.
-    if (isSilentMode(this.chat.permissionMode)) {
-      await this.client.replyPermission(id, 'once').catch(() => undefined)
-      return
-    }
     const toolName = permissionToolName(request.permission)
     this.pendingPermissions.set(id, { id, toolName })
     const diff = permissionDiff(request)
@@ -690,9 +677,9 @@ export class OpencodeSession implements AgentSession {
         patch: { permissionMode: restored, model: this.chat.model, modeBeforePlan: undefined }
       })
       this.store.saveChat(this.chat.id)
-      // The ruleset is fixed at session creation, so leaving plan mode needs a
-      // new session — the old one would keep denying every edit.
-      this.resetSession()
+      // No session reset: the agent rides each prompt, so the implementation
+      // turn simply runs as `build` on the same session — and keeps the server's
+      // own memory of the planning conversation.
       this.enqueueInternal(buildApprovedPlanPrompt(review.plan), review.userMessageId, restored)
       return
     }
@@ -704,21 +691,6 @@ export class OpencodeSession implements AgentSession {
     const feedbackId = randomUUID()
     this.pushMessage({ id: feedbackId, role: 'user', text: feedback, ts: Date.now() })
     this.enqueueInternal(buildPlanFeedbackPrompt(review.plan, feedback), feedbackId, 'plan')
-  }
-
-  /**
-   * Drop the server session so the next turn creates one with a fresh ruleset.
-   *
-   * A session's permission ruleset and agent are fixed when it is created, so a
-   * mode change can only take effect on a new session. The transcript is
-   * Carbon's, not the server's, so nothing is lost by starting another.
-   */
-  private resetSession(): void {
-    this.unsubscribe?.()
-    this.unsubscribe = null
-    this.sessionId = null
-    this.chat.sessionId = undefined
-    this.emit({ type: 'meta', chatId: this.chat.id, patch: { sessionId: undefined } })
   }
 
   // ---------- titles ----------
@@ -778,8 +750,7 @@ export class OpencodeSession implements AgentSession {
     if (this.chat.permissionMode === mode) return
     this.chat.permissionMode = mode
     if (mode !== 'plan') this.clearPlanReview()
-    // See resetSession: the ruleset is immutable for the life of a session.
-    this.resetSession()
+    // Nothing to rebuild: build↔plan is the `agent` on the next prompt.
   }
 
   async stopBackgroundJob(): Promise<void> {
@@ -872,14 +843,13 @@ export async function generateOpencodeText(
   let sessionId: string | null = null
   try {
     const ref = parseOpencodeModelId(model)
-    const created = await client.createSession({
-      title: 'Carbon internal',
-      // Read-only: this turn must not touch the workspace whatever it is asked.
-      permission: rulesetForMode('plan')
-    })
+    const created = await client.createSession({ title: 'Carbon internal', agent: 'plan' })
     sessionId = created.id
     const result = (await client.prompt(created.id, {
       ...(ref ? { model: ref } : {}),
+      // The plan agent, because this one-shot must not touch the workspace
+      // whatever it is asked — it only summarizes a transcript.
+      agent: 'plan',
       parts: [{ type: 'text', text: prompt }]
     })) as { parts?: OpencodePart[] } | null
     const text = (result?.parts ?? [])
