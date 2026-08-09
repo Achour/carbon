@@ -38,6 +38,7 @@ import type {
   WorktreeStatus
 } from '@shared/types'
 import { effortForProvider } from '@shared/types'
+import { shutdownOpencodeServers } from './opencodeServer'
 import { ChatManager } from './claude'
 import { readCodexConfigModel } from './codexConfig'
 import { listDir, readFileContent, searchFiles, statPath } from './files'
@@ -755,6 +756,8 @@ app.on('before-quit', (event) => {
   manager.disposeAll()
   terminals.disposeAll()
   preview.disposeAll()
+  // After disposeAll, so sessions unsubscribe before their server goes away.
+  shutdownOpencodeServers()
   quitting = store.flushAll().finally(() => {
     readyToQuit = true
     app.quit()
