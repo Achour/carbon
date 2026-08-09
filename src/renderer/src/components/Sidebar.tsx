@@ -1094,7 +1094,7 @@ export function Sidebar(): React.JSX.Element {
           filter is a control, and the only one detailed mode has for the thing
           compact spends a whole row on — so it's sized to be clicked, matching
           the chat titles beneath it rather than the divider text. */}
-      <div className={cn('flex items-center gap-2 px-3.5 pb-1', detailed ? 'pt-2' : 'pt-3')}>
+      <div className="flex items-center gap-2 px-3.5 pt-2 pb-1">
         {detailed ? (
           <DropdownMenu>
             <DropdownMenuTrigger
@@ -1138,21 +1138,20 @@ export function Sidebar(): React.JSX.Element {
         )}
         <div className="flex-1" />
         <WithTooltip label="Add a project folder">
+          {/* One control, one size in both modes. It sits next to a section
+              label in compact and a 13px filter in detailed, but it is the same
+              button doing the same thing — sizing it off whatever happens to be
+              beside it is how you get a target that shrinks when you switch
+              modes. Labels are free to differ; controls are not. */}
           <button
             type="button"
             onClick={() => void openProject()}
             aria-label="Add project"
-            className={cn(
-              '-mr-1.5 rounded-md text-sidebar-foreground/65 transition-colors hover:bg-sidebar-accent hover:text-foreground',
-              // Detailed mode pairs it with a 13px control, so it gets a real
-              // hit target instead of the label-sized one compact's section
-              // heading can carry.
-              detailed ? 'p-1.5' : 'p-1'
-            )}
+            className="-mr-1.5 rounded-md p-1.5 text-sidebar-foreground/65 transition-colors hover:bg-sidebar-accent hover:text-foreground"
           >
             {/* A folder, not a bare plus: the plus alone is the new-*chat* verb
                 everywhere else in this sidebar, and the two sat one row apart. */}
-            <FolderPlus className={detailed ? 'size-4' : 'size-3.5'} />
+            <FolderPlus className="size-4" />
           </button>
         </WithTooltip>
       </div>
