@@ -18,7 +18,7 @@ import {
   X
 } from 'lucide-react'
 import type { AssistantMessage, ChatMessage, ChatMeta, ToolPart } from '@shared/types'
-import { projectRoot } from '@shared/types'
+import { PROVIDER_LABELS, projectRoot } from '@shared/types'
 import { cn } from '@/lib/utils'
 import { basename } from '@/lib/format'
 import { useApp } from '@/store'
@@ -763,7 +763,7 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
                   className="flex animate-enter items-center gap-2.5 rounded-xl border border-primary/30 bg-primary/5 px-3.5 py-2.5"
                 >
                   <span className="text-[13px]">
-                    {chat.provider === 'codex' ? 'Codex' : 'Claude'} prepared a plan for your review.
+                    {PROVIDER_LABELS[chat.provider]} prepared a plan for your review.
                   </span>
                   <div className="flex-1" />
                   <Button
@@ -867,6 +867,15 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
             }
             permissionMode={chat.permissionMode}
             onPermissionModeChange={(permissionMode) => void setChatOptions({ permissionMode })}
+            opencodeAgent={chat.opencodeAgent}
+            // One patch, both halves: the mode has to follow the agent, since
+            // the plan-review gate reads the mode rather than the agent name.
+            onOpencodeAgentChange={(opencodeAgent) =>
+              void setChatOptions({
+                opencodeAgent,
+                permissionMode: opencodeAgent === 'plan' ? 'plan' : 'default'
+              })
+            }
             contextTokens={chat.contextTokens}
             contextWindow={chat.contextWindow}
             provider={composerProvider}

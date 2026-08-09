@@ -1,4 +1,5 @@
 import * as React from 'react'
+import { PROVIDER_LABELS } from '@shared/types'
 import {
   Activity,
   AlertTriangle,
@@ -64,10 +65,16 @@ export function SessionPanel(): React.JSX.Element {
   const cwd = useApp((s) => s.selectedCwd)
   const rateLimit = useApp((s) => (s.activeId ? s.rateLimits[s.activeId] : undefined))
   const loadModels = useApp((s) => s.loadModels)
-  // Permission rules and the subagent catalog remain Claude-specific. Codex App
-  // Server does expose account, rate-limit and MCP status control requests.
+  // Capability flags rather than "not Codex". Permission rules and the subagent
+  // catalog are Claude-specific (they come from .claude settings files); Codex
+  // App Server exposes account, rate-limit and MCP status; OpenCode exposes none
+  // of them through Carbon, so it must not inherit Claude's by default.
   const provider = useApp((s) => s.chats.find((c) => c.id === s.activeId)?.provider) ?? 'claude'
   const isCodex = provider === 'codex'
+  const isClaude = provider === 'claude'
+  const hasPermissionRules = isClaude
+  const hasSessionCost = isClaude
+  const hasSubagents = isClaude
 
   const [open, setOpen] = React.useState(false)
   const [busy, setBusy] = React.useState(false)
@@ -92,8 +99,8 @@ export function SessionPanel(): React.JSX.Element {
     if (!chatId) return
     setBusy(true)
     // Permission rules come from .claude settings files — a Claude-only concept;
-    // never read (or later delete) them for a Codex session.
-    if (!isCodex) await refreshRules()
+    // never read (or later delete) them for another backend's session.
+    if (hasPermissionRules) await refreshRules()
     const isLive = await window.api.sessionLive(chatId)
     setLive(isLive)
     if (!isLive) {
@@ -112,7 +119,7 @@ export function SessionPanel(): React.JSX.Element {
     setServers(srv)
     setAgents(agt)
     setBusy(false)
-  }, [chatId, loadModels, refreshRules, isCodex])
+  }, [chatId, loadModels, refreshRules, hasPermissionRules])
 
   React.useEffect(() => {
     if (open) void load()
@@ -172,9 +179,9 @@ export function SessionPanel(): React.JSX.Element {
         <div className="space-y-4 p-3">
           {live === false && (
             <div className="rounded-md border border-border bg-secondary/40 px-2.5 py-2 text-[11px] leading-relaxed text-muted-foreground">
-              {isCodex
-                ? 'This Codex session isn’t running. Send a message to start it.'
-                : 'The session isn’t running. Send a message to view live account, usage, MCP servers and subagents. Saved permission rules are shown below.'}
+              {isClaude
+                ? 'The session isn’t running. Send a message to view live account, usage, MCP servers and subagents. Saved permission rules are shown below.'
+                : `This ${PROVIDER_LABELS[provider]} session isn’t running. Send a message to start it.`}
             </div>
           )}
           {isCodex && (
@@ -193,9 +200,9 @@ export function SessionPanel(): React.JSX.Element {
             <div className="mt-0.5 text-[11px] text-muted-foreground">
               {[account?.organization, account?.subscriptionType || usage?.subscriptionType]
                 .filter(Boolean)
-                .join(' · ') || (isCodex ? 'Signed in via Codex' : 'Signed in via Claude Code')}
+                .join(' · ') || `Signed in via ${PROVIDER_LABELS[provider]}`}
             </div>
-            {usage && !isCodex && (
+            {usage && hasSessionCost && (
               <div className="mt-2 flex items-center justify-between rounded-md bg-secondary/40 px-2 py-1.5 text-[11px] tabular-nums text-muted-foreground">
                 <span>Session cost {formatCost(usage.costUsd)}</span>
                 <span className="text-emerald-500">+{usage.linesAdded}</span>
@@ -261,7 +268,7 @@ export function SessionPanel(): React.JSX.Element {
                         </Button>
                       </WithTooltip>
                     )}
-                    {!isCodex && (
+                    {isClaude && (
                     <WithTooltip label={s.status === 'disabled' ? 'Enable' : 'Disable'}>
                       <Button
                         size="icon-sm"
@@ -281,7 +288,7 @@ export function SessionPanel(): React.JSX.Element {
           </section>
 
           {/* Subagents */}
-          {!isCodex && <section className="border-t border-border pt-3">
+          {hasSubagents && <section className="border-t border-border pt-3">
             <SectionTitle icon={Bot}>Subagents</SectionTitle>
             {agents == null ? (
               <div className="text-[11px] text-muted-foreground">Loading…</div>
@@ -305,8 +312,8 @@ export function SessionPanel(): React.JSX.Element {
           </>
           )}
 
-          {/* Permission rules — from .claude settings; Claude-only, hidden for Codex. */}
-          {!isCodex && (
+          {/* Permission rules — from .claude settings, so Claude-only. */}
+          {hasPermissionRules && (
           <section className={cn(live !== false && 'border-t border-border pt-3')}>
             <SectionTitle icon={Shield}>Permission rules</SectionTitle>
             {rules == null ? (

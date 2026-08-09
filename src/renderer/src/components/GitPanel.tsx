@@ -23,6 +23,7 @@ import {
   type LucideIcon
 } from 'lucide-react'
 import type { GitFileChange, PrChecks, PrInfo } from '@shared/types'
+import { PROVIDER_LABELS } from '@shared/types'
 import { cn } from '@/lib/utils'
 import { handleTreeKeyDown } from '@/lib/treeKeyNav'
 import { resolveGitActions, type GitActionId } from '@/lib/gitActions'
@@ -393,7 +394,7 @@ function GitActionButton(): React.JSX.Element | null {
   const preferred = useApp((s) => s.preferredGitAction)
   const setPreferred = useApp((s) => s.setPreferredGitAction)
   const agentName = useApp((s) =>
-    s.chats.find((c) => c.id === s.activeId)?.provider === 'codex' ? 'Codex' : 'Claude'
+    PROVIDER_LABELS[s.chats.find((c) => c.id === s.activeId)?.provider ?? 'claude']
   )
   const inWorktree = useApp((s) => !!s.chats.find((c) => c.id === s.activeId)?.worktree)
 

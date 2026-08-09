@@ -49,6 +49,7 @@ const api: Api = {
     effort?: EffortId
     serviceTier?: ServiceTier
     permissionMode?: PermissionModeId
+    opencodeAgent?: string
     worktree?: WorktreeTarget
   }) => invoke('chats:create', opts),
   deleteChat: (id: string, worktree?: WorktreeDisposition) =>
@@ -88,6 +89,7 @@ const api: Api = {
   listModels: (chatId: string, cwd?: string) => invoke('session:models', chatId, cwd),
   codexConfigModel: () => invoke('codex:config-model'),
   listAgents: (chatId: string) => invoke('session:agents', chatId),
+  opencodeAgents: (cwd: string) => invoke('opencode:agents', cwd),
   accountInfo: (chatId: string) => invoke('session:account', chatId),
   usageInfo: (chatId: string) => invoke('session:usage', chatId),
   usageOverview: (refresh?: boolean) => invoke('usage:overview', refresh),

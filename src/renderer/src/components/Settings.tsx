@@ -12,10 +12,14 @@ import {
   Palette,
   Plus,
   Rows3,
+  Sparkles,
   Sun,
   X
 } from 'lucide-react'
+import { PROVIDER_LABELS, type Provider } from '@shared/types'
 import { cn } from '@/lib/utils'
+import { allModelOptions } from '@/lib/models'
+import { PROVIDER_COLOR, ProviderMark } from '@/components/ui/provider-mark'
 import {
   CODE_FONT_DEFAULT,
   CODE_FONT_MAX,
@@ -43,11 +47,169 @@ import { WithTooltip } from '@/components/ui/tooltip'
 const SECTIONS = [
   { id: 'appearance', label: 'Appearance', icon: Palette },
   { id: 'chats', label: 'Chats', icon: MessageSquare },
+  { id: 'models', label: 'Models', icon: Sparkles },
   { id: 'notifications', label: 'Notifications', icon: Bell },
   { id: 'about', label: 'About', icon: Info }
 ] as const
 
 type SectionId = (typeof SECTIONS)[number]['id']
+
+/**
+ * Which models the picker offers.
+ *
+ * A catalog of three backends runs to dozens of rows — OpenCode alone
+ * contributes every model of every provider the user has configured — and the
+ * composer's picker is a menu you scan mid-thought. Hiding is per-model rather
+ * than per-provider because the useless rows are scattered: a handful of frontier
+ * models are worth reaching for and the rest are noise, and which is which is
+ * personal.
+ *
+ * Nothing here disables a backend. A hidden model that is already a chat's model
+ * keeps running and stays visible in that chat's own picker (see
+ * `assembleModelOptions`' `keep`), because the alternative is a composer that
+ * shows no model at all.
+ */
+function ModelVisibility(): React.JSX.Element {
+  const dynamicModels = useApp((s) => s.models)
+  const codexConfigModel = useApp((s) => s.codexConfigModel)
+  const hiddenModels = useApp((s) => s.hiddenModels)
+  const toggleModelHidden = useApp((s) => s.toggleModelHidden)
+  const setModelsHidden = useApp((s) => s.setModelsHidden)
+  const loadModels = useApp((s) => s.loadModels)
+
+  // Settings can be the first thing opened in a session, before any chat has
+  // warmed the catalog. loadModels is a no-op once it is complete, so asking
+  // here costs nothing on the common path.
+  React.useEffect(() => {
+    void loadModels()
+  }, [loadModels])
+
+  const all = React.useMemo(
+    () => allModelOptions(dynamicModels, codexConfigModel),
+    [dynamicModels, codexConfigModel]
+  )
+  const groups = React.useMemo(
+    () =>
+      (Object.keys(PROVIDER_LABELS) as Provider[])
+        .map((provider) => ({ provider, models: all.filter((m) => m.provider === provider) }))
+        .filter((g) => g.models.length > 0),
+    [all]
+  )
+
+  const [tab, setTab] = React.useState<Provider | null>(null)
+  // A provider's tab can vanish under the selection — OpenCode's whole catalog
+  // disappears if its CLI stops answering — so the active tab is validated
+  // against what is actually here rather than trusted.
+  const active = groups.find((g) => g.provider === tab) ?? groups[0]
+
+  if (!all.length) {
+    return (
+      <p className="px-2 text-[13px] text-muted-foreground">
+        No models loaded yet. Open a chat once and they will appear here.
+      </p>
+    )
+  }
+
+  const ids = active.models.map((m) => m.id)
+  const shown = ids.filter((id) => !hiddenModels.has(id)).length
+
+  return (
+    <div>
+      {/* One tab per provider. Stacked sections meant scrolling past two whole
+          catalogs to reach the third, and OpenCode's alone runs to 22 rows. */}
+      <div
+        role="tablist"
+        aria-label="Provider"
+        className="mb-4 flex items-center gap-1 border-b border-border px-2"
+      >
+        {groups.map(({ provider, models }) => {
+          const isActive = provider === active.provider
+          const visible = models.filter((m) => !hiddenModels.has(m.id)).length
+          return (
+            <button
+              key={provider}
+              type="button"
+              role="tab"
+              aria-selected={isActive}
+              onClick={() => setTab(provider)}
+              className={cn(
+                'relative flex items-center gap-2 px-2.5 pb-2 text-[13px] transition-colors',
+                isActive
+                  ? 'font-medium text-foreground'
+                  : 'text-muted-foreground hover:text-foreground'
+              )}
+            >
+              <ProviderMark
+                provider={provider}
+                className="size-3.5"
+                style={{ color: PROVIDER_COLOR[provider] }}
+              />
+              {PROVIDER_LABELS[provider]}
+              <span className="text-[11px] tabular-nums text-muted-foreground">
+                {visible}/{models.length}
+              </span>
+              {isActive && (
+                <span className="absolute inset-x-0 -bottom-px h-0.5 rounded-full bg-primary" />
+              )}
+            </button>
+          )
+        })}
+      </div>
+
+      <div className="mb-1 flex items-center justify-between gap-3 px-2">
+        <span className="text-xs text-muted-foreground">
+          {shown === 0
+            ? 'Every model hidden — the picker falls back to this chat’s own.'
+            : `${shown} of ${ids.length} shown in the picker`}
+        </span>
+        <button
+          type="button"
+          onClick={() => setModelsHidden(ids, shown > 0)}
+          className="rounded-md px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        >
+          {shown > 0 ? 'Hide all' : 'Show all'}
+        </button>
+      </div>
+
+      <div className="rounded-lg border border-border">
+        {active.models.map((model, i) => {
+          const visible = !hiddenModels.has(model.id)
+          return (
+            <button
+              key={model.id}
+              type="button"
+              role="switch"
+              aria-checked={visible}
+              aria-label={model.label}
+              onClick={() => toggleModelHidden(model.id)}
+              className={cn(
+                'flex w-full items-center gap-3 px-2.5 py-2.5 text-left transition-colors hover:bg-accent/40',
+                i > 0 && 'border-t border-border/60'
+              )}
+            >
+              <div className="min-w-0 flex-1">
+                <div className={cn('truncate text-[13px]', !visible && 'text-muted-foreground')}>
+                  {model.label}
+                </div>
+                {model.description && (
+                  <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                    {model.description}
+                  </div>
+                )}
+              </div>
+              {model.free && (
+                <span className="shrink-0 rounded bg-success/15 px-1.5 py-px text-[10px] font-semibold text-success">
+                  Free
+                </span>
+              )}
+              <SwitchTrack checked={visible} />
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
 
 function SectionHeader({
   icon: Icon,
@@ -241,20 +403,32 @@ function Toggle({
         <div className="text-[13px] font-medium">{label}</div>
         <div className="mt-0.5 text-xs text-muted-foreground">{description}</div>
       </div>
+      <SwitchTrack checked={checked} />
+    </button>
+  )
+}
+
+/**
+ * The switch itself, without a row around it. Extracted so the model list can
+ * use the same control as every other setting — a second switch drawn slightly
+ * differently is the kind of thing that makes a settings page feel assembled
+ * rather than designed.
+ */
+function SwitchTrack({ checked }: { checked: boolean }): React.JSX.Element {
+  return (
+    <span
+      className={cn(
+        'relative h-[18px] w-8 shrink-0 rounded-full transition-colors',
+        checked ? 'bg-primary' : 'bg-secondary'
+      )}
+    >
       <span
         className={cn(
-          'relative h-[18px] w-8 shrink-0 rounded-full transition-colors',
-          checked ? 'bg-primary' : 'bg-secondary'
+          'absolute top-[2px] left-[2px] size-3.5 rounded-full bg-background shadow-sm transition-transform',
+          checked && 'translate-x-[14px]'
         )}
-      >
-        <span
-          className={cn(
-            'absolute top-[2px] left-[2px] size-3.5 rounded-full bg-background shadow-sm transition-transform',
-            checked && 'translate-x-[14px]'
-          )}
-        />
-      </span>
-    </button>
+      />
+    </span>
   )
 }
 
@@ -609,6 +783,17 @@ export function Settings(): React.JSX.Element {
                     onReset={() => setChatsPerProject(CHATS_PER_PROJECT_DEFAULT)}
                   />
                 </Row>
+              </section>
+            )}
+
+            {section === 'models' && (
+              <section>
+                <SectionHeader
+                  icon={Sparkles}
+                  title="Models"
+                  description="Which models the composer's picker offers. Hiding one never disables a backend — a chat already using it keeps running."
+                />
+                <ModelVisibility />
               </section>
             )}
 

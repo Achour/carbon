@@ -24,7 +24,6 @@ import type {
   ChatOptionsPatch,
   ChatStatus,
   EffortId,
-  ElementRef,
   FastModeState,
   FastModeStatus,
   McpServerInfo,
@@ -54,8 +53,15 @@ import { CODEX_SLASH_COMMANDS, parseCodexSlashCommand } from '@shared/codexComma
 import type { Store } from './store'
 import type { PreviewManager } from './preview'
 import { CodexSession, fetchCodexModels, generateCodexText } from './codex'
+import { OpencodeSession, fetchOpencodeModels, generateOpencodeText } from './opencode'
 import { CodexAppServerClient } from './codexAppServer'
-import { composePrompt, withTimeout, type AgentSession, type Emit } from './session'
+import {
+  appendAttachmentContext,
+  composePrompt,
+  withTimeout,
+  type AgentSession,
+  type Emit
+} from './session'
 import { DeltaCoalescer } from './deltaCoalescer'
 import { TITLE_SYSTEM, buildTitlePrompt, cleanTitle, deriveTitle, firstUserText } from './titles'
 import {
@@ -152,20 +158,6 @@ function extractImages(content: unknown): { mediaType: string; data: string }[] 
     images.push({ mediaType, data })
   }
   return images.length ? images : undefined
-}
-
-/** Renders a picked UI element as a text block the agent can act on. */
-function describeElement(el: ElementRef): string {
-  const lines = [`Selected UI element from the running app (${el.url}):`]
-  if (el.source?.file) {
-    const col = el.source.column != null ? `:${el.source.column}` : ''
-    const loc = el.source.line != null ? `${el.source.file}:${el.source.line}${col}` : el.source.file
-    lines.push(`- Source: ${loc}`)
-  }
-  if (el.label) lines.push(`- Text: ${JSON.stringify(el.label)}`)
-  if (el.selector) lines.push(`- Selector: ${el.selector}`)
-  if (el.html) lines.push(`- HTML: ${el.html}`)
-  return lines.join('\n')
 }
 
 interface InputQueue {
@@ -524,11 +516,9 @@ class ClaudeSession implements AgentSession {
     this.setStatus(this.chat.sessionId ? 'streaming' : 'starting')
     this.turnActive = true
 
-    // Images go to the model as base64 blocks; other files are referenced by
-    // path so Claude can Read them itself. Picked UI elements contribute a
-    // screenshot (if captured) plus a text description of where they live.
+    // Images go to the model as base64 blocks; files and picked elements have no
+    // native form and are folded into the prompt text instead.
     const content: Array<Record<string, unknown>> = []
-    const elementBlocks: string[] = []
     for (const a of attachments) {
       if ((a.kind === 'image' || a.kind === 'element') && a.data && a.mediaType) {
         content.push({
@@ -536,20 +526,11 @@ class ClaudeSession implements AgentSession {
           source: { type: 'base64', media_type: a.mediaType, data: a.data }
         })
       }
-      if (a.kind === 'element' && a.element) elementBlocks.push(describeElement(a.element))
     }
-    const filePaths = attachments.filter((a) => a.kind === 'file' && a.path).map((a) => a.path!)
     const epoch = this.sendEpoch
     const finish = (ctx?: string): void => {
       if (this.disposed || epoch !== this.sendEpoch) return
-      let prompt = composePrompt(text, ctx)
-      if (filePaths.length) {
-        const list = filePaths.map((p) => `- ${p}`).join('\n')
-        prompt = `${prompt ? `${prompt}\n\n` : ''}Attached files:\n${list}`
-      }
-      if (elementBlocks.length) {
-        prompt = `${prompt ? `${prompt}\n\n` : ''}${elementBlocks.join('\n\n')}`
-      }
+      const prompt = appendAttachmentContext(composePrompt(text, ctx), attachments)
       if (prompt || content.length === 0) content.push({ type: 'text', text: prompt })
       this.input.push({
         type: 'user',
@@ -1683,6 +1664,9 @@ export class ChatManager {
   async getCommands(cwd: string, provider: Provider = 'claude'): Promise<SlashCommand[]> {
     if (!cwd) return []
     if (provider === 'codex') return CODEX_SLASH_COMMANDS
+    // OpenCode has a /command endpoint; until it's wired, offering Claude's list
+    // would name commands this backend does not have.
+    if (provider === 'opencode') return []
     const cached = this.commandsByCwd.get(cwd)
     if (cached) return cached
     return this.warmCommands(cwd)
@@ -1798,17 +1782,21 @@ export class ChatManager {
         queueMicrotask(() => this.pruneIdleSessions())
       }
     }
+    // An explicit switch, not a ternary: the old `else` meant Claude, so a new
+    // provider would have silently run the wrong backend.
     const session: AgentSession =
       chat.provider === 'codex'
         ? new CodexSession(chat, sessionEmit, this.store, onDead)
-        : new ClaudeSession(
-            chat,
-            sessionEmit,
-            this.store,
-            onDead,
-            (commands) => this.commandsByCwd.set(chat.cwd, commands),
-            this.preview
-          )
+        : chat.provider === 'opencode'
+          ? new OpencodeSession(chat, sessionEmit, this.store, onDead)
+          : new ClaudeSession(
+              chat,
+              sessionEmit,
+              this.store,
+              onDead,
+              (commands) => this.commandsByCwd.set(chat.cwd, commands),
+              this.preview
+            )
     this.sessions.set(chat.id, session)
     this.pruneIdleSessions()
     return session
@@ -2036,7 +2024,9 @@ export class ChatManager {
       const gen =
         handoff.provider === 'codex'
           ? generateCodexText(chat.cwd, handoff.model, `${HANDOFF_BRIEF_SYSTEM}\n\n${prompt}`)
-          : generateClaudeText(chat.cwd, handoff.model, HANDOFF_BRIEF_SYSTEM, prompt)
+          : handoff.provider === 'opencode'
+            ? generateOpencodeText(chat.cwd, handoff.model, `${HANDOFF_BRIEF_SYSTEM}\n\n${prompt}`)
+            : generateClaudeText(chat.cwd, handoff.model, HANDOFF_BRIEF_SYSTEM, prompt)
       const brief = await withTimeout(gen, HANDOFF_TIMEOUT_MS, null)
       const summary = brief ?? this.transcriptFor(chat, HANDOFF_FALLBACK_CHARS)
       return summary ? buildHandoffContext(summary, fromLabel, !brief) : undefined
@@ -2329,15 +2319,20 @@ export class ChatManager {
     if (live?.length) this.mergeModels(live)
     const haveClaude = this.models?.some((option) => option.provider === 'claude')
     const haveCodex = this.models?.some((option) => option.provider === 'codex')
+    const haveOpencode = this.models?.some((option) => option.provider === 'opencode')
+    // Completeness is the two bundled providers only. OpenCode is an optional
+    // local CLI, so waiting for it would re-warm forever on machines without it;
+    // its rows merge in whenever they do arrive. Mirrors hasCompleteModelCatalog.
     if (haveClaude && haveCodex) return this.models!
     const folder = this.store.getMeta(chatId)?.cwd || cwd
     if (!folder) return this.models ?? []
     this.modelWarmup ??= Promise.all([
       haveClaude ? Promise.resolve([]) : this.warmModels(folder),
-      haveCodex ? Promise.resolve([]) : this.warmCodexModels()
+      haveCodex ? Promise.resolve([]) : this.warmCodexModels(),
+      haveOpencode ? Promise.resolve([]) : fetchOpencodeModels(folder)
     ])
-      .then(([claude, codex]) => {
-        this.mergeModels([...claude, ...codex])
+      .then(([claude, codex, opencode]) => {
+        this.mergeModels([...claude, ...codex, ...opencode])
         return this.models ?? []
       })
       .finally(() => {
@@ -2364,10 +2359,11 @@ export class ChatManager {
       await session.interrupt()
       return
     }
-    // A persisted Codex plan can be waiting without a live SDK wrapper after an
-    // app restart. Stopping it should still dismiss the review cleanly.
+    // A persisted plan review can be waiting without a live session wrapper
+    // after an app restart. Stopping it should still dismiss it cleanly. Both
+    // Codex and OpenCode persist theirs; Claude's is a live SDK permission.
     const chat = this.store.getChat(chatId)
-    const review = chat?.provider === 'codex' ? chat.pendingPlanReview : undefined
+    const review = chat && chat.provider !== 'claude' ? chat.pendingPlanReview : undefined
     if (!chat || !review) return
     chat.pendingPlanReview = undefined
     this.store.saveChat(chatId)
@@ -2405,14 +2401,14 @@ export class ChatManager {
     }
     // Codex plan reviews are persisted. Recreate the lightweight thread wrapper
     // on demand so an approval made after an app restart can still continue.
-    if (chat?.provider === 'codex' && chat.pendingPlanReview?.requestId === requestId) {
+    if (chat && chat.provider !== 'claude' && chat.pendingPlanReview?.requestId === requestId) {
       this.createSession(chat).respondPermission(requestId, decision)
     }
   }
 
   /** The plan text behind a pending review request, if `requestId` is one. */
   private planForRequest(chat: ChatData, requestId: string): string | null {
-    if (chat.provider === 'codex') {
+    if (chat.provider !== 'claude') {
       return chat.pendingPlanReview?.requestId === requestId ? chat.pendingPlanReview.plan : null
     }
     // Claude's review is a live ExitPlanMode permission; it dies with the
@@ -2509,6 +2505,11 @@ export class ChatManager {
         this.emit({ type: 'permission-resolved', chatId, requestId })
       }
     }
+    if (patch.opencodeAgent !== undefined) {
+      // No session call: OpenCode carries the agent on each prompt, so the next
+      // turn simply reads the new value — nothing to tear down or notify.
+      chat.opencodeAgent = patch.opencodeAgent || undefined
+    }
     if (patch.effort !== undefined && (patch.effort || undefined) !== chat.effort) {
       chat.effort = effortForProvider(patch.effort || undefined, chat.provider)
       // Effort has no live setter — drop the session; the next send resumes
@@ -2554,6 +2555,7 @@ export class ChatManager {
         effort: chat.effort,
         serviceTier: chat.serviceTier,
         permissionMode: chat.permissionMode,
+        opencodeAgent: chat.opencodeAgent,
         pendingPlanReview: chat.pendingPlanReview
       }
     })
@@ -2570,6 +2572,12 @@ export class ChatManager {
    * unfindable from the main checkout and every later send would fail with
    * "No conversation found with session ID". Codex resumes by thread id and
    * files rollouts by date, so its id stays valid.
+   *
+   * OpenCode is cleared for a different reason than Claude's: a session's
+   * working directory is the *server process's* cwd and is fixed when the
+   * session is created, so resuming one after a hand-off would keep editing the
+   * directory the chat just left. Clearing it is what makes the next send open a
+   * session on the server pooled for the new cwd.
    */
   relocateChat(chatId: string, cwd: string): void {
     const chat = this.store.getChat(chatId)

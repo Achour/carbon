@@ -118,6 +118,13 @@ export function NewChat(): React.JSX.Element {
   const [permissionMode, setPermissionMode] = React.useState<PermissionModeId>(
     defaults?.permissionMode ?? 'default'
   )
+  // OpenCode's chip is an agent picker, so the two move together — see the
+  // composer's `onOpencodeAgentChange`.
+  const [opencodeAgent, setOpencodeAgent] = React.useState<string>('build')
+  const changeOpencodeAgent = (agent: string): void => {
+    setOpencodeAgent(agent)
+    setPermissionMode(agent === 'plan' ? 'plan' : 'default')
+  }
   // Scope the worktree choice to the project it was made in. NewChat stays
   // mounted while the sidebar switches projects, so a bare `target` state would
   // otherwise carry an existing worktree from project A into project B.
@@ -172,6 +179,7 @@ export function NewChat(): React.JSX.Element {
         effort: effort || undefined,
         serviceTier: tierCorrected.current ? undefined : serviceTier,
         permissionMode,
+        opencodeAgent,
         attachments: attachments.length ? attachments : undefined,
         worktree: target.kind === 'local' ? undefined : target
       })
@@ -261,6 +269,8 @@ export function NewChat(): React.JSX.Element {
                   onServiceTierChange={changeServiceTier}
                   permissionMode={permissionMode}
                   onPermissionModeChange={setPermissionMode}
+                  opencodeAgent={opencodeAgent}
+                  onOpencodeAgentChange={changeOpencodeAgent}
                   provider={modelProvider}
                   cwd={cwd}
                   commands={commands}

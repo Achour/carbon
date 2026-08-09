@@ -61,7 +61,7 @@ import {
 } from 'lucide-react'
 import type { Provider } from '@shared/types'
 import { cn } from '@/lib/utils'
-import { ProviderMark } from '@/components/ui/provider-mark'
+import { PROVIDER_COLOR, ProviderMark } from '@/components/ui/provider-mark'
 
 const C = {
   blue: 'text-icon-blue',
@@ -80,6 +80,10 @@ type Spec = { Icon: LucideIcon; color: string; provider?: never } | { provider: 
 /** Whole filenames, matched before any extension rule. Keys are lowercased. */
 const BY_NAME: Record<string, Spec> = {
   'claude.md': { provider: 'claude' },
+  // AGENTS.md is read by Codex *and* OpenCode, so one mark has to stand for
+  // both; it stays Codex's because that is the file's origin. A file can only
+  // carry one badge, and guessing from the project would be worse than a
+  // consistent one.
   'agents.md': { provider: 'codex' },
   'codex.md': { provider: 'codex' },
 
@@ -324,11 +328,8 @@ export function FileIcon({
     return (
       <ProviderMark
         provider={spec.provider}
-        className={cn(
-          'size-3.5 shrink-0',
-          spec.provider === 'claude' ? 'text-brand-claude' : 'text-brand-codex',
-          className
-        )}
+        className={cn('size-3.5 shrink-0', className)}
+        style={{ color: PROVIDER_COLOR[spec.provider] }}
       />
     )
   }

@@ -35,7 +35,9 @@
  * even though the transcript reports the same id.
  */
 export interface UsageCell {
-  provider: 'claude' | 'codex'
+  // Spelled out rather than imported as `Provider` so this module stays free of
+  // value imports from `@shared` and `node --test` can run the .ts directly.
+  provider: 'claude' | 'codex' | 'opencode'
   model: string
   /** `usage.speed` from the transcript — 'fast' bills at a premium SKU. */
   speed?: string
@@ -190,7 +192,16 @@ const FAST_RATE = anthropic(10, 50)
 
 /** A model id, as it appears in a transcript, reduced to a table key. */
 export function normalizeModel(model: string): string {
-  return model.trim().toLowerCase().replace(/\[1m\]$/, '')
+  const id = model.trim().toLowerCase().replace(/\[1m\]$/, '')
+  // OpenCode addresses a model as `opencode:<providerID>/<modelID>`, and the
+  // rate tables are keyed by the bare model id. Both the wrapper and the
+  // upstream vendor segment have to come off or nothing matches and every
+  // OpenCode turn is reported unpriced — which reads as "free" beside the other
+  // two providers' notional dollars. A vendor-qualified remainder
+  // (`anthropic/claude-sonnet-5`, via a gateway) is left intact, since that is
+  // the form LiteLLM keys such models under.
+  if (!id.startsWith('opencode:')) return id
+  return id.slice('opencode:'.length).replace(/^[^/]+\//, '')
 }
 
 /** Longest-prefix match over a rate table. */

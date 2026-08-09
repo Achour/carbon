@@ -34,6 +34,10 @@ export function parseShellPath(output: Buffer): string | undefined {
 function commonToolPaths(home: string): string {
   return [
     join(home, '.local', 'bin'),
+    // Where OpenCode's own installer puts its binary. Usually already on the
+    // login-shell PATH; this is the fallback for when that read fails, and
+    // without it a Finder-launched Carbon can't find an installed OpenCode.
+    join(home, '.opencode', 'bin'),
     join(home, '.volta', 'bin'),
     join(home, '.bun', 'bin'),
     join(home, '.asdf', 'shims'),

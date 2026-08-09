@@ -10,16 +10,27 @@ import { WithTooltip } from '@/components/ui/tooltip'
 
 const PROVIDER_LABEL: Record<ProviderUsage['provider'], string> = {
   claude: 'Claude',
-  codex: 'Codex'
+  codex: 'Codex',
+  opencode: 'OpenCode'
 }
 
-/** The most-used window across both providers — what the trigger reports. */
+/**
+ * Every provider the overview actually carries. OpenCode is absent unless its
+ * CLI is installed, so this is a filter rather than a fixed pair.
+ */
+function providerUsages(overview: UsageOverview): ProviderUsage[] {
+  return [overview.claude, overview.codex, overview.opencode].filter(
+    (p): p is ProviderUsage => p != null
+  )
+}
+
+/** The most-used window across the available providers — what the trigger reports. */
 function peakUtilization(
   overview: UsageOverview | null
 ): { pct: number; provider: ProviderUsage['provider'] } | null {
   if (!overview) return null
   let peak: { pct: number; provider: ProviderUsage['provider'] } | null = null
-  for (const p of [overview.claude, overview.codex]) {
+  for (const p of providerUsages(overview)) {
     if (!p.available) continue
     for (const w of p.windows) {
       if (w.utilization == null) continue
@@ -193,12 +204,16 @@ export function UsagePanel(): React.JSX.Element {
               Reading plan limits…
             </div>
           ) : (
-            <>
-              <ProviderSection usage={overview.claude} />
-              <div className="border-t border-border pt-3">
-                <ProviderSection usage={overview.codex} />
+            // Mapped rather than written out, so the divider stays between
+            // sections however many the overview actually carries.
+            providerUsages(overview).map((usage, i) => (
+              <div
+                key={usage.provider}
+                className={cn(i > 0 && 'border-t border-border pt-3')}
+              >
+                <ProviderSection usage={usage} />
               </div>
-            </>
+            ))
           )}
         </div>
       </PopoverContent>

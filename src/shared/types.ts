@@ -1,4 +1,4 @@
-export type Provider = 'claude' | 'codex'
+export type Provider = 'claude' | 'codex' | 'opencode'
 
 export type ServiceTier = 'standard' | 'fast'
 
@@ -16,6 +16,8 @@ export type PermissionModeId = 'default' | 'acceptEdits' | 'plan' | 'auto' | 'by
 export type EffortId = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra'
 export type ClaudeEffortId = Exclude<EffortId, 'minimal' | 'ultra'>
 export type CodexEffortId = Exclude<EffortId, 'minimal'>
+/** OpenCode declares levels per model; 'ultra' is Claude's alone. */
+export type OpencodeEffortId = Exclude<EffortId, 'ultra'>
 
 export const EFFORT_OPTIONS: { id: EffortId | ''; label: string; description: string }[] = [
   { id: '', label: 'Default', description: 'Uses your provider config' },
@@ -39,9 +41,17 @@ export function effortForProvider(
 ): CodexEffortId | undefined
 export function effortForProvider(
   effort: EffortId | undefined,
+  provider: 'opencode'
+): OpencodeEffortId | undefined
+export function effortForProvider(
+  effort: EffortId | undefined,
   provider: Provider
 ): EffortId | undefined
 export function effortForProvider(effort: EffortId | undefined, provider: Provider): EffortId | undefined {
+  // OpenCode calls these *variants* and declares them per model, so the only
+  // provider-wide statement to make is that 'ultra' is Claude's alone. Which of
+  // the rest a given model accepts comes from its own `supportedEfforts`.
+  if (provider === 'opencode') return effort === 'ultra' ? undefined : effort
   if (provider === 'codex' && effort === 'minimal') return undefined
   if (provider === 'claude' && (effort === 'minimal' || effort === 'ultra')) return undefined
   return effort
@@ -114,6 +124,14 @@ export interface ChatMeta {
   /** Provider processing tier; older chats without this field use Standard. */
   serviceTier?: ServiceTier
   permissionMode: PermissionModeId
+  /**
+   * OpenCode only: the primary agent this chat runs as. OpenCode's modes *are*
+   * its agents, and a user can define their own, so the name is carried
+   * verbatim rather than squeezed into `permissionMode`'s closed union. The two
+   * agree by construction — picking `plan` also sets `permissionMode: 'plan'`,
+   * which is what the plan-review gate reads. Undefined means `build`.
+   */
+  opencodeAgent?: string
   /** Mode the chat was in before switching to plan; restored on plan approval. */
   modeBeforePlan?: PermissionModeId
   /** Codex plan awaiting approval; persisted so review survives an app restart. */
@@ -439,6 +457,32 @@ export interface AgentInfo {
   model?: string
 }
 
+/**
+ * One of OpenCode's *primary* agents — what its mode picker offers.
+ *
+ * Not `AgentInfo`, which is Claude's subagent list: these are the top-level
+ * agents a turn runs as. The set is read from the running server rather than
+ * hardcoded, because `opencode.json` can define more of them; a default install
+ * answers with exactly `build` and `plan`.
+ */
+export interface OpencodeAgentInfo {
+  name: string
+  description?: string
+}
+
+/**
+ * The agents every OpenCode install has, used when the server can't be asked
+ * (not installed, not reachable, an unrecognizable payload). Descriptions are
+ * OpenCode's own, so a fallback row reads exactly like the real one.
+ */
+export const OPENCODE_BUILTIN_AGENTS: OpencodeAgentInfo[] = [
+  {
+    name: 'build',
+    description: 'The default agent. Executes tools based on configured permissions.'
+  },
+  { name: 'plan', description: 'Plan mode. Disallows all edit tools.' }
+]
+
 /** Authenticated account, from `accountInfo()`. */
 export interface AccountInfo {
   email?: string
@@ -497,6 +541,12 @@ export interface ProviderUsage {
 export interface UsageOverview {
   claude: ProviderUsage
   codex: ProviderUsage
+  /**
+   * Omitted entirely when the OpenCode CLI isn't installed — an absent provider
+   * draws nothing, where an `available: false` row would tell most users about a
+   * backend they don't have.
+   */
+  opencode?: ProviderUsage
 }
 
 // ---------- Usage history (the Usage page) ----------
@@ -540,6 +590,7 @@ export interface UsageDay {
   day: string
   claude: UsageTotals
   codex: UsageTotals
+  opencode: UsageTotals
 }
 
 /**
@@ -559,6 +610,7 @@ export interface UsageReport {
   models: UsageModelRow[]
   claude: UsageTotals
   codex: UsageTotals
+  opencode: UsageTotals
   total: UsageTotals
   /** Distinct session files that contributed to the window. */
   sessions: number
@@ -679,6 +731,8 @@ export interface ChatOptionsPatch {
   effort?: EffortId | ''
   serviceTier?: ServiceTier
   permissionMode?: PermissionModeId
+  /** OpenCode's primary agent; see `ChatMeta.opencodeAgent`. */
+  opencodeAgent?: string
   /**
    * Whether the change also becomes the default for future chats. Defaults to
    * true, since a change is normally something the user picked. The composer
@@ -708,6 +762,8 @@ export interface ModelOption {
   supportedEfforts?: EffortId[]
   /** Whether this model advertises provider Fast mode; undefined means unknown. */
   supportsFastMode?: boolean
+  /** Costs nothing to run — currently only OpenCode Zen's free tier. */
+  free?: boolean
 }
 
 const canonicalModelName = (model?: string): string =>
@@ -749,6 +805,19 @@ export function rememberedEffortForModel(
 /** Sentinel model id: use Codex without pinning a model (defer to ~/.codex config). */
 export const CODEX_DEFAULT_MODEL = 'codex-default'
 
+/** Sentinel model id: use OpenCode without pinning a model (defer to its config). */
+export const OPENCODE_DEFAULT_MODEL = 'opencode-default'
+
+/**
+ * OpenCode addresses a model as a (providerID, modelID) pair, where `ModelOption.id`
+ * is one string — so ids are encoded `opencode:<providerID>/<modelID>`. The prefix
+ * is load-bearing rather than cosmetic: `providerForModel` falls back to 'claude',
+ * so an id that can't name its own provider is misrouted on every path that runs
+ * before the live catalog loads (startup, persisted `pendingProvider`, a plan
+ * approved into the other provider).
+ */
+export const OPENCODE_MODEL_PREFIX = 'opencode:'
+
 export const MODEL_OPTIONS: ModelOption[] = [
   { id: '', label: 'Default', description: 'Your Claude Code default', provider: 'claude' },
   { id: 'claude-fable-5', label: 'Fable 5', description: 'Most intelligent', provider: 'claude' },
@@ -789,6 +858,9 @@ export const MODEL_OPTIONS: ModelOption[] = [
  * fallback for startup, older settings and known aliases.
  */
 export function providerForModel(id: string, options: ModelOption[] = MODEL_OPTIONS): Provider {
+  // Checked before either catalog: OpenCode's models are all runtime-discovered,
+  // so its ids routinely have to answer this before any catalog has loaded.
+  if (id === OPENCODE_DEFAULT_MODEL || id.startsWith(OPENCODE_MODEL_PREFIX)) return 'opencode'
   return (
     options.find((m) => m.id === id)?.provider ??
     MODEL_OPTIONS.find((m) => m.id === id)?.provider ??
@@ -810,11 +882,25 @@ export function claudeModelName(resolvedModel?: string): string | undefined {
   return `${family} ${version}`
 }
 
-/** Human label for either provider's resolved wire model id. */
+/**
+ * Display name for an encoded OpenCode id: 'opencode:openai/gpt-5.6-luna' →
+ * 'gpt-5.6-luna'. The providerID is dropped because it names the *upstream*
+ * vendor, which the OpenCode badge beside it already says.
+ */
+export function opencodeModelName(id?: string): string | undefined {
+  if (!id || !id.startsWith(OPENCODE_MODEL_PREFIX)) return undefined
+  const rest = id.slice(OPENCODE_MODEL_PREFIX.length)
+  const slash = rest.indexOf('/')
+  return (slash === -1 ? rest : rest.slice(slash + 1)) || undefined
+}
+
+/** Human label for any provider's resolved wire model id. */
 export function resolvedModelName(resolvedModel?: string): string | undefined {
   if (!resolvedModel) return undefined
   const claudeName = claudeModelName(resolvedModel)
   if (claudeName) return claudeName
+  const opencodeName = opencodeModelName(resolvedModel)
+  if (opencodeName) return opencodeName
   // Preserve the existing Claude fallback for legacy ids the helper does not
   // recognize; the SDK's displayName is more useful than a raw wire id.
   if (/^claude-/i.test(resolvedModel)) return undefined
@@ -848,7 +934,8 @@ export function claudeModelContextWindow(
 
 export const PROVIDER_LABELS: Record<Provider, string> = {
   claude: 'Claude Code',
-  codex: 'Codex'
+  codex: 'Codex',
+  opencode: 'OpenCode'
 }
 
 /**
@@ -862,7 +949,8 @@ export function modelDisplayName(
   provider: Provider,
   options?: ModelOption[]
 ): string {
-  if (!model || model === CODEX_DEFAULT_MODEL) return PROVIDER_LABELS[provider]
+  if (!model || model === CODEX_DEFAULT_MODEL || model === OPENCODE_DEFAULT_MODEL)
+    return PROVIDER_LABELS[provider]
   return options?.find((option) => option.id === model)?.label ?? resolvedModelName(model) ?? model
 }
 
@@ -1124,6 +1212,8 @@ export interface Api {
     effort?: EffortId
     serviceTier?: ServiceTier
     permissionMode?: PermissionModeId
+    /** OpenCode's primary agent; see `ChatMeta.opencodeAgent`. */
+    opencodeAgent?: string
     /** Where the chat runs; omitted or `local` means `cwd` itself. */
     worktree?: WorktreeTarget
   }): Promise<ChatMeta>
@@ -1180,6 +1270,12 @@ export interface Api {
   /** User-level Codex model from $CODEX_HOME/config.toml; separate from Claude's model list. */
   codexConfigModel(): Promise<string | null>
   listAgents(chatId: string): Promise<AgentInfo[]>
+  /**
+   * OpenCode's primary agents for a directory — the modes its picker offers.
+   * Keyed by cwd rather than chat because the server is pooled per directory
+   * and the new-chat screen has no chat yet. Empty when OpenCode isn't installed.
+   */
+  opencodeAgents(cwd: string): Promise<OpencodeAgentInfo[]>
   accountInfo(chatId: string): Promise<AccountInfo | null>
   usageInfo(chatId: string): Promise<UsageInfo | null>
   /** Account-level plan limits for both providers; needs no chat. */

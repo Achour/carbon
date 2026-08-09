@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { Brain, Check, Sparkles } from 'lucide-react'
-import { EFFORT_OPTIONS, type EffortId } from '@shared/types'
+import { EFFORT_OPTIONS, PROVIDER_LABELS, type EffortId } from '@shared/types'
 import { cn } from '@/lib/utils'
 import {
   assembleModelOptions,
@@ -25,6 +25,7 @@ export function PlanContent({
   const chat = useApp((s) => s.chats.find((c) => c.id === s.activeId) ?? null)
   const dynamicModels = useApp((s) => s.models)
   const codexConfigModel = useApp((s) => s.codexConfigModel)
+  const hiddenModels = useApp((s) => s.hiddenModels)
   const modelEfforts = useApp((s) => s.defaults?.modelEfforts)
   const [feedback, setFeedback] = React.useState('')
   const [autoAccept, setAutoAccept] = React.useState(false)
@@ -44,11 +45,12 @@ export function PlanContent({
   const buildOptions = React.useMemo(
     () =>
       chat
-        ? assembleModelOptions(dynamicModels, codexConfigModel).filter(
-            (option) => !option.disabled
-          )
+        ? assembleModelOptions(dynamicModels, codexConfigModel, {
+            hidden: hiddenModels,
+            keep: chat.model ?? ''
+          }).filter((option) => !option.disabled)
         : [],
-    [chat, dynamicModels, codexConfigModel]
+    [chat, dynamicModels, codexConfigModel, hiddenModels]
   )
   const currentModel = chat ? canonicalModelId(chat.model ?? '', buildOptions) : ''
   const buildModel = buildPick ?? currentModel
@@ -59,12 +61,16 @@ export function PlanContent({
   // Efforts follow the *picked* build model's provider — a cross-provider pick
   // must offer that backend's levels, not the planning chat's.
   const buildProvider = buildModelOption?.provider ?? chat?.provider ?? 'claude'
-  const supportedBuildEfforts = new Set(
+  const supportedBuildEfforts = new Set<EffortId>(
     buildModelOption?.supportedEfforts ??
       resolvedBuildModelOption?.supportedEfforts ??
-      (buildProvider === 'codex'
-        ? ['low', 'medium', 'high', 'xhigh']
-        : ['low', 'medium', 'high', 'xhigh', 'max'])
+      // OpenCode declares its levels per model, so there is no provider-wide
+      // fallback to offer: a model that advertised none gets Default alone.
+      (buildProvider === 'opencode'
+        ? []
+        : buildProvider === 'codex'
+          ? ['low', 'medium', 'high', 'xhigh']
+          : ['low', 'medium', 'high', 'xhigh', 'max'])
   )
   const buildEffortOptions = chat
     ? EFFORT_OPTIONS.filter(
@@ -74,9 +80,9 @@ export function PlanContent({
           ? {
               ...option,
               description:
-                buildProvider === 'codex'
-                  ? 'Uses your Codex config'
-                  : 'Uses your Claude Code config'
+                buildProvider === 'opencode'
+                  ? 'The model’s own default'
+                  : `Uses your ${PROVIDER_LABELS[buildProvider]} config`
             }
           : option
       )

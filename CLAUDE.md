@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-An Electron desktop GUI for coding agents. Claude sessions run through `@anthropic-ai/claude-agent-sdk`; Codex sessions run through `@openai/codex-sdk`. Both live in the Electron main process, reuse the user's existing provider login, and operate in whatever project folder the user picks.
+An Electron desktop GUI for coding agents. Claude sessions run through `@anthropic-ai/claude-agent-sdk`; Codex sessions run through `@openai/codex-sdk`; OpenCode sessions drive the user's own `opencode serve` over HTTP. All three live in the Electron main process, reuse the user's existing provider login, and operate in whatever project folder the user picks.
 
 ## Commands
 
@@ -340,6 +340,122 @@ The environment is chosen at chat start and only *displayed* afterwards (the rea
 Both exits relocate the chat, so main disposes the session and the next send respawns in the new cwd — the same reason an effort change disposes.
 
 `branchVsDefault` (git.ts) is the *single* implementation of "where does this branch stand vs main" — one `for-each-ref` + one `rev-list --left-right`. `gitStatus` puts its answer on `GitStatus.defaultBranch` / `behindDefault` / `aheadDefault` (started before the numstat reads so it overlaps them instead of adding a round trip); `worktreeStatus` derives `unmergedCommits` from the same call; the merge guards read it directly. Everything user-facing — the `↓n` staleness chip in `ContextStrip` (click runs "Update from main"), the ⋯ menu labels, the merge dialog's counts — reads the `GitStatus` copy, so the chip, the menu and the dialog can never disagree. Staleness has no other symptom until it surfaces as a conflicted merge, which is why the chip says it out loud while it's still cheap to fix. Note `behindDefault` is *not* `GitStatus.behind`, which is measured against the branch's own upstream. `listWorktrees` tags each ref `merged` from a single `branch --merged`, which is what lets the picker mark a finished worktree and offer to remove it instead of accumulating dead ones. A fresh worktree with no setup script also says so in the chat (`setupMissingFor`); the silence used to read as "installed", and the agent would just start failing on missing dependencies.
+
+### OpenCode (`src/main/opencode*.ts`)
+
+The third backend, and the only one **not** bundled: `opencode` is the user's own
+install, found on PATH (`hydrateShellPath` covers `~/.opencode/bin`). That is the
+point rather than a compromise — the reason to support it is that the user is
+already logged in to it, and a bundled copy would carry its own empty auth and go
+stale against a CLI that ships most days. The probe names `opencode`
+specifically: the v2 beta installs alongside as `opencode2` and speaks a revised
+API. A missing binary throws from the session constructor, where `deliver`'s
+catch turns it into the chat's error message.
+
+`opencodeServer.ts` is **the only file that knows the wire protocol**, so a v2
+swap stays contained. Four facts from the running server shape everything above it:
+
+- **A session's working directory is the server process's cwd.** `POST /session`
+  has no `directory` field. So servers are pooled **one per directory**, not one
+  per app — and `relocateChat` clearing OpenCode's `sessionId` is not a
+  workaround but the mechanism: the next send opens a session on the server
+  pooled for the new cwd.
+- **`--port 0` binds the documented default 4096**, not an ephemeral port. Carbon
+  picks a free port itself, or it fights the user's own TUI for one.
+- **`/event` is a global bus.** One SSE stream per server fans out by `sessionID`,
+  buffering events for sessions that haven't attached yet (the prompt POST can
+  return before the route is registered). The bus replays nothing on reconnect,
+  so routes are told to `resync` and re-read their messages instead. **A resync
+  applies only the running turn's messages** — `listMessages` answers with the
+  whole session, so replaying it wholesale appends every earlier turn, and on a
+  chat resumed across a restart the entire conversation, onto the message on
+  screen. This turn's are the ones the stream already announced (they're in
+  `messageRoles`) plus anything the server dates at or after the turn began;
+  a message that answers to neither is left alone, since missing one reconnect's
+  updates is recoverable and re-rendering the history underneath the user is not.
+- **The prompt endpoint is synchronous** — `POST /session/{id}/message` resolves
+  when the turn is over, which is the turn-completion signal, raced against
+  `session.idle` so whichever lands first ends it once.
+
+Text arrives as **true incremental deltas** (`message.part.delta` is its own event
+type, not a field on `message.part.updated`), so the session takes Claude's simple
+coalescing path rather than Codex's suffix-diffing. Tool parts keep one `partID`
+across `pending → running → completed`. The server also echoes the user's own
+prompt back as a text part, so parts are filtered by the role recorded from
+`message.updated` — without that every turn renders twice.
+
+**OpenCode's modes are its agents, and the list is the user's.** The mode chip is
+built from `GET /agent`, keeping the unhidden primaries (`compaction`/`summary`/
+`title` are internal, `explore`/`general` are subagents) — `build` and `plan` on a
+default install, plus whatever `opencode.json` defines. Carbon picks the agent and
+sends **no permission ruleset**: what gets approved comes from the user's config
+and the agent's own declaration, so a chat here behaves exactly like the same
+prompt in their TUI. The list is fetched **per directory** (the server is pooled
+that way, and a project's config is its own) and falls back to the built-in pair
+rather than an empty picker.
+
+Two earlier versions were wrong in opposite directions. The first synthesized four
+Carbon modes out of per-session rulesets (`{permission, pattern, action}` triples)
+— it worked, but invented a taxonomy no OpenCode user recognizes. The second
+hardcoded `build`/`plan`, which is right for a stock install and silently hides
+every agent a user wrote. The ruleset trade is still worth knowing: "accept edits"
+and "full access" are not per-chat here. They are global config, which is also why
+Carbon must not write them — that config is shared with every other client on the
+server.
+
+`ChatMeta.opencodeAgent` carries the name verbatim rather than squeezing it into
+`PermissionModeId`'s closed union, and `permissionMode` follows it (`plan` for the
+plan agent, `default` for everything else) because the plan-review gate reads the
+mode. Plan mode therefore **overrides** a custom pick in `agentForChat`: a turn the
+gate treats as read-only has to actually run the read-only agent. Only `plan` maps
+to a mode of its own — Carbon can't know what someone's `reviewer` agent may do,
+and guessing would either strand an editing agent behind the plan gate or let a
+read-only one out of it.
+
+The agent rides **each prompt**, not just session creation (verified: a session
+opened as `plan` accepted `agent: build` on the next turn and wrote the file), so
+switching agents and approving a plan both continue on the same session rather
+than dropping it — and a custom agent needs no more plumbing than the built-in two. Permission requests still reach the user, because the build
+agent gates a few things by default and their config may gate more —
+`decisionToReply` maps Carbon's answer onto `once`/`always`/`reject`, with no
+"deny always" since OpenCode has no persistent denial.
+
+Plan review is synthesized the Codex way (persisted `PersistedPlanReview` + a fake
+`ExitPlanMode` request) on top of OpenCode's native read-only `plan` agent.
+`rewindFiles` reuses `workspaceCheckpoint.ts` rather than OpenCode's own revert
+API, whose semantics are unverified.
+
+Usage history is read straight from `~/.local/share/opencode/opencode.db`
+(`opencodeUsage.ts`), *not* through `usageStats`' `(path, mtime, size)` cache —
+that cache's premise is that an unchanged stamp means unchanged content, true of
+append-only JSONL and false of one continuously-written database. Two traps, both
+found against the real file: the **WAL is load-bearing** (a just-finished turn
+lives in `opencode.db-wal`; a read-only connection sees it, `immutable=1` would
+not), and **reasoning is reported alongside output rather than inside it**
+(`input + output + reasoning + cache == total`), the opposite of Carbon's
+convention — unfolded, those tokens would be priced nowhere. Cost is **not** taken
+from the row's `cost` column, which is 0 on a subscription; cells carry tokens and
+price through the shared table like the other two, which is why `normalizeModel`
+strips the `opencode:<providerID>/` wrapper — a longest-prefix match against the
+full id finds nothing and reports every turn unpriced, i.e. free.
+
+**Effort is per model, and OpenCode calls it a `variant`.** Each model in the
+catalog declares its own (`deepseek-v4-flash-free` offers low/high/max, GPT-5.6
+Sol offers low/medium/high/xhigh/max, several Zen models offer none), so it
+arrives as `ModelOption.supportedEfforts` and rides the turn as the prompt's
+`variant` — the same model-specific path Codex takes, not a provider-wide list.
+`effortForProvider` therefore only drops `ultra`, which is Claude's alone. The
+catalog also uses `none`, `thinking` and `default`, which have no `EffortId`;
+they are dropped rather than mapped, since sending `high` where the user asked
+for `none` is worse than not offering the level.
+
+Model ids are `opencode:<providerID>/<modelID>` plus an `opencode-default`
+sentinel. The prefix is load-bearing: `providerForModel` falls back to `'claude'`,
+and every OpenCode model is runtime-discovered, so an id that cannot name its own
+provider is misrouted on every path that runs before the catalog loads.
+`hasCompleteModelCatalog` deliberately still means claude+codex — requiring an
+optional local CLI would leave the picker permanently incomplete and re-fetch
+forever.
 
 ## Provider integration
 

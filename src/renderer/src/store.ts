@@ -19,7 +19,7 @@ import { invalidateLocalImages } from '@/lib/imageCache'
 import { gitAction, gitActionPrompt, type GitActionId } from '@/lib/gitActions'
 import { changedPathsFromParts } from '@/lib/turnChanges'
 import { hasCompleteModelCatalog, mergeModelCatalogs } from '@/lib/modelCatalog'
-import { USAGE_DEFAULT_DAYS, projectRoot, providerForModel } from '@shared/types'
+import { PROVIDER_LABELS, USAGE_DEFAULT_DAYS, projectRoot, providerForModel } from '@shared/types'
 import type {
   AppDefaults,
   AssistantMessage,
@@ -38,6 +38,7 @@ import type {
   GitHubState,
   GitStatus,
   ModelOption,
+  OpencodeAgentInfo,
   OpResult,
   PermissionDecision,
   PermissionRequestPayload,
@@ -211,6 +212,15 @@ interface AppState {
   models: ModelOption[]
   /** Fetches the session's model list once and caches it (feeds the composer picker). */
   loadModels(chatId?: string, cwd?: string): Promise<void>
+  /**
+   * OpenCode's primary agents, keyed by the directory whose server reported
+   * them — its modes *are* its agents, and a user's `opencode.json` can define
+   * more than the built-in build/plan pair. Per directory because the server is
+   * pooled that way and the answer can genuinely differ between projects.
+   */
+  opencodeAgents: Record<string, OpencodeAgentInfo[]>
+  /** Fetches a directory's agent list once and caches it (feeds the mode picker). */
+  loadOpencodeAgents(cwd: string): Promise<void>
   /** User-level Codex default, kept separate from Claude's dynamic model rows. */
   codexConfigModel: string | null | undefined
   loadCodexConfigModel(): Promise<void>
@@ -342,6 +352,17 @@ interface AppState {
   /** How many recent chats each project shows in the sidebar before search. */
   chatsPerProject: number
   setChatsPerProject(n: number): void
+  /**
+   * Model ids hidden from the picker, chosen in Settings.
+   *
+   * A UI preference, so it lives in localStorage next to the other picker-shape
+   * settings rather than in `defaults`: main never consults it, and a hidden
+   * model that is still selected keeps working — hiding trims the menu, it does
+   * not disable a backend.
+   */
+  hiddenModels: ReadonlySet<string>
+  toggleModelHidden(id: string): void
+  setModelsHidden(ids: string[], hidden: boolean): void
   /** How much each sidebar chat row says — see `SidebarDensity`. Persisted. */
   sidebarDensity: SidebarDensity
   setSidebarDensity(density: SidebarDensity): void
@@ -474,6 +495,8 @@ interface AppState {
       effort?: EffortId
       serviceTier?: ServiceTier
       permissionMode?: ChatMeta['permissionMode']
+      /** OpenCode's primary agent; ignored by the other providers. */
+      opencodeAgent?: string
       attachments?: Attachment[]
       /** Display label for an app-initiated first message (e.g. "Commit"). */
       label?: string
@@ -593,7 +616,7 @@ function notifyTurnDone(
   if (prefs.sound && !failed) playChime()
   if (prefs.finish && !document.hasFocus()) {
     const chat = s.chats.find((c) => c.id === ev.chatId)
-    const title = chat?.title || (chat?.provider === 'codex' ? 'Codex' : 'Claude')
+    const title = chat?.title || PROVIDER_LABELS[chat?.provider ?? 'claude']
     const stats = ev.message.stats
     notify(
       title,
@@ -820,6 +843,9 @@ let codexConfigModelLoad: Promise<string | null> | null = null
 let modelsLoad: Promise<ModelOption[]> | null = null
 let modelsRetryAt = 0
 const MODELS_RETRY_MS = 30_000
+// In-flight agent reads, per directory: the composer and the new-chat screen can
+// ask for the same folder at once, and the first answer is cached in the store.
+const opencodeAgentsLoad = new Set<string>()
 // GitHub reads are deduped per project, not globally. A request for project A
 // must not suppress the refresh kicked off when the user switches to project B.
 const githubRequests = new Map<string, Promise<GitHubState>>()
@@ -854,6 +880,7 @@ export const useApp = create<AppState>((set, get) => ({
   usage: null,
   fastMode: {},
   models: [],
+  opencodeAgents: {},
   codexConfigModel: undefined,
   permissions: {},
   queued: {},
@@ -1178,6 +1205,32 @@ export const useApp = create<AppState>((set, get) => ({
       saveNotifyPrefs(notifyPrefs)
       return { notifyPrefs }
     })
+  },
+
+  hiddenModels: (() => {
+    try {
+      const raw = JSON.parse(localStorage.getItem('hiddenModels') ?? '[]') as unknown
+      return new Set(Array.isArray(raw) ? raw.filter((x): x is string => typeof x === 'string') : [])
+    } catch {
+      return new Set<string>()
+    }
+  })(),
+
+  toggleModelHidden(id) {
+    const next = new Set(get().hiddenModels)
+    if (!next.delete(id)) next.add(id)
+    localStorage.setItem('hiddenModels', JSON.stringify([...next]))
+    set({ hiddenModels: next })
+  },
+
+  setModelsHidden(ids, hidden) {
+    const next = new Set(get().hiddenModels)
+    for (const id of ids) {
+      if (hidden) next.add(id)
+      else next.delete(id)
+    }
+    localStorage.setItem('hiddenModels', JSON.stringify([...next]))
+    set({ hiddenModels: next })
   },
 
   chatsPerProject: (() => {
@@ -2130,6 +2183,25 @@ export const useApp = create<AppState>((set, get) => ({
     }
   },
 
+  async loadOpencodeAgents(cwd) {
+    if (!cwd || get().opencodeAgents[cwd]) return
+    if (opencodeAgentsLoad.has(cwd)) return
+    opencodeAgentsLoad.add(cwd)
+    try {
+      const agents = await window.api.opencodeAgents(cwd)
+      // An empty answer means OpenCode isn't installed here; leaving the entry
+      // unset lets the picker keep its built-in pair and lets a later chat in a
+      // machine that does have it try again.
+      if (agents.length) {
+        set((s) => ({ opencodeAgents: { ...s.opencodeAgents, [cwd]: agents } }))
+      }
+    } catch {
+      // Same fallback as an empty answer: the composer's built-in pair.
+    } finally {
+      opencodeAgentsLoad.delete(cwd)
+    }
+  },
+
   async refreshUsage(force = false) {
     try {
       set({ usage: await window.api.usageOverview(force) })
@@ -2499,7 +2571,7 @@ export const useApp = create<AppState>((set, get) => ({
         if (s.notifyPrefs.sound) playChime()
         if (s.notifyPrefs.permission && !document.hasFocus()) {
           const chat = s.chats.find((c) => c.id === ev.chatId)
-          const agent = chat?.provider === 'codex' ? 'Codex' : 'Claude'
+          const agent = PROVIDER_LABELS[chat?.provider ?? 'claude']
           const title = chat?.title || agent
           const what =
             ev.request.toolName === 'ExitPlanMode'

@@ -3,6 +3,7 @@ import type {
   AgentInfo,
   Attachment,
   ChatEvent,
+  ElementRef,
   McpServerInfo,
   ModelOption,
   OpResult,
@@ -23,6 +24,46 @@ export type Emit = (ev: ChatEvent) => void
  */
 export function composePrompt(text: string, hiddenContext?: string): string {
   return [hiddenContext, text].filter(Boolean).join('\n\n')
+}
+
+/** Renders a picked UI element as a text block the agent can act on. */
+function describeElement(el: ElementRef): string {
+  const lines = [`Selected UI element from the running app (${el.url}):`]
+  if (el.source?.file) {
+    const col = el.source.column != null ? `:${el.source.column}` : ''
+    const loc = el.source.line != null ? `${el.source.file}:${el.source.line}${col}` : el.source.file
+    lines.push(`- Source: ${loc}`)
+  }
+  if (el.label) lines.push(`- Text: ${JSON.stringify(el.label)}`)
+  if (el.selector) lines.push(`- Selector: ${el.selector}`)
+  if (el.html) lines.push(`- HTML: ${el.html}`)
+  return lines.join('\n')
+}
+
+/**
+ * The outbound prompt with the attachments that have no native form folded in.
+ *
+ * Images ride as blocks every provider understands, but the other two kinds are
+ * text: a **file** is referenced by path so the agent reads it itself (cheaper
+ * than inlining it, and it stays current), and a picked **element** contributes
+ * a description of where it lives alongside its screenshot.
+ *
+ * Shared because all three providers say this identically, and because the cost
+ * of *not* sharing it is silent: a provider that skips the fold drops the
+ * element picker's output on the floor with nothing on screen to say so.
+ */
+export function appendAttachmentContext(prompt: string, attachments: Attachment[]): string {
+  const filePaths = attachments.filter((a) => a.kind === 'file' && a.path).map((a) => a.path!)
+  const elements = attachments
+    .filter((a) => a.kind === 'element' && a.element)
+    .map((a) => describeElement(a.element!))
+  let out = prompt
+  if (filePaths.length) {
+    const list = filePaths.map((p) => `- ${p}`).join('\n')
+    out = `${out ? `${out}\n\n` : ''}Attached files:\n${list}`
+  }
+  if (elements.length) out = `${out ? `${out}\n\n` : ''}${elements.join('\n\n')}`
+  return out
 }
 
 /** Resolve to `fallback` after `ms`. The work is not cancelled, just ignored. */

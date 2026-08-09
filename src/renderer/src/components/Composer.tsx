@@ -21,6 +21,7 @@ import {
 } from 'lucide-react'
 import {
   EFFORT_OPTIONS,
+  OPENCODE_BUILTIN_AGENTS,
   PERMISSION_MODES,
   PROVIDER_LABELS,
   SERVICE_TIER_OPTIONS,
@@ -66,6 +67,21 @@ function codexPermissionValue(mode: PermissionModeId): PermissionModeId {
   return mode
 }
 
+/**
+ * One row of the permission chip. For Claude and Codex the id is a
+ * `PermissionModeId`; for OpenCode it is an *agent name*, since OpenCode's modes
+ * are its agents and a user's `opencode.json` can define more than the built-in
+ * pair. `look` is the mode whose icon and accent the row wears — the only thing
+ * the two spaces still share.
+ */
+type PermissionChoice = { id: string; label: string; description: string; look: PermissionModeId }
+
+/** `code-reviewer` → `Code reviewer`. Custom agent names are slugs. */
+function agentLabel(name: string): string {
+  const spaced = name.replace(/[-_]+/g, ' ').trim()
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1)
+}
+
 type PermissionAppearance = {
   Icon: LucideIcon
   iconClassName: string
@@ -75,7 +91,7 @@ type PermissionAppearance = {
 /** A consistent icon and semantic accent for permission modes across providers. */
 function permissionAppearance(
   mode: PermissionModeId,
-  isCodex: boolean
+  provider: Provider
 ): PermissionAppearance {
   switch (mode) {
     case 'plan':
@@ -108,7 +124,10 @@ function permissionAppearance(
       }
     default:
       return {
-        Icon: isCodex ? PencilLine : ShieldQuestion,
+        // Codex's default mode edits inside its sandbox and OpenCode's build
+        // agent edits per the user's own config, so both read as a pencil;
+        // Claude's asks first, which is the question shield.
+        Icon: provider === 'claude' ? ShieldQuestion : PencilLine,
         iconClassName: 'text-muted-foreground',
         triggerClassName: ''
       }
@@ -231,7 +250,7 @@ function ContextRing({
   window: number
   provider: Provider
 }): React.JSX.Element {
-  const name = provider === 'codex' ? 'Codex' : 'Claude'
+  const name = PROVIDER_LABELS[provider]
   const pct = Math.min(1, used / win)
   const left = Math.max(0, win - used)
   const r = 5
@@ -329,7 +348,10 @@ function ModelSettingsPicker({
   const selectedName = resolvedModelName(selected?.resolvedModel) ?? selected?.label ?? model
   const selectedEffort = efforts.find((option) => option.id === effort)
   const selectedTier = serviceTiers.find((option) => option.id === serviceTier)
-  const groups = (['claude', 'codex'] as Provider[])
+  // Derived from PROVIDER_LABELS rather than a literal list, so a new provider
+  // gets a picker group by virtue of having a label — the previous hardcoded
+  // array was cast to Provider[] and would silently omit one.
+  const groups = (Object.keys(PROVIDER_LABELS) as Provider[])
     .map((group) => ({ group, models: models.filter((option) => option.provider === group) }))
     .filter(({ models: options }) => options.length > 0)
 
@@ -408,6 +430,11 @@ function ModelSettingsPicker({
                     {resolved && resolved !== option.label && (
                       <span className="shrink-0 text-[11px] text-muted-foreground/70">
                         {resolved}
+                      </span>
+                    )}
+                    {option.free && (
+                      <span className="shrink-0 rounded bg-success/15 px-1.5 py-px text-[10px] font-semibold text-success">
+                        Free
                       </span>
                     )}
                     {option.contextWindow && (
@@ -530,6 +557,8 @@ export function Composer({
   onServiceTierChange,
   permissionMode,
   onPermissionModeChange,
+  opencodeAgent,
+  onOpencodeAgentChange,
   contextTokens,
   contextWindow,
   provider = 'claude',
@@ -555,6 +584,14 @@ export function Composer({
   onServiceTierChange?: (serviceTier: ServiceTier, opts?: { remember?: boolean }) => void
   permissionMode: PermissionModeId
   onPermissionModeChange: (mode: PermissionModeId) => void
+  /** OpenCode only: the primary agent this chat runs as; undefined means `build`. */
+  opencodeAgent?: string
+  /**
+   * OpenCode only. The handler owns *both* halves: the agent itself and the
+   * `permissionMode` that has to agree with it (`plan` for the plan agent,
+   * `default` for everything else), since the plan-review gate reads the mode.
+   */
+  onOpencodeAgentChange?: (agent: string) => void
   contextTokens?: number
   contextWindow?: number
   /** Which agent backs this chat; switches the pickers/labels to its reality. */
@@ -599,7 +636,13 @@ export function Composer({
   // Both providers' models are always offered — picking one from the other
   // provider switches the chat's backend mid-conversation, and main hands the
   // context over via a handoff brief (see ChatManager.startHandoffBrief).
-  const modelOptions = assembleModelOptions(dynamicModels, codexConfigModel)
+  const hiddenModels = useApp((s) => s.hiddenModels)
+  // `keep` so hiding the model this chat is already on trims it from everyone
+  // else's menu without blanking its own picker.
+  const modelOptions = assembleModelOptions(dynamicModels, codexConfigModel, {
+    hidden: hiddenModels,
+    keep: model
+  })
 
   const selectedModel = React.useMemo(
     () => canonicalModelId(model, modelOptions),
@@ -610,17 +653,29 @@ export function Composer({
   // more values than any one model necessarily advertises, so do not build this
   // menu from the provider-wide SDK union.
   const isCodex = provider === 'codex'
+  const isOpencode = provider === 'opencode'
   const selectedModelOption = modelOptions.find((option) => option.id === selectedModel)
   const codexEfforts = new Set(
     selectedModelOption?.supportedEfforts ?? ['low', 'medium', 'high', 'xhigh']
   )
-  const effortOptions = isCodex
-    ? EFFORT_OPTIONS.filter((e) => e.id === '' || codexEfforts.has(e.id as EffortId)).map((e) =>
-        e.id === '' ? { ...e, description: 'Uses your Codex config' } : e
+  // OpenCode calls these *variants* and declares them per model — one Zen model
+  // offers low/high/max, another none at all — so it takes the same
+  // model-specific path as Codex rather than a provider-wide list. A model with
+  // no variants gets the Default row alone, and `invalidEffort` below then
+  // coerces a stale effort inherited from another provider to '' with
+  // `remember: false`.
+  const opencodeEfforts = new Set(selectedModelOption?.supportedEfforts ?? [])
+  const effortOptions = isOpencode
+    ? EFFORT_OPTIONS.filter((e) => e.id === '' || opencodeEfforts.has(e.id as EffortId)).map((e) =>
+        e.id === '' ? { ...e, description: 'The model’s own default' } : e
       )
-    : EFFORT_OPTIONS.filter((e) => e.id !== 'minimal' && e.id !== 'ultra').map((e) =>
-        e.id === '' ? { ...e, description: 'Uses your Claude Code config' } : e
-      )
+    : isCodex
+      ? EFFORT_OPTIONS.filter((e) => e.id === '' || codexEfforts.has(e.id as EffortId)).map((e) =>
+          e.id === '' ? { ...e, description: 'Uses your Codex config' } : e
+        )
+      : EFFORT_OPTIONS.filter((e) => e.id !== 'minimal' && e.id !== 'ultra').map((e) =>
+          e.id === '' ? { ...e, description: 'Uses your Claude Code config' } : e
+        )
   const invalidEffort = effort !== '' && !effortOptions.some((option) => option.id === effort)
   const effortValue = invalidEffort ? '' : effort
   // Selecting a model also restores the effort last used with it, so flipping
@@ -665,9 +720,68 @@ export function Composer({
   React.useEffect(() => {
     if (invalidServiceTier) onServiceTierChange?.('standard', { remember: false })
   }, [invalidServiceTier, onServiceTierChange])
-  const permissionOptions = isCodex ? CODEX_PERMISSION_MODES : PERMISSION_MODES
-  const permissionValue = isCodex ? codexPermissionValue(permissionMode) : permissionMode
-  const selectedPermissionAppearance = permissionAppearance(permissionValue, isCodex)
+  // OpenCode's modes are the agents its server reports, so the list is fetched
+  // per directory rather than hardcoded — a user's own agents belong in the
+  // picker beside build and plan. The built-in pair stands in until it lands
+  // (and forever, on a machine without OpenCode).
+  const loadOpencodeAgents = useApp((s) => s.loadOpencodeAgents)
+  const opencodeAgentList = useApp((s) => (cwd ? s.opencodeAgents[cwd] : undefined))
+  React.useEffect(() => {
+    if (isOpencode && cwd) void loadOpencodeAgents(cwd)
+  }, [isOpencode, cwd, loadOpencodeAgents])
+  const permissionOptions = React.useMemo<PermissionChoice[]>(() => {
+    if (isOpencode) {
+      const agents = opencodeAgentList?.length ? opencodeAgentList : OPENCODE_BUILTIN_AGENTS
+      return agents.map((agent) => ({
+        id: agent.name,
+        label: agentLabel(agent.name),
+        // Carbon writes no copy of its own here: an agent's description is
+        // whatever its author wrote, and for build/plan that is OpenCode's.
+        description: agent.description || 'Agent from your opencode.json',
+        // Only plan has a Carbon meaning; a custom agent could do anything, and
+        // dressing it as read-only or as full access would be a guess.
+        look: agent.name === 'plan' ? 'plan' : 'default'
+      }))
+    }
+    const modes = isCodex ? CODEX_PERMISSION_MODES : PERMISSION_MODES
+    return modes.map((m) => ({ id: m.id, label: m.label, description: m.description, look: m.id }))
+  }, [isOpencode, isCodex, opencodeAgentList])
+  // A chat can arrive carrying a mode this provider doesn't have — switching in
+  // from Claude on Auto or Accept edits, neither of which OpenCode expresses —
+  // or an agent that has since been removed from opencode.json. Fall back to the
+  // first row rather than leaving the chip blank. Same shape as `invalidEffort`.
+  const rawPermission = isOpencode
+    ? permissionMode === 'plan'
+      ? 'plan'
+      : opencodeAgent || 'build'
+    : isCodex
+      ? codexPermissionValue(permissionMode)
+      : permissionMode
+  const invalidPermission = !permissionOptions.some((m) => m.id === rawPermission)
+  const permissionValue = invalidPermission ? permissionOptions[0].id : rawPermission
+  const selectedPermissionAppearance = permissionAppearance(
+    permissionOptions.find((m) => m.id === permissionValue)?.look ?? 'default',
+    provider
+  )
+  const choosePermission = React.useCallback(
+    (id: string) => {
+      if (isOpencode) onOpencodeAgentChange?.(id)
+      else onPermissionModeChange(id as PermissionModeId)
+    },
+    [isOpencode, onOpencodeAgentChange, onPermissionModeChange]
+  )
+  // Persist the correction, so the chat's stored mode matches what it actually
+  // runs under rather than a mode this backend silently reinterprets.
+  React.useEffect(() => {
+    if (invalidPermission) choosePermission(permissionValue)
+  }, [invalidPermission, permissionValue, choosePermission])
+  // OpenCode's chip carries the agent, so a mode it has no agent for — anything
+  // but default and plan — would otherwise sit in the chat unseen and unrunnable.
+  React.useEffect(() => {
+    if (!isOpencode) return
+    if (permissionMode === 'default' || permissionMode === 'plan') return
+    onPermissionModeChange('default')
+  }, [isOpencode, permissionMode, onPermissionModeChange])
 
   const inbox = useApp((s) => s.attachmentInbox)
   React.useEffect(() => {
@@ -1071,9 +1185,9 @@ export function Composer({
           />
           <CompactSelect
             value={permissionValue}
-            onValueChange={(v) => onPermissionModeChange(v as PermissionModeId)}
+            onValueChange={choosePermission}
             options={permissionOptions.map((m) => {
-              const appearance = permissionAppearance(m.id, isCodex)
+              const appearance = permissionAppearance(m.look, provider)
               return {
                 value: m.id,
                 label: m.label,
