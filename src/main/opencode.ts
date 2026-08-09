@@ -102,9 +102,17 @@ export class OpencodeSession implements AgentSession {
   private running = false
   private interrupted = false
   private current: AssistantMessage | null = null
-  private activeUserMessageId: string | null = null
   /** OpenCode part id → where it lives in the current assistant message. */
   private partLoc = new Map<string, { message: AssistantMessage; index: number }>()
+  /**
+   * OpenCode message id → role.
+   *
+   * The server echoes the user's own prompt back as a text part, so without this
+   * every message would appear twice — once as the user typed it and again as
+   * assistant prose. Populated from `message.updated`, which the server always
+   * sends for a message before any of its parts.
+   */
+  private messageRoles = new Map<string, string>()
   /** The single checklist card for this turn. */
   private todoLoc: { message: AssistantMessage; index: number; toolUseId: string } | null = null
   private pendingPermissions = new Map<string, PendingPermission>()
@@ -331,10 +339,10 @@ export class OpencodeSession implements AgentSession {
     this.interrupted = false
     this.current = null
     this.partLoc.clear()
+    this.messageRoles.clear()
     this.todoLoc = null
     this.turnUsage = emptyUsage()
     this.turnStart = Date.now()
-    this.activeUserMessageId = turn.userMessageId
     this.turnModel = undefined
     // Captured before the turn and paired with an 'after' when it ends, so a
     // rewind can restore exactly what this turn changed. Deliberately the same
@@ -413,6 +421,7 @@ export class OpencodeSession implements AgentSession {
         // Which model actually served the turn, for the turn-stats row. Only
         // recorded — the chat's own model is the user's pick and is not rewritten
         // from what the server happened to resolve.
+        if (event.messageID && event.role) this.messageRoles.set(event.messageID, event.role)
         if (event.role === 'assistant' && event.modelID) {
           this.turnModel = event.providerID ? `${event.providerID}/${event.modelID}` : event.modelID
         }
@@ -462,8 +471,10 @@ export class OpencodeSession implements AgentSession {
   }
 
   private applyPart(raw: OpencodePart): void {
-    // The user's own echoed prompt comes back as a part; Carbon already showed it.
-    if (!raw.id || raw.messageID === this.activeUserMessageId) return
+    if (!raw.id) return
+    // The user's own prompt comes back as a text part on their message; Carbon
+    // has already shown it, and rendering it again would double every turn.
+    if (raw.messageID && this.messageRoles.get(raw.messageID) === 'user') return
     this.turnUsage = addStepUsage(this.turnUsage, raw)
     const mapped = partToAssistantPart(raw)
     if (!mapped) return

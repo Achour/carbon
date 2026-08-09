@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { readOpencodeCells, opencodeDbPath } from '../src/main/opencodeUsage.ts'
+import { normalizeModel, priceCell, staticRate, type UsageCell } from '../src/main/usageScan.ts'
 
 /**
  * Driven against a real SQLite database rather than a mock, because the things
@@ -152,4 +153,42 @@ test('corrupt rows are skipped without losing the rest of the window', () => {
 
 test('the database path is the one OpenCode actually uses', () => {
   assert.equal(opencodeDbPath('/home/x'), '/home/x/.local/share/opencode/opencode.db')
+})
+
+test('an OpenCode model id is stripped down to something a rate table can match', () => {
+  // The wrapper and the upstream vendor both have to come off: matchRate is a
+  // longest-*prefix* match, so 'opencode:openai/gpt-5.6-luna' matches nothing
+  // and the turn is reported unpriced — i.e. free, next to two providers'
+  // real numbers.
+  assert.equal(normalizeModel('opencode:openai/gpt-5.6-luna'), 'gpt-5.6-luna')
+  assert.equal(normalizeModel('opencode:opencode/deepseek-v4-flash-free'), 'deepseek-v4-flash-free')
+  // A gateway that qualifies the model by vendor keeps that part: it is the
+  // form the rate feed keys such models under.
+  assert.equal(
+    normalizeModel('opencode:openrouter/anthropic/claude-sonnet-5'),
+    'anthropic/claude-sonnet-5'
+  )
+  // Other providers' ids are untouched.
+  assert.equal(normalizeModel('claude-opus-5'), 'claude-opus-5')
+  assert.equal(normalizeModel('GPT-5.6-Sol'), 'gpt-5.6-sol')
+})
+
+test('an OpenCode cell prices through the shared static table', () => {
+  const cell: UsageCell = {
+    provider: 'opencode',
+    model: 'opencode:openai/gpt-5.6-luna',
+    day: '2026-08-09',
+    input: 1_000_000,
+    cacheRead: 0,
+    cacheWrite5m: 0,
+    cacheWrite1h: 0,
+    output: 0,
+    reasoning: 0,
+    responses: 1
+  }
+  const cost = priceCell(cell, staticRate)
+  // The point is that it is priced at all — an unpriced cell is what "free"
+  // looks like on the chart.
+  assert.ok(cost.costUsd > 0, 'a known model must not come back unpriced')
+  assert.equal(cost.unpricedTokens, 0)
 })

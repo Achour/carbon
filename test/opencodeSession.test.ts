@@ -212,6 +212,32 @@ test('text deltas append to the stored part, and a full part supersedes them', a
   client.finishTurn()
 })
 
+test('the echoed user prompt is not rendered again as assistant prose', async () => {
+  const { session, client, chat } = harness()
+  session.send('do the thing')
+  await waitFor(() => client.prompts.length === 1)
+
+  // The server replays the user's own message as a text part on a user-role
+  // message. Rendering it would show every turn's prompt twice.
+  client.emit({ type: 'message.updated', messageID: 'msg_user', role: 'user' })
+  client.emit({
+    type: 'message.part.updated',
+    part: { id: 'p-user', messageID: 'msg_user', type: 'text', text: 'do the thing' }
+  })
+  client.emit({ type: 'message.updated', messageID: 'msg_asst', role: 'assistant' })
+  client.emit({
+    type: 'message.part.updated',
+    part: { id: 'p-asst', messageID: 'msg_asst', type: 'text', text: 'Did it.' }
+  })
+
+  const assistants = chat.messages.filter((m) => m.role === 'assistant')
+  const texts = assistants.flatMap((m) => m.parts.map((p) => (p?.type === 'text' ? p.text : '')))
+  assert.deepEqual(texts.filter(Boolean), ['Did it.'])
+  assert.equal(chat.messages.filter((m) => m.role === 'user').length, 1)
+
+  client.finishTurn()
+})
+
 test('a tool part updates in place across its lifecycle rather than stacking cards', async () => {
   const { session, client, chat } = harness()
   session.send('write a file')
