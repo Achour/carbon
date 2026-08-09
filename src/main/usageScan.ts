@@ -35,7 +35,9 @@
  * even though the transcript reports the same id.
  */
 export interface UsageCell {
-  provider: 'claude' | 'codex'
+  // Spelled out rather than imported as `Provider` so this module stays free of
+  // value imports from `@shared` and `node --test` can run the .ts directly.
+  provider: 'claude' | 'codex' | 'opencode'
   model: string
   /** `usage.speed` from the transcript — 'fast' bills at a premium SKU. */
   speed?: string

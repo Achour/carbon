@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { Brain, Check, Sparkles } from 'lucide-react'
-import { EFFORT_OPTIONS, type EffortId } from '@shared/types'
+import { EFFORT_OPTIONS, PROVIDER_LABELS, type EffortId } from '@shared/types'
 import { cn } from '@/lib/utils'
 import {
   assembleModelOptions,
@@ -59,12 +59,16 @@ export function PlanContent({
   // Efforts follow the *picked* build model's provider — a cross-provider pick
   // must offer that backend's levels, not the planning chat's.
   const buildProvider = buildModelOption?.provider ?? chat?.provider ?? 'claude'
-  const supportedBuildEfforts = new Set(
+  const supportedBuildEfforts = new Set<EffortId>(
     buildModelOption?.supportedEfforts ??
       resolvedBuildModelOption?.supportedEfforts ??
-      (buildProvider === 'codex'
-        ? ['low', 'medium', 'high', 'xhigh']
-        : ['low', 'medium', 'high', 'xhigh', 'max'])
+      // OpenCode has no effort concept, so it advertises none and the menu
+      // collapses to the Default row alone.
+      (buildProvider === 'opencode'
+        ? []
+        : buildProvider === 'codex'
+          ? ['low', 'medium', 'high', 'xhigh']
+          : ['low', 'medium', 'high', 'xhigh', 'max'])
   )
   const buildEffortOptions = chat
     ? EFFORT_OPTIONS.filter(
@@ -74,9 +78,9 @@ export function PlanContent({
           ? {
               ...option,
               description:
-                buildProvider === 'codex'
-                  ? 'Uses your Codex config'
-                  : 'Uses your Claude Code config'
+                buildProvider === 'opencode'
+                  ? 'OpenCode has no effort setting'
+                  : `Uses your ${PROVIDER_LABELS[buildProvider]} config`
             }
           : option
       )

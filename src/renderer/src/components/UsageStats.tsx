@@ -26,10 +26,12 @@ import { WithTooltip } from '@/components/ui/tooltip'
 // ---------- Series ----------
 
 const SERIES: { key: Provider; label: string; color: string }[] = [
-  // Fixed order, never cycled: Claude is always warm, Codex always cool, so the
-  // legend on one chart reads the same as the dots in the table below it.
+  // Fixed order, never cycled: Claude is always warm, Codex always cool and
+  // OpenCode always magenta, so the legend on one chart reads the same as the
+  // dots in the table below it.
   { key: 'claude', label: 'Claude Code', color: 'var(--chart-claude)' },
-  { key: 'codex', label: 'Codex', color: 'var(--chart-codex)' }
+  { key: 'codex', label: 'Codex', color: 'var(--chart-codex)' },
+  { key: 'opencode', label: 'OpenCode', color: 'var(--chart-opencode)' }
 ]
 
 type Measure = 'cost' | 'tokens'
@@ -469,8 +471,11 @@ function Breakdown({ report }: { report: UsageReport }): React.JSX.Element {
           .map((d) => ({
             id: d.day,
             label: shortDay(d.day),
-            costUsd: d.claude.costUsd + d.codex.costUsd,
-            tokens: tokensOf(d.claude) + tokensOf(d.codex)
+            // Summed over SERIES rather than named providers: a hardcoded pair
+            // silently drops a third provider's spend from the by-day rows while
+            // the chart above still plots it.
+            costUsd: SERIES.reduce((sum, s) => sum + d[s.key].costUsd, 0),
+            tokens: SERIES.reduce((sum, s) => sum + tokensOf(d[s.key]), 0)
           }))
           .filter((d) => d.costUsd > 0 || d.tokens > 0)
           .reverse()
@@ -704,14 +709,14 @@ export function UsageStats(): React.JSX.Element {
 
             <div className="flex items-center justify-between px-1 pb-2 text-[11px] text-muted-foreground">
               <span>
-                Read from Claude Code and Codex session logs, including turns run outside Carbon
+                Read from the agents' own session logs, including turns run outside Carbon
               </span>
               <span>{updatedLabel(report.scannedAt)}</span>
             </div>
 
             {empty && (
               <p className="px-1 pb-4 text-[12px] text-muted-foreground">
-                No usage recorded in this window. Sessions appear here once Claude Code or Codex
+                No usage recorded in this window. Sessions appear here once one of the agents
                 has run — from this app or the terminal.
               </p>
             )}

@@ -1,4 +1,4 @@
-export type Provider = 'claude' | 'codex'
+export type Provider = 'claude' | 'codex' | 'opencode'
 
 export type ServiceTier = 'standard' | 'fast'
 
@@ -37,11 +37,16 @@ export function effortForProvider(
   effort: EffortId | undefined,
   provider: 'codex'
 ): CodexEffortId | undefined
+export function effortForProvider(effort: EffortId | undefined, provider: 'opencode'): undefined
 export function effortForProvider(
   effort: EffortId | undefined,
   provider: Provider
 ): EffortId | undefined
 export function effortForProvider(effort: EffortId | undefined, provider: Provider): EffortId | undefined {
+  // OpenCode has no reasoning-effort concept: the server takes a model and an
+  // agent, and nothing else. Dropping the effort here is what keeps a stale
+  // 'ultra' from riding a provider switch into a prompt that can't express it.
+  if (provider === 'opencode') return undefined
   if (provider === 'codex' && effort === 'minimal') return undefined
   if (provider === 'claude' && (effort === 'minimal' || effort === 'ultra')) return undefined
   return effort
@@ -497,6 +502,12 @@ export interface ProviderUsage {
 export interface UsageOverview {
   claude: ProviderUsage
   codex: ProviderUsage
+  /**
+   * Omitted entirely when the OpenCode CLI isn't installed — an absent provider
+   * draws nothing, where an `available: false` row would tell most users about a
+   * backend they don't have.
+   */
+  opencode?: ProviderUsage
 }
 
 // ---------- Usage history (the Usage page) ----------
@@ -540,6 +551,7 @@ export interface UsageDay {
   day: string
   claude: UsageTotals
   codex: UsageTotals
+  opencode: UsageTotals
 }
 
 /**
@@ -559,6 +571,7 @@ export interface UsageReport {
   models: UsageModelRow[]
   claude: UsageTotals
   codex: UsageTotals
+  opencode: UsageTotals
   total: UsageTotals
   /** Distinct session files that contributed to the window. */
   sessions: number
@@ -749,6 +762,19 @@ export function rememberedEffortForModel(
 /** Sentinel model id: use Codex without pinning a model (defer to ~/.codex config). */
 export const CODEX_DEFAULT_MODEL = 'codex-default'
 
+/** Sentinel model id: use OpenCode without pinning a model (defer to its config). */
+export const OPENCODE_DEFAULT_MODEL = 'opencode-default'
+
+/**
+ * OpenCode addresses a model as a (providerID, modelID) pair, where `ModelOption.id`
+ * is one string — so ids are encoded `opencode:<providerID>/<modelID>`. The prefix
+ * is load-bearing rather than cosmetic: `providerForModel` falls back to 'claude',
+ * so an id that can't name its own provider is misrouted on every path that runs
+ * before the live catalog loads (startup, persisted `pendingProvider`, a plan
+ * approved into the other provider).
+ */
+export const OPENCODE_MODEL_PREFIX = 'opencode:'
+
 export const MODEL_OPTIONS: ModelOption[] = [
   { id: '', label: 'Default', description: 'Your Claude Code default', provider: 'claude' },
   { id: 'claude-fable-5', label: 'Fable 5', description: 'Most intelligent', provider: 'claude' },
@@ -789,6 +815,9 @@ export const MODEL_OPTIONS: ModelOption[] = [
  * fallback for startup, older settings and known aliases.
  */
 export function providerForModel(id: string, options: ModelOption[] = MODEL_OPTIONS): Provider {
+  // Checked before either catalog: OpenCode's models are all runtime-discovered,
+  // so its ids routinely have to answer this before any catalog has loaded.
+  if (id === OPENCODE_DEFAULT_MODEL || id.startsWith(OPENCODE_MODEL_PREFIX)) return 'opencode'
   return (
     options.find((m) => m.id === id)?.provider ??
     MODEL_OPTIONS.find((m) => m.id === id)?.provider ??
@@ -810,11 +839,25 @@ export function claudeModelName(resolvedModel?: string): string | undefined {
   return `${family} ${version}`
 }
 
-/** Human label for either provider's resolved wire model id. */
+/**
+ * Display name for an encoded OpenCode id: 'opencode:openai/gpt-5.6-luna' →
+ * 'gpt-5.6-luna'. The providerID is dropped because it names the *upstream*
+ * vendor, which the OpenCode badge beside it already says.
+ */
+export function opencodeModelName(id?: string): string | undefined {
+  if (!id || !id.startsWith(OPENCODE_MODEL_PREFIX)) return undefined
+  const rest = id.slice(OPENCODE_MODEL_PREFIX.length)
+  const slash = rest.indexOf('/')
+  return (slash === -1 ? rest : rest.slice(slash + 1)) || undefined
+}
+
+/** Human label for any provider's resolved wire model id. */
 export function resolvedModelName(resolvedModel?: string): string | undefined {
   if (!resolvedModel) return undefined
   const claudeName = claudeModelName(resolvedModel)
   if (claudeName) return claudeName
+  const opencodeName = opencodeModelName(resolvedModel)
+  if (opencodeName) return opencodeName
   // Preserve the existing Claude fallback for legacy ids the helper does not
   // recognize; the SDK's displayName is more useful than a raw wire id.
   if (/^claude-/i.test(resolvedModel)) return undefined
@@ -848,7 +891,8 @@ export function claudeModelContextWindow(
 
 export const PROVIDER_LABELS: Record<Provider, string> = {
   claude: 'Claude Code',
-  codex: 'Codex'
+  codex: 'Codex',
+  opencode: 'OpenCode'
 }
 
 /**
@@ -862,7 +906,8 @@ export function modelDisplayName(
   provider: Provider,
   options?: ModelOption[]
 ): string {
-  if (!model || model === CODEX_DEFAULT_MODEL) return PROVIDER_LABELS[provider]
+  if (!model || model === CODEX_DEFAULT_MODEL || model === OPENCODE_DEFAULT_MODEL)
+    return PROVIDER_LABELS[provider]
   return options?.find((option) => option.id === model)?.label ?? resolvedModelName(model) ?? model
 }
 

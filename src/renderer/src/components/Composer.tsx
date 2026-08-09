@@ -66,6 +66,18 @@ function codexPermissionValue(mode: PermissionModeId): PermissionModeId {
   return mode
 }
 
+// OpenCode carries the mode as a per-session permission ruleset (read/edit/bash/
+// webfetch × allow|deny|ask) plus the agent the turn runs as, so the same five
+// ids map cleanly. Worth saying plainly that the ruleset is scoped to the one
+// session: the user's own TUI, talking to the same server, is unaffected.
+const OPENCODE_PERMISSION_MODES: { id: PermissionModeId; label: string; description: string }[] = [
+  { id: 'plan', label: 'Plan mode', description: 'Runs the plan agent — reads only, never edits' },
+  { id: 'default', label: 'Ask to approve', description: 'Prompts before edits and commands' },
+  { id: 'acceptEdits', label: 'Accept edits', description: 'Edits without asking; still asks to run commands' },
+  { id: 'auto', label: 'Auto', description: 'Approves edits and reads; asks before commands and fetches' },
+  { id: 'bypassPermissions', label: 'Full access', description: 'Approves everything in this chat — use with care' }
+]
+
 type PermissionAppearance = {
   Icon: LucideIcon
   iconClassName: string
@@ -75,7 +87,7 @@ type PermissionAppearance = {
 /** A consistent icon and semantic accent for permission modes across providers. */
 function permissionAppearance(
   mode: PermissionModeId,
-  isCodex: boolean
+  provider: Provider
 ): PermissionAppearance {
   switch (mode) {
     case 'plan':
@@ -108,7 +120,9 @@ function permissionAppearance(
       }
     default:
       return {
-        Icon: isCodex ? PencilLine : ShieldQuestion,
+        // Codex's default mode still edits inside its sandbox, so it reads as a
+        // pencil; Claude's and OpenCode's ask first, which is the question shield.
+        Icon: provider === 'codex' ? PencilLine : ShieldQuestion,
         iconClassName: 'text-muted-foreground',
         triggerClassName: ''
       }
@@ -231,7 +245,7 @@ function ContextRing({
   window: number
   provider: Provider
 }): React.JSX.Element {
-  const name = provider === 'codex' ? 'Codex' : 'Claude'
+  const name = PROVIDER_LABELS[provider]
   const pct = Math.min(1, used / win)
   const left = Math.max(0, win - used)
   const r = 5
@@ -329,7 +343,10 @@ function ModelSettingsPicker({
   const selectedName = resolvedModelName(selected?.resolvedModel) ?? selected?.label ?? model
   const selectedEffort = efforts.find((option) => option.id === effort)
   const selectedTier = serviceTiers.find((option) => option.id === serviceTier)
-  const groups = (['claude', 'codex'] as Provider[])
+  // Derived from PROVIDER_LABELS rather than a literal list, so a new provider
+  // gets a picker group by virtue of having a label — the previous hardcoded
+  // array was cast to Provider[] and would silently omit one.
+  const groups = (Object.keys(PROVIDER_LABELS) as Provider[])
     .map((group) => ({ group, models: models.filter((option) => option.provider === group) }))
     .filter(({ models: options }) => options.length > 0)
 
@@ -610,17 +627,27 @@ export function Composer({
   // more values than any one model necessarily advertises, so do not build this
   // menu from the provider-wide SDK union.
   const isCodex = provider === 'codex'
+  const isOpencode = provider === 'opencode'
   const selectedModelOption = modelOptions.find((option) => option.id === selectedModel)
   const codexEfforts = new Set(
     selectedModelOption?.supportedEfforts ?? ['low', 'medium', 'high', 'xhigh']
   )
-  const effortOptions = isCodex
-    ? EFFORT_OPTIONS.filter((e) => e.id === '' || codexEfforts.has(e.id as EffortId)).map((e) =>
-        e.id === '' ? { ...e, description: 'Uses your Codex config' } : e
-      )
-    : EFFORT_OPTIONS.filter((e) => e.id !== 'minimal' && e.id !== 'ultra').map((e) =>
-        e.id === '' ? { ...e, description: 'Uses your Claude Code config' } : e
-      )
+  // OpenCode takes a model and an agent and nothing else, so it gets the
+  // Default row alone. That is not a stub: `invalidEffort` below then coerces a
+  // stale effort inherited from another provider to '' with `remember: false`,
+  // which is exactly the behavior an empty menu should have.
+  const effortOptions = isOpencode
+    ? EFFORT_OPTIONS.filter((e) => e.id === '').map((e) => ({
+        ...e,
+        description: 'OpenCode has no effort setting'
+      }))
+    : isCodex
+      ? EFFORT_OPTIONS.filter((e) => e.id === '' || codexEfforts.has(e.id as EffortId)).map((e) =>
+          e.id === '' ? { ...e, description: 'Uses your Codex config' } : e
+        )
+      : EFFORT_OPTIONS.filter((e) => e.id !== 'minimal' && e.id !== 'ultra').map((e) =>
+          e.id === '' ? { ...e, description: 'Uses your Claude Code config' } : e
+        )
   const invalidEffort = effort !== '' && !effortOptions.some((option) => option.id === effort)
   const effortValue = invalidEffort ? '' : effort
   // Selecting a model also restores the effort last used with it, so flipping
@@ -665,9 +692,13 @@ export function Composer({
   React.useEffect(() => {
     if (invalidServiceTier) onServiceTierChange?.('standard', { remember: false })
   }, [invalidServiceTier, onServiceTierChange])
-  const permissionOptions = isCodex ? CODEX_PERMISSION_MODES : PERMISSION_MODES
+  const permissionOptions = isOpencode
+    ? OPENCODE_PERMISSION_MODES
+    : isCodex
+      ? CODEX_PERMISSION_MODES
+      : PERMISSION_MODES
   const permissionValue = isCodex ? codexPermissionValue(permissionMode) : permissionMode
-  const selectedPermissionAppearance = permissionAppearance(permissionValue, isCodex)
+  const selectedPermissionAppearance = permissionAppearance(permissionValue, provider)
 
   const inbox = useApp((s) => s.attachmentInbox)
   React.useEffect(() => {
@@ -1073,7 +1104,7 @@ export function Composer({
             value={permissionValue}
             onValueChange={(v) => onPermissionModeChange(v as PermissionModeId)}
             options={permissionOptions.map((m) => {
-              const appearance = permissionAppearance(m.id, isCodex)
+              const appearance = permissionAppearance(m.id, provider)
               return {
                 value: m.id,
                 label: m.label,

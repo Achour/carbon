@@ -48,6 +48,13 @@
    */
   --chart-claude: oklch(0.6 0.139 45.6);
   --chart-codex: oklch(0.54 0.124 256.5);
+  /* Third series. Magenta rather than a green or teal: under deuteranopia a
+     green collapses toward the orange and a teal toward the blue, where magenta
+     stays separable from both, and it carries a distinct lightness so the three
+     are still ordered when hue is lost entirely. NOT yet run through the same
+     pairwise ΔE validation as the pair above — do that before treating this
+     value as settled. */
+  --chart-opencode: oklch(0.52 0.163 330);
 
   /*
    * The providers' own marks, wherever a logo is drawn (the sidebar's detailed
@@ -63,6 +70,12 @@
    */
   --brand-claude: oklch(0.6 0.139 45.6);
   --brand-codex: oklch(0.27 0 0);
+  /* OpenCode's mark is monochrome too — a near-black terminal frame (#131010),
+     so it gets the same flip as Codex rather than an invented hue. The warmth is
+     the mark's own and is what keeps the two monochrome badges from being the
+     same swatch; the real distinction is the shape (a square frame against
+     OpenAI's knot), which is legible at 11px where a 2% lightness step is not. */
+  --brand-opencode: oklch(0.21 0.008 40);
 
   /*
    * The file-type icon palette (`lib/fileIcon.tsx`). Seven hues rather than one
@@ -116,8 +129,10 @@
      same hues re-validated against a dark background. */
   --chart-claude: oklch(0.664 0.143 46.5);
   --chart-codex: oklch(0.644 0.141 252.7);
+  --chart-opencode: oklch(0.68 0.155 331);
   --brand-claude: oklch(0.7 0.135 46);
   --brand-codex: oklch(0.95 0 0);
+  --brand-opencode: oklch(0.94 0.01 60);
   /* Re-stepped for the dark surface, same hues. */
   --icon-blue: oklch(0.7 0.13 250);
   --icon-cyan: oklch(0.75 0.1 205);
@@ -157,8 +172,10 @@
   --color-warning: var(--warning);
   --color-chart-claude: var(--chart-claude);
   --color-chart-codex: var(--chart-codex);
+  --color-chart-opencode: var(--chart-opencode);
   --color-brand-claude: var(--brand-claude);
   --color-brand-codex: var(--brand-codex);
+  --color-brand-opencode: var(--brand-opencode);
   --color-icon-blue: var(--icon-blue);
   --color-icon-cyan: var(--icon-cyan);
   --color-icon-green: var(--icon-green);

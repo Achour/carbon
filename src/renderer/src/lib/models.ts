@@ -25,5 +25,10 @@ export function assembleModelOptions(
       ? { ...option, resolvedModel: codexConfigModel }
       : option
   )
-  return [...providerOptions('claude'), ...codexModels]
+  // OpenCode is a locally-installed CLI, so unlike the other two it can be
+  // legitimately absent. It contributes its live rows or nothing at all — the
+  // static catalog holds only its sentinel, and a picker group containing just
+  // "OpenCode (default)" on a machine without the binary is a dead end.
+  const opencodeModels = dynamicModels.filter((option) => option.provider === 'opencode')
+  return [...providerOptions('claude'), ...codexModels, ...opencodeModels]
 }

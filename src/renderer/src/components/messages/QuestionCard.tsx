@@ -1,6 +1,7 @@
 import * as React from 'react'
 import { MessageCircleQuestion } from 'lucide-react'
 import type { PermissionRequestPayload, Provider, UserQuestion } from '@shared/types'
+import { PROVIDER_LABELS } from '@shared/types'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -154,7 +155,7 @@ export function QuestionCard({
       <div className="flex items-center gap-2 border-b border-border/60 px-3.5 py-2.5">
         <MessageCircleQuestion className="size-4 text-primary" />
         <span className="text-[13px] font-semibold">
-          {provider === 'codex' ? 'Codex' : 'Claude'} has a question
+          {PROVIDER_LABELS[provider]} has a question
         </span>
       </div>
       <div className="space-y-4 px-3.5 py-3">

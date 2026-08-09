@@ -18,7 +18,7 @@ import {
   X
 } from 'lucide-react'
 import type { AssistantMessage, ChatMessage, ChatMeta, ToolPart } from '@shared/types'
-import { projectRoot } from '@shared/types'
+import { PROVIDER_LABELS, projectRoot } from '@shared/types'
 import { cn } from '@/lib/utils'
 import { basename } from '@/lib/format'
 import { useApp } from '@/store'
@@ -763,7 +763,7 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
                   className="flex animate-enter items-center gap-2.5 rounded-xl border border-primary/30 bg-primary/5 px-3.5 py-2.5"
                 >
                   <span className="text-[13px]">
-                    {chat.provider === 'codex' ? 'Codex' : 'Claude'} prepared a plan for your review.
+                    {PROVIDER_LABELS[chat.provider]} prepared a plan for your review.
                   </span>
                   <div className="flex-1" />
                   <Button

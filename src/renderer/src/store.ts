@@ -19,7 +19,7 @@ import { invalidateLocalImages } from '@/lib/imageCache'
 import { gitAction, gitActionPrompt, type GitActionId } from '@/lib/gitActions'
 import { changedPathsFromParts } from '@/lib/turnChanges'
 import { hasCompleteModelCatalog, mergeModelCatalogs } from '@/lib/modelCatalog'
-import { USAGE_DEFAULT_DAYS, projectRoot, providerForModel } from '@shared/types'
+import { PROVIDER_LABELS, USAGE_DEFAULT_DAYS, projectRoot, providerForModel } from '@shared/types'
 import type {
   AppDefaults,
   AssistantMessage,
@@ -593,7 +593,7 @@ function notifyTurnDone(
   if (prefs.sound && !failed) playChime()
   if (prefs.finish && !document.hasFocus()) {
     const chat = s.chats.find((c) => c.id === ev.chatId)
-    const title = chat?.title || (chat?.provider === 'codex' ? 'Codex' : 'Claude')
+    const title = chat?.title || PROVIDER_LABELS[chat?.provider ?? 'claude']
     const stats = ev.message.stats
     notify(
       title,
@@ -2499,7 +2499,7 @@ export const useApp = create<AppState>((set, get) => ({
         if (s.notifyPrefs.sound) playChime()
         if (s.notifyPrefs.permission && !document.hasFocus()) {
           const chat = s.chats.find((c) => c.id === ev.chatId)
-          const agent = chat?.provider === 'codex' ? 'Codex' : 'Claude'
+          const agent = PROVIDER_LABELS[chat?.provider ?? 'claude']
           const title = chat?.title || agent
           const what =
             ev.request.toolName === 'ExitPlanMode'
