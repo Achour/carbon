@@ -54,6 +54,7 @@ import { CODEX_SLASH_COMMANDS, parseCodexSlashCommand } from '@shared/codexComma
 import type { Store } from './store'
 import type { PreviewManager } from './preview'
 import { CodexSession, fetchCodexModels, generateCodexText } from './codex'
+import { OpencodeSession, fetchOpencodeModels, generateOpencodeText } from './opencode'
 import { CodexAppServerClient } from './codexAppServer'
 import { composePrompt, withTimeout, type AgentSession, type Emit } from './session'
 import { DeltaCoalescer } from './deltaCoalescer'
@@ -1683,6 +1684,9 @@ export class ChatManager {
   async getCommands(cwd: string, provider: Provider = 'claude'): Promise<SlashCommand[]> {
     if (!cwd) return []
     if (provider === 'codex') return CODEX_SLASH_COMMANDS
+    // OpenCode has a /command endpoint; until it's wired, offering Claude's list
+    // would name commands this backend does not have.
+    if (provider === 'opencode') return []
     const cached = this.commandsByCwd.get(cwd)
     if (cached) return cached
     return this.warmCommands(cwd)
@@ -1798,17 +1802,21 @@ export class ChatManager {
         queueMicrotask(() => this.pruneIdleSessions())
       }
     }
+    // An explicit switch, not a ternary: the old `else` meant Claude, so a new
+    // provider would have silently run the wrong backend.
     const session: AgentSession =
       chat.provider === 'codex'
         ? new CodexSession(chat, sessionEmit, this.store, onDead)
-        : new ClaudeSession(
-            chat,
-            sessionEmit,
-            this.store,
-            onDead,
-            (commands) => this.commandsByCwd.set(chat.cwd, commands),
-            this.preview
-          )
+        : chat.provider === 'opencode'
+          ? new OpencodeSession(chat, sessionEmit, this.store, onDead)
+          : new ClaudeSession(
+              chat,
+              sessionEmit,
+              this.store,
+              onDead,
+              (commands) => this.commandsByCwd.set(chat.cwd, commands),
+              this.preview
+            )
     this.sessions.set(chat.id, session)
     this.pruneIdleSessions()
     return session
@@ -2036,7 +2044,9 @@ export class ChatManager {
       const gen =
         handoff.provider === 'codex'
           ? generateCodexText(chat.cwd, handoff.model, `${HANDOFF_BRIEF_SYSTEM}\n\n${prompt}`)
-          : generateClaudeText(chat.cwd, handoff.model, HANDOFF_BRIEF_SYSTEM, prompt)
+          : handoff.provider === 'opencode'
+            ? generateOpencodeText(chat.cwd, handoff.model, `${HANDOFF_BRIEF_SYSTEM}\n\n${prompt}`)
+            : generateClaudeText(chat.cwd, handoff.model, HANDOFF_BRIEF_SYSTEM, prompt)
       const brief = await withTimeout(gen, HANDOFF_TIMEOUT_MS, null)
       const summary = brief ?? this.transcriptFor(chat, HANDOFF_FALLBACK_CHARS)
       return summary ? buildHandoffContext(summary, fromLabel, !brief) : undefined
@@ -2329,15 +2339,20 @@ export class ChatManager {
     if (live?.length) this.mergeModels(live)
     const haveClaude = this.models?.some((option) => option.provider === 'claude')
     const haveCodex = this.models?.some((option) => option.provider === 'codex')
+    const haveOpencode = this.models?.some((option) => option.provider === 'opencode')
+    // Completeness is the two bundled providers only. OpenCode is an optional
+    // local CLI, so waiting for it would re-warm forever on machines without it;
+    // its rows merge in whenever they do arrive. Mirrors hasCompleteModelCatalog.
     if (haveClaude && haveCodex) return this.models!
     const folder = this.store.getMeta(chatId)?.cwd || cwd
     if (!folder) return this.models ?? []
     this.modelWarmup ??= Promise.all([
       haveClaude ? Promise.resolve([]) : this.warmModels(folder),
-      haveCodex ? Promise.resolve([]) : this.warmCodexModels()
+      haveCodex ? Promise.resolve([]) : this.warmCodexModels(),
+      haveOpencode ? Promise.resolve([]) : fetchOpencodeModels(folder)
     ])
-      .then(([claude, codex]) => {
-        this.mergeModels([...claude, ...codex])
+      .then(([claude, codex, opencode]) => {
+        this.mergeModels([...claude, ...codex, ...opencode])
         return this.models ?? []
       })
       .finally(() => {
@@ -2364,10 +2379,11 @@ export class ChatManager {
       await session.interrupt()
       return
     }
-    // A persisted Codex plan can be waiting without a live SDK wrapper after an
-    // app restart. Stopping it should still dismiss the review cleanly.
+    // A persisted plan review can be waiting without a live session wrapper
+    // after an app restart. Stopping it should still dismiss it cleanly. Both
+    // Codex and OpenCode persist theirs; Claude's is a live SDK permission.
     const chat = this.store.getChat(chatId)
-    const review = chat?.provider === 'codex' ? chat.pendingPlanReview : undefined
+    const review = chat && chat.provider !== 'claude' ? chat.pendingPlanReview : undefined
     if (!chat || !review) return
     chat.pendingPlanReview = undefined
     this.store.saveChat(chatId)
@@ -2405,14 +2421,14 @@ export class ChatManager {
     }
     // Codex plan reviews are persisted. Recreate the lightweight thread wrapper
     // on demand so an approval made after an app restart can still continue.
-    if (chat?.provider === 'codex' && chat.pendingPlanReview?.requestId === requestId) {
+    if (chat && chat.provider !== 'claude' && chat.pendingPlanReview?.requestId === requestId) {
       this.createSession(chat).respondPermission(requestId, decision)
     }
   }
 
   /** The plan text behind a pending review request, if `requestId` is one. */
   private planForRequest(chat: ChatData, requestId: string): string | null {
-    if (chat.provider === 'codex') {
+    if (chat.provider !== 'claude') {
       return chat.pendingPlanReview?.requestId === requestId ? chat.pendingPlanReview.plan : null
     }
     // Claude's review is a live ExitPlanMode permission; it dies with the
@@ -2570,6 +2586,12 @@ export class ChatManager {
    * unfindable from the main checkout and every later send would fail with
    * "No conversation found with session ID". Codex resumes by thread id and
    * files rollouts by date, so its id stays valid.
+   *
+   * OpenCode is cleared for a different reason than Claude's: a session's
+   * working directory is the *server process's* cwd and is fixed when the
+   * session is created, so resuming one after a hand-off would keep editing the
+   * directory the chat just left. Clearing it is what makes the next send open a
+   * session on the server pooled for the new cwd.
    */
   relocateChat(chatId: string, cwd: string): void {
     const chat = this.store.getChat(chatId)
