@@ -20,6 +20,15 @@ import { gitAction, gitActionPrompt, type GitActionId } from '@/lib/gitActions'
 import { changedPathsFromParts } from '@/lib/turnChanges'
 import { hasCompleteModelCatalog, mergeModelCatalogs } from '@/lib/modelCatalog'
 import {
+  isEmptyDraft,
+  loadDrafts,
+  pruneChatDrafts,
+  sameDraft,
+  sameOptions,
+  saveDrafts
+} from '@/lib/drafts'
+import type { ComposerDraft, ProjectDraft, ProjectDraftOptions } from '@/lib/drafts'
+import {
   USAGE_DEFAULT_DAYS,
   knownProviderForModel,
   projectRoot,
@@ -280,6 +289,35 @@ interface AppState {
   attachmentInbox: Attachment[]
   addAttachment(att: Attachment): void
   clearAttachmentInbox(): void
+
+  // ---- Drafts ----
+  /**
+   * Unsent composer text, keyed by chat id. `ChatView` is keyed by chat id, so
+   * every switch remounts the composer — without this the box is emptied by
+   * simply looking at another chat.
+   */
+  chatDrafts: Record<string, ComposerDraft>
+  /**
+   * Unsent home-screen prompts, one per project folder — the sidebar's Drafts
+   * section. Not chats: see `lib/drafts.ts` for why a draft must stay
+   * pre-creation state.
+   */
+  projectDrafts: Record<string, ProjectDraft>
+  saveChatDraft(chatId: string, draft: ComposerDraft): void
+  /** Writes (or, when empty, clears) a project's draft plus the pickers' state. */
+  saveProjectDraft(cwd: string, draft: ComposerDraft, options: ProjectDraftOptions): void
+  /** Updates an *existing* draft's launch options; the pickers alone aren't a draft. */
+  patchProjectDraft(cwd: string, options: ProjectDraftOptions): void
+  discardProjectDraft(cwd: string): void
+  /**
+   * Bumped per project by `discardProjectDraft`. The composer keeps its text in
+   * local state, so deleting the store entry alone would be undone by the next
+   * debounce — this is how a discard reaches the box that is still holding it.
+   * A counter rather than a flag: two discards in a row must both land.
+   */
+  draftDiscards: Record<string, number>
+  /** Sidebar Drafts row: the home screen in that project, with the draft restored. */
+  openDraft(cwd: string): void
 
   // ---- Slash commands ----
   /** Slash commands for the active project, powering the composer's / menu. */
@@ -768,6 +806,23 @@ function omit<T>(map: Record<string, T>, ids: string[]): Record<string, T> {
 }
 
 /**
+ * Drops the drafts belonging to deleted chats/projects and writes the result
+ * through to storage. Sits beside the other `omit` cleanups in the deletion
+ * paths so a draft can't outlive the thing it was typed into.
+ */
+function dropDrafts(
+  s: Pick<AppState, 'chatDrafts' | 'projectDrafts'>,
+  chatIds: string[],
+  cwds: string[] = []
+): Pick<AppState, 'chatDrafts' | 'projectDrafts'> {
+  const hit = chatIds.some((id) => id in s.chatDrafts) || cwds.some((cwd) => cwd in s.projectDrafts)
+  if (!hit) return { chatDrafts: s.chatDrafts, projectDrafts: s.projectDrafts }
+  const next = { chats: omit(s.chatDrafts, chatIds), projects: omit(s.projectDrafts, cwds) }
+  saveDrafts(next)
+  return { chatDrafts: next.chats, projectDrafts: next.projects }
+}
+
+/**
  * Repo-relative files the active chat's *last turn* edited (everything after the
  * last user message). Powers the "Last Turn" scope. Empty when no active chat
  * matches this cwd. Intersects with the dirty set so already-reverted edits drop
@@ -817,6 +872,9 @@ export function scopedChanges(
 }
 
 const initialThemeMode = storedThemeMode()
+// Read once at module load, like the other persisted UI state. Chat drafts for
+// chats that no longer exist are dropped in `init`, once the chat list is known.
+const initialDrafts = loadDrafts()
 let codexConfigModelLoad: Promise<string | null> | null = null
 // Model-list probes are shared while in flight. A partial result is retried
 // after a cooldown: permanent provider failures must not spawn a process on
@@ -1035,6 +1093,76 @@ export const useApp = create<AppState>((set, get) => ({
 
   clearAttachmentInbox() {
     set({ attachmentInbox: [] })
+  },
+
+  // ---- Drafts ----
+
+  chatDrafts: initialDrafts.chats,
+  projectDrafts: initialDrafts.projects,
+
+  saveChatDraft(chatId, draft) {
+    set((s) => {
+      if (sameDraft(s.chatDrafts[chatId], draft)) return {}
+      const chatDrafts = { ...s.chatDrafts }
+      if (isEmptyDraft(draft)) delete chatDrafts[chatId]
+      else chatDrafts[chatId] = draft
+      saveDrafts({ chats: chatDrafts, projects: s.projectDrafts })
+      return { chatDrafts }
+    })
+  },
+
+  saveProjectDraft(cwd, draft, options) {
+    set((s) => {
+      const current = s.projectDrafts[cwd]
+      const projectDrafts = { ...s.projectDrafts }
+      if (isEmptyDraft(draft)) {
+        if (!current) return {}
+        delete projectDrafts[cwd]
+      } else {
+        if (current && sameDraft(current, draft) && sameOptions(current, options)) return {}
+        // `updatedAt` tracks the text, which is what the Drafts section orders
+        // on — see `patchProjectDraft`, which deliberately leaves it alone.
+        projectDrafts[cwd] = { ...options, ...draft, cwd, updatedAt: Date.now() }
+      }
+      saveDrafts({ chats: s.chatDrafts, projects: projectDrafts })
+      return { projectDrafts }
+    })
+  },
+
+  patchProjectDraft(cwd, options) {
+    set((s) => {
+      const current = s.projectDrafts[cwd]
+      // Changing the model with an empty composer creates nothing: a draft is
+      // text you'd lose, and the pickers already persist as `AppDefaults`.
+      if (!current || sameOptions(current, options)) return {}
+      const projectDrafts = { ...s.projectDrafts, [cwd]: { ...current, ...options } }
+      saveDrafts({ chats: s.chatDrafts, projects: projectDrafts })
+      return { projectDrafts }
+    })
+  },
+
+  draftDiscards: {},
+
+  discardProjectDraft(cwd) {
+    set((s) => {
+      if (!s.projectDrafts[cwd]) return {}
+      const projectDrafts = { ...s.projectDrafts }
+      delete projectDrafts[cwd]
+      saveDrafts({ chats: s.chatDrafts, projects: projectDrafts })
+      return {
+        projectDrafts,
+        draftDiscards: { ...s.draftDiscards, [cwd]: (s.draftDiscards[cwd] ?? 0) + 1 }
+      }
+    })
+  },
+
+  openDraft(cwd) {
+    // Deliberately not awaited: `openChat(null)` is synchronous on its null
+    // branch, so both updates land in one tick and React renders the home
+    // screen once. Awaiting would yield between them and mount `NewChat` twice,
+    // the first time against whatever folder the outgoing chat left behind.
+    void get().openChat(null)
+    if (get().selectedCwd !== cwd) get().setSelectedCwd(cwd)
   },
 
   // ---- Slash commands ----
@@ -1280,8 +1408,17 @@ export const useApp = create<AppState>((set, get) => ({
     // boot only when the user's translucency setting is on.
     void window.api.setWindowTranslucent(get().translucentSidebar)
     const [chats, defaults] = await Promise.all([window.api.listChats(), window.api.getDefaults()])
+    // A chat deleted in another window (the database is shared) leaves its draft
+    // behind; this is the first moment we can tell. Project drafts are NOT
+    // pruned against this list — a draft is often the very first thing in a
+    // folder that has no chats yet.
+    const chatDrafts = pruneChatDrafts(get().chatDrafts, chats.map((c) => c.id))
+    if (Object.keys(chatDrafts).length !== Object.keys(get().chatDrafts).length) {
+      saveDrafts({ chats: chatDrafts, projects: get().projectDrafts })
+    }
     set({
       chats,
+      chatDrafts,
       defaults,
       loading: false,
       selectedCwd: homeCwd(chats, defaults.recentDirs)
@@ -2194,7 +2331,8 @@ export const useApp = create<AppState>((set, get) => ({
         fastMode: omit(s.fastMode, [id]),
         panelOpenByChat: prunePanelState(s, [id]),
         tabsByChat: pruneTabsByChat(s, [id]),
-        ...pruneTerminals(s, [id])
+        ...pruneTerminals(s, [id]),
+        ...dropDrafts(s, [id])
       }
     })
     return res
@@ -2239,6 +2377,7 @@ export const useApp = create<AppState>((set, get) => ({
         panelOpenByChat: prunePanelState(s, ids),
         tabsByChat: pruneTabsByChat(s, ids),
         ...pruneTerminals(s, ids),
+        ...dropDrafts(s, ids, [cwd]),
         defaults: s.defaults ? { ...s.defaults, recentDirs } : s.defaults
       }
     })

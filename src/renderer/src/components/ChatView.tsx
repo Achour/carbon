@@ -356,6 +356,13 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
   const sendMessage = useApp((s) => s.sendMessage)
   const interrupt = useApp((s) => s.interrupt)
   const setChatOptions = useApp((s) => s.setChatOptions)
+  const saveChatDraft = useApp((s) => s.saveChatDraft)
+  // Read imperatively, not subscribed: the composer writes a debounced copy back
+  // a couple of times a second while you type, and a subscription here would
+  // re-render the whole transcript on every one of them. `App` keys this
+  // component by chat id, so a mount *is* a chat switch — which is the only
+  // moment the draft needs reading.
+  const initialDraft = React.useMemo(() => useApp.getState().chatDrafts[chat.id], [chat.id])
   const modelEfforts = useApp((s) => s.defaults?.modelEfforts)
   // A cross-provider pick is only armed until the next send; the composer
   // previews its provider (efforts, placeholder, labels) while the chat itself
@@ -849,6 +856,8 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
             // Returned, not voided: the composer needs the promise so a failed
             // send restores the draft instead of discarding it.
             onSend={(text, attachments) => sendMessage(text, attachments)}
+            draft={initialDraft}
+            onDraftChange={(next) => saveChatDraft(chat.id, next)}
             streaming={busy}
             onStop={() => void interrupt()}
             // A cross-provider pick is only armed until the next send; the

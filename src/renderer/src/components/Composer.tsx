@@ -35,6 +35,7 @@ import {
   type SlashCommand
 } from '@shared/types'
 import { cn } from '@/lib/utils'
+import type { ComposerDraft } from '@/lib/drafts'
 import { FileIcon } from '@/lib/fileIcon'
 import {
   assembleModelOptions,
@@ -47,6 +48,13 @@ import { CompactSelect } from '@/components/ui/select'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { WithTooltip } from '@/components/ui/tooltip'
 import { SessionPanel } from '@/components/SessionPanel'
+
+/**
+ * How long typing pauses before the draft reaches the store. Long enough that a
+ * burst of keystrokes is one write, short enough that anything but a switch made
+ * mid-word is already saved before the unmount flush has to catch it.
+ */
+const DRAFT_DEBOUNCE_MS = 400
 
 const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024
@@ -538,7 +546,10 @@ export function Composer({
   disabled = false,
   switchingNote,
   placeholder = 'Ask Claude Code anything…',
-  autoFocus = true
+  autoFocus = true,
+  draft,
+  onDraftChange,
+  clearToken = 0
 }: {
   /** May be async; if it rejects, the composer restores the draft. */
   onSend: (text: string, attachments: Attachment[]) => void | Promise<void>
@@ -572,10 +583,50 @@ export function Composer({
   switchingNote?: string
   placeholder?: string
   autoFocus?: boolean
+  /**
+   * Unsent text to open with. Read **once**, at mount — callers pass a snapshot
+   * taken imperatively rather than a subscribed value, so a keystroke can't
+   * re-render the transcript above. Mount the composer under a `key` naming the
+   * chat or project it belongs to and this stays correct by construction.
+   */
+  draft?: ComposerDraft
+  /** Debounced while typing, and flushed on unmount. */
+  onDraftChange?: (draft: ComposerDraft) => void
+  /**
+   * Empties the box whenever it changes. The sidebar can discard the draft of
+   * the project you are looking at, and deleting the stored copy alone would be
+   * undone by the very next debounce — the text lives here.
+   */
+  clearToken?: number
 }): React.JSX.Element {
-  const [text, setText] = React.useState('')
-  const [attachments, setAttachments] = React.useState<Attachment[]>([])
+  const [text, setText] = React.useState(() => draft?.text ?? '')
+  const [attachments, setAttachments] = React.useState<Attachment[]>(() => draft?.attachments ?? [])
   const [attachError, setAttachError] = React.useState<string | null>(null)
+
+  // ---- Draft persistence ----
+  // Text stays in local state: typing has to be instant, and routing every
+  // keystroke through the store would re-render every subscriber of it. The
+  // store only sees a debounced copy — plus one final write on unmount, which
+  // is the write that actually matters, since a chat switch remounts this
+  // component and would otherwise take the last few keystrokes with it.
+  const liveDraft = React.useRef<ComposerDraft>({ text, attachments })
+  liveDraft.current = { text, attachments }
+  const emitDraft = React.useRef(onDraftChange)
+  emitDraft.current = onDraftChange
+  React.useEffect(() => {
+    const timer = setTimeout(() => emitDraft.current?.(liveDraft.current), DRAFT_DEBOUNCE_MS)
+    return () => clearTimeout(timer)
+  }, [text, attachments])
+  React.useEffect(() => () => emitDraft.current?.(liveDraft.current), [])
+  // Skips the mount run: the initial token is not a discard, and clearing here
+  // would throw away the draft we were just handed.
+  const mountedToken = React.useRef(clearToken)
+  React.useEffect(() => {
+    if (mountedToken.current === clearToken) return
+    mountedToken.current = clearToken
+    setText('')
+    setAttachments([])
+  }, [clearToken])
 
   // Attachments handed in from elsewhere (e.g. an element picked in the browser
   // preview) land in a store inbox; pull them into the composer and clear it.

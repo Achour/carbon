@@ -21,6 +21,7 @@ import type {
   ServiceTier,
   WorktreeTarget
 } from '@shared/types'
+import type { ComposerDraft, ProjectDraftOptions } from '@/lib/drafts'
 import { basename, greeting } from '@/lib/format'
 import { useApp } from '@/store'
 import { Button } from '@/components/ui/button'
@@ -78,19 +79,35 @@ export function NewChat(): React.JSX.Element {
   const git = useApp((s) => s.git)
   const commands = useApp((s) => s.commands)
 
+  // The draft for this project, read once — `App` keys this component by folder,
+  // so a mount is the only moment there is a new one to read. A draft restores
+  // the *pickers* too: reopening one that silently relaunched on a different
+  // model than the chip said when you walked away would be worse than losing it.
+  const draft = React.useMemo(() => (cwd ? useApp.getState().projectDrafts[cwd] : undefined), [cwd])
+  const saveProjectDraft = useApp((s) => s.saveProjectDraft)
+  const patchProjectDraft = useApp((s) => s.patchProjectDraft)
+  // Only changes when the sidebar's Drafts ✕ is used, so subscribing costs no
+  // re-render while typing.
+  const clearToken = useApp((s) => (cwd ? (s.draftDiscards[cwd] ?? 0) : 0))
+
   const models = useApp((s) => s.models)
-  const [model, setModel] = React.useState(defaults?.model ?? '')
+  const [model, setModel] = React.useState(draft?.model ?? defaults?.model ?? '')
   // The remembered model decides the provider whenever it can name one: this is
   // the screen that turns the pair into a chat, and a chat born on the wrong
-  // backend fails its very first send with a model-not-supported error.
+  // backend fails its very first send with a model-not-supported error. A
+  // restored draft's pair goes through the same reconciler as the defaults'.
   const [modelProvider, setModelProvider] = React.useState<Provider>(() =>
-    providerForRememberedModel(defaults?.model, defaults?.modelProvider, models)
+    providerForRememberedModel(
+      draft?.model ?? defaults?.model,
+      draft?.provider ?? defaults?.modelProvider,
+      models
+    )
   )
   const changeModel = (next: string, provider: Provider): void => {
     setModel(next)
     setModelProvider(provider)
   }
-  const [effort, setEffort] = React.useState<EffortId | ''>(defaults?.effort ?? '')
+  const [effort, setEffort] = React.useState<EffortId | ''>(draft?.effort ?? defaults?.effort ?? '')
   // Per-model effort memory for this compose session, seeded from the persisted
   // defaults. Switching models restores each one's last effort (via the
   // composer); a genuine pick updates the map, keyed by the current model. An
@@ -108,7 +125,7 @@ export function NewChat(): React.JSX.Element {
     })
   }
   const [serviceTier, setServiceTier] = React.useState<ServiceTier>(
-    defaults?.serviceTier ?? 'standard'
+    draft?.serviceTier ?? defaults?.serviceTier ?? 'standard'
   )
   // Creating a chat also records its options as the defaults. A tier the
   // composer *corrected* (Fast on a model that lacks it) isn't a user choice, so
@@ -120,15 +137,16 @@ export function NewChat(): React.JSX.Element {
     setServiceTier(next)
   }
   const [permissionMode, setPermissionMode] = React.useState<PermissionModeId>(
-    defaults?.permissionMode ?? 'default'
+    draft?.permissionMode ?? defaults?.permissionMode ?? 'default'
   )
-  // Scope the worktree choice to the project it was made in. NewChat stays
-  // mounted while the sidebar switches projects, so a bare `target` state would
-  // otherwise carry an existing worktree from project A into project B.
+  // Scope the worktree choice to the project it was made in — belt and braces
+  // now that `App` keys this component by folder, but the guard costs nothing
+  // and a bare `target` state carrying project A's worktree into project B is
+  // exactly the kind of thing a future refactor reintroduces.
   const [targetSelection, setTargetSelection] = React.useState<{
     cwd: string | null
     target: WorktreeTarget
-  }>({ cwd, target: { kind: 'local' } })
+  }>({ cwd, target: draft?.target ?? { kind: 'local' } })
   const target: WorktreeTarget =
     targetSelection.cwd === cwd ? targetSelection.target : { kind: 'local' }
   const setTarget = React.useCallback(
@@ -150,6 +168,65 @@ export function NewChat(): React.JSX.Element {
     setTarget(pendingTarget)
     clearPendingTarget()
   }, [pendingTarget, clearPendingTarget])
+
+  // A restored draft can name a worktree that has been removed since it was
+  // written — starting the chat there would land it in a directory that no
+  // longer exists. Checked once, and only replaced if the stale target is still
+  // the one selected, so it can't stomp a pick made while the check was in
+  // flight.
+  React.useEffect(() => {
+    const restored = draft?.target
+    if (restored?.kind !== 'existing') return undefined
+    let alive = true
+    void window.api.statPath(restored.path).then((kind) => {
+      if (!alive || kind === 'dir') return
+      setTargetSelection((prev) =>
+        prev.target.kind === 'existing' && prev.target.path === restored.path
+          ? { cwd, target: { kind: 'local' } }
+          : prev
+      )
+    })
+    return () => {
+      alive = false
+    }
+  }, [draft, cwd])
+
+  // A project draft carries the pickers as well as the text, so a write has to
+  // snapshot them at the moment the text lands — including on the composer's
+  // unmount flush, which is the last thing that runs when you switch away
+  // mid-sentence. The ref is what keeps that flush from writing stale options.
+  const draftOptions: ProjectDraftOptions = {
+    provider: modelProvider,
+    model: model || undefined,
+    effort: effort || undefined,
+    serviceTier,
+    permissionMode,
+    target: target.kind === 'local' ? undefined : target
+  }
+  const draftOptionsRef = React.useRef(draftOptions)
+  draftOptionsRef.current = draftOptions
+  const handleDraftChange = React.useCallback(
+    (next: ComposerDraft) => {
+      if (cwd) saveProjectDraft(cwd, next, draftOptionsRef.current)
+    },
+    [cwd, saveProjectDraft]
+  )
+  // Changing a picker with text already in the box updates that draft in place.
+  // With an empty box it does nothing — the pickers alone are not a draft, and
+  // they are already remembered as `AppDefaults`.
+  const targetKey = target.kind === 'existing' ? `existing:${target.path}` : target.kind
+  React.useEffect(() => {
+    if (cwd) patchProjectDraft(cwd, draftOptionsRef.current)
+  }, [
+    cwd,
+    patchProjectDraft,
+    modelProvider,
+    model,
+    effort,
+    serviceTier,
+    permissionMode,
+    targetKey
+  ])
 
   // The rail shows its own compact changes affordance, separate from the strip.
   const hasChanges = !!git?.isRepo && git.changes.length > 0
@@ -256,6 +333,9 @@ export function NewChat(): React.JSX.Element {
                   // Returned, not voided: the composer needs the promise so it
                   // can put the draft back if starting the chat fails.
                   onSend={(text, attachments) => start(text, attachments)}
+                  draft={draft}
+                  onDraftChange={handleDraftChange}
+                  clearToken={clearToken}
                   model={model}
                   onModelChange={changeModel}
                   effort={effort}

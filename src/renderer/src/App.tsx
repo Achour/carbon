@@ -148,6 +148,12 @@ export default function App(): React.JSX.Element {
   }, [init, applyEvent, openChat])
 
   const activeChat = chats.find((c) => c.id === activeId) ?? null
+  // Keyed by the folder, like `ChatView` is by its chat: the home screen's whole
+  // state — the prompt, the pickers, the worktree target — belongs to one
+  // project, and the draft for the folder you switch to has to be seeded at
+  // mount. Also what makes the outgoing folder's draft flush before the next
+  // one is read.
+  const homeCwd = useApp((s) => s.selectedCwd)
   const settingsOpen = useApp((s) => s.settingsOpen)
   const usageOpen = useApp((s) => s.usageOpen)
   const panelFullscreen = useApp((s) => s.panelOpen && s.panelMaximized)
@@ -175,7 +181,7 @@ export default function App(): React.JSX.Element {
             ) : activeChat ? (
               <ChatView key={activeChat.id} chat={activeChat} />
             ) : (
-              <NewChat />
+              <NewChat key={homeCwd ?? ''} />
             )}
             {!pageOpen && <RightPanel />}
           </div>

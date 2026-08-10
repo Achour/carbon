@@ -18,6 +18,7 @@ import {
   MoreHorizontal,
   PanelLeft,
   Pencil,
+  PencilLine,
   Pin,
   PinOff,
   Plus,
@@ -32,6 +33,7 @@ import { cn } from '@/lib/utils'
 import { basename, dateGroup, relativeTime, shortenPath } from '@/lib/format'
 import { REVEAL_LABEL } from '@/lib/platform'
 import { chatActivity, projectActivity, type ChatActivity } from '@/lib/chatActivity'
+import { draftSummary, sortedProjectDrafts, type ProjectDraft } from '@/lib/drafts'
 import { useApp } from '@/store'
 import { UpdateBanner } from '@/components/UpdateBanner'
 import { UsagePanel } from '@/components/UsagePanel'
@@ -629,6 +631,67 @@ function ActivityIndicator({ activity }: { activity: ChatActivity }): React.JSX.
   )
 }
 
+/**
+ * A prompt typed on the home screen and never sent.
+ *
+ * Deliberately not a `ChatItem`: there is no chat behind it, and creating one
+ * eagerly would freeze a provider/model pair and — for a `new` worktree target —
+ * leave a real checkout and branch on disk for a message that was never sent.
+ * See `lib/drafts.ts`.
+ */
+function DraftItem({
+  draft,
+  project,
+  onOpen,
+  onDiscard
+}: {
+  draft: ProjectDraft
+  /** Folder this belongs to; null when the header above already names it. */
+  project: string | null
+  onOpen: () => void
+  onDiscard: () => void
+}): React.JSX.Element {
+  return (
+    <div
+      data-draft={draft.cwd}
+      className="group relative rounded-md transition-colors hover:bg-sidebar-accent/60"
+    >
+      <button
+        type="button"
+        onClick={onOpen}
+        className="flex w-full min-w-0 items-start gap-2 py-1.5 pr-7 pl-2.5 text-left outline-none"
+      >
+        <PencilLine className="mt-px size-3.5 shrink-0 text-muted-foreground/70" />
+        <span className="flex min-w-0 flex-1 flex-col gap-px">
+          <span className="min-w-0 truncate text-[13px] text-sidebar-foreground/55 transition-colors group-hover:text-sidebar-foreground/90">
+            {/* Attachments with no text are still a draft worth coming back to,
+                and there is nothing to quote for them. */}
+            {draftSummary(draft.text) || 'Attachment'}
+          </span>
+          {project && (
+            <span className="flex min-w-0 items-center gap-1 text-[11px] leading-tight text-muted-foreground/65">
+              <Folder className="size-3 shrink-0" />
+              <span className="min-w-0 truncate">{project}</span>
+            </span>
+          )}
+        </span>
+      </button>
+      {/* No confirm, like the queued-message ✕ in ChatView: one unsent line, and
+          the row is only reachable by hovering it. */}
+      <WithTooltip label="Discard draft">
+        <button
+          type="button"
+          onClick={onDiscard}
+          aria-label="Discard draft"
+          className="absolute top-1.5 right-1.5 rounded p-0.5 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:bg-sidebar-accent hover:text-foreground"
+        >
+          <X className="size-3" />
+        </button>
+      </WithTooltip>
+    </div>
+  )
+}
+
 export function Sidebar(): React.JSX.Element {
   const chats = useApp((s) => s.chats)
   const activeId = useApp((s) => s.activeId)
@@ -653,6 +716,10 @@ export function Sidebar(): React.JSX.Element {
   const projectNames = useApp((s) => s.projectNames)
   const setProjectName = useApp((s) => s.setProjectName)
   const projectLabel = (cwd: string): string => projectNames[cwd]?.trim() || basename(cwd)
+
+  const projectDrafts = useApp((s) => s.projectDrafts)
+  const openDraft = useApp((s) => s.openDraft)
+  const discardProjectDraft = useApp((s) => s.discardProjectDraft)
 
   const detailed = useApp((s) => s.sidebarDensity) === 'detailed'
   const sidebarProject = useApp((s) => s.sidebarProject)
@@ -928,6 +995,12 @@ export function Sidebar(): React.JSX.Element {
   const pinnedShown = filterProject
     ? pinnedChats.filter((c) => projectRoot(c) === filterProject)
     : pinnedChats
+  // Home-screen prompts never sent. Scoped by the same filter as the pins, for
+  // the same reason — a draft from another project showing through a filtered
+  // sidebar makes the whole list a half-truth. Hidden projects stay hidden.
+  const draftsShown = sortedProjectDrafts(projectDrafts).filter(
+    (draft) => !hiddenProjects[draft.cwd] && (!filterProject || draft.cwd === filterProject)
+  )
   // Take the rows from `chats` rather than from the groups: `chats` is already
   // in sidebar order (store.ts `hoistChat`) and flattening the groups would
   // impose the project grouping this mode exists to not have. Order is the
@@ -1079,6 +1152,34 @@ export function Sidebar(): React.JSX.Element {
           <Kbd className="ml-auto opacity-0 transition-opacity group-hover:opacity-100">⌘K</Kbd>
         </button>
       </div>
+
+      {/* Unsent prompts, at the very top and above even the pins: this is the
+          one section whose contents exist nowhere else, and a draft you can't
+          see is a draft you've lost. There is at most one per project, so it
+          costs the pins a row or two and never a screenful. */}
+      {draftsShown.length > 0 && (
+        <div className="flex max-h-[25vh] shrink-0 flex-col">
+          <div className="flex items-center gap-2 px-3.5 pt-3 pb-1">
+            <span className="text-[11px] font-medium tracking-wide text-muted-foreground/70">
+              Drafts
+            </span>
+          </div>
+          <div className="min-h-0 overflow-y-auto px-3">
+            <div className="space-y-px">
+              {draftsShown.map((draft) => (
+                <DraftItem
+                  key={draft.cwd}
+                  draft={draft}
+                  // A filter has already named the project in the header.
+                  project={filterProject ? null : projectLabel(draft.cwd)}
+                  onOpen={() => openDraft(draft.cwd)}
+                  onDiscard={() => discardProjectDraft(draft.cwd)}
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Pinned chats, above the projects and outside their scroller so they
           stay reachable no matter how far down the project list you are. */}
