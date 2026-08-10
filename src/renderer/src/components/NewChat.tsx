@@ -12,7 +12,7 @@ import {
   SquareTerminal
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { providerForModel } from '@shared/types'
+import { providerForRememberedModel } from '@shared/types'
 import type {
   Attachment,
   EffortId,
@@ -78,9 +78,13 @@ export function NewChat(): React.JSX.Element {
   const git = useApp((s) => s.git)
   const commands = useApp((s) => s.commands)
 
+  const models = useApp((s) => s.models)
   const [model, setModel] = React.useState(defaults?.model ?? '')
-  const [modelProvider, setModelProvider] = React.useState<Provider>(
-    defaults?.modelProvider ?? providerForModel(defaults?.model ?? '')
+  // The remembered model decides the provider whenever it can name one: this is
+  // the screen that turns the pair into a chat, and a chat born on the wrong
+  // backend fails its very first send with a model-not-supported error.
+  const [modelProvider, setModelProvider] = React.useState<Provider>(() =>
+    providerForRememberedModel(defaults?.model, defaults?.modelProvider, models)
   )
   const changeModel = (next: string, provider: Provider): void => {
     setModel(next)

@@ -349,4 +349,25 @@ A chat can switch provider mid-conversation (the composer's model picker offers 
 
 A plan approval may carry a `model` (`PermissionDecision`) — the plan review's "Build with" picker — so one model can plan and another implement, Cursor-style. Within a provider, each session applies it at approval time: Claude fires the live `setModel` *before* resolving the approval (both ride the CLI's stdin, so ordering guarantees the implementation turn starts on the new model); Codex sets `chat.model` before building the implementation turn, which snapshots it. A model from the *other* provider never reaches the session — the manager intercepts it (see the handoff paragraph above).
 
+**The model decides the backend, and it is stored twice.** Every place that
+remembers a model remembers a provider beside it (`chat.provider`,
+`AppDefaults.modelProvider`, `NewChat`'s two `useState`s) — a second field is
+unavoidable, because a runtime-discovered id is in no static catalog and only
+the picker knows which list it came from. Two fields drift, and this pair drifts
+in a way that has no symptom until a send: a chat launched as Codex carrying
+`claude-fable-5[1m]` fails every turn with *"The 'claude-fable-5[1m]' model is
+not supported when using Codex with a ChatGPT account"*, permanently, because
+nothing revisits the pair. So `providerForRememberedModel` is the single
+reconciler and the precedence is fixed — a model whose provider is *certain*
+outranks the recorded one, which answers only for ids nothing can place.
+Certainty comes from the live catalog, then the static one, then the id's shape
+(`knownProviderForModel`), that last rule existing because the SDK's wire ids
+(`claude-opus-5[1m]`) appear in no catalog at all. Mirroring one field without
+the other is the bug this prevents: the renderer copied `defaults.model` after
+each new chat and left `modelProvider` behind, so the *next* New-chat screen
+paired a fresh Claude pick with the previous chat's Codex provider. Reconcile
+where the pair is frozen (`chats:create`), and drop a model the chat's provider
+cannot run at send (`dropForeignModel`) so a chat already written that way heals
+instead of failing forever.
+
 Codex's `workspace-write` sandbox carves `.git` out as read-only, and it resolves a worktree's `.git` *pointer file* to the shared gitdir and carves that out too — so a worktree creates no Claude/Codex asymmetry that a plain checkout doesn't already have. If that ever changes, the escape hatch is `additionalDirectories` on the SDK's `ThreadOptions` (forwarded as `--add-dir`).

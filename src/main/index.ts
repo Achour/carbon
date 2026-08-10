@@ -37,7 +37,7 @@ import type {
   WorktreeInfo,
   WorktreeStatus
 } from '@shared/types'
-import { effortForProvider } from '@shared/types'
+import { effortForProvider, providerForRememberedModel } from '@shared/types'
 import { ChatManager } from './claude'
 import { readCodexConfigModel } from './codexConfig'
 import { listDir, readFileContent, searchFiles, statPath } from './files'
@@ -373,7 +373,15 @@ function registerIpc(): void {
       }
     ) => {
     const now = Date.now()
-    const provider = opts.provider ?? 'claude'
+    // The model has the last word on which backend runs it. A chat is the one
+    // place the pair is frozen — everything after this reads `chat.provider` —
+    // and the renderer carries the two in separate state, so this is where a
+    // drifted pair has to be reconciled rather than persisted.
+    const provider = providerForRememberedModel(
+      opts.model,
+      opts.provider,
+      manager.modelCatalog()
+    )
     const effort = effortForProvider(opts.effort, provider)
 
     // A worktree chat lives in its own directory; everything downstream

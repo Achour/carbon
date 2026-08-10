@@ -19,7 +19,12 @@ import { invalidateLocalImages } from '@/lib/imageCache'
 import { gitAction, gitActionPrompt, type GitActionId } from '@/lib/gitActions'
 import { changedPathsFromParts } from '@/lib/turnChanges'
 import { hasCompleteModelCatalog, mergeModelCatalogs } from '@/lib/modelCatalog'
-import { USAGE_DEFAULT_DAYS, projectRoot, providerForModel } from '@shared/types'
+import {
+  USAGE_DEFAULT_DAYS,
+  knownProviderForModel,
+  projectRoot,
+  providerForRememberedModel
+} from '@shared/types'
 import type {
   AppDefaults,
   AssistantMessage,
@@ -1044,8 +1049,7 @@ export const useApp = create<AppState>((set, get) => ({
     const prov =
       provider ??
       s.chats.find((c) => c.id === s.activeId)?.provider ??
-      (s.defaults?.modelProvider ??
-        (s.defaults?.model ? providerForModel(s.defaults.model, s.models) : 'claude'))
+      providerForRememberedModel(s.defaults?.model, s.defaults?.modelProvider, s.models)
     const key = cwd ? `${cwd}::${prov}` : null
     // Already loaded (or loading) for this exact provider+project — nothing to do.
     if (s.commandsKey === key) return
@@ -1296,8 +1300,7 @@ export const useApp = create<AppState>((set, get) => ({
     // model so a Codex default never warms a Claude command session.
     get().loadCommands(
       cwd,
-      defaults?.modelProvider ??
-        (defaults?.model ? providerForModel(defaults.model, get().models) : 'claude')
+      providerForRememberedModel(defaults?.model, defaults?.modelProvider, get().models)
     )
   },
 
@@ -1947,6 +1950,11 @@ export const useApp = create<AppState>((set, get) => ({
           ? {
               ...s.defaults,
               model: meta.model,
+              // The provider travels with the model, always. Mirroring one
+              // without the other leaves the next New-chat screen pairing this
+              // model with the *previous* pick's provider — which is how a
+              // Claude model came to be launched as a Codex chat.
+              modelProvider: meta.provider,
               effort: meta.effort,
               serviceTier: opts?.serviceTier,
               permissionMode: opts?.permissionMode ?? s.defaults.permissionMode,
@@ -2272,7 +2280,18 @@ export const useApp = create<AppState>((set, get) => ({
       return {
         defaults: {
           ...s.defaults,
-          ...(patch.model !== undefined ? { model: patch.model || undefined } : {}),
+          // Model and provider move together — see the same pairing in newChat.
+          // Main records both from this patch; mirroring only the model would
+          // leave the next New-chat screen holding a mismatched pair.
+          ...(patch.model !== undefined
+            ? {
+                model: patch.model || undefined,
+                modelProvider:
+                  patch.modelProvider ??
+                  knownProviderForModel(patch.model, s.models) ??
+                  s.defaults.modelProvider
+              }
+            : {}),
           ...(patch.effort !== undefined ? { effort: patch.effort || undefined } : {}),
           ...(patch.serviceTier !== undefined ? { serviceTier: patch.serviceTier } : {}),
           ...(patch.permissionMode ? { permissionMode: patch.permissionMode } : {}),

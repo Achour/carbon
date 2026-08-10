@@ -46,6 +46,7 @@ import {
   claudeModelContextWindow,
   claudeModelLabel,
   effortForProvider,
+  knownProviderForModel,
   modelDisplayName,
   modelLabel,
   providerForModel
@@ -1776,6 +1777,15 @@ export class ChatManager {
     }
   }
 
+  /**
+   * Whatever of both providers' catalogs has been discovered so far, for callers
+   * that need to place a model id without waiting on a fetch. Empty until the
+   * first `listModels`, so treat a miss as "unknown", not "not a real model".
+   */
+  modelCatalog(): ModelOption[] {
+    return this.models ?? MODEL_OPTIONS
+  }
+
   private mergeModels(options: ModelOption[]): void {
     if (!options.length) return
     const providers = new Set(options.map((option) => option.provider))
@@ -1820,12 +1830,36 @@ export class ChatManager {
     // A pending model pick from the other provider applies now — the send is
     // the commitment; until here it was only a chip in the composer.
     const handoff = this.applyPendingSwitch(chat)
+    this.dropForeignModel(chat)
     const command = chat.provider === 'codex' ? parseCodexSlashCommand(text) : null
     if (command) {
       void this.runCodexCommand(chat, command, attachments, handoff)
       return
     }
     this.sendPrompt(chat, text, attachments, label, handoff)
+  }
+
+  /**
+   * Forget a model the chat's provider cannot run. Provider and model are
+   * persisted side by side, so a chat written by an older build — or by any
+   * future path that sets one without the other — can hold a pair that no
+   * request will ever satisfy: every send comes back "The 'claude-fable-5'
+   * model is not supported when using Codex", and nothing in the chat revisits
+   * the pair, so it stays broken for good.
+   *
+   * The provider is what survives, not the model. It owns the session, the
+   * thread id and the whole conversation; the model is one option among several
+   * the provider already has a default for. Only a model whose provider is
+   * *certain* is dropped — an id neither catalog places is left alone, since
+   * refusing to send a model that does work would be the worse failure.
+   */
+  private dropForeignModel(chat: ChatData): void {
+    if (!chat.model) return
+    const owner = knownProviderForModel(chat.model, this.modelCatalog())
+    if (!owner || owner === chat.provider) return
+    chat.model = undefined
+    this.store.saveChat(chat.id)
+    this.emit({ type: 'meta', chatId: chat.id, patch: { model: undefined } })
   }
 
   /**

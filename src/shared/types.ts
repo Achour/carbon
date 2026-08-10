@@ -784,16 +784,60 @@ export const MODEL_OPTIONS: ModelOption[] = [
 ]
 
 /**
- * Which provider a model id belongs to. Callers with a live catalog pass it so
- * runtime-discovered Codex ids route correctly; the static catalog remains the
+ * Which provider a model id *demonstrably* belongs to, or undefined when the id
+ * is one neither catalog nor its shape can place. Callers with a live catalog
+ * pass it so runtime-discovered ids route correctly; the static catalog is the
  * fallback for startup, older settings and known aliases.
+ *
+ * The shape rules below matter because a wire id is not always a catalog id: the
+ * SDK reports Claude's long-context models as `claude-opus-5[1m]`, which no
+ * static row carries. Answering "unknown" for those let a stale provider stand
+ * beside a model that could never run on it — a Claude id sent to Codex, which
+ * the API rejects outright. Anything genuinely unplaceable still returns
+ * undefined so an explicitly recorded provider keeps the last word.
+ */
+export function knownProviderForModel(
+  id: string,
+  options: ModelOption[] = MODEL_OPTIONS
+): Provider | undefined {
+  const listed = options.find((m) => m.id === id) ?? MODEL_OPTIONS.find((m) => m.id === id)
+  if (listed) return listed.provider
+  if (/^claude[-.]/i.test(id)) return 'claude'
+  if (/^(gpt|codex|o\d)[-.]/i.test(id)) return 'codex'
+  return undefined
+}
+
+/**
+ * Which provider a model id belongs to, defaulting to Claude for ids nothing can
+ * place. Prefer `knownProviderForModel` where an explicit provider is on hand —
+ * that answer should only be overridden by a certainty, not by this default.
  */
 export function providerForModel(id: string, options: ModelOption[] = MODEL_OPTIONS): Provider {
-  return (
-    options.find((m) => m.id === id)?.provider ??
-    MODEL_OPTIONS.find((m) => m.id === id)?.provider ??
-    'claude'
-  )
+  return knownProviderForModel(id, options) ?? 'claude'
+}
+
+/**
+ * The provider a remembered (model, provider) pair should actually run on. The
+ * model's own catalog entry wins over the recorded provider, which is only
+ * consulted for ids nothing can place — a runtime-discovered id, or settings
+ * written before the field existed.
+ *
+ * The precedence is the point. The two are stored separately and can drift
+ * apart, and the two outcomes are not symmetric: a stale provider beside a
+ * known model is an API rejection ("The 'claude-fable-5' model is not supported
+ * when using Codex"), where preferring the model's own provider can at worst
+ * re-state what the pair already agreed on.
+ */
+export function providerForRememberedModel(
+  model: string | undefined,
+  recorded: Provider | undefined,
+  options: ModelOption[] = MODEL_OPTIONS
+): Provider {
+  // "No model" pins nothing: both providers have a default of their own, and
+  // Claude's Default row *is* the empty id — reading it as evidence of Claude
+  // would drag every unpinned Codex chat across to the wrong backend.
+  if (!model) return recorded ?? 'claude'
+  return knownProviderForModel(model, options) ?? recorded ?? 'claude'
 }
 
 /**
