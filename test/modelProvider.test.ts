@@ -4,7 +4,8 @@ import {
   knownProviderForModel,
   providerForModel,
   providerForRememberedModel,
-  type ModelOption
+  type ModelOption,
+  type Provider
 } from '../src/shared/types.ts'
 
 test('a live catalog places runtime-discovered ids', () => {
@@ -52,4 +53,18 @@ test('an unpinned model leaves the provider alone', () => {
   assert.equal(providerForRememberedModel(undefined, 'codex'), 'codex')
   assert.equal(providerForRememberedModel('', 'codex'), 'codex')
   assert.equal(providerForRememberedModel('', 'claude'), 'claude')
+})
+
+test('a recorded provider this build does not have answers for nothing', () => {
+  // settings.json is shared between builds like the database is, so
+  // `modelProvider` can name a backend that no longer exists. It is consulted
+  // only for ids nothing can place — passing it on would put an unplaceable
+  // string into every `Record<Provider, …>` the composer indexes.
+  const recorded = 'opencode' as unknown as Provider
+  assert.equal(providerForRememberedModel(undefined, recorded), 'claude')
+  assert.equal(providerForRememberedModel('opencode:laguna-s-2.1-free', recorded), 'claude')
+  // A model that *can* be placed still wins, exactly as before.
+  assert.equal(providerForRememberedModel('gpt-5.6-sol', recorded), 'codex')
+  // And a provider this build does have is still honoured for an unplaceable id.
+  assert.equal(providerForRememberedModel('some-unlisted-id', 'codex'), 'codex')
 })

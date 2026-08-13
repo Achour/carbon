@@ -4,6 +4,7 @@ import './index.css'
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App'
+import { ErrorBoundary } from './components/ErrorBoundary'
 import { useApp } from './store'
 import { previewForCwd } from './lib/previewRegistry'
 import {
@@ -50,8 +51,16 @@ if (import.meta.env.DEV) {
   )
 }
 
+// A boundary *outside* `App`, not just the one around the content pane. React
+// unmounts the entire root when a render throws with no boundary above it, and
+// everything the pane's boundary does not cover — the sidebar, the dialogs, the
+// providers — is on that path: one unrenderable chat row left the window a flat
+// sheet of the theme's background color, with no error, no UI and no way back.
+// This one cannot make the app work, but it can always say what broke.
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <App />
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
   </React.StrictMode>
 )

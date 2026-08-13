@@ -1496,3 +1496,69 @@ test('flagging an unloaded index dirty still cannot write the placeholder', asyn
   assert.equal(bodyAt(dir, id, 5), before[5], 'nor by the thorough pass at quit')
   rmSync(dir, { recursive: true, force: true })
 })
+
+// ---------- A provider this build does not have ----------
+
+test('a chat whose provider no longer exists reads back runnable', async () => {
+  // The database is shared across builds, so a chat started on a branch that
+  // adds a provider outlives that branch. Nothing revisits the row, and every
+  // provider-keyed lookup is undefined outside the union — the sidebar's mark
+  // did `PATHS[provider].map` and unmounted the whole window, on every launch,
+  // because the row is still there on the next one.
+  const dir = userDir()
+  const store = new Store(dir)
+  const chat = makeChat({ model: 'opus[1m]', sessionId: 'claude-session' })
+  store.addChat(chat)
+  await store.flushAll()
+
+  // What the other build wrote: its own provider name, its own model id, and a
+  // thread id only it can resume.
+  const db = new DatabaseSync(join(dir, 'chats.db'))
+  const row = db.prepare('SELECT meta FROM chats WHERE id = ?').get(chat.id) as { meta: string }
+  const meta = JSON.parse(row.meta) as Record<string, unknown>
+  meta.provider = 'opencode'
+  meta.model = 'opencode:opencode/laguna-s-2.1-free'
+  meta.sessionId = 'opencode-session'
+  meta.pendingProvider = 'opencode'
+  meta.pendingModel = 'opencode:something-else'
+  db.prepare('UPDATE chats SET meta = ? WHERE id = ?').run(JSON.stringify(meta), chat.id)
+  db.close()
+
+  // All three read paths, because the sidebar, the composer and a session each
+  // come in through a different one.
+  const reopened = new Store(dir)
+  for (const [name, got] of [
+    ['listChats', reopened.listChats()[0]],
+    ['getMeta', reopened.getMeta(chat.id)],
+    ['getChat', reopened.getChat(chat.id)]
+  ] as const) {
+    assert.ok(got, `${name} returned nothing`)
+    assert.equal(got.provider, 'claude', `${name} kept an unrunnable provider`)
+    // The model is that backend's own id and no catalog can place it, so
+    // dropForeignModel would leave it alone and it would be sent to Claude for
+    // good; the session id is a thread nothing else can resume.
+    assert.equal(got.model, undefined, `${name} kept a foreign model`)
+    assert.equal(got.sessionId, undefined, `${name} kept a foreign session id`)
+    assert.equal(got.pendingProvider, undefined, `${name} kept a foreign pending provider`)
+    assert.equal(got.pendingModel, undefined, `${name} kept a foreign pending model`)
+  }
+  await reopened.flushAll()
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('a chat on a provider this build does have is left exactly as it was', async () => {
+  const dir = userDir()
+  const store = new Store(dir)
+  const chat = makeChat({ provider: 'codex', model: 'gpt-5.6-sol', sessionId: 'thread-7' })
+  store.addChat(chat)
+  await store.flushAll()
+
+  const reopened = new Store(dir)
+  const got = reopened.getMeta(chat.id)
+  assert.ok(got)
+  assert.equal(got.provider, 'codex')
+  assert.equal(got.model, 'gpt-5.6-sol')
+  assert.equal(got.sessionId, 'thread-7', 'a resumable thread must survive the read')
+  await reopened.flushAll()
+  rmSync(dir, { recursive: true, force: true })
+})

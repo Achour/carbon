@@ -10,6 +10,9 @@ import {
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { DatabaseSync, backup, type StatementSync } from 'node:sqlite'
+// Relative and .ts-extensioned, like codex.ts: this is a *runtime* import, and
+// `node --test` runs this file directly with no bundler to resolve `@shared`.
+import { knownProvider } from '../shared/types.ts'
 import type {
   AppDefaults,
   ChatData,
@@ -19,6 +22,45 @@ import type {
   PermissionModeId,
   ServiceTier
 } from '@shared/types'
+
+/**
+ * Parse a stored chat row back into something *this* build can actually run.
+ *
+ * The only field here that names a backend is `provider`, and it is the one
+ * field a row can carry a value for that no longer exists — the database is
+ * shared across builds, so a chat started on a branch that adds a provider
+ * outlives that branch. The symptom is not a mislabelled row: provider-keyed
+ * lookups are total over the union and undefined outside it, so the sidebar's
+ * `PATHS[provider].map` throws, and because the sidebar renders *outside* the
+ * content pane's error boundary that unmounts the whole window. It survives
+ * restarts too, since the row is still there on the next launch.
+ *
+ * The rest of the provider's identity goes with its name. `model` is that
+ * backend's own id, and `dropForeignModel` deliberately leaves an id no catalog
+ * can place alone (refusing a model that does work is the worse failure) — so
+ * left behind it would be sent to Claude forever. `sessionId` is a thread only
+ * that backend can resume. Both are cleared, which drops the chat onto the
+ * provider's defaults rather than onto settings that cannot work.
+ */
+function reconcileProvider(meta: ChatMeta): void {
+  if (!knownProvider(meta.provider)) {
+    meta.provider = 'claude'
+    meta.model = undefined
+    meta.sessionId = undefined
+  }
+  // A deferred cross-provider pick names a second provider; it has never been
+  // sent, so it is dropped outright rather than resolved to a default.
+  if (meta.pendingProvider !== undefined && !knownProvider(meta.pendingProvider)) {
+    meta.pendingProvider = undefined
+    meta.pendingModel = undefined
+  }
+}
+
+function parseMeta(json: string): ChatMeta {
+  const meta = JSON.parse(json) as ChatMeta
+  reconcileProvider(meta)
+  return meta
+}
 
 /**
  * Write via a temp file + atomic rename so a crash or force-quit mid-write can't
@@ -849,6 +891,9 @@ export class Store {
       return false
     }
     if (!chat?.id || !Array.isArray(chat.messages)) return false
+    // The archive predates the database and outlives every build that wrote it,
+    // so it carries the same unrunnable-provider rows the SQLite path does.
+    reconcileProvider(chat)
     if (guard) {
       const known = this.db.prepare('SELECT updated_at FROM chats WHERE id = ?').get(chat.id) as
         | { updated_at: number }
@@ -998,7 +1043,7 @@ export class Store {
         out.push(metaOf(chat))
       } else {
         try {
-          out.push(JSON.parse(row.meta) as ChatMeta)
+          out.push(parseMeta(row.meta))
         } catch (err) {
           console.error(`Failed to parse chat meta ${row.id}:`, err)
           continue
@@ -1022,7 +1067,7 @@ export class Store {
     const row = this.selMeta.get(id) as { meta: string } | undefined
     if (!row) return null
     try {
-      return JSON.parse(row.meta) as ChatMeta
+      return parseMeta(row.meta)
     } catch (err) {
       console.error(`Failed to parse chat meta ${id}:`, err)
       return null
@@ -1048,7 +1093,7 @@ export class Store {
     this.stats.hydrations++
     let chat: ChatData
     try {
-      chat = { ...(JSON.parse(row.meta) as ChatMeta), messages: [] }
+      chat = { ...parseMeta(row.meta), messages: [] }
     } catch (err) {
       console.error(`Failed to parse chat meta ${id}:`, err)
       return null

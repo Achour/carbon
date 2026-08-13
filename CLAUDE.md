@@ -508,4 +508,26 @@ where the pair is frozen (`chats:create`), and drop a model the chat's provider
 cannot run at send (`dropForeignModel`) so a chat already written that way heals
 instead of failing forever.
 
+**A stored provider can name a backend this build does not have.** `userData` is
+pinned to `ai-gui` so every build shares one database and one `settings.json` —
+which is what lets dev and packaged share history, and also what lets a branch
+that adds a fourth provider write rows the merged app must still open. Nothing
+revisits the pair, so the row outlives the branch. The symptom is not a
+mislabelled chat: `Record<Provider, …>` is total over the union and plain
+`undefined` outside it, so `PATHS[provider].map` in `ProviderMark` *throws* — and
+since the sidebar renders outside the content pane's error boundary, React
+unmounts the root and the window becomes a flat sheet of the theme's background,
+on every launch, because the row is still there on the next one. So `Provider` is
+enumerable (`PROVIDERS`) and `knownProvider` coerces at the two places a provider
+is read off disk: `parseMeta` / `reconcileProvider` in `store.ts` and
+`providerForRememberedModel` for `settings.json`. The whole provider-side
+identity goes with the name — `model` is that backend's own id, which
+`dropForeignModel` deliberately *leaves alone* when no catalog can place it, so
+left behind it would be sent to Claude for good; `sessionId` is a thread only
+that backend can resume. Coerce at the read rather than teaching each lookup a
+fallback: drawing one backend's mark on another's chat is worse than declining
+to place it. The root `ErrorBoundary` in `main.tsx` is the backstop — it cannot
+make the app work, but a render throw anywhere must never leave a black window
+with nothing to click.
+
 Codex's `workspace-write` sandbox carves `.git` out as read-only, and it resolves a worktree's `.git` *pointer file* to the shared gitdir and carves that out too — so a worktree creates no Claude/Codex asymmetry that a plain checkout doesn't already have. If that ever changes, the escape hatch is `additionalDirectories` on the SDK's `ThreadOptions` (forwarded as `--add-dir`).

@@ -1,4 +1,26 @@
-export type Provider = 'claude' | 'codex' | 'grok'
+export const PROVIDERS = ['claude', 'codex', 'grok'] as const
+
+export type Provider = (typeof PROVIDERS)[number]
+
+/**
+ * The provider a stored name refers to, or null when this build has no backend
+ * of that name.
+ *
+ * `Provider` is a compile-time union, and every `Record<Provider, …>` in the app
+ * is a total function *over that union* — outside it they return undefined, and
+ * the caller dereferences it (`PATHS[provider].map`) rather than falling back.
+ * That is the right shape for a fixed set, but a chat's `provider` is not one:
+ * it is a string read off disk, and the database is deliberately shared between
+ * builds (`userData` is pinned to `ai-gui`, dev and packaged alike), so a branch
+ * that adds a fourth provider writes rows every other build must still be able
+ * to open. Coerce such a value once, at the read, rather than teaching every
+ * lookup to survive it — a fallback inside the lookups would draw one backend's
+ * mark for another's chat, and silently mislabelling a row is worse than
+ * declining to place it.
+ */
+export function knownProvider(value: unknown): Provider | null {
+  return PROVIDERS.includes(value as Provider) ? (value as Provider) : null
+}
 
 export type ServiceTier = 'standard' | 'fast'
 
@@ -898,11 +920,16 @@ export function providerForRememberedModel(
   recorded: Provider | undefined,
   options: ModelOption[] = MODEL_OPTIONS
 ): Provider {
+  // The recorded half is a bare string out of settings.json, which a build with
+  // a provider this one does not have may have written. It is consulted only
+  // for models nothing can place, so a provider *this* build cannot place
+  // answers for nothing at all and must not be passed on as one.
+  const known = knownProvider(recorded)
   // "No model" pins nothing: both providers have a default of their own, and
   // Claude's Default row *is* the empty id — reading it as evidence of Claude
   // would drag every unpinned Codex chat across to the wrong backend.
-  if (!model) return recorded ?? 'claude'
-  return knownProviderForModel(model, options) ?? recorded ?? 'claude'
+  if (!model) return known ?? 'claude'
+  return knownProviderForModel(model, options) ?? known ?? 'claude'
 }
 
 /**
