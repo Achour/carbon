@@ -234,6 +234,17 @@ async function readGrokFile(path: string): Promise<UsageCell[]> {
   return [...cells.values()]
 }
 
+/**
+ * Which reader parses which provider's logs. A table rather than a chain of
+ * ternaries so a fourth provider is a missing key the compiler names, not a
+ * silent fall-through into Codex's parser.
+ */
+const READERS: Record<Provider, (path: string) => Promise<UsageCell[]>> = {
+  claude: readClaudeFile,
+  codex: readCodexFile,
+  grok: readGrokFile
+}
+
 // ---------- Cache ----------
 
 type Cache = Map<string, CacheEntry>
@@ -378,12 +389,7 @@ async function scan(opts: UsageStatsOptions, days: number, refresh: boolean): Pr
   let failures = 0
   await runPool(pending, CONCURRENCY, async ({ source, mtimeMs, size }) => {
     try {
-      const cells =
-        source.provider === 'claude'
-          ? await readClaudeFile(source.path)
-          : source.provider === 'grok'
-            ? await readGrokFile(source.path)
-            : await readCodexFile(source.path)
+      const cells = await READERS[source.provider](source.path)
       live.set(source.path, { mtimeMs, size, cells })
     } catch {
       failures++
@@ -415,6 +421,11 @@ async function scan(opts: UsageStatsOptions, days: number, refresh: boolean): Pr
   const codex = emptyTotals()
   const grok = emptyTotals()
   const total = emptyTotals()
+  // Hoisted: the loop below runs once per cached cell across every session file
+  // in the window — tens of thousands on a real corpus — and an inline
+  // `{ claude, codex, grok }[cell.provider]` would allocate a throwaway object
+  // on each pass purely to do a lookup.
+  const providerTotals: Record<Provider, UsageTotals> = { claude, codex, grok }
   let sessions = 0
 
   for (const [path, entry] of live) {
@@ -434,7 +445,7 @@ async function scan(opts: UsageStatsOptions, days: number, refresh: boolean): Pr
         byModel.set(key, (row = { provider: cell.provider, model: cell.model, ...emptyTotals() }))
       }
       accumulate(row, cell, cost)
-      accumulate({ claude, codex, grok }[cell.provider], cell, cost)
+      accumulate(providerTotals[cell.provider], cell, cost)
       accumulate(total, cell, cost)
     }
     // A subagent transcript is part of its parent session, not another one —

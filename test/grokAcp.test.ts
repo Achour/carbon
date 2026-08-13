@@ -1,8 +1,7 @@
 import { strict as assert } from 'node:assert'
 import test from 'node:test'
 import {
-  grokEffortFlag,
-  grokPermissionMode,
+  grokPermissionBaseline,
   isExitPlanTool,
   resolveGrokBinary,
   toolName,
@@ -10,6 +9,7 @@ import {
   toolOutput,
   toolStatus
 } from '../src/main/grokAcp.ts'
+import { effortForProvider } from '../src/shared/types.ts'
 
 // Fixtures are verbatim payloads captured from grok 1.0.3 over `agent stdio`,
 // not hand-written approximations — the point of these tests is to pin the
@@ -97,48 +97,28 @@ test('isExitPlanTool matches on kind or name, not on the title', () => {
   )
 })
 
-test('grokEffortFlag passes the four advertised levels and drops the rest', () => {
+test('effortForProvider is the single filter for Grok levels', () => {
   for (const effort of ['low', 'medium', 'high', 'xhigh']) {
-    assert.equal(grokEffortFlag(effort), effort)
+    assert.equal(effortForProvider(effort, 'grok'), effort)
   }
-  // `max`/`ultra`/`minimal` are other providers' levels. Forwarding one would be
-  // accepted by the CLI and silently ignored, leaving the composer claiming a
-  // reasoning level that is not running.
-  for (const effort of ['max', 'ultra', 'minimal', 'bogus']) {
-    assert.equal(grokEffortFlag(effort), undefined)
+  // Other providers' levels. Forwarding one would be accepted by the CLI and
+  // silently ignored, leaving the composer claiming a level that is not running.
+  for (const effort of ['max', 'ultra', 'minimal']) {
+    assert.equal(effortForProvider(effort, 'grok'), undefined)
   }
-  assert.equal(grokEffortFlag(undefined), undefined)
+  assert.equal(effortForProvider(undefined, 'grok'), undefined)
 })
 
-test('grokPermissionMode splits Carbon modes across Grok\'s two axes', () => {
-  assert.deepEqual(grokPermissionMode('bypassPermissions'), {
-    alwaysApprove: true,
-    autoMode: false,
-    planMode: false
-  })
-  assert.deepEqual(grokPermissionMode('auto'), {
-    alwaysApprove: false,
-    autoMode: true,
-    planMode: false
-  })
-  assert.deepEqual(grokPermissionMode('plan'), {
-    alwaysApprove: false,
-    autoMode: false,
-    planMode: true
-  })
-  assert.deepEqual(grokPermissionMode('default'), {
-    alwaysApprove: false,
-    autoMode: false,
-    planMode: false
-  })
-  // acceptEdits deliberately lands on the ask baseline rather than on auto:
-  // upgrading it would make the *more* restrictive of the two settings run more
-  // without asking.
-  assert.deepEqual(grokPermissionMode('acceptEdits'), {
-    alwaysApprove: false,
-    autoMode: false,
-    planMode: false
-  })
+test('grokPermissionBaseline reduces Carbon modes to the session-creation axis', () => {
+  assert.equal(grokPermissionBaseline('bypassPermissions'), 'yolo')
+  assert.equal(grokPermissionBaseline('auto'), 'auto')
+  assert.equal(grokPermissionBaseline('default'), 'ask')
+  // Plan is the *other*, independent axis: it moves live and does not change
+  // the baseline the session was created with.
+  assert.equal(grokPermissionBaseline('plan'), 'ask')
+  // acceptEdits deliberately lands on ask rather than auto — upgrading it would
+  // make the more restrictive of the two settings run more without asking.
+  assert.equal(grokPermissionBaseline('acceptEdits'), 'ask')
 })
 
 test('resolveGrokBinary prefers an explicit override, then the CLI home', () => {

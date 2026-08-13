@@ -22,6 +22,7 @@ import {
 import {
   EFFORT_OPTIONS,
   PERMISSION_MODES,
+  PROVIDER_EFFORTS,
   PROVIDER_LABELS,
   PROVIDER_SHORT_LABELS,
   SERVICE_TIER_OPTIONS,
@@ -70,6 +71,31 @@ const CODEX_PERMISSION_MODES: { id: PermissionModeId; label: string; description
   { id: 'auto', label: 'Auto', description: 'Codex reviews approval requests before escalating' },
   { id: 'bypassPermissions', label: 'Full access', description: 'No sandbox — use with care' }
 ]
+
+// Grok has no Accept-edits: its CLI treats `acceptEdits` as a Claude-compat
+// alias of ask, so offering it would name a mode the session never enters. The
+// rest map onto real baselines — `_meta.yoloMode`, `_meta.autoMode`, and the
+// plan flag (see `grokPermissionMode`).
+const GROK_PERMISSION_MODES: { id: PermissionModeId; label: string; description: string }[] = [
+  { id: 'plan', label: 'Plan mode', description: 'Explores and writes a plan before building' },
+  { id: 'default', label: 'Ask to approve', description: 'Prompts before sensitive actions' },
+  { id: 'auto', label: 'Auto', description: 'A safety check approves routine work for you' },
+  { id: 'bypassPermissions', label: 'Full access', description: 'Never asks — use with care' }
+]
+
+/**
+ * Which permission modes each backend actually implements. A menu built from
+ * the wrong provider's list offers modes that silently degrade — Grok served
+ * Claude's list would advertise Accept edits and get ask.
+ */
+const PROVIDER_PERMISSION_MODES: Record<
+  Provider,
+  { id: PermissionModeId; label: string; description: string }[]
+> = {
+  claude: PERMISSION_MODES,
+  codex: CODEX_PERMISSION_MODES,
+  grok: GROK_PERMISSION_MODES
+}
 
 function codexPermissionValue(mode: PermissionModeId): PermissionModeId {
   return mode
@@ -658,21 +684,16 @@ export function Composer({
     [modelOptions, model]
   )
 
-  // Codex effort support is model-specific. The CLI's global config accepts
-  // more values than any one model necessarily advertises, so do not build this
-  // menu from the provider-wide SDK union.
+  // Effort support is model-specific where the provider reports it (Codex and
+  // Grok both do), since a CLI's global config accepts more values than any one
+  // model necessarily advertises. `PROVIDER_EFFORTS` is the provider-wide union
+  // and the right fallback when the selected model says nothing.
   const isCodex = provider === 'codex'
   const selectedModelOption = modelOptions.find((option) => option.id === selectedModel)
-  const codexEfforts = new Set(
-    selectedModelOption?.supportedEfforts ?? ['low', 'medium', 'high', 'xhigh']
-  )
-  const effortOptions = isCodex
-    ? EFFORT_OPTIONS.filter((e) => e.id === '' || codexEfforts.has(e.id as EffortId)).map((e) =>
-        e.id === '' ? { ...e, description: 'Uses your Codex config' } : e
-      )
-    : EFFORT_OPTIONS.filter((e) => e.id !== 'minimal' && e.id !== 'ultra').map((e) =>
-        e.id === '' ? { ...e, description: 'Uses your Claude Code config' } : e
-      )
+  const supported = new Set(selectedModelOption?.supportedEfforts ?? PROVIDER_EFFORTS[provider])
+  const effortOptions = EFFORT_OPTIONS.filter(
+    (e) => e.id === '' || supported.has(e.id as EffortId)
+  ).map((e) => (e.id === '' ? { ...e, description: `Uses your ${PROVIDER_LABELS[provider]} config` } : e))
   const invalidEffort = effort !== '' && !effortOptions.some((option) => option.id === effort)
   const effortValue = invalidEffort ? '' : effort
   // Selecting a model also restores the effort last used with it, so flipping
@@ -717,8 +738,14 @@ export function Composer({
   React.useEffect(() => {
     if (invalidServiceTier) onServiceTierChange?.('standard', { remember: false })
   }, [invalidServiceTier, onServiceTierChange])
-  const permissionOptions = isCodex ? CODEX_PERMISSION_MODES : PERMISSION_MODES
-  const permissionValue = isCodex ? codexPermissionValue(permissionMode) : permissionMode
+  const permissionOptions = PROVIDER_PERMISSION_MODES[provider]
+  const requestedPermission = isCodex ? codexPermissionValue(permissionMode) : permissionMode
+  // A chat can arrive carrying a mode this provider does not have — switching a
+  // Claude chat on Accept edits over to Grok. Show what the backend will
+  // actually do (its ask baseline) rather than leaving the chip blank.
+  const permissionValue = permissionOptions.some((option) => option.id === requestedPermission)
+    ? requestedPermission
+    : 'default'
   const selectedPermissionAppearance = permissionAppearance(permissionValue, isCodex)
 
   const inbox = useApp((s) => s.attachmentInbox)

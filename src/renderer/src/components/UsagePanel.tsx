@@ -1,6 +1,7 @@
 import * as React from 'react'
 import { Loader2, RefreshCw } from 'lucide-react'
 import type { ProviderUsage, UsageOverview } from '@shared/types'
+import { PROVIDER_SHORT_LABELS } from '@shared/types'
 import { cn } from '@/lib/utils'
 import { useApp } from '@/store'
 import { UsageBar, USAGE_CRITICAL, USAGE_WARN } from '@/components/UsageBar'
@@ -8,15 +9,10 @@ import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { WithTooltip } from '@/components/ui/tooltip'
 
-const PROVIDER_LABEL: Record<ProviderUsage['provider'], string> = {
-  claude: 'Claude',
-  codex: 'Codex',
-  // Present for the type, but never rendered: this panel reads *live plan
-  // headroom*, and Grok exposes no equivalent endpoint, so `usageInfo()` returns
-  // null and no Grok row is ever built. The Usage *page* covers Grok in full —
-  // that answers a different question, from the session logs on disk.
-  grok: 'Grok'
-}
+// Grok never appears here: this panel reads *live plan headroom*, and Grok
+// exposes no equivalent endpoint, so `usageInfo()` returns null and no Grok row
+// is ever built. The Usage *page* covers Grok in full — a different question,
+// answered from the session logs on disk.
 
 /** The most-used window across both providers — what the trigger reports. */
 function peakUtilization(
@@ -74,7 +70,7 @@ function ProviderSection({ usage }: { usage: ProviderUsage }): React.JSX.Element
     <section>
       <div className="mb-2 flex items-baseline justify-between">
         <span className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
-          {PROVIDER_LABEL[usage.provider]}
+          {PROVIDER_SHORT_LABELS[usage.provider]}
         </span>
         {usage.plan && (
           <span className="rounded bg-secondary px-1.5 py-px text-[10px] text-muted-foreground">
@@ -152,7 +148,7 @@ export function UsagePanel(): React.JSX.Element {
   const label =
     peak == null
       ? 'Usage'
-      : `Usage · ${PROVIDER_LABEL[peak.provider]} ${Math.round(peak.pct)}%`
+      : `Usage · ${PROVIDER_SHORT_LABELS[peak.provider]} ${Math.round(peak.pct)}%`
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -171,7 +167,7 @@ export function UsagePanel(): React.JSX.Element {
             // other gets closer to its limit — which is exactly the thing worth
             // knowing at a glance.
             <span className="text-[11px] tabular-nums">
-              {PROVIDER_LABEL[peak.provider]} {Math.round(peak.pct)}%
+              {PROVIDER_SHORT_LABELS[peak.provider]} {Math.round(peak.pct)}%
             </span>
           )}
         </PopoverTrigger>

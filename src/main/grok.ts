@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import {
   effortForProvider,
   GROK_DEFAULT_MODEL,
+  MODEL_OPTIONS,
   type AccountInfo,
   type AgentInfo,
   type AssistantMessage,
@@ -31,9 +32,8 @@ import { DeltaCoalescer } from './deltaCoalescer.ts'
 import {
   GrokAcpClient,
   GROK_OAUTH_REFERRER,
-  grokEffortFlag,
   grokInstalled,
-  grokPermissionMode,
+  grokPermissionBaseline,
   resolveGrokBinary,
   isExitPlanTool,
   toolName,
@@ -44,10 +44,12 @@ import {
   type GrokModelState,
   type GrokPermissionRequest,
   type GrokPromptResult,
+  type GrokRawUpdate,
   type GrokSessionUpdate,
   type GrokToolCall
 } from './grokAcp.ts'
 import { deriveTitle } from './titles.ts'
+import { USD_PER_TICK } from './usageScan.ts'
 
 /**
  * Grok Build as an `AgentSession`, on top of the ACP client in `grokAcp.ts`.
@@ -57,14 +59,13 @@ import { deriveTitle } from './titles.ts'
  * into `ChatEvent`s. That is what lets the manager, the IPC layer and the whole
  * renderer stay unaware there is a third backend at all.
  *
- * `costUsdTicks` is xAI's own billing figure at 1e-10 USD per tick — Carbon
- * reports it verbatim rather than pricing the tokens itself, because unlike the
- * Usage page (which must re-price historical cells as rates move) a turn's cost
- * is a fact the provider already settled.
+ * `costUsdTicks` is xAI's own billing figure — Carbon reports it verbatim rather
+ * than pricing the tokens itself, because unlike the Usage page (which must
+ * re-price historical cells as rates move) a turn's cost is a fact the provider
+ * already settled.
  */
-const USD_PER_TICK = 1e-10
 
-/** Grok's default context window; overridden per model from the ACP handshake. */
+/** Fallback context window, for a model the handshake hasn't described yet. */
 const DEFAULT_CONTEXT_WINDOW = 500_000
 
 /** Handshake-only probe: no turn runs, so this only has to outlast a spawn. */
@@ -122,7 +123,8 @@ export class GrokSession implements AgentSession {
   private lastEmittedStatus: ChatStatus | null = null
   private turnStart = 0
   private models: GrokModelState | null = null
-  private commands: GrokCommand[] = []
+  /** Plan flag the live session is known to hold; null when the agent is new. */
+  private appliedMode: 'plan' | 'default' | null = null
   /**
    * The permission baseline and effort are process-level in Grok (a `session/new`
    * `_meta` flag and a spawn flag). Changing either cannot be applied to a live
@@ -166,11 +168,13 @@ export class GrokSession implements AgentSession {
   // ---------- Lifecycle ----------
 
   private currentOptionsKey(): string {
-    const mode = grokPermissionMode(this.chat.permissionMode)
+    // Everything a running agent cannot be told about: its folder, the
+    // permission baseline it was created with, and the effort it was spawned
+    // with. A change to any of them replaces the process.
     return [
       this.chat.cwd,
-      mode.alwaysApprove ? 'yolo' : mode.autoMode ? 'auto' : 'ask',
-      grokEffortFlag(effortForProvider(this.chat.effort, 'grok')) ?? ''
+      grokPermissionBaseline(this.chat.permissionMode),
+      effortForProvider(this.chat.effort, 'grok') ?? ''
     ].join('|')
   }
 
@@ -200,22 +204,23 @@ export class GrokSession implements AgentSession {
   }
 
   private async startClient(): Promise<GrokAcpClient> {
-    const mode = grokPermissionMode(this.chat.permissionMode)
+    const baseline = grokPermissionBaseline(this.chat.permissionMode)
     const client = new GrokAcpClient({
       cwd: this.chat.cwd,
       model: this.launchModel(),
-      effort: grokEffortFlag(effortForProvider(this.chat.effort, 'grok')),
-      alwaysApprove: mode.alwaysApprove,
-      autoMode: mode.autoMode,
+      effort: effortForProvider(this.chat.effort, 'grok'),
+      alwaysApprove: baseline === 'yolo',
+      autoMode: baseline === 'auto',
       callbacks: {
         onUpdate: (update) => this.handleUpdate(update),
         onPermission: (request) => this.handlePermission(request),
         onModels: (state) => this.handleModels(state),
-        onCommands: (commands) => this.handleCommands(commands),
         onExit: (error) => this.handleExit(error)
       }
     })
     this.client = client
+    // A fresh agent holds no mode we know of, whatever the last one did.
+    this.appliedMode = null
     const initial = await client.start()
     if (initial) this.handleModels(initial)
 
@@ -242,13 +247,23 @@ export class GrokSession implements AgentSession {
     return client
   }
 
-  /** Plan mode is the one permission axis that moves without a respawn. */
+  /**
+   * Plan mode is the one permission axis that moves without a respawn, so it is
+   * re-asserted before each turn (see `runTurn`). `appliedMode` makes that free
+   * in the common case: without it every prompt would pay a full round trip to
+   * the child process before the text is even written, delaying first token on
+   * a mode that has not moved since the last turn.
+   */
   private async applyLiveMode(client: GrokAcpClient): Promise<void> {
     if (!this.sessionId) return
+    const wanted = this.chat.permissionMode === 'plan' ? 'plan' : 'default'
+    if (this.appliedMode === wanted) return
     try {
-      await client.setMode(this.sessionId, this.chat.permissionMode === 'plan' ? 'plan' : 'default')
+      await client.setMode(this.sessionId, wanted)
+      this.appliedMode = wanted
     } catch {
-      // Mode is advisory; a refusal must not block the turn.
+      // Mode is advisory; a refusal must not block the turn. Left unrecorded so
+      // the next turn tries again rather than assuming it landed.
     }
   }
 
@@ -415,14 +430,13 @@ export class GrokSession implements AgentSession {
   }
 
   private recordTurn(result: GrokPromptResult): void {
-    const tokens = result.turnTokens ?? {}
-    if (tokens.total != null) {
-      this.chat.contextTokens = tokens.total
+    if (result.contextTokens != null) {
+      this.chat.contextTokens = result.contextTokens
       this.chat.contextWindow = this.contextWindow()
       this.emit({
         type: 'meta',
         chatId: this.chat.id,
-        patch: { contextTokens: tokens.total, contextWindow: this.chat.contextWindow }
+        patch: { contextTokens: result.contextTokens, contextWindow: this.chat.contextWindow }
       })
     }
     const usage = result.usage
@@ -444,30 +458,45 @@ export class GrokSession implements AgentSession {
     })
   }
 
+  /**
+   * The live handshake first, then the static catalog, then a floor — the same
+   * ladder `CodexSession.contextWindow` walks. The catalog rung matters before
+   * the first handshake lands, which is exactly when a resumed chat draws its
+   * context ring.
+   */
   private contextWindow(): number {
-    const current = this.models?.availableModels?.find(
-      (model) => model.modelId === (this.models?.currentModelId ?? this.chat.model)
-    )
-    return current?._meta?.totalContextTokens ?? DEFAULT_CONTEXT_WINDOW
+    const id = this.models?.currentModelId ?? this.chat.model
+    const live = this.models?.availableModels?.find((model) => model.modelId === id)
+    if (live?._meta?.totalContextTokens) return live._meta.totalContextTokens
+    return MODEL_OPTIONS.find((option) => option.id === id)?.contextWindow ?? DEFAULT_CONTEXT_WINDOW
   }
 
   // ---------- Stream normalization ----------
 
-  private handleUpdate(update: GrokSessionUpdate): void {
+  /**
+   * The one place a wire payload becomes a typed variant. Casting here rather
+   * than per case is what lets the union narrow — every branch below reads its
+   * own fields with no further assertion.
+   */
+  private handleUpdate(raw: GrokRawUpdate): void {
     if (this.disposed) return
+    const update = raw as GrokSessionUpdate
     switch (update.sessionUpdate) {
       case 'agent_message_chunk':
-        this.appendStream('text', textOf((update as { content?: { text?: string } }).content))
+        this.appendStream('text', update.content?.text ?? '')
         return
       case 'agent_thought_chunk':
-        this.appendStream('thinking', textOf((update as { content?: { text?: string } }).content))
+        this.appendStream('thinking', update.content?.text ?? '')
         return
       case 'tool_call':
       case 'tool_call_update':
-        this.applyToolCall(update as GrokToolCall)
+        this.applyToolCall(update)
         return
       case 'session_info_update':
-        this.applyTitle((update as { title?: string }).title)
+        this.applyTitle(update.title)
+        return
+      case 'available_commands_update':
+        this.handleCommands(update.availableCommands ?? [])
         return
       case 'current_mode_update':
         return
@@ -572,25 +601,25 @@ export class GrokSession implements AgentSession {
     this.models = { ...this.models, ...state }
   }
 
+  /**
+   * Grok's commands arrive inside `session/update`, not as their own
+   * notification — they are session state (they change with the plugins a
+   * session loads), which is why nothing can warm them without a live chat.
+   */
   private handleCommands(commands: GrokCommand[]): void {
-    this.commands = commands
-    this.onCommands(
-      commands.map((command) => ({
-        name: command.name,
-        description: command.description ?? '',
-        argumentHint: command.input?.hint
-      }))
-    )
+    const list: SlashCommand[] = commands.map((command) => ({
+      name: command.name,
+      description: command.description ?? '',
+      argumentHint: command.input?.hint
+    }))
     this.emit({
       type: 'commands',
       chatId: this.chat.id,
       cwd: this.chat.cwd,
-      commands: this.commands.map((command) => ({
-        name: command.name,
-        description: command.description ?? '',
-        argumentHint: command.input?.hint
-      }))
+      provider: 'grok',
+      commands: list
     })
+    this.onCommands(list)
   }
 
   // ---------- Permissions ----------
@@ -897,7 +926,6 @@ export async function fetchGrokModels(cwd: string): Promise<ModelOption[]> {
         onUpdate: () => {},
         onPermission: async () => null,
         onModels: () => {},
-        onCommands: () => {},
         onExit: () => {}
       }
     })

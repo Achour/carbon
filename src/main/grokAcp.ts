@@ -30,7 +30,18 @@ interface RpcMessage {
   error?: { code: number; message: string; data?: unknown }
 }
 
-/** A `session/update` payload. Only the variants Carbon renders are named. */
+/**
+ * A `session/update` payload — a *discriminated* union of the variants Carbon
+ * renders, deliberately with no catch-all member.
+ *
+ * An `| { sessionUpdate: string; [key: string]: unknown }` arm would make this
+ * assignable from any payload, which reads as tolerant but costs the narrowing:
+ * inside `case 'agent_message_chunk'` the compiler resolves `content` through
+ * the index signature to `{}`, so every consumer has to re-cast to an inline
+ * shape and the declared variants become documentation nothing checks. The
+ * unknown-variant tolerance belongs at the transport boundary instead
+ * (`GrokRawUpdate`), where exactly one cast happens.
+ */
 export type GrokSessionUpdate =
   | { sessionUpdate: 'agent_message_chunk'; content?: GrokContentBlock }
   | { sessionUpdate: 'agent_thought_chunk'; content?: GrokContentBlock }
@@ -41,7 +52,10 @@ export type GrokSessionUpdate =
   | ({ sessionUpdate: 'tool_call' } & GrokToolCall)
   | ({ sessionUpdate: 'tool_call_update' } & GrokToolCall)
   | { sessionUpdate: 'plan'; entries?: { content: string; status?: string }[] }
-  | { sessionUpdate: string; [key: string]: unknown }
+  | { sessionUpdate: 'turn_completed'; usage?: GrokTurnUsage }
+
+/** What actually comes off the wire: any `sessionUpdate`, including new ones. */
+export type GrokRawUpdate = { sessionUpdate: string } & Record<string, unknown>
 
 export interface GrokContentBlock {
   type: string
@@ -121,10 +135,15 @@ export interface GrokPromptResult {
   /** `end_turn`, `cancelled`, `max_tokens`, … — Grok's own set, not ACP's. */
   stopReason: string
   modelId?: string
-  /** Cumulative for the *session*, not the turn — deltas are the caller's job. */
+  /** The turn's token accounting, including the cost xAI settled on. */
   usage?: GrokTurnUsage
-  /** The turn's own totals, which `usage` does not give. */
-  turnTokens?: { input?: number; output?: number; total?: number; cachedRead?: number; reasoning?: number }
+  /**
+   * Tokens live in the model's context after this turn — the last call's total,
+   * not the turn's sum. That difference is what makes it a separate field from
+   * `usage.totalTokens`, which counts every call and would draw a context ring
+   * well past 100%.
+   */
+  contextTokens?: number
 }
 
 export interface GrokModelInfo {
@@ -150,11 +169,10 @@ export interface GrokSessionInfo {
 }
 
 export interface GrokAcpCallbacks {
-  onUpdate(update: GrokSessionUpdate): void
+  onUpdate(update: GrokRawUpdate): void
   /** Resolve with the chosen `optionId`, or null to cancel the request. */
   onPermission(request: GrokPermissionRequest): Promise<string | null>
   onModels(state: GrokModelState): void
-  onCommands(commands: GrokCommand[]): void
   /** The process is gone. `error` is null for a clean, expected shutdown. */
   onExit(error: Error | null): void
 }
@@ -333,13 +351,7 @@ export class GrokAcpClient {
       stopReason: String(raw?.stopReason ?? 'end_turn'),
       modelId: typeof meta.modelId === 'string' ? meta.modelId : undefined,
       usage: meta.usage as GrokTurnUsage | undefined,
-      turnTokens: {
-        input: numberOr(meta.inputTokens),
-        output: numberOr(meta.outputTokens),
-        total: numberOr(meta.totalTokens),
-        cachedRead: numberOr(meta.cachedReadTokens),
-        reasoning: numberOr(meta.reasoningTokens)
-      }
+      contextTokens: numberOr(meta.totalTokens)
     }
   }
 
@@ -472,7 +484,7 @@ export class GrokAcpClient {
   private handleNotification(method: string, raw: unknown): void {
     const params = (raw ?? {}) as Record<string, unknown>
     if (method === 'session/update') {
-      const update = params.update as GrokSessionUpdate | undefined
+      const update = params.update as GrokRawUpdate | undefined
       if (update) this.options.callbacks.onUpdate(update)
       return
     }
@@ -483,7 +495,7 @@ export class GrokAcpClient {
       return
     }
     if (method === '_x.ai/session/update') {
-      const update = params.update as GrokSessionUpdate | undefined
+      const update = params.update as GrokRawUpdate | undefined
       if (update) this.options.callbacks.onUpdate(update)
     }
   }
@@ -494,34 +506,25 @@ function numberOr(value: unknown): number | undefined {
 }
 
 /**
- * Grok's own effort ids happen to match Carbon's for the four levels it has, so
- * this is a filter rather than a mapping — but it is a *function* so that the
- * day xAI adds one, exactly one place changes.
- */
-export function grokEffortFlag(effort: string | undefined): string | undefined {
-  if (!effort) return undefined
-  return ['low', 'medium', 'high', 'xhigh'].includes(effort) ? effort : undefined
-}
-
-/**
- * Carbon's permission modes against Grok's two independent axes: a *baseline*
- * fixed when the session is created, and a plan flag that moves live.
+ * Carbon's permission modes reduced to Grok's *baseline* — the axis fixed when
+ * the session is created (`_meta.yoloMode` / `_meta.autoMode`). Plan mode is the
+ * other, independent axis and moves live, so it is not represented here.
  *
- * `acceptEdits` has no Grok equivalent — the CLI's own `acceptEdits` is a
- * Claude-compatibility alias that its permission engine treats as ask — so it
- * maps to the ask baseline rather than to `auto`. Quietly upgrading it would
- * make the least-privileged of the two settings run *more* without asking.
+ * A single value rather than a set of booleans because that is what both callers
+ * want: the session builder switches on it, and it is the whole permission
+ * component of `optionsKey`, which decides whether a change needs a respawn.
+ *
+ * `acceptEdits` deliberately lands on `ask` — the CLI's own `acceptEdits` is a
+ * Claude-compatibility alias its permission engine treats as ask, so mapping it
+ * to `auto` would make the least-privileged of the two settings run *more*
+ * without asking.
  */
-export function grokPermissionMode(mode: string): {
-  alwaysApprove: boolean
-  autoMode: boolean
-  planMode: boolean
-} {
-  return {
-    alwaysApprove: mode === 'bypassPermissions',
-    autoMode: mode === 'auto',
-    planMode: mode === 'plan'
-  }
+export type GrokBaseline = 'yolo' | 'auto' | 'ask'
+
+export function grokPermissionBaseline(mode: string): GrokBaseline {
+  if (mode === 'bypassPermissions') return 'yolo'
+  if (mode === 'auto') return 'auto'
+  return 'ask'
 }
 /**
  * The name carried by *this* payload, or undefined when it carries none.
@@ -570,7 +573,7 @@ export function toolOutput(call: GrokToolCall): string | undefined {
   const blocks = call.content
   if (!blocks?.length) return undefined
   const parts: string[] = []
-  for (const block of blocks as GrokToolContent[]) {
+  for (const block of blocks) {
     if (block.type === 'content') {
       const text = (block as { content?: { text?: string } }).content?.text
       if (text) parts.push(text)

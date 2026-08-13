@@ -54,16 +54,33 @@ export function effortForProvider(
   provider: Provider
 ): EffortId | undefined
 export function effortForProvider(effort: EffortId | undefined, provider: Provider): EffortId | undefined {
-  if (provider === 'codex' && effort === 'minimal') return undefined
-  if (provider === 'claude' && (effort === 'minimal' || effort === 'ultra')) return undefined
-  if (provider === 'grok' && effort !== undefined && !GROK_EFFORTS.includes(effort as GrokEffortId)) {
-    return undefined
-  }
-  return effort
+  if (effort === undefined) return undefined
+  return PROVIDER_EFFORTS[provider].includes(effort) ? effort : undefined
 }
 
-/** The reasoning levels Grok models advertise, widest-model first. */
-export const GROK_EFFORTS: GrokEffortId[] = ['low', 'medium', 'high', 'xhigh']
+/**
+ * Every provider's reasoning levels, widest model first — the single answer to
+ * "which efforts does this backend have".
+ *
+ * One table rather than a rule per provider because three call sites need the
+ * same fact in three shapes: `effortForProvider` filters a stored value against
+ * it, the composer builds a menu from it, and the plan review's "Build with"
+ * picker falls back to it when a model advertises none of its own. Those had
+ * drifted into a filter, a two-way ternary and a `Record` respectively, which is
+ * how a Grok chat came to be offered Claude's menu — including `max`, which
+ * `effortForProvider` then silently dropped on the way to the CLI.
+ *
+ * A *model* may support fewer (`ModelOption.supportedEfforts`); this is the
+ * provider-wide union and the correct fallback when the model says nothing.
+ */
+export const PROVIDER_EFFORTS: Record<Provider, EffortId[]> = {
+  claude: ['low', 'medium', 'high', 'xhigh', 'max'],
+  codex: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+  grok: ['low', 'medium', 'high', 'xhigh']
+}
+
+/** Grok's reasoning levels. Kept as a named export for the ACP spawn flag. */
+export const GROK_EFFORTS = PROVIDER_EFFORTS.grok as GrokEffortId[]
 
 export type ChatStatus = 'idle' | 'starting' | 'streaming' | 'waiting-permission'
 
@@ -662,7 +679,11 @@ export type ChatEvent =
   | { type: 'chat-locked'; chatId: string }
   | { type: 'permission-request'; chatId: string; request: PermissionRequestPayload }
   | { type: 'permission-resolved'; chatId: string; requestId: string }
-  | { type: 'commands'; chatId: string; cwd: string; commands: SlashCommand[] }
+  // `provider` is part of the identity, not decoration: two providers can have a
+  // live session in the same folder, and the renderer keys its cache on
+  // `${cwd}::${provider}`. Without it a Grok push either lands in Claude's slot
+  // or is discarded for not matching it.
+  | { type: 'commands'; chatId: string; cwd: string; provider: Provider; commands: SlashCommand[] }
   | { type: 'background-jobs'; chatId: string; jobs: BackgroundJob[] }
   | { type: 'rate-limit'; chatId: string; state: RateLimitState }
   // Transient (not persisted): whether the provider is honouring this chat's

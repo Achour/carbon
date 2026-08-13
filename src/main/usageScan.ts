@@ -617,8 +617,13 @@ export interface GrokSample {
   costUsd: number
 }
 
-/** 1 tick = 1e-10 USD. */
-const USD_PER_TICK = 1e-10
+/**
+ * xAI's cost unit: 1 tick = 1e-10 USD. Confirmed against the headless
+ * `--output-format json` reply, which prints `total_cost_usd` beside
+ * `total_cost_usd_ticks`. Exported because `grok.ts` converts the same field for
+ * a turn's `TurnStats`, and a correction to the scale must land in one place.
+ */
+export const USD_PER_TICK = 1e-10
 
 /** Parse one `updates.jsonl` line into a sample per model, or null. */
 export function parseGrokLine(line: string): GrokSample[] | null {

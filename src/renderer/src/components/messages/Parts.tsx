@@ -100,7 +100,10 @@ function RewindControl({ messageId }: { messageId: string }): React.JSX.Element 
   }, [open, messageId, rewindFiles])
 
   // Codex has no file checkpoints — rewind always fails, so don't offer it.
-  if (provider === 'codex') return <></>
+  // Gated on *is Claude* rather than *is not Codex*: the latter silently began
+  // offering Rewind to Grok the moment a third provider existed, where
+  // `rewindFiles` can only answer `canRewind: false`.
+  if (provider !== 'claude') return <></>
 
   const noChanges = (preview?.filesChanged?.length ?? 0) === 0
   const apply = async (): Promise<void> => {

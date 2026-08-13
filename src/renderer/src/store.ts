@@ -2696,7 +2696,7 @@ export const useApp = create<AppState>((set, get) => ({
         // Pushed by a Claude session's command watcher — only apply it if the
         // active project is still on Claude (not switched to Codex in the same
         // folder), so it can't repopulate the menu for a Codex chat.
-        if (get().commandsKey === `${ev.cwd}::claude`) set({ commands: ev.commands })
+        if (get().commandsKey === `${ev.cwd}::${ev.provider}`) set({ commands: ev.commands })
         break
       }
     }

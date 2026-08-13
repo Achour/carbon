@@ -437,7 +437,13 @@ class ClaudeSession implements AgentSession {
       argumentHint: c.argumentHint || undefined,
       aliases: c.aliases
     }))
-    this.emit({ type: 'commands', chatId: this.chat.id, cwd: this.chat.cwd, commands })
+    this.emit({
+      type: 'commands',
+      chatId: this.chat.id,
+      cwd: this.chat.cwd,
+      provider: 'claude',
+      commands
+    })
     this.onCommands(commands)
   }
 
@@ -1642,12 +1648,25 @@ interface HandoffSnapshot {
   model?: string
 }
 
+/**
+ * Cache key for a folder's slash commands. Keyed by provider as well as cwd
+ * because two providers can hold a live session in the same folder, and their
+ * command sets share nothing — Claude's come from `.claude/commands`, Grok's
+ * from its own plugins. The renderer keys its copy the same way.
+ */
+function commandsKey(cwd: string, provider: Provider): string {
+  return `${cwd}::${provider}`
+}
+
 export class ChatManager {
   private sessions = new Map<string, AgentSession>()
   private static readonly MAX_IDLE_SESSIONS = 2
   // Slash commands are the same for every chat in a folder, so cache them by cwd
   // — new chats in a known project can show the menu before their first turn.
+  /** Slash commands by `${cwd}::${provider}` — see `commandsKey`. */
   private commandsByCwd = new Map<string, SlashCommand[]>()
+  /** Whether the Grok catalog probe has run this session — see `listModels`. */
+  private grokProbed = false
   // In-flight warmups, deduped per cwd.
   private warmups = new Map<string, Promise<SlashCommand[]>>()
   // The model list is account-level, not per chat or folder, so it's cached once
@@ -1685,13 +1704,12 @@ export class ChatManager {
   async getCommands(cwd: string, provider: Provider = 'claude'): Promise<SlashCommand[]> {
     if (!cwd) return []
     if (provider === 'codex') return CODEX_SLASH_COMMANDS
-    const cached = this.commandsByCwd.get(cwd)
+    const cached = this.commandsByCwd.get(commandsKey(cwd, provider))
     if (cached) return cached
-    // Grok's commands are session state, not a folder's: they ride the ACP
-    // handshake and change with the plugins a session loads. A live session
-    // fills the cache above; warming Claude's list for a Grok chat would offer
-    // commands the backend has never heard of.
-    if (provider === 'grok') return []
+    // Only Claude can be warmed without a chat: its CLI answers
+    // `supportedCommands` as a control request. Grok's list rides the ACP
+    // handshake of a real session, so it arrives when one starts and not before.
+    if (provider !== 'claude') return []
     return this.warmCommands(cwd)
   }
 
@@ -1729,8 +1747,8 @@ export class ChatManager {
           argumentHint: c.argumentHint || undefined,
           aliases: c.aliases
         }))
-        this.commandsByCwd.set(cwd, commands)
-        this.emit({ type: 'commands', chatId: '', cwd, commands })
+        this.commandsByCwd.set(commandsKey(cwd, 'claude'), commands)
+        this.emit({ type: 'commands', chatId: '', cwd, provider: 'claude', commands })
         return commands
       } catch {
         return []
@@ -1819,14 +1837,14 @@ export class ChatManager {
         ? new CodexSession(chat, sessionEmit, this.store, onDead)
         : chat.provider === 'grok'
           ? new GrokSession(chat, sessionEmit, this.store, onDead, (commands) =>
-              this.commandsByCwd.set(chat.cwd, commands)
+              this.commandsByCwd.set(commandsKey(chat.cwd, 'grok'), commands)
             )
           : new ClaudeSession(
               chat,
               sessionEmit,
               this.store,
               onDead,
-              (commands) => this.commandsByCwd.set(chat.cwd, commands),
+              (commands) => this.commandsByCwd.set(commandsKey(chat.cwd, 'claude'), commands),
               this.preview
             )
     this.sessions.set(chat.id, session)
@@ -2375,7 +2393,12 @@ export class ChatManager {
     if (live?.length) this.mergeModels(live)
     const haveClaude = this.models?.some((option) => option.provider === 'claude')
     const haveCodex = this.models?.some((option) => option.provider === 'codex')
-    const haveGrok = this.models?.some((option) => option.provider === 'grok')
+    // Grok's presence is tracked by whether the probe *ran*, not by whether it
+    // returned rows: an empty result is the answer "not installed", and reading
+    // it as "not fetched yet" would defeat this fast path forever for those
+    // users — re-spawning `grok agent stdio` on every call. Same reasoning as
+    // `hasCompleteModelCatalog` in the renderer, which excludes Grok outright.
+    const haveGrok = this.grokProbed || this.models?.some((option) => option.provider === 'grok')
     if (haveClaude && haveCodex && haveGrok) return this.models!
     const folder = this.store.getMeta(chatId)?.cwd || cwd
     if (!folder) return this.models ?? []
@@ -2388,6 +2411,7 @@ export class ChatManager {
       haveGrok ? Promise.resolve([]) : fetchGrokModels(folder)
     ])
       .then(([claude, codex, grok]) => {
+        this.grokProbed = true
         this.mergeModels([...claude, ...codex, ...grok])
         return this.models ?? []
       })
