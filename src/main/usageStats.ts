@@ -8,6 +8,7 @@ import {
   emptyCell,
   localDay,
   parseClaudeLine,
+  parseGrokLine,
   priceCell,
   type CellCost,
   type UsageCell
@@ -15,7 +16,7 @@ import {
 import { loadRates } from './usageRates'
 
 /**
- * Walks both CLIs' session logs and turns them into the Usage page's report.
+ * Walks every CLI's session logs and turns them into the Usage page's report.
  * Parsing and pricing live in `usageScan.ts`; this file owns the filesystem, the
  * cache, and the aggregation.
  *
@@ -40,6 +41,13 @@ const CACHE_FILE = 'usage-cache.json'
  * not raw lines, so a file that hasn't changed still has to be re-read when the
  * derivation does — otherwise a corrected rate would apply only to sessions that
  * happened to be written afterwards.
+ *
+ * Adding Grok deliberately did *not* bump it. No existing cell's derivation
+ * moved: Claude and Codex parse exactly as before, and `priceCell`'s new branch
+ * only fires on a cell carrying a provider-reported cost, which only Grok writes.
+ * Grok's own logs are picked up regardless, because they are paths the cache has
+ * never seen. Bumping would have forced every user through a cold ~2 GB rescan
+ * to arrive at numbers identical to the ones already cached.
  */
 const CACHE_VERSION = 2
 /** Don't let the cache grow unbounded as sessions accumulate. */
@@ -90,8 +98,10 @@ async function collectJsonl(dir: string, depth: number, out: string[]): Promise<
 async function listSources(home: string): Promise<Source[]> {
   const claudeHome = process.env.CLAUDE_CONFIG_DIR || join(home, '.claude')
   const codexHome = process.env.CODEX_HOME || join(home, '.codex')
+  const grokHome = process.env.GROK_HOME || join(home, '.grok')
   const claude: string[] = []
   const codex: string[] = []
+  const grok: string[] = []
   await Promise.all([
     // Claude's main transcripts sit at `projects/<slug>/<session>.jsonl`, but a
     // Task/subagent turn is written to its own file beside them —
@@ -102,11 +112,19 @@ async function listSources(home: string): Promise<Source[]> {
     collectJsonl(join(claudeHome, 'projects'), 6, claude),
     collectJsonl(join(codexHome, 'sessions'), 4, codex),
     // Codex moves finished threads here; they are still real spend.
-    collectJsonl(join(codexHome, 'archived_sessions'), 4, codex)
+    collectJsonl(join(codexHome, 'archived_sessions'), 4, codex),
+    // Grok nests one directory deep — `sessions/<encoded cwd>/<id>/*.jsonl` —
+    // and writes several JSONL files per session (`events`, `chat_history`,
+    // `rewind_points`). Only `updates.jsonl` carries usage; the others are
+    // filtered below rather than here so the walk stays one shared helper.
+    collectJsonl(join(grokHome, 'sessions'), 4, grok)
   ])
   return [
     ...claude.map((path): Source => ({ provider: 'claude', path })),
-    ...codex.map((path): Source => ({ provider: 'codex', path }))
+    ...codex.map((path): Source => ({ provider: 'codex', path })),
+    ...grok
+      .filter((path) => path.endsWith('updates.jsonl'))
+      .map((path): Source => ({ provider: 'grok', path }))
   ]
 }
 
@@ -187,6 +205,32 @@ async function readCodexFile(path: string): Promise<UsageCell[]> {
       reasoning: s.reasoning
     })
   }
+  return [...cells.values()]
+}
+
+async function readGrokFile(path: string): Promise<UsageCell[]> {
+  const cells = new Map<string, UsageCell>()
+  await forEachLine(path, (line) => {
+    const samples = parseGrokLine(line)
+    if (!samples) return
+    for (const s of samples) {
+      const day = localDay(s.ts)
+      const k = `${s.model} ${day}`
+      let c = cells.get(k)
+      if (!c) cells.set(k, (c = emptyCell('grok', s.model, day)))
+      addSample(c, {
+        input: s.input,
+        cacheRead: s.cacheRead,
+        cacheWrite5m: s.cacheWrite,
+        cacheWrite1h: 0,
+        output: s.output,
+        reasoning: s.reasoning
+      })
+      // Costs sum across the turns folded into this cell; see `UsageCell.costUsd`
+      // for why a reported figure is stored where a computed one would not be.
+      c.costUsd = (c.costUsd ?? 0) + s.costUsd
+    }
+  })
   return [...cells.values()]
 }
 
@@ -337,7 +381,9 @@ async function scan(opts: UsageStatsOptions, days: number, refresh: boolean): Pr
       const cells =
         source.provider === 'claude'
           ? await readClaudeFile(source.path)
-          : await readCodexFile(source.path)
+          : source.provider === 'grok'
+            ? await readGrokFile(source.path)
+            : await readCodexFile(source.path)
       live.set(source.path, { mtimeMs, size, cells })
     } catch {
       failures++
@@ -362,11 +408,12 @@ async function scan(opts: UsageStatsOptions, days: number, refresh: boolean): Pr
   const to = localDay(end.getTime())
   const byDay = new Map<string, UsageDay>()
   for (const day of dayRange(start, end)) {
-    byDay.set(day, { day, claude: emptyTotals(), codex: emptyTotals() })
+    byDay.set(day, { day, claude: emptyTotals(), codex: emptyTotals(), grok: emptyTotals() })
   }
   const byModel = new Map<string, UsageModelRow>()
   const claude = emptyTotals()
   const codex = emptyTotals()
+  const grok = emptyTotals()
   const total = emptyTotals()
   let sessions = 0
 
@@ -380,14 +427,14 @@ async function scan(opts: UsageStatsOptions, days: number, refresh: boolean): Pr
       // and not a number frozen into a file that never changes again.
       const cost = priceCell(cell, rates)
       const dayRow = byDay.get(cell.day)
-      if (dayRow) accumulate(cell.provider === 'claude' ? dayRow.claude : dayRow.codex, cell, cost)
+      if (dayRow) accumulate(dayRow[cell.provider], cell, cost)
       const key = `${cell.provider} ${cell.model}`
       let row = byModel.get(key)
       if (!row) {
         byModel.set(key, (row = { provider: cell.provider, model: cell.model, ...emptyTotals() }))
       }
       accumulate(row, cell, cost)
-      accumulate(cell.provider === 'claude' ? claude : codex, cell, cost)
+      accumulate({ claude, codex, grok }[cell.provider], cell, cost)
       accumulate(total, cell, cost)
     }
     // A subagent transcript is part of its parent session, not another one —
@@ -404,6 +451,7 @@ async function scan(opts: UsageStatsOptions, days: number, refresh: boolean): Pr
     ),
     claude,
     codex,
+    grok,
     total,
     sessions,
     scannedAt: Date.now(),

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-An Electron desktop GUI for coding agents. Claude sessions run through `@anthropic-ai/claude-agent-sdk`; Codex sessions run through `@openai/codex-sdk`. Both live in the Electron main process, reuse the user's existing provider login, and operate in whatever project folder the user picks.
+An Electron desktop GUI for coding agents. Claude sessions run through `@anthropic-ai/claude-agent-sdk`; Codex sessions run through `@openai/codex-sdk`; Grok sessions speak ACP to the `grok` CLI, which ships no SDK. All three live in the Electron main process, reuse the user's existing provider login, and operate in whatever project folder the user picks.
 
 ## Commands
 
@@ -75,7 +75,7 @@ Path aliases: `@` → `src/renderer/src`, `@shared` → `src/shared` (renderer a
 
 ### Session flow (`src/main/claude.ts`)
 
-`ChatManager` holds one provider-specific session per active chat. Claude uses one long-lived Agent SDK `query()` input stream. Codex uses SDK `Thread.runStreamed()` turns and resumes the same thread id across turns and app restarts. Both normalize provider events into the shared `ChatEvent` contract.
+`ChatManager` holds one provider-specific session per active chat. Claude uses one long-lived Agent SDK `query()` input stream. Codex uses SDK `Thread.runStreamed()` turns and resumes the same thread id across turns and app restarts. Grok spawns `grok agent stdio` and speaks ACP to it. All three normalize provider events into the shared `ChatEvent` contract.
 
 - Conversations resume across app restarts via `chat.sessionId` (`resume` option); the session id arrives on the SDK `init` message.
 - SDK stream events are normalized into `AssistantPart[]` (`text` / `thinking` / `tool`); when the final `assistant` message arrives, `reconcileAssistant` replaces the streamed parts wholesale. Tool results come back on `user` messages and are matched by `toolUseId` via the `toolLoc` map.
@@ -83,6 +83,61 @@ Path aliases: `@` → `src/renderer/src`, `@shared` → `src/shared` (renderer a
 - Permissions: the SDK's `canUseTool` callback returns a Promise held in a `pending` map until the renderer answers via `chat:respond-permission`. "Always allow" uses the SDK's permission `suggestions`.
 - Changing **effort** has no live SDK setter — `setOptions` disposes the session and the next send resumes it in a fresh process. Model and permission mode change live.
 - Sub-agent traffic is skipped in the UI: messages with `parent_tool_use_id` are ignored.
+
+### Grok Build (`src/main/grokAcp.ts`, `grok.ts`)
+
+The third provider is the one with **no SDK**, so the protocol itself is the
+integration surface: `grokAcp.ts` spawns `grok agent stdio` and speaks
+[ACP](https://agentclientprotocol.com) JSON-RPC over its pipes, and `grok.ts`
+turns that into `ChatEvent`s. The split is exactly the one `codex.ts` keeps
+against `codexAppServer.ts`, and it is what lets the manager, the IPC layer and
+the whole renderer stay unaware there is a third backend — `AgentSession`
+remains the only seam.
+
+**`GROK_OAUTH2_REFERRER=carbon` is why this needs no API key.** It identifies the
+client to xAI's OAuth flow, so a SuperGrok/X subscription authorizes the session;
+without it the CLI cannot tell who is asking. Auth is then resolved, not
+configured: `XAI_API_KEY` if set, otherwise the CLI's own cached login.
+
+Shapes were read off grok 1.0.3 rather than the published schema, which collapses
+several `sessionUpdate` variants into one and omits every `x.ai/*` extension.
+Four findings drove the design, each measured against the running CLI:
+
+- **Grok has two independent permission axes, not one.** A *baseline* fixed at
+  `session/new` (`_meta.yoloMode` / `_meta.autoMode`) and a plan flag that moves
+  live via `session/set_mode` — which recognizes only `plan` and `default`, and
+  accepts every other id with an empty result and no `current_mode_update`. So a
+  permission-mode change respawns the agent, the way an effort change does, while
+  plan mode does not. `_meta.autoMode` is sent **explicitly false** rather than
+  omitted: with no flag the CLI falls back to `permission_mode` in the user's own
+  `~/.grok/config.toml`, which is frequently `auto`, and a chat Carbon labels
+  "Ask" would then run tools without prompting.
+- **`session/set_model` works live**, so the model changes without a respawn.
+  Reasoning effort does not — no method exists — so it is a spawn flag
+  (`--reasoning-effort`) and moving it respawns.
+- **Grok never gates `exit_plan_mode`.** The tool simply succeeds and the turn
+  ends, in every permission mode including plain ask. The plan review is therefore
+  *synthesized* from the tool call rather than bridged from a pending request, the
+  plan text is read from `plan.md` in the session directory (the call's input is
+  empty), and approving it starts a **new turn** because there is no suspended one
+  to release — Codex's shape, not Claude's. The plan flag is re-asserted at the
+  head of every turn: on approval the chat's mode returns to `default` while the
+  *session* is still refusing every edit outside `plan.md`, which silently failed
+  every write the implementation turn attempted.
+- **Only the first payload of a tool call identifies it.** The closing
+  `tool_call_update` carries `title: undefined` and `_meta: null`, so a naming
+  function that always answers renames a finished "Read" card to a generic
+  fallback at the moment it completes (`toolNameIfNamed` vs `toolName`), and
+  `isExitPlanTool` cannot recognize it — hence `planToolIds`, without which each
+  plan leaves a stray unnamed error card.
+
+`fetchGrokModels` probes the catalog for **zero tokens**: the model list rides the
+ACP handshake, so the agent is spawned, `initialize` is answered, and the process
+is killed before a session exists. It returns `[]` when the CLI is absent, and
+that is deliberately how Grok stays out of the picker for anyone who has not
+installed it — `assembleModelOptions` gives Grok no static fallback, unlike the
+two providers that ship with the app. The static `MODEL_OPTIONS` rows still exist
+so `knownProviderForModel` can place a stored `grok-4.6`.
 
 ### Persistence (`src/main/store.ts`)
 
@@ -311,14 +366,17 @@ Two different questions wear the word "usage", and they share nothing. `usage.ts
 + `UsagePanel` ask the providers **how much plan headroom is left right now** —
 answered live, off a throwaway process, shown as a chip in the sidebar footer.
 `usageStats.ts` + the Usage **page** ask **what was spent, on what, over the last
-7/30/90 days** — a history question no live API answers, since neither provider
-bills a subscription per token.
+7/30/90 days** — a history question no live API answers, since no provider bills a
+subscription per token. Only Claude and Codex answer the *live* question at all;
+Grok exposes no plan-headroom endpoint, so it appears on the page and never in the
+sidebar chip.
 
 The only durable record is the CLIs' own session logs, so that is the source:
-`~/.claude/projects/<slug>/<session>.jsonl` and
-`~/.codex/sessions/<y>/<m>/<d>/rollout-*.jsonl`. Reading them covers Carbon's own
-turns *for free* — both SDKs drive the real CLIs, so an in-app chat lands in the
-same files as a terminal one. That is also why the page does **not** also sum the
+`~/.claude/projects/<slug>/<session>.jsonl`,
+`~/.codex/sessions/<y>/<m>/<d>/rollout-*.jsonl`, and
+`~/.grok/sessions/<percent-encoded cwd>/<id>/updates.jsonl`. Reading them covers
+Carbon's own turns *for free* — every adapter drives the real CLI, so an in-app
+chat lands in the same files as a terminal one. That is also why the page does **not** also sum the
 `TurnStats` on our own event messages: it would double every in-app turn.
 
 - **Subagents are separate files.** A Task/subagent turn is written to
@@ -333,6 +391,18 @@ same files as a terminal one. That is also why the page does **not** also sum th
   and no model — hence `CodexFileReader`, a per-file cursor that carries the model
   forward from `turn_context` / `thread_settings_applied` and sums only the delta.
   Its `input_tokens` is *inclusive* of `cached_input_tokens`; Claude's is not.
+- **Grok reports the cost itself**, on one line kind: an `_x.ai/session/update`
+  whose `sessionUpdate` is `turn_completed`, carrying per-model totals and
+  `costUsdTicks` at 1e-10 USD per tick. Its totals are *per turn* (verified
+  against a session whose three turns rise then fall), so they sum rather than
+  needing Codex's delta treatment, and `inputTokens` is inclusive like Codex's.
+  This is the one case where a cell stores money: the rule against it exists
+  because a *computed* estimate would freeze one day's rate table into a file
+  that is never re-read, and a provider-reported figure has no such defect — it
+  is not an estimate of what a turn cost, it is what the turn cost. `priceCell`
+  prefers it. The derived `grok` rate entry therefore never prices a turn; it
+  exists only for the cache-savings counterfactual, which has no reported
+  equivalent and read as a flat $0 without it.
 - **Rates are fetched, not hard-coded** (`usageRates.ts`). A static table cannot
   price the Codex-only slugs: `gpt-5.6-sol` bills at $5/$30 per MTok, 4× the
   GPT-5 family it is named after, and guessing the family understated Codex spend
@@ -357,11 +427,30 @@ same files as a terminal one. That is also why the page does **not** also sum th
   a warm one ~20 ms, and switching range never re-reads. `CACHE_VERSION` now
   tracks only the *parsing* — rate changes reprice for free.
 
-`--chart-claude` / `--chart-codex` (`index.css`) are the one place the app carries
-hue a theme does not set: on a page whose job is "Claude vs Codex" the colors *are*
-the labels, so they must not move when the theme does. Warm/cool, and validated for
-CVD separation and contrast in both modes — they are not interchangeable with
-`--warning` / `--success`, which mean state rather than identity.
+`--chart-claude` / `--chart-codex` / `--chart-grok` (`index.css`) are the one place
+the app carries hue a theme does not set: on a page whose job is comparing
+providers the colors *are* the labels, so they must not move when the theme does.
+Validated for CVD separation and contrast in both modes — they are not
+interchangeable with `--warning` / `--success`, which mean state rather than
+identity.
+
+The third series is a materially harder problem than the first two, and the
+numbers say so. Warm/cool alone carries a *pair* through every CVD type with room
+to spare (ΔE00 ≥ 44); a third hue has to clear both at once, and the obvious pick
+— a green — collapses against orange under protan/deutan (ΔE00 12) and against
+blue under tritan (ΔE00 5). Plum at low lightness is the best any single hue
+family manages, because it separates on *lightness*, which CVD preserves, rather
+than on hue alone: light clears 20 on every pair, dark's tightest is 18.1. That
+shortfall is stated rather than designed away — the alternative was a near-gray at
+chroma 0.04, which buys ΔE00 21.6 by giving up being a color at all. Re-run the
+check before touching any of the three, since they are now solved as a set.
+
+`--brand-grok` is a different decision: xAI's mark is monochrome like OpenAI's, so
+it takes the *same* value as `--brand-codex` rather than a hue invented to
+separate them. The shapes carry the difference — OpenAI's knot against xAI's two
+slashes is a wider gap at 14px than any two hues would be — and a tinted xAI badge
+would be a brand fact we made up, which is exactly the error the blue-Codex note
+above rules out.
 
 ### Git worktrees (`src/main/worktree.ts`)
 
@@ -390,9 +479,11 @@ Both exits relocate the chat, so main disposes the session and the next send res
 
 ## Provider integration
 
-Keep provider behavior behind `AgentSession` and normalize it into `ChatEvent`. Claude has native per-tool permissions and `ExitPlanMode`; Codex maps permission choices to sandbox policies and synthesizes the same plan-review event so the renderer remains provider-neutral.
+Keep provider behavior behind `AgentSession` and normalize it into `ChatEvent`. Claude has native per-tool permissions and `ExitPlanMode`; Codex maps permission choices to sandbox policies and synthesizes the same plan-review event so the renderer remains provider-neutral; Grok bridges ACP `session/request_permission` to the same event and synthesizes the plan review from a tool call (see Grok Build above).
 
-A chat can switch provider mid-conversation (the composer's model picker offers both providers). A cross-provider pick is **deferred**: it only arms `chat.pendingModel` — the composer previews the target (chip, efforts, placeholder) but nothing else happens, so a misclick is undone by picking again and the original session is never touched. The switch applies on the next send (`applyPendingSwitch` → `switchProvider`): the session is disposed and the conversation carries over by **handoff** (`src/main/handoff.ts` + `ChatManager.handoffContext`) — the outgoing model writes a brief from the app's own transcript on a *throwaway* one-shot, falling back to the raw capped transcript on failure or timeout. The brief rides that same turn via `AgentSession.send`'s `hiddenContext` parameter — prepended to the prompt the model sees, never to the displayed/persisted user message — and may be a *promise*: the echo lands instantly and each session's internal `sendChain` holds turns in order until the context resolves. The plan review's "Build with" picker crosses providers too (this one applies at Approve, which is already deliberate): `ChatManager.approvePlanCrossProvider` tears down the review (disposing the plan session resolves it), restores the pre-plan permission mode, runs `switchProvider`, and kicks off implementation with the plan text verbatim — the plan itself is the handoff artifact; the brief only covers the conversation around it.
+Adding the third provider changed **six lines of renderer logic and no architecture**, which is the seam working — but it did expose the idiom that breaks when a pair becomes a trio: `provider === 'codex' ? … : 'Claude'`, and its inverse `!isCodex` standing in for "is Claude". Both silently mislabel or over-serve a third provider rather than failing to compile. `PROVIDER_SHORT_LABELS` and an explicit `isClaude` replace them; prefer a `Record<Provider, …>` over a ternary anywhere provider identity is being decided, so the compiler names the next gap.
+
+A chat can switch provider mid-conversation (the composer's model picker offers all three providers). A cross-provider pick is **deferred**: it only arms `chat.pendingModel` — the composer previews the target (chip, efforts, placeholder) but nothing else happens, so a misclick is undone by picking again and the original session is never touched. The switch applies on the next send (`applyPendingSwitch` → `switchProvider`): the session is disposed and the conversation carries over by **handoff** (`src/main/handoff.ts` + `ChatManager.handoffContext`) — the outgoing model writes a brief from the app's own transcript on a *throwaway* one-shot, falling back to the raw capped transcript on failure or timeout. The brief rides that same turn via `AgentSession.send`'s `hiddenContext` parameter — prepended to the prompt the model sees, never to the displayed/persisted user message — and may be a *promise*: the echo lands instantly and each session's internal `sendChain` holds turns in order until the context resolves. The plan review's "Build with" picker crosses providers too (this one applies at Approve, which is already deliberate): `ChatManager.approvePlanCrossProvider` tears down the review (disposing the plan session resolves it), restores the pre-plan permission mode, runs `switchProvider`, and kicks off implementation with the plan text verbatim — the plan itself is the handoff artifact; the brief only covers the conversation around it.
 
 A plan approval may carry a `model` (`PermissionDecision`) — the plan review's "Build with" picker — so one model can plan and another implement, Cursor-style. Within a provider, each session applies it at approval time: Claude fires the live `setModel` *before* resolving the approval (both ride the CLI's stdin, so ordering guarantees the implementation turn starts on the new model); Codex sets `chat.model` before building the implementation turn, which snapshots it. A model from the *other* provider never reaches the session — the manager intercepts it (see the handoff paragraph above).
 

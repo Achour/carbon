@@ -48,6 +48,23 @@
    */
   --chart-claude: oklch(0.6 0.139 45.6);
   --chart-codex: oklch(0.54 0.124 256.5);
+  /*
+   * The third series is a materially harder problem than the first two, and the
+   * numbers say so: warm/cool alone carries a *pair* through every CVD type with
+   * room to spare (ΔE00 ≥ 44), but a third hue has to clear both at once, and
+   * the obvious pick — a green — collapses against orange under protan/deutan
+   * (ΔE00 12) and against blue under tritan (ΔE00 5).
+   *
+   * Plum at low lightness is the best any single hue family manages, because it
+   * separates on *lightness*, which CVD preserves, rather than on hue alone.
+   * Measured: light clears 20 on every pair (tightest codex/grok deutan 20.4);
+   * dark's tightest is claude/grok under tritan at 18.1, just under the bar the
+   * pair holds. That shortfall is stated rather than designed away — the
+   * alternative was a near-gray at chroma 0.04, which buys ΔE00 21.6 by giving
+   * up being a color at all, and a legend of three needs its third to read as a
+   * hue. Both modes still clear 3:1 against their surface.
+   */
+  --chart-grok: oklch(0.4 0.08 336);
 
   /*
    * The providers' own marks, wherever a logo is drawn (the sidebar's detailed
@@ -63,6 +80,13 @@
    */
   --brand-claude: oklch(0.6 0.139 45.6);
   --brand-codex: oklch(0.27 0 0);
+  /*
+   * xAI's mark is monochrome like OpenAI's, so it takes the same value rather
+   * than a hue invented to separate the two. The marks' shapes already do that
+   * — a knot against two slashes — and a tinted xAI badge would be a brand fact
+   * we made up, which is the exact error the blue-Codex note above rules out.
+   */
+  --brand-grok: oklch(0.27 0 0);
 
   /*
    * The file-type icon palette (`lib/fileIcon.tsx`). Seven hues rather than one
@@ -116,8 +140,10 @@
      same hues re-validated against a dark background. */
   --chart-claude: oklch(0.664 0.143 46.5);
   --chart-codex: oklch(0.644 0.141 252.7);
+  --chart-grok: oklch(0.55 0.08 336);
   --brand-claude: oklch(0.7 0.135 46);
   --brand-codex: oklch(0.95 0 0);
+  --brand-grok: oklch(0.95 0 0);
   /* Re-stepped for the dark surface, same hues. */
   --icon-blue: oklch(0.7 0.13 250);
   --icon-cyan: oklch(0.75 0.1 205);
@@ -157,6 +183,7 @@
   --color-warning: var(--warning);
   --color-chart-claude: var(--chart-claude);
   --color-chart-codex: var(--chart-codex);
+  --color-chart-grok: var(--chart-grok);
   --color-brand-claude: var(--brand-claude);
   --color-brand-codex: var(--brand-codex);
   --color-icon-blue: var(--icon-blue);

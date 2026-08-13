@@ -1,6 +1,14 @@
 import type { ModelOption } from '@shared/types'
 
-/** A live picker is complete only once both provider catalogs are represented. */
+/**
+ * A live picker is complete once both *required* provider catalogs are present.
+ *
+ * Grok is deliberately not one of them. Claude and Codex ship with the app, so a
+ * missing catalog there means a fetch that has not landed yet and is worth
+ * retrying; Grok is a third-party CLI the user may simply not have installed,
+ * and requiring it would leave those users retrying a probe forever that is
+ * correctly returning nothing.
+ */
 export function hasCompleteModelCatalog(models: ModelOption[]): boolean {
   return (
     models.some((option) => option.provider === 'claude') &&

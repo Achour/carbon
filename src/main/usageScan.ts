@@ -35,7 +35,7 @@
  * even though the transcript reports the same id.
  */
 export interface UsageCell {
-  provider: 'claude' | 'codex'
+  provider: 'claude' | 'codex' | 'grok'
   model: string
   /** `usage.speed` from the transcript — 'fast' bills at a premium SKU. */
   speed?: string
@@ -52,8 +52,24 @@ export interface UsageCell {
   output: number
   /** Reasoning tokens — a subset of `output`, reported only by Codex. */
   reasoning: number
-  /** Assistant responses (Claude) / sampled turns (Codex) this cell covers. */
+  /** Assistant responses (Claude) / sampled turns (Codex, Grok) this cell covers. */
   responses: number
+  /**
+   * What the provider itself said the cell cost, when it says so. Only Grok
+   * does: every `turn_completed` carries `costUsdTicks`, xAI's own settled
+   * figure for that turn.
+   *
+   * This is the one case where storing money in a cell is right, and it is worth
+   * being precise about why, because the rest of this file deliberately does the
+   * opposite. The rule against stored cost exists because a *computed* estimate
+   * would freeze one day's rate table into a file that is never re-read, so a
+   * later rate correction could never reach it. A provider-reported figure has
+   * no such defect: it is not an estimate of what a turn cost, it is what the
+   * turn cost, and it does not move when a list price does. Re-deriving it from
+   * a table would be strictly less accurate — and for Grok, guesswork besides,
+   * since LiteLLM publishes no `grok-4.5`/`grok-4.6` entry at all.
+   */
+  costUsd?: number
 }
 
 export function emptyCell(
@@ -177,8 +193,33 @@ const RATES: [prefix: string, rate: Rate][] = [
   ['gpt-5', openai(1.25, 10)],
   ['codex-', openai(1.25, 10)],
   ['o4-mini', openai(1.1, 4.4)],
-  ['o3', openai(2, 8)]
+  ['o3', openai(2, 8)],
+  // xAI. These are *derived*, not published: LiteLLM carries no `grok-4.5` or
+  // `grok-4.6` entry, and xAI's own list prices don't name the `-build` slugs
+  // the CLI reports. Solved out of `costUsdTicks` — the settled cost xAI puts on
+  // every turn — against three samples, one of which had no cache at all and so
+  // pins the input rate on its own at $2.00/MTok. Cache reads came out at 24% of
+  // input on two independent turns; output is the loosest of the three (a 34
+  // token reply barely moves the total) and takes the conventional 5x.
+  //
+  // Being approximate costs less here than anywhere else in this table: a Grok
+  // cell carries its own reported cost and `priceCell` prefers it, so these
+  // figures never price a turn. They exist for the cache-savings counterfactual
+  // ("what these reads would have cost uncached"), which has no reported
+  // equivalent and read as a flat $0 — "caching saved nothing" — without them.
+  ['grok', grok(2, 10)]
 ]
+
+/** xAI bills cache reads at ~24% of input and no premium on writes. */
+function grok(input: number, output: number): Rate {
+  return {
+    input,
+    output,
+    cacheRead: input * 0.24,
+    cacheWrite5m: input,
+    cacheWrite1h: input
+  }
+}
 
 /**
  * Fast mode is a different SKU, not a faster tier of the same one — Claude Opus 5
@@ -265,6 +306,16 @@ export interface CellCost {
 /** Price a cell. Applied at read time, so a rate refresh reprices everything. */
 export function priceCell(cell: UsageCell, lookup: RateLookup = staticRate): CellCost {
   const rate = rateFor(cell.model, cell.speed, lookup)
+  // A reported cost outranks the table (see `UsageCell.costUsd`). Savings still
+  // come from the rate when one exists, since no provider reports those; with no
+  // rate the cost stands alone rather than dragging the cell into `unpriced`.
+  if (cell.costUsd != null) {
+    return {
+      costUsd: cell.costUsd,
+      savingsUsd: rate ? (cell.cacheRead * (rate.input - rate.cacheRead)) / 1e6 : 0,
+      unpricedTokens: 0
+    }
+  }
   if (!rate) return { costUsd: 0, savingsUsd: 0, unpricedTokens: cellTokens(cell) }
   const m = 1e6
   return {
@@ -525,4 +576,93 @@ export class CodexFileReader {
     this.samples = []
     return out
   }
+}
+
+// ---------- Grok transcripts ----------
+
+/**
+ * Grok writes one directory per session under
+ * `~/.grok/sessions/<percent-encoded cwd>/<sessionId>/`, and the file that
+ * matters is `updates.jsonl` — the ACP update stream. Usage rides exactly one
+ * kind of line in it: an `_x.ai/session/update` whose `sessionUpdate` is
+ * `turn_completed`.
+ *
+ * Three things make this simpler than the other two readers, and one makes it
+ * harder:
+ *
+ * - **The totals are per turn, not cumulative.** Verified against a real
+ *   three-turn session whose figures rise then fall; they are summed, not
+ *   differenced the way Codex's running counter has to be.
+ * - **The model is on the line**, under `modelUsage`, keyed by a `-build`
+ *   suffixed id (`grok-4.6-build`). A turn that switched models carries one
+ *   entry per model, so each becomes its own sample.
+ * - **The cost is on the line too** (`costUsdTicks`, at 1e-10 USD per tick —
+ *   confirmed against the headless `--output-format json` reply, which prints
+ *   `total_cost_usd` and `total_cost_usd_ticks` side by side).
+ * - The harder part: `inputTokens` is *inclusive* of `cachedReadTokens`, as
+ *   Codex's is and Claude's is not.
+ */
+export const GROK_LINE_HINT = 'turn_completed'
+
+export interface GrokSample {
+  model: string
+  ts: number
+  /** Uncached input — `inputTokens` less the cached part. */
+  input: number
+  cacheRead: number
+  cacheWrite: number
+  output: number
+  reasoning: number
+  /** xAI's own settled cost for this turn, in USD. */
+  costUsd: number
+}
+
+/** 1 tick = 1e-10 USD. */
+const USD_PER_TICK = 1e-10
+
+/** Parse one `updates.jsonl` line into a sample per model, or null. */
+export function parseGrokLine(line: string): GrokSample[] | null {
+  if (!line.includes(GROK_LINE_HINT)) return null
+  let o: Record<string, unknown>
+  try {
+    o = JSON.parse(line) as Record<string, unknown>
+  } catch {
+    return null
+  }
+  const params = o.params as Record<string, unknown> | undefined
+  const update = params?.update as Record<string, unknown> | undefined
+  if (!update || update.sessionUpdate !== 'turn_completed') return null
+  const usage = update.usage as Record<string, unknown> | undefined
+  if (!usage) return null
+
+  const meta = params?._meta as Record<string, unknown> | undefined
+  const ts = num(meta?.agentTimestampMs) || num(o.timestamp) * 1000
+  if (!Number.isFinite(ts) || ts <= 0) return null
+
+  const byModel = usage.modelUsage as Record<string, Record<string, unknown>> | undefined
+  // A turn with no per-model breakdown still spent tokens; attributing it to
+  // `unknown` keeps it in the totals rather than dropping it silently.
+  const entries: [string, Record<string, unknown>][] = byModel
+    ? Object.entries(byModel)
+    : [['unknown', usage]]
+
+  const out: GrokSample[] = []
+  for (const [model, row] of entries) {
+    const total = num(row.inputTokens)
+    const cached = Math.min(num(row.cachedReadTokens), total)
+    const output = num(row.outputTokens)
+    const write = num(row.cacheCreationTokens)
+    if (total + output + write === 0) continue
+    out.push({
+      model,
+      ts,
+      input: total - cached,
+      cacheRead: cached,
+      cacheWrite: write,
+      output,
+      reasoning: num(row.reasoningTokens),
+      costUsd: num(row.costUsdTicks) * USD_PER_TICK
+    })
+  }
+  return out.length ? out : null
 }

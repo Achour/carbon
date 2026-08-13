@@ -23,6 +23,7 @@ import {
   EFFORT_OPTIONS,
   PERMISSION_MODES,
   PROVIDER_LABELS,
+  PROVIDER_SHORT_LABELS,
   SERVICE_TIER_OPTIONS,
   fastModeNote,
   resolvedModelName,
@@ -239,7 +240,7 @@ function ContextRing({
   window: number
   provider: Provider
 }): React.JSX.Element {
-  const name = provider === 'codex' ? 'Codex' : 'Claude'
+  const name = PROVIDER_SHORT_LABELS[provider]
   const pct = Math.min(1, used / win)
   const left = Math.max(0, win - used)
   const r = 5
@@ -337,7 +338,7 @@ function ModelSettingsPicker({
   const selectedName = resolvedModelName(selected?.resolvedModel) ?? selected?.label ?? model
   const selectedEffort = efforts.find((option) => option.id === effort)
   const selectedTier = serviceTiers.find((option) => option.id === serviceTier)
-  const groups = (['claude', 'codex'] as Provider[])
+  const groups = (['claude', 'codex', 'grok'] as Provider[])
     .map((group) => ({ group, models: models.filter((option) => option.provider === group) }))
     .filter(({ models: options }) => options.length > 0)
 

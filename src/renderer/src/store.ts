@@ -29,6 +29,7 @@ import {
 } from '@/lib/drafts'
 import type { ComposerDraft, ProjectDraft, ProjectDraftOptions } from '@/lib/drafts'
 import {
+  PROVIDER_SHORT_LABELS,
   USAGE_DEFAULT_DAYS,
   knownProviderForModel,
   projectRoot,
@@ -636,7 +637,7 @@ function notifyTurnDone(
   if (prefs.sound && !failed) playChime()
   if (prefs.finish && !document.hasFocus()) {
     const chat = s.chats.find((c) => c.id === ev.chatId)
-    const title = chat?.title || (chat?.provider === 'codex' ? 'Codex' : 'Claude')
+    const title = chat?.title || PROVIDER_SHORT_LABELS[chat?.provider ?? 'claude']
     const stats = ev.message.stats
     notify(
       title,
@@ -2657,7 +2658,7 @@ export const useApp = create<AppState>((set, get) => ({
         if (s.notifyPrefs.sound) playChime()
         if (s.notifyPrefs.permission && !document.hasFocus()) {
           const chat = s.chats.find((c) => c.id === ev.chatId)
-          const agent = chat?.provider === 'codex' ? 'Codex' : 'Claude'
+          const agent = PROVIDER_SHORT_LABELS[chat?.provider ?? 'claude']
           const title = chat?.title || agent
           const what =
             ev.request.toolName === 'ExitPlanMode'

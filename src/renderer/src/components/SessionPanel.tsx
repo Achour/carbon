@@ -18,6 +18,7 @@ import type {
   PermissionRule,
   UsageInfo
 } from '@shared/types'
+import { PROVIDER_LABELS, PROVIDER_SHORT_LABELS } from '@shared/types'
 import { cn } from '@/lib/utils'
 import { formatCost, resetsIn } from '@/lib/format'
 import { useApp } from '@/store'
@@ -68,6 +69,12 @@ export function SessionPanel(): React.JSX.Element {
   // Server does expose account, rate-limit and MCP status control requests.
   const provider = useApp((s) => s.chats.find((c) => c.id === s.activeId)?.provider) ?? 'claude'
   const isCodex = provider === 'codex'
+  // Several sections below are Claude-only, and were gated on `!isCodex` back
+  // when "not Codex" and "Claude" were the same statement. With a third
+  // provider they are not: Grok has no `.claude` rules file, no subagent
+  // catalog and no session-cost API, so it must be gated *in* to Claude rather
+  // than merely out of Codex.
+  const isClaude = provider === 'claude'
 
   const [open, setOpen] = React.useState(false)
   const [busy, setBusy] = React.useState(false)
@@ -93,7 +100,7 @@ export function SessionPanel(): React.JSX.Element {
     setBusy(true)
     // Permission rules come from .claude settings files — a Claude-only concept;
     // never read (or later delete) them for a Codex session.
-    if (!isCodex) await refreshRules()
+    if (isClaude) await refreshRules()
     const isLive = await window.api.sessionLive(chatId)
     setLive(isLive)
     if (!isLive) {
@@ -112,7 +119,7 @@ export function SessionPanel(): React.JSX.Element {
     setServers(srv)
     setAgents(agt)
     setBusy(false)
-  }, [chatId, loadModels, refreshRules, isCodex])
+  }, [chatId, loadModels, refreshRules, isClaude])
 
   React.useEffect(() => {
     if (open) void load()
@@ -172,15 +179,22 @@ export function SessionPanel(): React.JSX.Element {
         <div className="space-y-4 p-3">
           {live === false && (
             <div className="rounded-md border border-border bg-secondary/40 px-2.5 py-2 text-[11px] leading-relaxed text-muted-foreground">
-              {isCodex
-                ? 'This Codex session isn’t running. Send a message to start it.'
-                : 'The session isn’t running. Send a message to view live account, usage, MCP servers and subagents. Saved permission rules are shown below.'}
+              {isClaude
+                ? 'The session isn’t running. Send a message to view live account, usage, MCP servers and subagents. Saved permission rules are shown below.'
+                : `This ${PROVIDER_SHORT_LABELS[provider]} session isn’t running. Send a message to start it.`}
             </div>
           )}
           {isCodex && (
             <div className="text-[11px] leading-relaxed text-muted-foreground/70">
               Signed in via Codex. Session cost and line counts aren’t reported; plan limits
               and MCP status are live.
+            </div>
+          )}
+          {provider === 'grok' && (
+            <div className="text-[11px] leading-relaxed text-muted-foreground/70">
+              Signed in via the Grok CLI. Account, plan limits and MCP status aren’t exposed
+              over ACP; Grok manages its MCP servers in <code>~/.grok/config.toml</code>. Token
+              spend still appears on the Usage page.
             </div>
           )}
           {live !== false && (
@@ -193,9 +207,9 @@ export function SessionPanel(): React.JSX.Element {
             <div className="mt-0.5 text-[11px] text-muted-foreground">
               {[account?.organization, account?.subscriptionType || usage?.subscriptionType]
                 .filter(Boolean)
-                .join(' · ') || (isCodex ? 'Signed in via Codex' : 'Signed in via Claude Code')}
+                .join(' · ') || `Signed in via ${PROVIDER_LABELS[provider]}`}
             </div>
-            {usage && !isCodex && (
+            {usage && isClaude && (
               <div className="mt-2 flex items-center justify-between rounded-md bg-secondary/40 px-2 py-1.5 text-[11px] tabular-nums text-muted-foreground">
                 <span>Session cost {formatCost(usage.costUsd)}</span>
                 <span className="text-emerald-500">+{usage.linesAdded}</span>
@@ -261,7 +275,7 @@ export function SessionPanel(): React.JSX.Element {
                         </Button>
                       </WithTooltip>
                     )}
-                    {!isCodex && (
+                    {isClaude && (
                     <WithTooltip label={s.status === 'disabled' ? 'Enable' : 'Disable'}>
                       <Button
                         size="icon-sm"
@@ -281,7 +295,7 @@ export function SessionPanel(): React.JSX.Element {
           </section>
 
           {/* Subagents */}
-          {!isCodex && <section className="border-t border-border pt-3">
+          {isClaude && <section className="border-t border-border pt-3">
             <SectionTitle icon={Bot}>Subagents</SectionTitle>
             {agents == null ? (
               <div className="text-[11px] text-muted-foreground">Loading…</div>
@@ -305,8 +319,8 @@ export function SessionPanel(): React.JSX.Element {
           </>
           )}
 
-          {/* Permission rules — from .claude settings; Claude-only, hidden for Codex. */}
-          {!isCodex && (
+          {/* Permission rules — from .claude settings; Claude-only. */}
+          {isClaude && (
           <section className={cn(live !== false && 'border-t border-border pt-3')}>
             <SectionTitle icon={Shield}>Permission rules</SectionTitle>
             {rules == null ? (

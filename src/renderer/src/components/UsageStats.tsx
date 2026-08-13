@@ -26,10 +26,12 @@ import { WithTooltip } from '@/components/ui/tooltip'
 // ---------- Series ----------
 
 const SERIES: { key: Provider; label: string; color: string }[] = [
-  // Fixed order, never cycled: Claude is always warm, Codex always cool, so the
-  // legend on one chart reads the same as the dots in the table below it.
+  // Fixed order, never cycled: Claude is always warm, Codex always cool, Grok
+  // always plum, so the legend on one chart reads the same as the dots in the
+  // table below it.
   { key: 'claude', label: 'Claude Code', color: 'var(--chart-claude)' },
-  { key: 'codex', label: 'Codex', color: 'var(--chart-codex)' }
+  { key: 'codex', label: 'Codex', color: 'var(--chart-codex)' },
+  { key: 'grok', label: 'Grok', color: 'var(--chart-grok)' }
 ]
 
 type Measure = 'cost' | 'tokens'

@@ -10,7 +10,12 @@ import { WithTooltip } from '@/components/ui/tooltip'
 
 const PROVIDER_LABEL: Record<ProviderUsage['provider'], string> = {
   claude: 'Claude',
-  codex: 'Codex'
+  codex: 'Codex',
+  // Present for the type, but never rendered: this panel reads *live plan
+  // headroom*, and Grok exposes no equivalent endpoint, so `usageInfo()` returns
+  // null and no Grok row is ever built. The Usage *page* covers Grok in full —
+  // that answers a different question, from the session logs on disk.
+  grok: 'Grok'
 }
 
 /** The most-used window across both providers — what the trigger reports. */

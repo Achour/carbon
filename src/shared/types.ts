@@ -1,4 +1,4 @@
-export type Provider = 'claude' | 'codex'
+export type Provider = 'claude' | 'codex' | 'grok'
 
 export type ServiceTier = 'standard' | 'fast'
 
@@ -16,6 +16,14 @@ export type PermissionModeId = 'default' | 'acceptEdits' | 'plan' | 'auto' | 'by
 export type EffortId = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra'
 export type ClaudeEffortId = Exclude<EffortId, 'minimal' | 'ultra'>
 export type CodexEffortId = Exclude<EffortId, 'minimal'>
+/**
+ * Grok advertises its reasoning levels per model on the ACP handshake
+ * (`_meta.reasoningEfforts`), and every model so far offers a subset of these
+ * four. `max`/`ultra`/`minimal` have no Grok equivalent, so they are dropped
+ * rather than approximated — sending an unknown effort is silently ignored by
+ * the CLI, which would leave the composer claiming a level that isn't running.
+ */
+export type GrokEffortId = Extract<EffortId, 'low' | 'medium' | 'high' | 'xhigh'>
 
 export const EFFORT_OPTIONS: { id: EffortId | ''; label: string; description: string }[] = [
   { id: '', label: 'Default', description: 'Uses your provider config' },
@@ -39,13 +47,23 @@ export function effortForProvider(
 ): CodexEffortId | undefined
 export function effortForProvider(
   effort: EffortId | undefined,
+  provider: 'grok'
+): GrokEffortId | undefined
+export function effortForProvider(
+  effort: EffortId | undefined,
   provider: Provider
 ): EffortId | undefined
 export function effortForProvider(effort: EffortId | undefined, provider: Provider): EffortId | undefined {
   if (provider === 'codex' && effort === 'minimal') return undefined
   if (provider === 'claude' && (effort === 'minimal' || effort === 'ultra')) return undefined
+  if (provider === 'grok' && effort !== undefined && !GROK_EFFORTS.includes(effort as GrokEffortId)) {
+    return undefined
+  }
   return effort
 }
+
+/** The reasoning levels Grok models advertise, widest-model first. */
+export const GROK_EFFORTS: GrokEffortId[] = ['low', 'medium', 'high', 'xhigh']
 
 export type ChatStatus = 'idle' | 'starting' | 'streaming' | 'waiting-permission'
 
@@ -540,6 +558,7 @@ export interface UsageDay {
   day: string
   claude: UsageTotals
   codex: UsageTotals
+  grok: UsageTotals
 }
 
 /**
@@ -559,6 +578,7 @@ export interface UsageReport {
   models: UsageModelRow[]
   claude: UsageTotals
   codex: UsageTotals
+  grok: UsageTotals
   total: UsageTotals
   /** Distinct session files that contributed to the window. */
   sessions: number
@@ -749,6 +769,9 @@ export function rememberedEffortForModel(
 /** Sentinel model id: use Codex without pinning a model (defer to ~/.codex config). */
 export const CODEX_DEFAULT_MODEL = 'codex-default'
 
+/** Sentinel model id: use Grok without pinning a model (defer to ~/.grok/config.toml). */
+export const GROK_DEFAULT_MODEL = 'grok-default'
+
 export const MODEL_OPTIONS: ModelOption[] = [
   { id: '', label: 'Default', description: 'Your Claude Code default', provider: 'claude' },
   { id: 'claude-fable-5', label: 'Fable 5', description: 'Most intelligent', provider: 'claude' },
@@ -780,6 +803,23 @@ export const MODEL_OPTIONS: ModelOption[] = [
     provider: 'codex',
     contextWindow: 272_000,
     supportedEfforts: ['low', 'medium', 'high', 'xhigh', 'max']
+  },
+  { id: 'grok-default', label: 'Grok (default)', description: 'Model from your Grok config', provider: 'grok' },
+  {
+    id: 'grok-4.6',
+    label: 'Grok 4.6',
+    description: 'xAI Grok Build',
+    provider: 'grok',
+    contextWindow: 500_000,
+    supportedEfforts: ['low', 'medium', 'high', 'xhigh']
+  },
+  {
+    id: 'grok-4.5',
+    label: 'Grok 4.5',
+    description: 'xAI Grok Build',
+    provider: 'grok',
+    contextWindow: 500_000,
+    supportedEfforts: ['low', 'medium', 'high']
   }
 ]
 
@@ -804,6 +844,10 @@ export function knownProviderForModel(
   if (listed) return listed.provider
   if (/^claude[-.]/i.test(id)) return 'claude'
   if (/^(gpt|codex|o\d)[-.]/i.test(id)) return 'codex'
+  // Grok's wire ids are the catalog ids (`grok-4.6`), but the CLI also reports
+  // build-suffixed variants on usage rows (`grok-4.6-build`) and older docs use
+  // the bare `grok-build` alias, none of which any static row carries.
+  if (/^grok[-.]/i.test(id)) return 'grok'
   return undefined
 }
 
@@ -892,7 +936,20 @@ export function claudeModelContextWindow(
 
 export const PROVIDER_LABELS: Record<Provider, string> = {
   claude: 'Claude Code',
-  codex: 'Codex'
+  codex: 'Codex',
+  grok: 'Grok'
+}
+
+/**
+ * The name to use in prose and on chips — "Claude", not "Claude Code". Six
+ * places used to spell this as `provider === 'codex' ? 'Codex' : 'Claude'`,
+ * which is a two-provider idiom that silently mislabels a third as Claude
+ * rather than failing to compile.
+ */
+export const PROVIDER_SHORT_LABELS: Record<Provider, string> = {
+  claude: 'Claude',
+  codex: 'Codex',
+  grok: 'Grok'
 }
 
 /**

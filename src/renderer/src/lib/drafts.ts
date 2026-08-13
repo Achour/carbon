@@ -172,7 +172,8 @@ export function parseDrafts(raw: string | null): DraftStore {
       attachments: Array.isArray(draft.attachments) ? draft.attachments : [],
       // The pair is reconciled again by `providerForRememberedModel` when the
       // draft is restored; this only keeps the field a valid `Provider`.
-      provider: draft.provider === 'codex' ? 'codex' : 'claude',
+      provider:
+        draft.provider === 'codex' || draft.provider === 'grok' ? draft.provider : 'claude',
       updatedAt: typeof draft.updatedAt === 'number' ? draft.updatedAt : 0
     }
     if (!isEmptyDraft(next)) out.projects[cwd] = next

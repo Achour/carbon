@@ -56,6 +56,7 @@ import type { Store } from './store'
 import type { PreviewManager } from './preview'
 import { CodexSession, fetchCodexModels, generateCodexText } from './codex'
 import { CodexAppServerClient } from './codexAppServer'
+import { fetchGrokModels, generateGrokText, GrokSession } from './grok'
 import { composePrompt, withTimeout, type AgentSession, type Emit } from './session'
 import { DeltaCoalescer } from './deltaCoalescer'
 import { TITLE_SYSTEM, buildTitlePrompt, cleanTitle, deriveTitle, firstUserText } from './titles'
@@ -1686,6 +1687,11 @@ export class ChatManager {
     if (provider === 'codex') return CODEX_SLASH_COMMANDS
     const cached = this.commandsByCwd.get(cwd)
     if (cached) return cached
+    // Grok's commands are session state, not a folder's: they ride the ACP
+    // handshake and change with the plugins a session loads. A live session
+    // fills the cache above; warming Claude's list for a Grok chat would offer
+    // commands the backend has never heard of.
+    if (provider === 'grok') return []
     return this.warmCommands(cwd)
   }
 
@@ -1811,14 +1817,18 @@ export class ChatManager {
     const session: AgentSession =
       chat.provider === 'codex'
         ? new CodexSession(chat, sessionEmit, this.store, onDead)
-        : new ClaudeSession(
-            chat,
-            sessionEmit,
-            this.store,
-            onDead,
-            (commands) => this.commandsByCwd.set(chat.cwd, commands),
-            this.preview
-          )
+        : chat.provider === 'grok'
+          ? new GrokSession(chat, sessionEmit, this.store, onDead, (commands) =>
+              this.commandsByCwd.set(chat.cwd, commands)
+            )
+          : new ClaudeSession(
+              chat,
+              sessionEmit,
+              this.store,
+              onDead,
+              (commands) => this.commandsByCwd.set(chat.cwd, commands),
+              this.preview
+            )
     this.sessions.set(chat.id, session)
     this.pruneIdleSessions()
     return session
@@ -2070,7 +2080,9 @@ export class ChatManager {
       const gen =
         handoff.provider === 'codex'
           ? generateCodexText(chat.cwd, handoff.model, `${HANDOFF_BRIEF_SYSTEM}\n\n${prompt}`)
-          : generateClaudeText(chat.cwd, handoff.model, HANDOFF_BRIEF_SYSTEM, prompt)
+          : handoff.provider === 'grok'
+            ? generateGrokText(chat.cwd, handoff.model, `${HANDOFF_BRIEF_SYSTEM}\n\n${prompt}`)
+            : generateClaudeText(chat.cwd, handoff.model, HANDOFF_BRIEF_SYSTEM, prompt)
       const brief = await withTimeout(gen, HANDOFF_TIMEOUT_MS, null)
       const summary = brief ?? this.transcriptFor(chat, HANDOFF_FALLBACK_CHARS)
       return summary ? buildHandoffContext(summary, fromLabel, !brief) : undefined
@@ -2363,15 +2375,20 @@ export class ChatManager {
     if (live?.length) this.mergeModels(live)
     const haveClaude = this.models?.some((option) => option.provider === 'claude')
     const haveCodex = this.models?.some((option) => option.provider === 'codex')
-    if (haveClaude && haveCodex) return this.models!
+    const haveGrok = this.models?.some((option) => option.provider === 'grok')
+    if (haveClaude && haveCodex && haveGrok) return this.models!
     const folder = this.store.getMeta(chatId)?.cwd || cwd
     if (!folder) return this.models ?? []
     this.modelWarmup ??= Promise.all([
       haveClaude ? Promise.resolve([]) : this.warmModels(folder),
-      haveCodex ? Promise.resolve([]) : this.warmCodexModels()
+      haveCodex ? Promise.resolve([]) : this.warmCodexModels(),
+      // Resolves to [] when the CLI isn't installed, which is what keeps Grok
+      // out of the picker for anyone who hasn't got it rather than showing rows
+      // that fail on send.
+      haveGrok ? Promise.resolve([]) : fetchGrokModels(folder)
     ])
-      .then(([claude, codex]) => {
-        this.mergeModels([...claude, ...codex])
+      .then(([claude, codex, grok]) => {
+        this.mergeModels([...claude, ...codex, ...grok])
         return this.models ?? []
       })
       .finally(() => {
@@ -2398,10 +2415,11 @@ export class ChatManager {
       await session.interrupt()
       return
     }
-    // A persisted Codex plan can be waiting without a live SDK wrapper after an
-    // app restart. Stopping it should still dismiss the review cleanly.
+    // A persisted Codex or Grok plan can be waiting without a live wrapper after
+    // an app restart. Stopping it should still dismiss the review cleanly.
     const chat = this.store.getChat(chatId)
-    const review = chat?.provider === 'codex' ? chat.pendingPlanReview : undefined
+    const review =
+      chat?.provider === 'codex' || chat?.provider === 'grok' ? chat.pendingPlanReview : undefined
     if (!chat || !review) return
     chat.pendingPlanReview = undefined
     this.store.saveChat(chatId)
@@ -2437,16 +2455,21 @@ export class ChatManager {
       live.respondPermission(requestId, decision)
       return
     }
-    // Codex plan reviews are persisted. Recreate the lightweight thread wrapper
-    // on demand so an approval made after an app restart can still continue.
-    if (chat?.provider === 'codex' && chat.pendingPlanReview?.requestId === requestId) {
+    // Codex and Grok plan reviews are persisted. Recreate the session wrapper on
+    // demand so an approval made after an app restart can still continue.
+    if (
+      (chat?.provider === 'codex' || chat?.provider === 'grok') &&
+      chat.pendingPlanReview?.requestId === requestId
+    ) {
       this.createSession(chat).respondPermission(requestId, decision)
     }
   }
 
   /** The plan text behind a pending review request, if `requestId` is one. */
   private planForRequest(chat: ChatData, requestId: string): string | null {
-    if (chat.provider === 'codex') {
+    // Codex and Grok both raise the plan at the *end* of a turn, so there is no
+    // suspended request to hold it and the review is persisted instead.
+    if (chat.provider === 'codex' || chat.provider === 'grok') {
       return chat.pendingPlanReview?.requestId === requestId ? chat.pendingPlanReview.plan : null
     }
     // Claude's review is a live ExitPlanMode permission; it dies with the
@@ -2603,7 +2626,8 @@ export class ChatManager {
    * under a directory derived from its cwd, so an id earned in the worktree is
    * unfindable from the main checkout and every later send would fail with
    * "No conversation found with session ID". Codex resumes by thread id and
-   * files rollouts by date, so its id stays valid.
+   * files rollouts by date, so its id stays valid. Grok keys sessions by
+   * percent-encoded cwd exactly as Claude does, so it drops its id too.
    */
   relocateChat(chatId: string, cwd: string): void {
     const chat = this.store.getChat(chatId)

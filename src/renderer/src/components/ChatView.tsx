@@ -18,7 +18,7 @@ import {
   X
 } from 'lucide-react'
 import type { AssistantMessage, ChatMessage, ChatMeta, ToolPart } from '@shared/types'
-import { projectRoot } from '@shared/types'
+import { PROVIDER_SHORT_LABELS, projectRoot } from '@shared/types'
 import { cn } from '@/lib/utils'
 import { basename } from '@/lib/format'
 import { useApp } from '@/store'
@@ -770,7 +770,7 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
                   className="flex animate-enter items-center gap-2.5 rounded-xl border border-primary/30 bg-primary/5 px-3.5 py-2.5"
                 >
                   <span className="text-[13px]">
-                    {chat.provider === 'codex' ? 'Codex' : 'Claude'} prepared a plan for your review.
+                    {PROVIDER_SHORT_LABELS[chat.provider]} prepared a plan for your review.
                   </span>
                   <div className="flex-1" />
                   <Button
@@ -883,7 +883,11 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
             commands={commands}
             // Busy-gated so a note left behind by a crash can never stick.
             switchingNote={busy ? chat.switchingNote : undefined}
-            placeholder={composerProvider === 'codex' ? 'Ask Codex anything…' : undefined}
+            placeholder={
+              composerProvider === 'claude'
+                ? undefined
+                : `Ask ${PROVIDER_SHORT_LABELS[composerProvider]} anything…`
+            }
           />
         </div>
       </div>

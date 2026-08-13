@@ -1,7 +1,22 @@
 import * as React from 'react'
 import { Brain, Check, Sparkles } from 'lucide-react'
-import { EFFORT_OPTIONS, type EffortId } from '@shared/types'
+import {
+  EFFORT_OPTIONS,
+  PROVIDER_LABELS,
+  type EffortId,
+  type Provider
+} from '@shared/types'
 import { cn } from '@/lib/utils'
+
+/**
+ * Effort levels to offer when the picked model advertises none of its own —
+ * each provider's widest set, so the menu never hides a level the backend has.
+ */
+const DEFAULT_BUILD_EFFORTS: Record<Provider, EffortId[]> = {
+  claude: ['low', 'medium', 'high', 'xhigh', 'max'],
+  codex: ['low', 'medium', 'high', 'xhigh'],
+  grok: ['low', 'medium', 'high', 'xhigh']
+}
 import {
   assembleModelOptions,
   canonicalModelId,
@@ -58,26 +73,18 @@ export function PlanContent({
   )
   // Efforts follow the *picked* build model's provider — a cross-provider pick
   // must offer that backend's levels, not the planning chat's.
-  const buildProvider = buildModelOption?.provider ?? chat?.provider ?? 'claude'
+  const buildProvider: Provider = buildModelOption?.provider ?? chat?.provider ?? 'claude'
   const supportedBuildEfforts = new Set(
     buildModelOption?.supportedEfforts ??
       resolvedBuildModelOption?.supportedEfforts ??
-      (buildProvider === 'codex'
-        ? ['low', 'medium', 'high', 'xhigh']
-        : ['low', 'medium', 'high', 'xhigh', 'max'])
+      DEFAULT_BUILD_EFFORTS[buildProvider]
   )
   const buildEffortOptions = chat
     ? EFFORT_OPTIONS.filter(
         (option) => option.id === '' || supportedBuildEfforts.has(option.id as EffortId)
       ).map((option) =>
         option.id === ''
-          ? {
-              ...option,
-              description:
-                buildProvider === 'codex'
-                  ? 'Uses your Codex config'
-                  : 'Uses your Claude Code config'
-            }
+          ? { ...option, description: `Uses your ${PROVIDER_LABELS[buildProvider]} config` }
           : option
       )
     : []
