@@ -79,8 +79,13 @@ const CODEX_PERMISSION_MODES: { id: PermissionModeId; label: string; description
 const GROK_PERMISSION_MODES: { id: PermissionModeId; label: string; description: string }[] = [
   { id: 'plan', label: 'Plan mode', description: 'Explores and writes a plan before building' },
   { id: 'default', label: 'Ask to approve', description: 'Prompts before sensitive actions' },
-  { id: 'auto', label: 'Auto', description: 'A safety check approves routine work for you' },
-  { id: 'bypassPermissions', label: 'Full access', description: 'Never asks — use with care' }
+  // "Blocks" rather than "asks": in a non-interactive client a call the check
+  // refuses fails and is reported to the model — it does not escalate to a
+  // prompt the way Claude's Auto does.
+  { id: 'auto', label: 'Auto', description: 'A safety check approves or blocks each action' },
+  // Not Claude's "Never asks": Grok still applies deny rules, hooks and some
+  // shell ask rules under always-approve.
+  { id: 'bypassPermissions', label: 'Full access', description: 'Skips prompts — deny rules still apply' }
 ]
 
 /**
