@@ -1,9 +1,17 @@
 import { strict as assert } from 'node:assert'
 import test from 'node:test'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
+  buildGrokPrompt,
+  grokAskUserQuestionResult,
   grokPermissionBaseline,
+  isAskUserQuestionTool,
   isExitPlanTool,
+  isGrokAskUserQuestionMethod,
   isGrokTranscriptUpdate,
+  parseGrokQuestions,
   resolveGrokBinary,
   toolName,
   toolNameIfNamed,
@@ -169,4 +177,108 @@ test('toolNameIfNamed answers only when the payload names the tool', () => {
   )
   // The fallback belongs to card *creation*, which must be labelled something.
   assert.equal(toolName({ toolCallId: 'c', status: 'completed' }), 'Tool')
+})
+
+test('isGrokAskUserQuestionMethod matches the 1.0.3 wire name', () => {
+  assert.equal(isGrokAskUserQuestionMethod('_x.ai/ask_user_question'), true)
+  assert.equal(isGrokAskUserQuestionMethod('x.ai/ask_user_question'), true)
+  assert.equal(isGrokAskUserQuestionMethod('session/request_permission'), false)
+  assert.equal(isGrokAskUserQuestionMethod('_x.ai/exit_plan_mode'), false)
+})
+
+test('isAskUserQuestionTool matches on the xAI name, not the title', () => {
+  assert.equal(
+    isAskUserQuestionTool({
+      toolCallId: 'c',
+      title: 'ask_user_question',
+      _meta: { 'x.ai/tool': { name: 'ask_user_question' } }
+    }),
+    true
+  )
+  assert.equal(isAskUserQuestionTool({ toolCallId: 'c', title: 'ask_user_question' }), false)
+})
+
+test('parseGrokQuestions reads the tool-shaped payload Grok actually sends', () => {
+  const questions = parseGrokQuestions({
+    sessionId: 'sess',
+    questions: [
+      {
+        question: 'Which store?',
+        options: [
+          { label: 'US', description: 'Ship from the US warehouse' },
+          { label: 'EU' }
+        ],
+        multiSelect: false
+      }
+    ]
+  })
+  assert.equal(questions.length, 1)
+  assert.equal(questions[0]?.question, 'Which store?')
+  assert.equal(questions[0]?.options[0]?.label, 'US')
+  assert.equal(questions[0]?.options[0]?.description, 'Ship from the US warehouse')
+  assert.equal(questions[0]?.multiSelect, false)
+  assert.equal(questions[0]?.allowOther, true)
+})
+
+test('parseGrokQuestions accepts snake_case and nested rawInput', () => {
+  const questions = parseGrokQuestions({
+    rawInput: {
+      questions: [{ question: 'Pick one', options: ['A', 'B'], multi_select: true }]
+    }
+  })
+  assert.equal(questions[0]?.multiSelect, true)
+  assert.deepEqual(
+    questions[0]?.options.map((option) => option.label),
+    ['A', 'B']
+  )
+})
+
+test('grokAskUserQuestionResult is internally tagged with outcome', () => {
+  assert.deepEqual(grokAskUserQuestionResult(null), { outcome: 'declined' })
+  assert.deepEqual(grokAskUserQuestionResult({ behavior: 'deny' }), { outcome: 'declined' })
+  assert.deepEqual(
+    grokAskUserQuestionResult({
+      behavior: 'allow',
+      updatedInput: { answers: { 'Which store?': 'US' } }
+    }),
+    { outcome: 'answered', answers: { 'Which store?': 'US' } }
+  )
+  // An empty allow is a dismiss, not an empty answer the model would treat as a choice.
+  assert.deepEqual(grokAskUserQuestionResult({ behavior: 'allow', updatedInput: { answers: {} } }), {
+    outcome: 'declined'
+  })
+})
+
+test('buildGrokPrompt embeds a path-less screenshot so Grok can see it', () => {
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString('base64')
+  const { blocks, temps } = buildGrokPrompt('what is this?', [
+    { id: '1', kind: 'image', name: 'shot.png', mediaType: 'image/png', data: png }
+  ])
+  try {
+    assert.equal(temps.length, 1)
+    const text = blocks.find((block) => block.type === 'text')
+    assert.match(text?.text ?? '', /Attached files:/)
+    assert.match(text?.text ?? '', /shot|\.png/)
+    const resource = blocks.find((block) => block.type === 'resource')
+    assert.equal(resource?.resource?.blob, png)
+    assert.equal(resource?.resource?.mimeType, 'image/png')
+    const link = blocks.find((block) => block.type === 'resource_link')
+    assert.equal(link?.name, 'shot.png')
+    assert.ok(link?.uri?.startsWith('file:'))
+  } finally {
+    for (const path of temps) rmSync(path, { force: true })
+  }
+})
+
+test('buildGrokPrompt lists a file attachment by its existing path', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'karbun-grok-test-'))
+  const path = join(dir, 'notes.md')
+  const { blocks, temps } = buildGrokPrompt('read this', [
+    { id: '2', kind: 'file', name: 'notes.md', path }
+  ])
+  assert.deepEqual(temps, [])
+  const text = blocks.find((block) => block.type === 'text')
+  assert.match(text?.text ?? '', /notes\.md/)
+  const link = blocks.find((block) => block.type === 'resource_link')
+  assert.equal(link?.name, 'notes.md')
 })

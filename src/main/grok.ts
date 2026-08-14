@@ -24,7 +24,8 @@ import {
   type RewindResult,
   type SlashCommand,
   type ToolPart,
-  type UsageInfo
+  type UsageInfo,
+  type UserQuestion
 } from '@shared/types'
 import type { Store } from './store'
 import { composePrompt, withTimeout, type AgentSession, type Emit } from './session.ts'
@@ -32,15 +33,22 @@ import { DeltaCoalescer } from './deltaCoalescer.ts'
 import {
   GrokAcpClient,
   GROK_OAUTH_REFERRER,
+  buildGrokPrompt,
+  cleanupStaleGrokTempFiles,
+  grokAskUserQuestionResult,
   grokInstalled,
   grokPermissionBaseline,
-  resolveGrokBinary,
+  isAskUserQuestionTool,
   isExitPlanTool,
   isGrokTranscriptUpdate,
+  removeGrokTempFiles,
+  resolveGrokBinary,
   toolName,
   toolNameIfNamed,
   toolOutput,
   toolStatus,
+  type GrokAskUserQuestionRequest,
+  type GrokAskUserQuestionResult,
   type GrokCommand,
   type GrokModelState,
   type GrokPermissionRequest,
@@ -86,6 +94,11 @@ interface PendingPermission {
   request: GrokPermissionRequest
 }
 
+interface PendingQuestion {
+  resolve: (result: GrokAskUserQuestionResult) => void
+  questions: UserQuestion[]
+}
+
 export class GrokSession implements AgentSession {
   private chat: ChatData
   private emit: Emit
@@ -109,6 +122,7 @@ export class GrokSession implements AgentSession {
   private streamSlot: { kind: 'text' | 'thinking'; index: number } | null = null
 
   private permissions = new Map<string, PendingPermission>()
+  private questions = new Map<string, PendingQuestion>()
   /**
    * Persisted like Codex's, and for the same reason: Grok's plan arrives as the
    * *last* thing in a turn rather than as a gate inside one, so there is no
@@ -169,7 +183,13 @@ export class GrokSession implements AgentSession {
   }
 
   get idle(): boolean {
-    return !this.running && this.queued.size === 0 && this.permissions.size === 0 && !this.planReview
+    return (
+      !this.running &&
+      this.queued.size === 0 &&
+      this.permissions.size === 0 &&
+      this.questions.size === 0 &&
+      !this.planReview
+    )
   }
 
   // ---------- Lifecycle ----------
@@ -221,11 +241,13 @@ export class GrokSession implements AgentSession {
       callbacks: {
         onUpdate: (update) => this.handleUpdate(update),
         onPermission: (request) => this.handlePermission(request),
+        onAskUserQuestion: (request) => this.handleAskUserQuestion(request),
         onModels: (state) => this.handleModels(state),
         onExit: (error) => this.handleExit(error)
       }
     })
     this.client = client
+    cleanupStaleGrokTempFiles()
     // A fresh agent holds no mode we know of, whatever the last one did.
     this.appliedMode = null
     const initial = await client.start()
@@ -402,7 +424,12 @@ export class GrokSession implements AgentSession {
       // (or a previous turn's leftover notifications) must not create a
       // second copy of history under the user message we just pushed.
       this.liveTurn = true
-      result = await client.prompt(this.sessionId, this.promptBlocks(turn))
+      const { blocks, temps } = buildGrokPrompt(turn.text, turn.attachments)
+      try {
+        result = await client.prompt(this.sessionId, blocks)
+      } finally {
+        removeGrokTempFiles(temps)
+      }
     } catch (error) {
       if (!this.disposed && !this.interrupted) {
         this.pushError(error instanceof Error ? error.message : String(error))
@@ -414,20 +441,6 @@ export class GrokSession implements AgentSession {
     }
   }
 
-  /**
-   * Grok 1.0.3 declares `promptCapabilities.image: false`, so an attached image
-   * cannot ride the prompt as a content block the way it does for the other two.
-   * The path goes in the text instead — the agent has filesystem tools and reads
-   * it itself, which is what the CLI's own `@file` mention does.
-   */
-  private promptBlocks(turn: PendingTurn): { type: string; text: string }[] {
-    const paths = turn.attachments
-      .map((attachment) => attachment.path)
-      .filter((path): path is string => !!path)
-    const text = paths.length ? `${turn.text}\n\nAttached files:\n${paths.join('\n')}` : turn.text
-    return [{ type: 'text', text }]
-  }
-
   private finishTurn(result: GrokPromptResult | null): void {
     this.deltas.flush()
     this.current = null
@@ -437,7 +450,7 @@ export class GrokSession implements AgentSession {
     // accumulating every call of a long conversation.
     this.planToolIds.clear()
     if (result) this.recordTurn(result)
-    this.setStatus(this.permissions.size ? 'waiting-permission' : 'idle')
+    this.setStatus(this.hasBlockingPrompt() ? 'waiting-permission' : 'idle')
     this.store.saveChat(this.chat.id)
   }
 
@@ -641,7 +654,23 @@ export class GrokSession implements AgentSession {
 
   // ---------- Permissions ----------
 
+  private hasBlockingPrompt(): boolean {
+    return this.permissions.size > 0 || this.questions.size > 0 || !!this.planReview
+  }
+
+  /**
+   * `ask_user_question` is not a dangerous tool — Grok auto-allows it internally
+   * (wait_ms 0) and then sends `_x.ai/ask_user_question` for the actual card.
+   * If that permission request does leak through, allow it so the extension
+   * method can fire instead of showing an Allow/Deny card for a question.
+   */
   private handlePermission(request: GrokPermissionRequest): Promise<string | null> {
+    if (isAskUserQuestionTool(request.toolCall)) {
+      const allow =
+        request.options.find((option) => option.kind === 'allow_once' || option.kind === 'allow_always') ??
+        request.options[0]
+      return Promise.resolve(allow?.optionId ?? null)
+    }
     return new Promise<string | null>((resolve) => {
       if (this.disposed) {
         resolve(null)
@@ -668,7 +697,49 @@ export class GrokSession implements AgentSession {
     })
   }
 
+  private handleAskUserQuestion(request: GrokAskUserQuestionRequest): Promise<GrokAskUserQuestionResult> {
+    return new Promise((resolve) => {
+      if (this.disposed || this.interrupted) {
+        resolve({ outcome: 'cancelled' })
+        return
+      }
+      const questions = request.questions
+      if (!questions.length) {
+        resolve({ outcome: 'declined' })
+        return
+      }
+      const requestId = randomUUID()
+      this.questions.set(requestId, { resolve, questions })
+      this.emit({
+        type: 'permission-request',
+        chatId: this.chat.id,
+        request: {
+          id: requestId,
+          chatId: this.chat.id,
+          toolUseId: request.toolCallId ?? `grok-question-${requestId}`,
+          toolName: 'AskUserQuestion',
+          input: { questions },
+          title: 'Answer questions',
+          displayName: 'Grok questions',
+          description: 'Grok needs your input to continue.',
+          hasSuggestions: false
+        }
+      })
+      this.setStatus('waiting-permission')
+    })
+  }
+
   respondPermission(requestId: string, decision: PermissionDecision): void {
+    const question = this.questions.get(requestId)
+    if (question) {
+      this.questions.delete(requestId)
+      question.resolve(grokAskUserQuestionResult(decision))
+      this.emit({ type: 'permission-resolved', chatId: this.chat.id, requestId })
+      this.setStatus(
+        this.running ? 'streaming' : this.hasBlockingPrompt() ? 'waiting-permission' : 'idle'
+      )
+      return
+    }
     const pending = this.permissions.get(requestId)
     if (pending) {
       this.permissions.delete(requestId)
@@ -685,7 +756,7 @@ export class GrokSession implements AgentSession {
       pending.resolve(option?.optionId ?? null)
       this.emit({ type: 'permission-resolved', chatId: this.chat.id, requestId })
       this.setStatus(
-        this.running ? 'streaming' : this.permissions.size ? 'waiting-permission' : 'idle'
+        this.running ? 'streaming' : this.hasBlockingPrompt() ? 'waiting-permission' : 'idle'
       )
       return
     }
@@ -702,6 +773,11 @@ export class GrokSession implements AgentSession {
       this.emit({ type: 'permission-resolved', chatId: this.chat.id, requestId })
     }
     this.permissions.clear()
+    for (const [requestId, pending] of this.questions) {
+      pending.resolve({ outcome: 'cancelled' })
+      this.emit({ type: 'permission-resolved', chatId: this.chat.id, requestId })
+    }
+    this.questions.clear()
   }
 
   /**

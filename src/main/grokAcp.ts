@@ -1,9 +1,11 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { existsSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { existsSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import { homedir, tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { createInterface } from 'node:readline'
-import type { ToolPart } from '@shared/types'
+import type { Attachment, ElementRef, ToolPart, UserQuestion } from '@shared/types'
 
 /**
  * A JSON-RPC client for `grok agent stdio`, the xAI CLI's ACP transport.
@@ -82,6 +84,15 @@ export interface GrokContentBlock {
   text?: string
   data?: string
   mimeType?: string
+  name?: string
+  uri?: string
+  description?: string
+  resource?: {
+    uri: string
+    mimeType?: string
+    text?: string
+    blob?: string
+  }
 }
 
 export interface GrokCommand {
@@ -188,10 +199,31 @@ export interface GrokSessionInfo {
   models?: GrokModelState
 }
 
+export interface GrokAskUserQuestionRequest {
+  sessionId?: string
+  toolCallId?: string
+  questions: UserQuestion[]
+}
+
+/**
+ * Internally-tagged ext response. A result without `outcome` is what made
+ * `ask_user_question` fail with "missing field `outcome` at line 1 column 2".
+ */
+export type GrokAskUserQuestionResult =
+  | { outcome: 'answered'; answers: Record<string, string> }
+  | { outcome: 'declined' }
+  | { outcome: 'cancelled' }
+
 export interface GrokAcpCallbacks {
   onUpdate(update: GrokRawUpdate): void
   /** Resolve with the chosen `optionId`, or null to cancel the request. */
   onPermission(request: GrokPermissionRequest): Promise<string | null>
+  /**
+   * Plan-mode (and other) clarifying questions. Grok sends these as
+   * `_x.ai/ask_user_question`, not as a permission prompt — answering
+   * method-not-found is what made the tool fail in Carbon.
+   */
+  onAskUserQuestion?(request: GrokAskUserQuestionRequest): Promise<GrokAskUserQuestionResult>
   onModels(state: GrokModelState): void
   /** The process is gone. `error` is null for a clean, expected shutdown. */
   onExit(error: Error | null): void
@@ -443,6 +475,16 @@ export class GrokAcpClient {
     stdin.write(`${JSON.stringify(message)}\n`)
   }
 
+  /** Reply to an agent request. A dead process has nothing left to hear. */
+  private reply(id: JsonRpcId, payload: { result: unknown } | { error: { code: number; message: string } }): void {
+    try {
+      this.write({ jsonrpc: '2.0', id, ...payload })
+    } catch {
+      // The child exited while we were waiting on the user (a question card,
+      // a permission prompt). There is no stdin left to carry the answer.
+    }
+  }
+
   private fail(error: Error | null): void {
     const waiters = [...this.pending.values()]
     this.pending.clear()
@@ -480,24 +522,46 @@ export class GrokAcpClient {
   }
 
   private async handleServerRequest(id: JsonRpcId, method: string, raw: unknown): Promise<void> {
+    if (isGrokAskUserQuestionMethod(method)) {
+      // Always a *result* with `outcome`. A JSON-RPC error here is what the CLI
+      // surfaces as "Carbon does not implement _x.ai/ask_user_question"; an
+      // empty `{}` is "missing field `outcome`".
+      try {
+        const questions = parseGrokQuestions(raw)
+        const ask = this.options.callbacks.onAskUserQuestion
+        const toolCall = asRecord(raw)?.toolCall
+        const result = ask
+          ? await ask({
+              questions,
+              sessionId: stringField(raw, 'sessionId'),
+              toolCallId:
+                stringField(raw, 'toolCallId') ??
+                stringField(raw, 'tool_call_id') ??
+                stringField(toolCall, 'toolCallId')
+            })
+          : { outcome: 'declined' as const }
+        this.reply(id, { result })
+      } catch {
+        this.reply(id, { result: { outcome: 'cancelled' } })
+      }
+      return
+    }
     if (method !== 'session/request_permission') {
       // Anything else is a capability we declared we do not have. Answering
       // "method not found" is the honest reply and lets the agent fall back to
       // doing the work itself; a stubbed empty result would be deserialized as
       // a real answer and fail the tool instead.
-      this.write({ jsonrpc: '2.0', id, error: { code: -32601, message: `Carbon does not implement ${method}.` } })
+      this.reply(id, { error: { code: -32601, message: `Carbon does not implement ${method}.` } })
       return
     }
     const request = (raw ?? {}) as GrokPermissionRequest
     try {
       const optionId = await this.options.callbacks.onPermission(request)
-      this.write({
-        jsonrpc: '2.0',
-        id,
+      this.reply(id, {
         result: { outcome: optionId ? { outcome: 'selected', optionId } : { outcome: 'cancelled' } }
       })
     } catch {
-      this.write({ jsonrpc: '2.0', id, result: { outcome: { outcome: 'cancelled' } } })
+      this.reply(id, { result: { outcome: { outcome: 'cancelled' } } })
     }
   }
 
@@ -610,4 +674,232 @@ export function toolOutput(call: GrokToolCall): string | undefined {
 export function isExitPlanTool(call: GrokToolCall): boolean {
   const meta = call._meta?.['x.ai/tool']
   return meta?.kind === 'exit_plan' || meta?.name === 'exit_plan_mode'
+}
+
+/** True for the clarifying-question tool — not the permission-gated ones. */
+export function isAskUserQuestionTool(call: GrokToolCall): boolean {
+  const meta = call._meta?.['x.ai/tool']
+  return meta?.name === 'ask_user_question'
+}
+
+/**
+ * Grok's ACP extension for the question card. Verified against 1.0.3: the
+ * method on the wire is `_x.ai/ask_user_question` (same underscore prefix as
+ * `_x.ai/session/update`). The unprefixed form is accepted so a later CLI
+ * that drops the convention still lands here.
+ */
+export function isGrokAskUserQuestionMethod(method: string): boolean {
+  return method === '_x.ai/ask_user_question' || method === 'x.ai/ask_user_question'
+}
+
+export function grokAskUserQuestionResult(
+  decision: { behavior: 'allow' | 'deny'; updatedInput?: Record<string, unknown> } | null
+): GrokAskUserQuestionResult {
+  if (!decision || decision.behavior !== 'allow') return { outcome: 'declined' }
+  const raw = decision.updatedInput?.answers
+  const answers: Record<string, string> = {}
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    for (const [key, value] of Object.entries(raw)) {
+      if (typeof value === 'string' && value.trim()) answers[key] = value
+      else if (Array.isArray(value) && value.length) answers[key] = value.map(String).join(', ')
+    }
+  }
+  if (!Object.keys(answers).length) return { outcome: 'declined' }
+  return { outcome: 'answered', answers }
+}
+
+/**
+ * Pulls the question list out of an `_x.ai/ask_user_question` payload. The
+ * CLI wraps the same `{ questions }` the tool took; be tolerant of nesting
+ * (`params.questions`, `rawInput.questions`) so a shape tweak does not
+ * silently render an empty card.
+ */
+export function parseGrokQuestions(raw: unknown): UserQuestion[] {
+  const root = asRecord(raw)
+  const candidates = [root?.questions, asRecord(root?.params)?.questions, asRecord(root?.rawInput)?.questions]
+  let list: unknown[] | undefined
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate) && candidate.length) {
+      list = candidate
+      break
+    }
+  }
+  if (!list) return []
+  const questions: UserQuestion[] = []
+  for (const [index, entry] of list.entries()) {
+    const item = asRecord(entry)
+    if (!item) continue
+    const question = typeof item.question === 'string' ? item.question.trim() : ''
+    if (!question) continue
+    const header =
+      (typeof item.header === 'string' && item.header.trim()) ||
+      (typeof item.title === 'string' && item.title.trim()) ||
+      'Question'
+    const multiSelect = item.multiSelect === true || item.multi_select === true
+    const rawOptions = Array.isArray(item.options) ? item.options : []
+    const options = rawOptions
+      .map((option) => {
+        if (typeof option === 'string') {
+          const label = option.trim()
+          return label ? { label } : null
+        }
+        const rec = asRecord(option)
+        const label = typeof rec?.label === 'string' ? rec.label.trim() : ''
+        if (!label) return null
+        const description = typeof rec?.description === 'string' ? rec.description : undefined
+        return description ? { label, description } : { label }
+      })
+      .filter((option): option is { label: string; description?: string } => !!option)
+    questions.push({
+      id: typeof item.id === 'string' && item.id.trim() ? item.id : `q${index}`,
+      question,
+      header,
+      options,
+      multiSelect,
+      // Grok's TUI always offers a freeform Other; Carbon's card matches that.
+      allowOther: item.allowOther !== false && item.allow_other !== false
+    })
+  }
+  return questions
+}
+
+const TEMP_PREFIX = 'karbun-grok-'
+
+function writeTempImage(mediaType: string, base64: string): string | null {
+  try {
+    const ext = mediaType.split('/')[1]?.replace(/[^a-z0-9]/gi, '') || 'png'
+    const path = join(tmpdir(), `${TEMP_PREFIX}${randomUUID()}.${ext}`)
+    writeFileSync(path, Buffer.from(base64, 'base64'))
+    return path
+  } catch (err) {
+    console.error('writeTempImage failed:', err)
+    return null
+  }
+}
+
+let staleCleaned = false
+/** One-time sweep of temp attachment copies left behind by an abnormal exit. */
+export function cleanupStaleGrokTempFiles(): void {
+  if (staleCleaned) return
+  staleCleaned = true
+  const cutoff = Date.now() - 60 * 60 * 1000
+  try {
+    for (const name of readdirSync(tmpdir())) {
+      if (!name.startsWith(TEMP_PREFIX)) continue
+      const path = join(tmpdir(), name)
+      try {
+        if (statSync(path).mtimeMs < cutoff) rmSync(path, { force: true })
+      } catch {
+        // ignore individual failures
+      }
+    }
+  } catch {
+    // tmpdir unreadable — nothing to clean
+  }
+}
+
+export function removeGrokTempFiles(paths: string[]): void {
+  for (const path of paths) {
+    try {
+      rmSync(path, { force: true })
+    } catch {
+      // Already gone.
+    }
+  }
+}
+
+/** Renders a picked UI element as a text block the agent can act on. */
+function describeElement(el: ElementRef): string {
+  const lines = [`Selected UI element from the running app (${el.url}):`]
+  if (el.source?.file) {
+    const col = el.source.column != null ? `:${el.source.column}` : ''
+    const loc = el.source.line != null ? `${el.source.file}:${el.source.line}${col}` : el.source.file
+    lines.push(`- Source: ${loc}`)
+  }
+  if (el.label) lines.push(`- Text: ${JSON.stringify(el.label)}`)
+  if (el.selector) lines.push(`- Selector: ${el.selector}`)
+  if (el.html) lines.push(`- HTML: ${el.html}`)
+  return lines.join('\n')
+}
+
+/**
+ * Composer attachments as ACP prompt blocks.
+ *
+ * Grok 1.0.3 still advertises `promptCapabilities.image: false`, so a pasted
+ * screenshot cannot ride as an `image` content block. Composer images also
+ * have no `path` — only base64 — which is why the old "put the path in the
+ * text" fallback sent nothing. The agent *does* advertise `embeddedContext`
+ * and must accept `resource_link`, so we:
+ *   - materialize the bytes to a temp file (so `read_file` can open them)
+ *   - embed the same bytes as a `resource` blob
+ *   - name every file in the text, matching the CLI's own `@file` mention
+ */
+export function buildGrokPrompt(
+  text: string,
+  attachments: Attachment[] = []
+): { blocks: GrokContentBlock[]; temps: string[] } {
+  const temps: string[] = []
+  const filePaths: string[] = []
+  const elementNotes: string[] = []
+  const resources: GrokContentBlock[] = []
+
+  for (const attachment of attachments) {
+    if ((attachment.kind === 'image' || attachment.kind === 'element') && attachment.data && attachment.mediaType) {
+      const path = attachment.path || writeTempImage(attachment.mediaType, attachment.data)
+      if (path && !attachment.path) temps.push(path)
+      const uri = path ? pathToFileURL(path).href : `attachment:${attachment.id || attachment.name}`
+      resources.push({
+        type: 'resource',
+        resource: {
+          uri,
+          mimeType: attachment.mediaType,
+          blob: attachment.data
+        }
+      })
+      resources.push({
+        type: 'resource_link',
+        uri,
+        name: attachment.name,
+        mimeType: attachment.mediaType,
+        description: attachment.kind === 'element' ? 'Selected UI element' : 'Attached image'
+      })
+      if (path) filePaths.push(path)
+    } else if (attachment.kind === 'file' && attachment.path) {
+      const uri = pathToFileURL(attachment.path).href
+      resources.push({
+        type: 'resource_link',
+        uri,
+        name: attachment.name,
+        description: 'Attached file'
+      })
+      filePaths.push(attachment.path)
+    }
+    if (attachment.kind === 'element' && attachment.element) {
+      elementNotes.push(describeElement(attachment.element))
+    }
+  }
+
+  let prompt = text
+  if (filePaths.length) {
+    prompt = `${prompt ? `${prompt}\n\n` : ''}Attached files:\n${filePaths.map((path) => `- ${path}`).join('\n')}`
+  }
+  if (elementNotes.length) {
+    prompt = `${prompt ? `${prompt}\n\n` : ''}${elementNotes.join('\n\n')}`
+  }
+
+  const blocks: GrokContentBlock[] = []
+  if (prompt || resources.length === 0) blocks.push({ type: 'text', text: prompt })
+  blocks.push(...resources)
+  return { blocks, temps }
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined
+}
+
+function stringField(raw: unknown, key: string): string | undefined {
+  const value = asRecord(raw)?.[key]
+  return typeof value === 'string' && value.trim() ? value : undefined
 }
