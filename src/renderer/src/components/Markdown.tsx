@@ -8,6 +8,7 @@ import { Check, Code2, Copy, Maximize2, RotateCcw, X, ZoomIn, ZoomOut } from 'lu
 import { cn } from '@/lib/utils'
 import { useApp } from '@/store'
 import { getImageEpoch, readImageOnce, subscribeImageEpoch } from '@/lib/imageCache'
+import { remarkHighlightLang } from '@/lib/highlight'
 import { splitMarkdownStream } from '@/lib/markdownStream'
 
 /** Project folder used to resolve relative file paths in inline code. */
@@ -530,7 +531,10 @@ const components = {
 
 // Stable plugin arrays — hoisted so they aren't re-created on every render.
 // Typed via ReactMarkdown's own prop types to stay exactly compatible.
-const REMARK_PLUGINS: React.ComponentProps<typeof ReactMarkdown>['remarkPlugins'] = [remarkGfm]
+const REMARK_PLUGINS: React.ComponentProps<typeof ReactMarkdown>['remarkPlugins'] = [
+  remarkGfm,
+  remarkHighlightLang
+]
 const REHYPE_PLUGINS: React.ComponentProps<typeof ReactMarkdown>['rehypePlugins'] = [
   [rehypeHighlight, { ignoreMissing: true, detect: false }]
 ]
