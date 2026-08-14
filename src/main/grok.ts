@@ -43,6 +43,7 @@ import {
   isGrokTranscriptUpdate,
   removeGrokTempFiles,
   resolveGrokBinary,
+  grokToolInput,
   toolName,
   toolNameIfNamed,
   toolOutput,
@@ -576,11 +577,12 @@ export class GrokSession implements AgentSession {
     const existing = this.toolLoc.get(call.toolCallId)
     if (!existing) {
       const message = this.ensureCurrent()
+      const name = toolName(call)
       const part: ToolPart = {
         type: 'tool',
         toolUseId: call.toolCallId,
-        name: toolName(call),
-        input: call.rawInput,
+        name,
+        input: grokToolInput(name, call.rawInput),
         status: toolStatus(call.status)
       }
       message.parts.push(part)
@@ -596,12 +598,12 @@ export class GrokSession implements AgentSession {
     if (!part || part.type !== 'tool') return
     const patch: Partial<ToolPart> = {}
     if (call.status) patch.status = toolStatus(call.status)
-    if (call.rawInput !== undefined) patch.input = call.rawInput
-    // `tool_call_update` re-titles the call once it knows what it is doing
-    // ("Read" becomes "Read `/tmp/app/math.js`"); the later title is the better
-    // one. A status-only update names nothing and must leave the card alone.
+    // Canonical name first so input remapping sees Grep/Read/Bash, not "Search".
     const name = toolNameIfNamed(call)
     if (name && name !== part.name) patch.name = name
+    if (call.rawInput !== undefined) {
+      patch.input = grokToolInput(name ?? part.name, call.rawInput)
+    }
     const output = toolOutput(call)
     if (output !== undefined) patch.output = output
     if (patch.status === 'error' && !patch.output && part.output === undefined) {

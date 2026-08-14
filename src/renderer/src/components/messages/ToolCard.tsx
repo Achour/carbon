@@ -71,6 +71,8 @@ function toolMeta(part: ToolPart, cwd: string): ToolMeta {
       return { icon: Search, label: 'Grep', summary: str(input.pattern) }
     case 'Glob':
       return { icon: Search, label: 'Glob', summary: str(input.pattern) }
+    case 'ListDir':
+      return file(Search, 'List', str(input.path) ?? str(input.target_directory) ?? str(input.directory))
     case 'Task':
     case 'Agent':
       return { icon: Bot, label: 'Agent', summary: str(input.description) }
@@ -361,6 +363,7 @@ export const GROUPABLE_TOOLS = new Set([
   'Read',
   'Grep',
   'Glob',
+  'ListDir',
   'NotebookRead',
   ...FILE_MUTATION_TOOLS,
   'WebFetch',
@@ -378,6 +381,8 @@ function groupTitle(label: string | undefined, n: number): string {
     case 'Grep':
     case 'Glob':
       return plural('search', 'searches')
+    case 'List':
+      return `Listed ${plural('folder', 'folders')}`
     case 'Agent':
       return plural('agent', 'agents')
     case 'Fetch':

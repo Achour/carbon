@@ -611,27 +611,93 @@ export function grokPermissionBaseline(mode: string): GrokBaseline {
   return 'ask'
 }
 /**
+ * Grok's wire names → the names the renderer already groups and icons.
+ *
+ * Stored on `ToolPart.name`. Grouping, file-path chips, Bash humanization and
+ * the turn-changes card all key off Claude/Codex ids (`Grep`, `Read`, `Bash`).
+ * xAI's label ("Search") used to win here, so two greps landed as two wrench
+ * cards named "Search" and never entered `GROUPABLE_TOOLS`.
+ */
+const GROK_TOOL_NAMES: Record<string, string> = {
+  grep: 'Grep',
+  read_file: 'Read',
+  list_dir: 'ListDir',
+  glob: 'Glob',
+  run_terminal_command: 'Bash',
+  write: 'Write',
+  search_replace: 'Edit',
+  web_search: 'WebSearch',
+  web_fetch: 'WebFetch',
+  todo_write: 'TodoWrite',
+  spawn_subagent: 'Agent',
+  task: 'Agent',
+  ask_user_question: 'AskUserQuestion',
+  exit_plan_mode: 'ExitPlanMode',
+  enter_plan_mode: 'EnterPlanMode'
+}
+
+function canonicalGrokToolName(wire: string | undefined): string | undefined {
+  const key = wire?.trim()
+  if (!key) return undefined
+  return GROK_TOOL_NAMES[key] ?? GROK_TOOL_NAMES[key.toLowerCase()]
+}
+
+/**
  * The name carried by *this* payload, or undefined when it carries none.
  *
- * The distinction matters because a tool's last `tool_call_update` is typically
- * status-only — no `title`, `_meta: null` — and a naming function that always
- * answers would rename a finished "Read" card to a generic fallback at the
- * exact moment it completes. Only an update that actually names the tool may
- * rename it.
+ * Prefer the xAI `name` (then canonicalize) over the human `label`. The label
+ * is what the TUI prints ("Search", "Run Command"); the renderer already has
+ * its own labels, and storing those broke grouping. A status-only update
+ * (`_meta: null`, no title) still returns undefined so it cannot rename a
+ * finished card.
  */
 export function toolNameIfNamed(call: GrokToolCall): string | undefined {
   const meta = call._meta?.['x.ai/tool']
-  return meta?.label?.trim() || meta?.name?.trim() || call.title?.trim() || undefined
+  const fromMeta = canonicalGrokToolName(meta?.name) || meta?.name?.trim() || meta?.label?.trim()
+  if (fromMeta) return fromMeta
+  return canonicalGrokToolName(call.title) || call.title?.trim() || undefined
 }
 
 /**
  * The best available name for a tool card, with a fallback — for *opening* a
- * card, which must be labelled with something. xAI's own descriptor carries a
- * human label ("Run Command") where ACP's `title` is either the raw tool name or
- * a whole sentence; the label is preferred, then the name, then the title.
+ * card, which must be labelled with something.
  */
 export function toolName(call: GrokToolCall): string {
   return toolNameIfNamed(call) ?? 'Tool'
+}
+
+/**
+ * Align Grok's input field names with the ones `toolMeta` / turn-changes read
+ * (`file_path`, `content`). `read_file` sends `target_file`; `list_dir` sends
+ * `target_directory`. Without this a canonical `Read` card has no path chip.
+ */
+export function grokToolInput(name: string, raw: unknown): unknown {
+  const input = asRecord(raw)
+  if (!input) return raw
+  const path = firstString(input.file_path, input.target_file, input.path, input.target_directory, input.directory)
+  switch (name) {
+    case 'Read':
+    case 'Write':
+    case 'Edit': {
+      const next = { ...input }
+      if (path && next.file_path !== path) next.file_path = path
+      if (name === 'Write' && typeof next.contents === 'string' && next.content === undefined) {
+        next.content = next.contents
+      }
+      return next
+    }
+    case 'ListDir':
+      return path && input.path !== path ? { ...input, path } : input
+    default:
+      return raw
+  }
+}
+
+function firstString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === 'string' && value) return value
+  }
+  return undefined
 }
 
 /** ACP tool status → Carbon's three-state `ToolStatus`. */

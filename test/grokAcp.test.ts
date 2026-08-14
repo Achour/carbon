@@ -11,6 +11,7 @@ import {
   isExitPlanTool,
   isGrokAskUserQuestionMethod,
   isGrokTranscriptUpdate,
+  grokToolInput,
   parseGrokQuestions,
   resolveGrokBinary,
   toolName,
@@ -24,24 +25,51 @@ import { effortForProvider } from '../src/shared/types.ts'
 // not hand-written approximations — the point of these tests is to pin the
 // shapes the CLI actually emits.
 
-test('toolName prefers xAI\'s human label over the raw ACP title', () => {
+test('toolName maps Grok wire names onto the renderer\'s grouping ids', () => {
+  // Verbatim 1.0.3 grep payload: label is "Search". Storing that is what
+  // rendered two wrench cards that GROUPABLE_TOOLS (which keys on `Grep`)
+  // would not coalesce.
+  assert.equal(
+    toolName({
+      toolCallId: 'call-1',
+      title: 'grep',
+      _meta: { 'x.ai/tool': { name: 'grep', label: 'Search' } }
+    }),
+    'Grep'
+  )
   assert.equal(
     toolName({
       toolCallId: 'call-1',
       title: 'run_terminal_command',
       _meta: { 'x.ai/tool': { name: 'run_terminal_command', label: 'Run Command' } }
     }),
-    'Run Command'
+    'Bash'
+  )
+  assert.equal(
+    toolName({ toolCallId: 'c', title: 'write', _meta: { 'x.ai/tool': { name: 'write' } } }),
+    'Write'
   )
 })
 
 test('toolName falls back through name, then title, then a constant', () => {
-  assert.equal(
-    toolName({ toolCallId: 'c', title: 'write', _meta: { 'x.ai/tool': { name: 'write' } } }),
-    'write'
-  )
   assert.equal(toolName({ toolCallId: 'c', title: 'Execute `ls`' }), 'Execute `ls`')
   assert.equal(toolName({ toolCallId: 'c' }), 'Tool')
+})
+
+test('grokToolInput copies Grok path fields onto the Claude/Codex names', () => {
+  assert.deepEqual(grokToolInput('Read', { target_file: '/tmp/app.js', limit: 40 }), {
+    target_file: '/tmp/app.js',
+    limit: 40,
+    file_path: '/tmp/app.js'
+  })
+  assert.deepEqual(grokToolInput('ListDir', { target_directory: '/tmp' }), {
+    target_directory: '/tmp',
+    path: '/tmp'
+  })
+  assert.deepEqual(grokToolInput('Grep', { pattern: 'foo', glob: '*.ts' }), {
+    pattern: 'foo',
+    glob: '*.ts'
+  })
 })
 
 test('toolStatus maps ACP statuses onto the three-state tool card', () => {
