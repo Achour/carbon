@@ -36,6 +36,7 @@ import {
   grokPermissionBaseline,
   resolveGrokBinary,
   isExitPlanTool,
+  isGrokTranscriptUpdate,
   toolName,
   toolNameIfNamed,
   toolOutput,
@@ -125,6 +126,12 @@ export class GrokSession implements AgentSession {
   private models: GrokModelState | null = null
   /** Plan flag the live session is known to hold; null when the agent is new. */
   private appliedMode: 'plan' | 'default' | null = null
+  /**
+   * True only while `session/prompt` is in flight. `session/load` (and anything
+   * the agent emits while idle) replays the stored transcript as ordinary
+   * `session/update`s — those must not become new messages.
+   */
+  private liveTurn = false
   /**
    * The permission baseline and effort are process-level in Grok (a `session/new`
    * `_meta` flag and a spawn flag). Changing either cannot be applied to a live
@@ -391,12 +398,17 @@ export class GrokSession implements AgentSession {
       // edit outside plan.md, so the implementation turn the approval just
       // queued fails every write it attempts.
       await this.applyLiveMode(client)
+      // Accept transcript updates only for this prompt. loadSession above
+      // (or a previous turn's leftover notifications) must not create a
+      // second copy of history under the user message we just pushed.
+      this.liveTurn = true
       result = await client.prompt(this.sessionId, this.promptBlocks(turn))
     } catch (error) {
       if (!this.disposed && !this.interrupted) {
         this.pushError(error instanceof Error ? error.message : String(error))
       }
     } finally {
+      this.liveTurn = false
       this.running = false
       this.finishTurn(result)
     }
@@ -481,6 +493,11 @@ export class GrokSession implements AgentSession {
   private handleUpdate(raw: GrokRawUpdate): void {
     if (this.disposed) return
     const update = raw as GrokSessionUpdate
+    // Replay from session/load (or idle notifications) looks identical to a
+    // live turn on the wire. Measured: a follow-up after a process restart
+    // produced one assistant message whose parts were every previous turn
+    // concatenated, so the new user bubble sat in the middle of old history.
+    if (!this.liveTurn && isGrokTranscriptUpdate(update.sessionUpdate)) return
     switch (update.sessionUpdate) {
       case 'agent_message_chunk':
         this.appendStream('text', update.content?.text ?? '')

@@ -57,6 +57,26 @@ export type GrokSessionUpdate =
 /** What actually comes off the wire: any `sessionUpdate`, including new ones. */
 export type GrokRawUpdate = { sessionUpdate: string } & Record<string, unknown>
 
+/**
+ * Updates that reconstruct a past turn. `session/load` replays them so a
+ * client with no history can paint the transcript; Carbon already has that
+ * history on disk, so applying them on resume would append a duplicate of the
+ * whole conversation under the next user message.
+ */
+export function isGrokTranscriptUpdate(kind: string): boolean {
+  switch (kind) {
+    case 'agent_message_chunk':
+    case 'agent_thought_chunk':
+    case 'user_message_chunk':
+    case 'tool_call':
+    case 'tool_call_update':
+    case 'plan':
+      return true
+    default:
+      return false
+  }
+}
+
 export interface GrokContentBlock {
   type: string
   text?: string

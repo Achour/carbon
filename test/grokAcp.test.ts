@@ -3,6 +3,7 @@ import test from 'node:test'
 import {
   grokPermissionBaseline,
   isExitPlanTool,
+  isGrokTranscriptUpdate,
   resolveGrokBinary,
   toolName,
   toolNameIfNamed,
@@ -107,6 +108,29 @@ test('effortForProvider is the single filter for Grok levels', () => {
     assert.equal(effortForProvider(effort, 'grok'), undefined)
   }
   assert.equal(effortForProvider(undefined, 'grok'), undefined)
+})
+
+test('transcript updates are the ones session/load replays', () => {
+  for (const kind of [
+    'agent_message_chunk',
+    'agent_thought_chunk',
+    'user_message_chunk',
+    'tool_call',
+    'tool_call_update',
+    'plan'
+  ]) {
+    assert.equal(isGrokTranscriptUpdate(kind), true)
+  }
+  // Commands and the mode flag arrive on load too, but they are session
+  // state, not a turn — the palette would stay empty if they were dropped.
+  for (const kind of [
+    'available_commands_update',
+    'session_info_update',
+    'current_mode_update',
+    'turn_completed'
+  ]) {
+    assert.equal(isGrokTranscriptUpdate(kind), false)
+  }
 })
 
 test('grokPermissionBaseline reduces Carbon modes to the session-creation axis', () => {
