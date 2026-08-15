@@ -135,6 +135,10 @@ export interface AppServerThreadOptions extends ThreadOptions {
   collaborationMode?: 'default' | 'plan'
   serviceTier?: 'standard' | 'fast'
   approvalsReviewer?: 'user' | 'auto_review' | 'guardian_subagent'
+  /** Merged into App Server's `config` overlay (e.g. `mcp_servers.preview`). */
+  extraConfig?: Record<string, unknown>
+  /** Turn-level developer instructions (preview MCP usage, …). */
+  developerInstructions?: string
 }
 
 export interface CodexThreadLike {
@@ -357,6 +361,13 @@ function serviceTierConfig(serviceTier: AppServerThreadOptions['serviceTier']): 
   return {
     service_tier: serviceTier === 'fast' ? 'fast' : 'default',
     features: { fast_mode: true }
+  }
+}
+
+export function threadOverlayConfig(options: AppServerThreadOptions): Record<string, unknown> {
+  return {
+    ...serviceTierConfig(options.serviceTier),
+    ...options.extraConfig
   }
 }
 
@@ -655,7 +666,7 @@ class CodexAppServerThread implements CodexThreadLike {
         approvalPolicy: this.options.approvalPolicy ?? 'never',
         approvalsReviewer: this.options.approvalsReviewer ?? 'user',
         sandbox: this.options.sandboxMode ?? null,
-        config: serviceTierConfig(this.options.serviceTier)
+        config: threadOverlayConfig(this.options)
       })) as { thread: NativeThread; model: string }
       this.nativeId = response.thread.id
       this.resolvedModel = response.model
@@ -667,7 +678,7 @@ class CodexAppServerThread implements CodexThreadLike {
         approvalPolicy: this.options.approvalPolicy ?? 'never',
         approvalsReviewer: this.options.approvalsReviewer ?? 'user',
         sandbox: this.options.sandboxMode ?? null,
-        config: serviceTierConfig(this.options.serviceTier),
+        config: threadOverlayConfig(this.options),
         ephemeral: false
       })) as { thread: NativeThread; model: string }
       this.nativeId = response.thread.id
@@ -697,7 +708,7 @@ class CodexAppServerThread implements CodexThreadLike {
         settings: {
           model: this.resolvedModel ?? this.options.model ?? '',
           reasoning_effort: this.options.modelReasoningEffort ?? null,
-          developer_instructions: null
+          developer_instructions: this.options.developerInstructions ?? null
         }
       }
     })) as { turn: NativeTurn }

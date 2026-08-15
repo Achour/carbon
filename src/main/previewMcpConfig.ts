@@ -29,7 +29,7 @@ export function carbonPreviewMcpServers(
 ): StdioMcpServer[] {
   const script = opts.scriptPath ?? previewMcpScriptPath()
   if (!existsSync(script)) {
-    console.warn(`[preview] MCP script missing at ${script}; Grok will not get preview tools.`)
+    console.warn(`[preview] MCP script missing at ${script}; Grok/Codex will not get preview tools.`)
     return []
   }
   const extra: Record<string, string> = {
@@ -49,6 +49,33 @@ export function carbonPreviewMcpServers(
       env
     }
   ]
+}
+
+/** Codex `config.mcp_servers` overlay — one named table; env is a map. */
+export function carbonPreviewCodexMcp(
+  cwd: string,
+  bridge: PreviewBridgeHandle,
+  opts: { scriptPath?: string; execPath?: string; plan?: boolean } = {}
+): Record<string, unknown> | undefined {
+  const servers = carbonPreviewMcpServers(cwd, bridge, opts)
+  const server = servers[0]
+  if (!server) return undefined
+  const env: Record<string, string> = {
+    ELECTRON_RUN_AS_NODE: '1',
+    CARBON_PREVIEW_URL: bridge.url,
+    CARBON_PREVIEW_TOKEN: bridge.token,
+    CARBON_PREVIEW_CWD: cwd
+  }
+  if (opts.plan) env.CARBON_PREVIEW_PLAN = '1'
+  return {
+    mcp_servers: {
+      [PREVIEW_MCP_NAME]: {
+        command: server.command,
+        args: server.args,
+        env
+      }
+    }
+  }
 }
 
 

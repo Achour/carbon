@@ -74,6 +74,7 @@ import {
   type WorkspaceCheckpoint
 } from './workspaceCheckpoint.ts'
 import { TITLE_SYSTEM, buildTitlePrompt, cleanTitle, deriveTitle, firstUserText } from './titles.ts'
+import { PREVIEW_SESSION_RULES } from './previewTools.ts'
 
 const OUTPUT_CAP = 100_000
 
@@ -366,6 +367,12 @@ export class CodexSession implements AgentSession {
   private emit: Emit
   private store: Store
   private onDead: () => void
+  private preview: {
+    mcpCodexConfig(
+      cwd: string,
+      opts?: { plan?: boolean }
+    ): Promise<Record<string, unknown> | undefined>
+  } | null
   private codex: CodexClientLike
   private thread: CodexThreadLike | null = null
   private threadOptionsKey: string | null = null
@@ -463,12 +470,19 @@ export class CodexSession implements AgentSession {
     // Injectable for provider-boundary tests; production App Server reuses
     // ~/.codex authentication through Carbon's bundled Codex CLI.
     codex?: CodexClientLike,
-    rolloutWatcherFactory: CodexRolloutWatcherFactory = createCodexRolloutWatcher
+    rolloutWatcherFactory: CodexRolloutWatcherFactory = createCodexRolloutWatcher,
+    preview: {
+      mcpCodexConfig(
+        cwd: string,
+        opts?: { plan?: boolean }
+      ): Promise<Record<string, unknown> | undefined>
+    } | null = null
   ) {
     this.chat = chat
     this.emit = emit
     this.store = store
     this.onDead = onDead
+    this.preview = preview
     this.codex =
       codex ??
       new CodexAppServerClient({
@@ -694,8 +708,15 @@ export class CodexSession implements AgentSession {
     }
   }
 
-  private ensureThread(turn: PendingTurn): CodexThreadLike {
+  private async ensureThread(turn: PendingTurn): Promise<CodexThreadLike> {
     const opts = this.threadOptions(turn)
+    const extraConfig = await this.preview?.mcpCodexConfig(this.chat.cwd, {
+      plan: opts.collaborationMode === 'plan'
+    })
+    if (extraConfig) {
+      opts.extraConfig = extraConfig
+      opts.developerInstructions = PREVIEW_SESSION_RULES
+    }
     const optionsKey = JSON.stringify(opts)
     if (this.thread && !this.optionsDirty && this.threadOptionsKey === optionsKey) return this.thread
     this.thread = this.threadId
@@ -793,7 +814,7 @@ export class CodexSession implements AgentSession {
         this.sawItem = false
         this.sawTerminal = false
         const resumedThreadId = this.threadId
-        const thread = this.ensureThread(turn)
+        const thread = await this.ensureThread(turn)
         try {
           const { events } = await thread.runStreamed(turn.input, { signal: this.abort.signal })
           for await (const event of events) {

@@ -152,7 +152,13 @@ class FakeRolloutWatcher implements CodexRolloutWatcher {
 
 function harness(
   turns: TurnFactory[],
-  patch: Partial<ChatData> = {}
+  patch: Partial<ChatData> = {},
+  preview: {
+    mcpCodexConfig(
+      cwd: string,
+      opts?: { plan?: boolean }
+    ): Promise<Record<string, unknown> | undefined>
+  } | null = null
 ): {
   session: CodexSession
   chat: ChatData
@@ -198,7 +204,8 @@ function harness(
     store,
     () => {},
     codex as unknown as Codex,
-    rolloutWatcherFactory
+    rolloutWatcherFactory,
+    preview
   )
   return { session, chat, events, codex, watcher, cwd, saved }
 }
@@ -1308,4 +1315,74 @@ test('generated images surface at the session boundary only when newly created',
     if (previousHome === undefined) delete process.env.CODEX_HOME
     else process.env.CODEX_HOME = previousHome
   }
+})
+
+test('a Codex turn receives Carbon preview as a keyed MCP overlay', async () => {
+  const preview = {
+    mcpCodexConfig: async (cwd: string, opts?: { plan?: boolean }) => ({
+      mcp_servers: {
+        preview: {
+          command: '/bin/echo',
+          args: ['--stdio'],
+          env: {
+            CARBON_PREVIEW_CWD: cwd,
+            ...(opts?.plan ? { CARBON_PREVIEW_PLAN: '1' } : {})
+          }
+        }
+      }
+    })
+  }
+  const h = harness(
+    [
+      async function* () {
+        yield { type: 'thread.started', thread_id: 'thread-1' }
+        yield { type: 'turn.completed', usage }
+      }
+    ],
+    {},
+    preview
+  )
+  h.session.send('Screenshot the app')
+  await waitFor(() => h.events.some((event) => event.type === 'status' && event.status === 'idle'))
+
+  const opts = h.codex.resumeCalls[0]?.options
+  const servers = (opts?.extraConfig?.mcp_servers ?? {}) as Record<string, { env?: Record<string, string> }>
+  assert.deepEqual(Object.keys(servers), ['preview'])
+  assert.equal(servers.preview.env?.CARBON_PREVIEW_CWD, h.cwd)
+  assert.equal(servers.preview.env?.CARBON_PREVIEW_PLAN, undefined)
+  assert.match(opts?.developerInstructions ?? '', /in-app browser/)
+  cleanup(h)
+})
+
+test('a plan-mode Codex turn pins preview start/stop as blocked', async () => {
+  const preview = {
+    mcpCodexConfig: async (_cwd: string, opts?: { plan?: boolean }) => ({
+      mcp_servers: {
+        preview: {
+          command: '/bin/echo',
+          args: ['--stdio'],
+          env: opts?.plan ? { CARBON_PREVIEW_PLAN: '1' } : {}
+        }
+      }
+    })
+  }
+  const h = harness(
+    [
+      async function* () {
+        yield { type: 'thread.started', thread_id: 'thread-1' }
+        yield { type: 'turn.completed', usage }
+      }
+    ],
+    { permissionMode: 'plan' },
+    preview
+  )
+  h.session.send('Plan a UI change')
+  await waitFor(() => h.events.some((event) => event.type === 'status' && event.status === 'idle'))
+
+  const servers = (h.codex.resumeCalls[0]?.options?.extraConfig?.mcp_servers ?? {}) as Record<
+    string,
+    { env?: Record<string, string> }
+  >
+  assert.equal(servers.preview.env?.CARBON_PREVIEW_PLAN, '1')
+  cleanup(h)
 })

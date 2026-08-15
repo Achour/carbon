@@ -6,7 +6,11 @@ import type { IPty } from 'node-pty'
 import type { PreviewCommand, PreviewCommandResult, PreviewEvent, PreviewState } from '@shared/types'
 import { killTree } from './pty'
 import { startPreviewBridge, type PreviewBridgeHandle } from './previewBridge.ts'
-import { carbonPreviewMcpServers, type StdioMcpServer } from './previewMcpConfig.ts'
+import {
+  carbonPreviewCodexMcp,
+  carbonPreviewMcpServers,
+  type StdioMcpServer
+} from './previewMcpConfig.ts'
 
 const nodeRequire = createRequire(import.meta.url)
 const pty = nodeRequire('node-pty') as typeof import('node-pty')
@@ -73,6 +77,13 @@ export class PreviewManager {
     const bridge = await this.mcp
     if (!bridge || !cwd) return []
     return carbonPreviewMcpServers(cwd, bridge)
+  }
+
+  /** Codex `config.mcp_servers.preview` overlay for this project's preview. */
+  async mcpCodexConfig(cwd: string, opts: { plan?: boolean } = {}): Promise<Record<string, unknown> | undefined> {
+    const bridge = await this.mcp
+    if (!bridge || !cwd) return undefined
+    return carbonPreviewCodexMcp(cwd, bridge, opts)
   }
 
   /** The dev command inferred from package.json, or null if there isn't one. */

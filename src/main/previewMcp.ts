@@ -1,4 +1,4 @@
-import { PREVIEW_TOOL_INFO, PREVIEW_TOOL_NAMES } from './previewTools.ts'
+import { PREVIEW_TOOL_INFO, PREVIEW_TOOL_NAMES, previewPlanBlock } from './previewTools.ts'
 import { callPreviewBridge, type PreviewBridgeResponse } from './previewBridge.ts'
 
 interface JsonRpcRequest {
@@ -147,8 +147,12 @@ async function startStdio(): Promise<void> {
     console.error('preview MCP: CARBON_PREVIEW_URL, CARBON_PREVIEW_TOKEN, and CARBON_PREVIEW_CWD are required.')
     process.exit(1)
   }
-  const callTool = (name: string, input: { url?: string }): Promise<PreviewBridgeResponse> =>
-    callPreviewBridge(url, token, cwd, name, input)
+  const plan = process.env.CARBON_PREVIEW_PLAN === '1'
+  const callTool = async (name: string, input: { url?: string }): Promise<PreviewBridgeResponse> => {
+    const blocked = previewPlanBlock(name, plan)
+    if (blocked) return { ok: false, error: blocked }
+    return callPreviewBridge(url, token, cwd, name, input)
+  }
 
   process.stdin.on('error', () => process.exit(1))
   for await (const message of readMcpMessages(process.stdin)) {

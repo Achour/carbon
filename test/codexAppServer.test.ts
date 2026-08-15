@@ -5,7 +5,8 @@ import {
   appServerApprovalResponse,
   CodexAppServerClient,
   isCodexCompactionItem,
-  normalizeAppServerItem
+  normalizeAppServerItem,
+  threadOverlayConfig
 } from '../src/main/codexAppServer.ts'
 import { fetchCodexModels } from '../src/main/codex.ts'
 
@@ -37,6 +38,16 @@ test('App Server MCP results retain text, images, structured content and metadat
     structured_content: { path: '/tmp/result.png' },
     _meta: { requestId: 'one' }
   })
+})
+
+test('thread overlay keeps service-tier keys and layers extra MCP config', () => {
+  const overlay = threadOverlayConfig({
+    serviceTier: 'fast',
+    extraConfig: { mcp_servers: { preview: { command: '/bin/echo' } } }
+  })
+  assert.equal(overlay.service_tier, 'fast')
+  assert.deepEqual(overlay.features, { fast_mode: true })
+  assert.deepEqual(overlay.mcp_servers, { preview: { command: '/bin/echo' } })
 })
 
 test('a started App Server file change stays running until completion', () => {

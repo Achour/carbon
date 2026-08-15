@@ -4,6 +4,7 @@ import type { PreviewState } from '../src/shared/types.ts'
 import {
   isPreviewSideEffect,
   isPreviewToolName,
+  previewPlanBlock,
   runPreviewTool,
   type PreviewToolHost
 } from '../src/main/previewTools.ts'
@@ -31,6 +32,9 @@ test('isPreviewToolName is the closed set of preview tools', () => {
   assert.equal(isPreviewSideEffect('start'), true)
   assert.equal(isPreviewSideEffect('stop'), true)
   assert.equal(isPreviewSideEffect('screenshot'), false)
+  assert.match(previewPlanBlock('start', true) ?? '', /plan mode/)
+  assert.equal(previewPlanBlock('screenshot', true), null)
+  assert.equal(previewPlanBlock('start', false), null)
 })
 
 test('runPreviewTool status/start/stop return the state JSON', async () => {

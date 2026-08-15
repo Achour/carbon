@@ -1834,7 +1834,15 @@ export class ChatManager {
     }
     const session: AgentSession =
       chat.provider === 'codex'
-        ? new CodexSession(chat, sessionEmit, this.store, onDead)
+        ? new CodexSession(
+            chat,
+            sessionEmit,
+            this.store,
+            onDead,
+            undefined,
+            undefined,
+            this.preview
+          )
         : chat.provider === 'grok'
           ? new GrokSession(
               chat,

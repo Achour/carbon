@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { startPreviewBridge } from '../src/main/previewBridge.ts'
-import { carbonPreviewMcpServers } from '../src/main/previewMcpConfig.ts'
+import { carbonPreviewCodexMcp, carbonPreviewMcpServers } from '../src/main/previewMcpConfig.ts'
 import {
   handleMcpCall,
   handleMcpMessage,
@@ -139,4 +139,23 @@ test('carbonPreviewMcpServers is a stdio ACP server pinned to the project cwd', 
   assert.equal(env.CARBON_PREVIEW_TOKEN, 'tok')
   assert.equal(env.CARBON_PREVIEW_CWD, '/Users/me/app')
   assert.equal(env.ELECTRON_RUN_AS_NODE, '1')
+})
+
+test('carbonPreviewCodexMcp is a keyed overlay, not a replacement table', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'carbon-preview-codex-'))
+  const script = join(dir, 'previewMcp.js')
+  writeFileSync(script, 'true\n')
+  const overlay = carbonPreviewCodexMcp(
+    '/Users/me/app',
+    { url: 'http://127.0.0.1:9', token: 'tok', close: () => {} },
+    { scriptPath: script, execPath: '/bin/echo', plan: true }
+  )
+  assert.ok(overlay)
+  const servers = overlay.mcp_servers as Record<string, { command: string; args: string[]; env: Record<string, string> }>
+  assert.deepEqual(Object.keys(servers), ['preview'])
+  assert.equal(servers.preview.command, '/bin/echo')
+  assert.deepEqual(servers.preview.args, [script, '--stdio'])
+  assert.equal(servers.preview.env.CARBON_PREVIEW_CWD, '/Users/me/app')
+  assert.equal(servers.preview.env.CARBON_PREVIEW_PLAN, '1')
+  assert.equal(servers.preview.env.ELECTRON_RUN_AS_NODE, '1')
 })

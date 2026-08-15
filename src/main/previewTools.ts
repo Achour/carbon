@@ -14,6 +14,12 @@ export function isPreviewSideEffect(name: PreviewToolName): boolean {
   return name === 'start' || name === 'stop'
 }
 
+/** Plan-mode deny for start/stop. Codex pins this via `CARBON_PREVIEW_PLAN`. */
+export function previewPlanBlock(name: string, plan: boolean): string | null {
+  if (!plan || !isPreviewToolName(name) || !isPreviewSideEffect(name)) return null
+  return 'Starting or stopping the dev server is a side effect and is not allowed in plan mode. Note it in the plan — it can run once the plan is approved.'
+}
+
 export const PREVIEW_TOOL_INFO: Record<
   PreviewToolName,
   { description: string; readOnly: boolean; url?: boolean }
