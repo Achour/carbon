@@ -11,7 +11,11 @@ import {
   isExitPlanTool,
   isGrokAskUserQuestionMethod,
   isGrokTranscriptUpdate,
+  isPreviewSideEffectTool,
+  isPreviewTool,
+  previewToolId,
   grokToolInput,
+  toolImages,
   parseGrokQuestions,
   resolveGrokBinary,
   toolName,
@@ -131,6 +135,51 @@ test('isExitPlanTool matches on kind or name, not on the title', () => {
   assert.equal(
     isExitPlanTool({ toolCallId: 'c', _meta: { 'x.ai/tool': { name: 'write', kind: 'write' } } }),
     false
+  )
+})
+
+test('previewToolId only matches the in-app preview MCP', () => {
+  assert.equal(
+    previewToolId({
+      toolCallId: 'c',
+      _meta: { 'x.ai/tool': { name: 'screenshot', namespace: 'preview' } }
+    }),
+    'mcp__preview__screenshot'
+  )
+  assert.equal(
+    previewToolId({ toolCallId: 'c', title: 'mcp__preview__start' }),
+    'mcp__preview__start'
+  )
+  assert.equal(previewToolId({ toolCallId: 'c', title: 'preview_navigate' }), 'mcp__preview__navigate')
+  // A bare "start" is not ours — Grok's own tools must not be auto-allowed.
+  assert.equal(previewToolId({ toolCallId: 'c', title: 'start' }), undefined)
+  assert.equal(isPreviewTool({ toolCallId: 'c', title: 'mcp__preview__console' }), true)
+  assert.equal(isPreviewSideEffectTool({ toolCallId: 'c', title: 'mcp__preview__start' }), true)
+  assert.equal(isPreviewSideEffectTool({ toolCallId: 'c', title: 'mcp__preview__status' }), false)
+  assert.equal(
+    toolName({
+      toolCallId: 'c',
+      title: 'screenshot',
+      _meta: { 'x.ai/tool': { name: 'screenshot', namespace: 'preview', label: 'Screenshot' } }
+    }),
+    'mcp__preview__screenshot'
+  )
+})
+
+test('toolImages pulls MCP image blocks out of a Grok tool result', () => {
+  assert.deepEqual(
+    toolImages({
+      toolCallId: 'c',
+      content: [{ type: 'content', content: { type: 'image', data: 'abc', mimeType: 'image/png' } }]
+    }),
+    [{ mediaType: 'image/png', data: 'abc' }]
+  )
+  assert.equal(
+    toolImages({
+      toolCallId: 'c',
+      content: [{ type: 'content', content: { type: 'text', text: 'ok' } }]
+    }),
+    undefined
   )
 })
 

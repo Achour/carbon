@@ -5,6 +5,8 @@ import { join } from 'node:path'
 import type { IPty } from 'node-pty'
 import type { PreviewCommand, PreviewCommandResult, PreviewEvent, PreviewState } from '@shared/types'
 import { killTree } from './pty'
+import { startPreviewBridge, type PreviewBridgeHandle } from './previewBridge.ts'
+import { carbonPreviewMcpServers, type StdioMcpServer } from './previewMcpConfig.ts'
 
 const nodeRequire = createRequire(import.meta.url)
 const pty = nodeRequire('node-pty') as typeof import('node-pty')
@@ -53,11 +55,25 @@ function detectRunner(cwd: string): (script: string) => string {
  */
 export class PreviewManager {
   private servers = new Map<string, Server>()
+  /** Loopback MCP front; Grok cannot take an in-process server. */
+  private readonly mcp: Promise<PreviewBridgeHandle | null>
 
   constructor(
     private emit: Emit,
     private send: SendCommand
-  ) {}
+  ) {
+    this.mcp = startPreviewBridge(this).catch((err) => {
+      console.warn('[preview] MCP bridge failed to start:', err)
+      return null
+    })
+  }
+
+  /** ACP `mcpServers` entry that gives this project's preview to Grok. */
+  async mcpServers(cwd: string): Promise<StdioMcpServer[]> {
+    const bridge = await this.mcp
+    if (!bridge || !cwd) return []
+    return carbonPreviewMcpServers(cwd, bridge)
+  }
 
   /** The dev command inferred from package.json, or null if there isn't one. */
   detect(cwd: string): string | null {
@@ -252,6 +268,7 @@ export class PreviewManager {
   }
 
   disposeAll(): void {
+    void this.mcp.then((bridge) => bridge?.close())
     for (const s of this.servers.values()) killTree(s.proc)
     this.servers.clear()
   }

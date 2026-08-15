@@ -8,6 +8,14 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin()],
     resolve: {
       alias: { '@shared': resolve('src/shared') }
+    },
+    build: {
+      rollupOptions: {
+        input: {
+          index: resolve('src/main/index.ts'),
+          previewMcp: resolve('src/main/previewMcp.ts')
+        }
+      }
     }
   },
   preload: {

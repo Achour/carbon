@@ -54,6 +54,7 @@ import {
 import { CODEX_SLASH_COMMANDS, parseCodexSlashCommand } from '@shared/codexCommands'
 import type { Store } from './store'
 import type { PreviewManager } from './preview'
+import { runPreviewTool } from './previewTools.ts'
 import { CodexSession, fetchCodexModels, generateCodexText } from './codex'
 import { CodexAppServerClient } from './codexAppServer'
 import { fetchGrokModels, generateGrokText, GrokSession } from './grok'
@@ -90,6 +91,14 @@ function buildPreviewServer(
   const text = (t: string): { content: Array<{ type: 'text'; text: string }> } => ({
     content: [{ type: 'text', text: t }]
   })
+  const previewToolResult = (
+    result: Awaited<ReturnType<typeof runPreviewTool>>
+  ):
+    | { content: Array<{ type: 'text'; text: string }> }
+    | { content: Array<{ type: 'image'; data: string; mimeType: string }> } =>
+    result.kind === 'image'
+      ? { content: [{ type: 'image' as const, data: result.data, mimeType: result.mimeType }] }
+      : text(result.text)
   return createSdkMcpServer({
     name: 'preview',
     version: '1.0.0',
@@ -98,43 +107,34 @@ function buildPreviewServer(
         'status',
         'Get the dev-server preview status for this project: whether it is running and its local URL.',
         {},
-        async () => text(JSON.stringify(preview.state(cwd)))
+        async () => previewToolResult(await runPreviewTool(preview, cwd, 'status'))
       ),
       tool(
         'start',
         'Start this project\'s dev server (command auto-detected from package.json). Waits until the local URL is ready and opens the in-app preview. Use before screenshotting.',
         {},
-        async () => text(JSON.stringify(await preview.startAndWait(cwd)))
+        async () => previewToolResult(await runPreviewTool(preview, cwd, 'start'))
       ),
       tool('stop', 'Stop this project\'s dev server.', {}, async () =>
-        text(JSON.stringify(preview.stop(cwd)))
+        previewToolResult(await runPreviewTool(preview, cwd, 'stop'))
       ),
       tool(
         'navigate',
         'Point the in-app preview browser at a URL (e.g. a specific route of the running app).',
         { url: z.string().describe('The URL to load in the preview.') },
-        async ({ url }) => {
-          const res = await preview.navigate(cwd, url)
-          return text(res.ok ? `Navigated to ${url}` : `Failed to navigate: ${res.error ?? 'unknown'}`)
-        }
+        async ({ url }) => previewToolResult(await runPreviewTool(preview, cwd, 'navigate', { url }))
       ),
       tool(
         'screenshot',
         'Capture a screenshot of the current preview page to see the running app as the user sees it. Start the dev server first if it is not running.',
         {},
-        async () => {
-          const data = await preview.screenshot(cwd)
-          if (!data) {
-            return text('No preview is open to screenshot. Start the dev server (preview.start) or navigate first.')
-          }
-          return { content: [{ type: 'image' as const, data, mimeType: 'image/png' }] }
-        }
+        async () => previewToolResult(await runPreviewTool(preview, cwd, 'screenshot'))
       ),
       tool(
         'console',
         'Read recent console output and errors from the running preview app (browser console + dev-server errors).',
         {},
-        async () => text(preview.recentConsole(cwd) || 'No console output captured yet.')
+        async () => previewToolResult(await runPreviewTool(preview, cwd, 'console'))
       )
     ]
   })
@@ -1836,8 +1836,13 @@ export class ChatManager {
       chat.provider === 'codex'
         ? new CodexSession(chat, sessionEmit, this.store, onDead)
         : chat.provider === 'grok'
-          ? new GrokSession(chat, sessionEmit, this.store, onDead, (commands) =>
-              this.commandsByCwd.set(commandsKey(chat.cwd, 'grok'), commands)
+          ? new GrokSession(
+              chat,
+              sessionEmit,
+              this.store,
+              onDead,
+              (commands) => this.commandsByCwd.set(commandsKey(chat.cwd, 'grok'), commands),
+              this.preview
             )
           : new ClaudeSession(
               chat,

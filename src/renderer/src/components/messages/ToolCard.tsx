@@ -95,6 +95,18 @@ function toolMeta(part: ToolPart, cwd: string): ToolMeta {
       return { icon: ClipboardList, label: 'Plan', summary: 'Present plan for approval' }
     case 'AskUserQuestion':
       return { icon: MessageCircleQuestion, label: 'Question' }
+    case 'mcp__preview__status':
+      return { icon: Globe, label: 'Preview', summary: 'Status' }
+    case 'mcp__preview__start':
+      return { icon: Globe, label: 'Preview', summary: 'Start dev server' }
+    case 'mcp__preview__stop':
+      return { icon: Globe, label: 'Preview', summary: 'Stop dev server' }
+    case 'mcp__preview__navigate':
+      return { icon: Globe, label: 'Preview', summary: str(input.url) }
+    case 'mcp__preview__screenshot':
+      return { icon: Globe, label: 'Preview', summary: 'Screenshot' }
+    case 'mcp__preview__console':
+      return { icon: Globe, label: 'Preview', summary: 'Console' }
     default: {
       const firstString = Object.values(input).find((v) => typeof v === 'string') as
         | string

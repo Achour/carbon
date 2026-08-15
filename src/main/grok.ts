@@ -44,6 +44,9 @@ import {
   removeGrokTempFiles,
   resolveGrokBinary,
   grokToolInput,
+  isPreviewSideEffectTool,
+  isPreviewTool,
+  toolImages,
   toolName,
   toolNameIfNamed,
   toolOutput,
@@ -60,6 +63,8 @@ import {
 } from './grokAcp.ts'
 import { deriveTitle } from './titles.ts'
 import { USD_PER_TICK } from './usageScan.ts'
+import type { PreviewManager } from './preview.ts'
+import { PREVIEW_SESSION_RULES, PREVIEW_TOOL_INFO, PREVIEW_TOOL_NAMES } from './previewTools.ts'
 
 /**
  * Grok Build as an `AgentSession`, on top of the ACP client in `grokAcp.ts`.
@@ -154,6 +159,8 @@ export class GrokSession implements AgentSession {
    * `ClaudeSession` has for effort.
    */
   private optionsKey: string
+  /** True once this session handed Grok the in-app preview MCP server. */
+  private previewAttached = false
 
   private readonly deltas = new DeltaCoalescer(
     (event) => this.emit(event),
@@ -167,7 +174,8 @@ export class GrokSession implements AgentSession {
     emit: Emit,
     store: Store,
     onDead: () => void,
-    onCommands: (commands: SlashCommand[]) => void = () => {}
+    onCommands: (commands: SlashCommand[]) => void = () => {},
+    private preview: PreviewManager | null = null
   ) {
     this.chat = chat
     this.emit = emit
@@ -233,12 +241,16 @@ export class GrokSession implements AgentSession {
 
   private async startClient(): Promise<GrokAcpClient> {
     const baseline = grokPermissionBaseline(this.chat.permissionMode)
+    const mcpServers = (await this.preview?.mcpServers(this.chat.cwd)) ?? []
+    this.previewAttached = mcpServers.length > 0
     const client = new GrokAcpClient({
       cwd: this.chat.cwd,
       model: this.launchModel(),
       effort: effortForProvider(this.chat.effort, 'grok'),
       alwaysApprove: baseline === 'yolo',
       autoMode: baseline === 'auto',
+      mcpServers,
+      extraRules: mcpServers.length ? PREVIEW_SESSION_RULES : undefined,
       callbacks: {
         onUpdate: (update) => this.handleUpdate(update),
         onPermission: (request) => this.handlePermission(request),
@@ -578,12 +590,14 @@ export class GrokSession implements AgentSession {
     if (!existing) {
       const message = this.ensureCurrent()
       const name = toolName(call)
+      const images = toolImages(call)
       const part: ToolPart = {
         type: 'tool',
         toolUseId: call.toolCallId,
         name,
         input: grokToolInput(name, call.rawInput),
-        status: toolStatus(call.status)
+        status: toolStatus(call.status),
+        ...(images ? { outputImages: images } : {})
       }
       message.parts.push(part)
       const index = message.parts.length - 1
@@ -606,6 +620,8 @@ export class GrokSession implements AgentSession {
     }
     const output = toolOutput(call)
     if (output !== undefined) patch.output = output
+    const images = toolImages(call)
+    if (images) patch.outputImages = images
     if (patch.status === 'error' && !patch.output && part.output === undefined) {
       patch.output = output ?? 'Tool failed.'
     }
@@ -667,6 +683,18 @@ export class GrokSession implements AgentSession {
    * method can fire instead of showing an Allow/Deny card for a question.
    */
   private handlePermission(request: GrokPermissionRequest): Promise<string | null> {
+    if (isPreviewTool(request.toolCall)) {
+      if (isPreviewSideEffectTool(request.toolCall) && this.chat.permissionMode === 'plan') {
+        const reject =
+          request.options.find((option) => option.kind === 'reject_once' || option.kind === 'reject_always') ??
+          request.options[request.options.length - 1]
+        return Promise.resolve(reject?.optionId ?? null)
+      }
+      const allow =
+        request.options.find((option) => option.kind === 'allow_once' || option.kind === 'allow_always') ??
+        request.options[0]
+      return Promise.resolve(allow?.optionId ?? null)
+    }
     if (isAskUserQuestionTool(request.toolCall)) {
       const allow =
         request.options.find((option) => option.kind === 'allow_once' || option.kind === 'allow_always') ??
@@ -940,7 +968,19 @@ export class GrokSession implements AgentSession {
   }
 
   async mcpStatus(): Promise<McpServerInfo[]> {
-    return []
+    if (!this.previewAttached) return []
+    return [
+      {
+        name: 'preview',
+        status: 'connected',
+        scope: 'local',
+        tools: PREVIEW_TOOL_NAMES.map((name) => ({
+          name,
+          description: PREVIEW_TOOL_INFO[name].description,
+          readOnly: PREVIEW_TOOL_INFO[name].readOnly
+        }))
+      }
+    ]
   }
 
   async mcpReconnect(): Promise<OpResult> {

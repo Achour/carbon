@@ -6,6 +6,8 @@ import { delimiter, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { createInterface } from 'node:readline'
 import type { Attachment, ElementRef, ToolPart, UserQuestion } from '@shared/types'
+import { isPreviewToolName, type PreviewToolName } from './previewTools.ts'
+import type { StdioMcpServer } from './previewMcpConfig.ts'
 
 /**
  * A JSON-RPC client for `grok agent stdio`, the xAI CLI's ACP transport.
@@ -238,6 +240,10 @@ export interface GrokAcpOptions {
   alwaysApprove?: boolean
   /** Auto mode for the session (`_meta.autoMode`), the safety-checked middle. */
   autoMode?: boolean
+  /** Extra MCP servers the client wants this session to connect to. */
+  mcpServers?: StdioMcpServer[]
+  /** Appended to the session system prompt (`_meta.rules`). */
+  extraRules?: string
   env?: NodeJS.ProcessEnv
   callbacks: GrokAcpCallbacks
 }
@@ -372,8 +378,8 @@ export class GrokAcpClient {
       : { autoMode: !!this.options.autoMode }
     const result = (await this.request('session/new', {
       cwd: this.options.cwd,
-      mcpServers: [],
-      _meta: meta
+      mcpServers: this.options.mcpServers ?? [],
+      _meta: this.sessionMeta(meta)
     })) as GrokSessionInfo
     return result
   }
@@ -388,7 +394,8 @@ export class GrokAcpClient {
     const result = (await this.request('session/load', {
       sessionId,
       cwd: this.options.cwd,
-      mcpServers: []
+      mcpServers: this.options.mcpServers ?? [],
+      _meta: this.sessionMeta()
     })) as Omit<GrokSessionInfo, 'sessionId'>
     return { ...result, sessionId }
   }
@@ -430,6 +437,12 @@ export class GrokAcpClient {
    */
   async setMode(sessionId: string, modeId: 'plan' | 'default'): Promise<void> {
     await this.request('session/set_mode', { sessionId, modeId })
+  }
+
+  private sessionMeta(base: Record<string, unknown> = {}): Record<string, unknown> | undefined {
+    const rules = this.options.extraRules?.trim()
+    const meta = rules ? { ...base, rules } : base
+    return Object.keys(meta).length ? meta : undefined
   }
 
   dispose(): void {
@@ -652,10 +665,44 @@ function canonicalGrokToolName(wire: string | undefined): string | undefined {
  * finished card.
  */
 export function toolNameIfNamed(call: GrokToolCall): string | undefined {
+  const preview = previewToolId(call)
+  if (preview) return preview
   const meta = call._meta?.['x.ai/tool']
   const fromMeta = canonicalGrokToolName(meta?.name) || meta?.name?.trim() || meta?.label?.trim()
   if (fromMeta) return fromMeta
   return canonicalGrokToolName(call.title) || call.title?.trim() || undefined
+}
+
+/**
+ * Carbon's preview MCP, named the way Claude's in-process server already is
+ * (`mcp__preview__start`) so the same tool card path renders it.
+ */
+export function previewToolId(call: GrokToolCall): `mcp__preview__${PreviewToolName}` | undefined {
+  const meta = call._meta?.['x.ai/tool']
+  const ns = meta?.namespace?.trim().toLowerCase()
+  const named = meta?.name?.trim().toLowerCase()
+  if (ns === 'preview' && named && isPreviewToolName(named)) return `mcp__preview__${named}`
+  return normalizePreviewTool(meta?.name) ?? normalizePreviewTool(call.title)
+}
+
+export function isPreviewTool(call: GrokToolCall): boolean {
+  return previewToolId(call) != null
+}
+
+export function isPreviewSideEffectTool(call: GrokToolCall): boolean {
+  const id = previewToolId(call)
+  return id === 'mcp__preview__start' || id === 'mcp__preview__stop'
+}
+
+function normalizePreviewTool(raw: string | undefined): `mcp__preview__${PreviewToolName}` | undefined {
+  if (!raw) return undefined
+  const key = raw.trim().toLowerCase().replace(/[-.]/g, '_')
+  const match =
+    /(?:mcp__preview__|preview__|preview_|preview\/|preview:)(status|start|stop|navigate|screenshot|console)$/.exec(
+      key
+    )
+  if (!match || !isPreviewToolName(match[1])) return undefined
+  return `mcp__preview__${match[1]}`
 }
 
 /**
@@ -734,6 +781,38 @@ export function toolOutput(call: GrokToolCall): string | undefined {
   }
   const joined = parts.join('\n').trim()
   return joined ? joined : undefined
+}
+
+/** Image blocks a tool returned (preview screenshot). MCP shape: {data, mimeType}. */
+export function toolImages(call: GrokToolCall): { mediaType: string; data: string }[] | undefined {
+  const blocks = call.content
+  if (!blocks?.length) return undefined
+  const images: { mediaType: string; data: string }[] = []
+  for (const block of blocks) {
+    const inner =
+      block.type === 'content'
+        ? ((block as { content?: Record<string, unknown> }).content ?? null)
+        : (block as Record<string, unknown>)
+    if (!inner) continue
+    const type = typeof inner.type === 'string' ? inner.type : undefined
+    if (type === 'image') {
+      const data = typeof inner.data === 'string' ? inner.data : undefined
+      if (!data) continue
+      const mediaType =
+        typeof inner.mimeType === 'string'
+          ? inner.mimeType
+          : typeof inner.mime_type === 'string'
+            ? inner.mime_type
+            : 'image/png'
+      images.push({ mediaType, data })
+      continue
+    }
+    const resource = inner.resource as { blob?: string; mimeType?: string } | undefined
+    if (type === 'resource' && resource?.blob) {
+      images.push({ mediaType: resource.mimeType || 'image/png', data: resource.blob })
+    }
+  }
+  return images.length ? images : undefined
 }
 
 /** True for the call that ends plan mode and asks for approval. */
