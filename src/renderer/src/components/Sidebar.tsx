@@ -407,7 +407,9 @@ function SearchChatsDialog({
  * one it never asked. `New chat` (and ⌘N) used to drop you into whatever folder
  * happened to be selected, which is invisible state; the per-project ＋ in
  * compact mode was the only place the answer was ever explicit, and detailed
- * mode has no project rows to put one on.
+ * mode has no project rows to put one on. The project filter is the other
+ * explicit pick: if the sidebar is already scoped to one folder, the chooser
+ * is skipped and the chat starts there.
  *
  * Same palette shape as the chat search above: type to narrow, arrows to move,
  * Enter to start. Ordered by recency (the chat list arrives newest-first), so
@@ -768,6 +770,7 @@ export function Sidebar(): React.JSX.Element {
   const setSearchOpen = useApp((s) => s.setSearchOpen)
   const newChatOpen = useApp((s) => s.newChatOpen)
   const setNewChatOpen = useApp((s) => s.setNewChatOpen)
+  const startNewChat = useApp((s) => s.startNewChat)
   const [renaming, setRenaming] = React.useState<ChatMeta | null>(null)
   const [deleting, setDeleting] = React.useState<ChatMeta | null>(null)
   const [deletingWt, setDeletingWt] = React.useState<WorktreeStatus | null>(null)
@@ -1132,10 +1135,10 @@ export function Sidebar(): React.JSX.Element {
       <div className="flex flex-col gap-0.5 px-2 pb-1">
         <button
           type="button"
-          // Asks which project, in both modes. The instant path stays where the
-          // answer is already on screen: compact mode's per-project ＋ and the
-          // "New chat here" on a detailed row's menu.
-          onClick={() => setNewChatOpen(true)}
+          // Asks which project, unless the filter already names one. The other
+          // instant paths stay where the answer is on screen: compact mode's
+          // per-project ＋ and "New chat here" on a detailed row's menu.
+          onClick={() => startNewChat()}
           className="group flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] text-sidebar-foreground transition-colors hover:bg-sidebar-accent/60"
         >
           <MessageSquarePlus className="size-4 shrink-0 text-muted-foreground" />

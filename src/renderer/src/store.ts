@@ -342,6 +342,12 @@ interface AppState {
    */
   newChatOpen: boolean
   setNewChatOpen(open: boolean): void
+  /**
+   * New chat (⌘N / sidebar row / menu). If the sidebar is already filtered to
+   * one project, that is an explicit pick — skip the chooser and start there.
+   * Otherwise open the project palette.
+   */
+  startNewChat(): void
   /** When true the file quick-open dialog is open (⌘P). */
   fileSearchOpen: boolean
   setFileSearchOpen(open: boolean): void
@@ -1198,6 +1204,22 @@ export const useApp = create<AppState>((set, get) => ({
   newChatOpen: false,
   setNewChatOpen(open) {
     set({ newChatOpen: open })
+  },
+  startNewChat() {
+    const s = get()
+    // The filter chip names the project on screen — same class of explicit pick
+    // as compact's per-project ＋. A persisted filter naming a hidden or vanished
+    // project is ignored the same way the sidebar itself ignores it.
+    const cwd = s.sidebarProject
+    const known =
+      !!cwd && !s.hiddenProjects[cwd] && s.chats.some((c) => projectRoot(c) === cwd)
+    if (known && cwd) {
+      if (s.selectedCwd !== cwd) s.setSelectedCwd(cwd)
+      void s.openChat(null)
+      if (s.newChatOpen) set({ newChatOpen: false })
+      return
+    }
+    set({ newChatOpen: true })
   },
 
   searchOpen: false,

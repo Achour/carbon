@@ -84,7 +84,7 @@ Two shapes, chosen in Settings → Chats, persisted in `localStorage`. **Compact
 
 With no project rows, two things move: the project **filter** in the header (scopes the list and the Pinned section, and drops the then-redundant project name from each row), and the project actions, appended to a chat row's right-click menu via `projectMenuItems` — the one definition that menu and the compact project row both render.
 
-**Starting a chat asks which project** (`NewChatDialog`, `newChatOpen`): the New chat row and ⌘N both open it, in both modes, because a new chat used to land in whatever folder happened to be selected — invisible state. Same palette shape as the chat search, ordered by recency so ⌘N-Enter is the common case. Instant paths survive where the project is already on screen: compact's per-project ＋, and "New chat here" on a detailed row's menu.
+**Starting a chat asks which project** (`NewChatDialog`, `startNewChat`): the New chat row and ⌘N both open it, in both modes, because a new chat used to land in whatever folder happened to be selected — invisible state. Same palette shape as the chat search, ordered by recency so ⌘N-Enter is the common case. Instant paths survive where the project is already on screen: the sidebar project filter (the chip names it), compact's per-project ＋, and "New chat here" on a detailed row's menu.
 
 Branches come from `git:branches` → `branchesAt` (`git.ts`): it reads `.git/HEAD` rather than spawning `rev-parse` per row, and follows a worktree's `.git` pointer file so a worktree reports its own branch. Skipped entirely in compact mode; refreshed when the folder set changes or *any* chat's turn ends, since a turn can create a branch.
 

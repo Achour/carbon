@@ -39,7 +39,7 @@ export default function App(): React.JSX.Element {
   React.useEffect(() => {
     void init()
     const offEvents = window.api.onChatEvent(applyEvent)
-    const offNewChat = window.api.onNewChat(() => void openChat(null))
+    const offNewChat = window.api.onNewChat(() => useApp.getState().startNewChat())
     const offOpenChat = window.api.onOpenChat((id) => void openChat(id))
     const offPreview = window.api.onPreviewEvent((ev) => {
       if (ev.type === 'state') useApp.getState().applyPreviewState(ev.state)
@@ -98,9 +98,9 @@ export default function App(): React.JSX.Element {
     const onKey = (e: KeyboardEvent): void => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'n') {
         e.preventDefault()
-        // Asks which project, same as the sidebar row — it used to silently
-        // start in whatever folder happened to be selected.
-        useApp.getState().setNewChatOpen(true)
+        // Same as the sidebar row: asks which project, unless the sidebar is
+        // already filtered to one (that pick is on screen).
+        useApp.getState().startNewChat()
       }
       if ((e.metaKey || e.ctrlKey) && e.key === 'b') {
         e.preventDefault()

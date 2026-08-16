@@ -326,15 +326,15 @@ uses for having no project rows either; the chats then sit flush, since the
 indent was that row's hanging indent. `projectMenuItems` is the single
 definition all three sites render.
 
-**Starting a chat asks which project** (`NewChatDialog`, `newChatOpen`) — the
+**Starting a chat asks which project** (`NewChatDialog`, `startNewChat`) — the
 sidebar's New chat row and ⌘N both open it, in both modes. That question was
 always there and never asked: a new chat landed in whatever folder happened to
 be selected, which is invisible state, and compact mode's per-project ＋ was the
 only place the answer was ever explicit. The dialog is the same palette shape as
 the chat search, ordered by *recency* rather than the sidebar's manual project
 order, so ⌘N-Enter is the common case. The instant paths survive where the
-project is already on screen: compact's per-project ＋, and "New chat here" on a
-detailed row's menu.
+project is already on screen: the sidebar project filter (the chip names it),
+compact's per-project ＋, and "New chat here" on a detailed row's menu.
 
 That dialog is also where projects get **pruned**, because it is the only place
 the whole list appears as rows — detailed mode has no project rows, so removal
