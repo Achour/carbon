@@ -394,6 +394,15 @@ class ClaudeSession implements AgentSession {
         enableFileCheckpointing: true,
         systemPrompt: { type: 'preset', preset: 'claude_code', append: GUI_SYSTEM_APPEND },
         settingSources: ['user', 'project', 'local'],
+        // Claude in Chrome is wired by the CLI as an MCP server, and its gate
+        // (`shouldEnableClaudeInChrome`) bails on `!isInteractive()` *before* it
+        // reads `claudeInChromeDefaultEnabled` — so a session the SDK spawns
+        // never gets the browser tools, however the user set it up in the
+        // terminal. This env var is the check that sits above that bail. Set it
+        // only when the user hasn't: `=0` is their opt-out, and the CLI reads it
+        // as a boolean. `env` REPLACES the subprocess environment rather than
+        // merging, hence the spread — and PATH is the hydrated one (shellEnv).
+        env: { ...process.env, CLAUDE_CODE_ENABLE_CFC: process.env.CLAUDE_CODE_ENABLE_CFC ?? '1' },
         mcpServers: { preview: buildPreviewServer(chat.cwd, preview) },
         canUseTool: async (toolName, input, opts) => {
           // The preview tools are safe, local, and app-mediated — never prompt.
