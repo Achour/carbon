@@ -1,6 +1,6 @@
 {
   "name": "carbon",
-  "version": "0.1.31",
+  "version": "0.1.32",
   "description": "Carbon — a beautiful desktop GUI for Claude Code and Codex",
   "type": "module",
   "main": "out/main/index.js",
