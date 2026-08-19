@@ -1,3 +1,4 @@
+import { basename } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import {
   createSdkMcpServer,
@@ -23,6 +24,7 @@ import type {
   ChatMeta,
   ChatOptionsPatch,
   ChatStatus,
+  ContextUsage,
   EffortId,
   ElementRef,
   FastModeState,
@@ -292,6 +294,73 @@ async function generateClaudeTitle(cwd: string, userText: string): Promise<strin
   return out ? cleanTitle(out) || null : null
 }
 
+/**
+ * `context_usage` (Claude Code 2.1.235+) split into the two things it actually
+ * says: the headline totals, which supersede `updateContext`'s estimate on
+ * `ChatMeta`, and the fixed overhead, which rides its own transient event.
+ *
+ * Structurally typed rather than imported from the SDK so an older CLI — whose
+ * assistant messages carry no `context_usage` at all — still compiles, and the
+ * arrays are defaulted for the same reason.
+ *
+ * MCP is summed per *server* here rather than in the renderer: the CLI reports
+ * one entry per tool and a few connected servers run to several hundred, none
+ * of which is ever displayed individually.
+ */
+type SdkContextUsage = {
+  total_tokens: number
+  raw_max_tokens: number
+  over_limit?: { tokens_over: number; kind: 'hard_limit' | 'compaction_window' }
+  mcp_tools?: { server_name: string; tokens: number }[]
+  memory_files?: { path: string; tokens: number }[]
+  agents?: { agent_type: string; tokens: number }[]
+  skills?: { name: string; tokens: number }[]
+}
+
+function contextOverhead(u: SdkContextUsage): ContextUsage['overhead'] {
+  const servers = new Map<string, number>()
+  for (const t of u.mcp_tools ?? []) {
+    servers.set(t.server_name, (servers.get(t.server_name) ?? 0) + t.tokens)
+  }
+  const rows: ContextUsage['overhead'] = [
+    ...[...servers].map(([label, tokens]) => ({ label, detail: 'MCP' as const, tokens })),
+    ...(u.memory_files ?? []).map((f) => ({
+      label: basename(f.path),
+      detail: 'memory' as const,
+      tokens: f.tokens
+    })),
+    ...(u.skills ?? []).map((k) => ({ label: k.name, detail: 'skill' as const, tokens: k.tokens })),
+    ...(u.agents ?? []).map((a) => ({
+      label: a.agent_type,
+      detail: 'agent' as const,
+      tokens: a.tokens
+    }))
+  ]
+  return rows.filter((r) => r.tokens > 0).sort((a, b) => b.tokens - a.tokens)
+}
+
+/**
+ * The assistant-level error enum in a sentence. This is a *different* axis from
+ * the result message's `subtype`, which is all the turn-end path has to show —
+ * "error_during_execution" names where it stopped, never why, so a billing hold
+ * and an overloaded API read identically without this.
+ *
+ * `unknown` is deliberately absent: it carries no more than the subtype it
+ * would replace.
+ */
+const ASSISTANT_ERROR_TEXT: Record<string, string> = {
+  authentication_failed: 'Authentication failed — sign in again.',
+  oauth_org_not_allowed: 'Your organization does not allow this login.',
+  account_on_hold: 'Your account is on hold. Check billing on the Anthropic console.',
+  billing_error: 'A billing error stopped this turn.',
+  rate_limit: 'Rate limited — wait a moment and try again.',
+  overloaded: 'The API is overloaded right now.',
+  invalid_request: 'The request was rejected as invalid.',
+  model_not_found: 'That model is not available on this account.',
+  server_error: 'The API returned a server error.',
+  max_output_tokens: 'The reply hit the maximum output length.'
+}
+
 class ClaudeSession implements AgentSession {
   private q: Query
   private input = createInputQueue()
@@ -341,6 +410,8 @@ class ClaudeSession implements AgentSession {
   // is in flight, so the error `result` the SDK emits for the aborted turn isn't
   // surfaced as a scary failure. Cleared on the first result after the interrupt.
   private interruptedTurn = false
+  /** Why the last assistant message failed, if it said. See `assistantErrorText`. */
+  private lastAssistantError: string | undefined
   // True from input enqueue until the SDK's terminal result. If the long-lived
   // stream ends cleanly in between, surface that as a failed turn instead of
   // silently returning to idle with only the user's message persisted.
@@ -1117,6 +1188,16 @@ class ClaudeSession implements AgentSession {
         else {
           void this.maybeGenerateTitle()
           this.reconcileAssistant(msg)
+          // Kept for the result branch below: the turn-end message says where it
+          // stopped, this says why. Cleared there so it can never describe a
+          // later, unrelated failure.
+          if ('error' in msg && msg.error) this.lastAssistantError = msg.error
+          // Main agent only: a sub-agent runs its own window, which is not this
+          // chat's. `in` rather than a plain read so an older CLI stays silent
+          // instead of emitting a zeroed reading.
+          if ('context_usage' in msg && msg.context_usage) {
+            this.applyContextUsage(msg.context_usage)
+          }
         }
         break
 
@@ -1184,7 +1265,7 @@ class ClaudeSession implements AgentSession {
           const errors =
             'errors' in msg && Array.isArray(msg.errors) && msg.errors.length
               ? msg.errors.join('\n')
-              : msg.subtype
+              : ((this.lastAssistantError && ASSISTANT_ERROR_TEXT[this.lastAssistantError]) ?? msg.subtype)
           // Skip errors from an intentional interrupt (the flag) and the CLI's
           // internal diagnostics (the text) — neither is a real failure. The
           // diagnostic can surface on the *resend* turn, after the flag has been
@@ -1200,6 +1281,7 @@ class ClaudeSession implements AgentSession {
             })
           }
         }
+        this.lastAssistantError = undefined
         this.interruptedTurn = false
         // Background tasks can legitimately outlive the parent turn. Keep
         // their tool cards live until the SDK reports the job set empty.
@@ -1377,6 +1459,41 @@ class ClaudeSession implements AgentSession {
       this.emit({ type: 'meta', chatId: this.chat.id, patch: { contextTokens: total } })
       this.store.saveChatSoon(this.chat.id)
     }
+  }
+
+  /**
+   * The CLI's own context accounting, which supersedes `updateContext`'s
+   * estimate (run from `reconcileAssistant` moments earlier): it counts what the
+   * *next* request will carry — system prompt, tool schemas, memory — where the
+   * estimate is only the last call's input tokens and so always reads low.
+   *
+   * The totals go on `ChatMeta` so they persist; the breakdown rides its own
+   * transient event because it would otherwise be re-serialized on every save.
+   */
+  private applyContextUsage(u: SdkContextUsage): void {
+    const patch: Partial<ChatMeta> = {}
+    if (u.total_tokens > 0 && u.total_tokens !== this.chat.contextTokens) {
+      this.chat.contextTokens = u.total_tokens
+      patch.contextTokens = u.total_tokens
+    }
+    if (u.raw_max_tokens > 0 && u.raw_max_tokens !== this.chat.contextWindow) {
+      this.chat.contextWindow = u.raw_max_tokens
+      patch.contextWindow = u.raw_max_tokens
+    }
+    if (patch.contextTokens !== undefined || patch.contextWindow !== undefined) {
+      this.emit({ type: 'meta', chatId: this.chat.id, patch })
+      this.store.saveChatSoon(this.chat.id)
+    }
+    this.emit({
+      type: 'context-usage',
+      chatId: this.chat.id,
+      usage: {
+        overLimit: u.over_limit
+          ? { tokensOver: u.over_limit.tokens_over, kind: u.over_limit.kind }
+          : undefined,
+        overhead: contextOverhead(u)
+      }
+    })
   }
 
   private reconcileAssistant(msg: SDKAssistantMessage): void {

@@ -224,9 +224,13 @@ export const UserBubble = React.memo(function UserBubble({
       )}
       <div className="flex w-full items-start justify-end gap-1">
         <RewindControl messageId={message.id} />
+        {/* Prompts render as markdown, the same as replies — a pasted list or a
+            fenced snippet reads as one. `breaks` keeps the newlines the user
+            actually typed, which plain markdown would collapse and which every
+            prompt already in the transcript was written expecting. */}
         {message.text && (
-          <div className="max-w-[85%] min-w-0 select-text rounded-2xl rounded-br-md bg-secondary px-4 py-2.5 text-[14px] leading-relaxed break-words whitespace-pre-wrap">
-            {message.text}
+          <div className="max-w-[85%] min-w-0 select-text rounded-2xl rounded-br-md bg-secondary px-4 py-2.5 break-words">
+            <Markdown text={message.text} breaks className="leading-relaxed" />
           </div>
         )}
       </div>

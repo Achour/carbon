@@ -341,6 +341,33 @@ export interface TurnFileChange {
   deletions: number
 }
 
+/**
+ * What is *permanently* in the context window, from `context_usage` on each
+ * assistant message (Claude Code 2.1.235+) — the part a user can act on.
+ *
+ * The headline numbers are deliberately NOT here: they ride `contextTokens` /
+ * `contextWindow` on `ChatMeta`, which every provider already feeds and which
+ * persists, so the reading survives a chat switch and a restart. This carries
+ * only what cannot persist — a breakdown that is stale the moment the session
+ * ends, and large enough that `metaOf`'s wholesale re-serialize would write it
+ * on every save.
+ *
+ * Already flattened, summed and sorted by the main process: the renderer showed
+ * one row per MCP *server*, while the CLI reports one entry per *tool* — a few
+ * hundred of them — so aggregating before IPC rather than after is what keeps
+ * this off the wire.
+ */
+export interface ContextUsage {
+  /**
+   * Set once the conversation no longer fits. `compaction_window` means the
+   * next turn triggers an auto-compact; `hard_limit` means the request itself
+   * would be rejected.
+   */
+  overLimit?: { tokensOver: number; kind: 'hard_limit' | 'compaction_window' }
+  /** Largest first, zero-token entries dropped. */
+  overhead: { label: string; detail: 'MCP' | 'memory' | 'skill' | 'agent'; tokens: number }[]
+}
+
 export interface TurnStats {
   costUsd: number
   durationMs: number
@@ -695,6 +722,9 @@ export type ChatEvent =
   | { type: 'part'; chatId: string; messageId: string; partIndex: number; part: AssistantPart }
   | { type: 'tool-update'; chatId: string; messageId: string; toolUseId: string; patch: Partial<ToolPart> }
   | { type: 'meta'; chatId: string; patch: Partial<ChatMeta> }
+  // Transient, per assistant message: the CLI's own context accounting. Not
+  // folded into `meta` because ChatMeta is persisted wholesale and this is not.
+  | { type: 'context-usage'; chatId: string; usage: ContextUsage }
   | { type: 'status'; chatId: string; status: ChatStatus }
   // Another Carbon instance holds this chat's write lock (userData is shared
   // between the dev and packaged builds), so edits here will not be saved.

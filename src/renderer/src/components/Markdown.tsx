@@ -2,6 +2,7 @@ import * as React from 'react'
 import { createPortal } from 'react-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import remarkBreaks from 'remark-breaks'
 import rehypeHighlight from 'rehype-highlight'
 import mermaid from 'mermaid'
 import { Check, Code2, Copy, Maximize2, RotateCcw, X, ZoomIn, ZoomOut } from 'lucide-react'
@@ -535,19 +536,28 @@ const REMARK_PLUGINS: React.ComponentProps<typeof ReactMarkdown>['remarkPlugins'
   remarkGfm,
   remarkHighlightLang
 ]
+// A user's typed newlines are meaningful — they wrote the prompt in a box, not
+// as a document — so their messages parse with hard breaks on. Assistant output
+// is authored markdown and keeps the standard collapsing behaviour.
+const REMARK_PLUGINS_BREAKS: React.ComponentProps<typeof ReactMarkdown>['remarkPlugins'] = [
+  ...(REMARK_PLUGINS ?? []),
+  remarkBreaks
+]
 const REHYPE_PLUGINS: React.ComponentProps<typeof ReactMarkdown>['rehypePlugins'] = [
   [rehypeHighlight, { ignoreMissing: true, detect: false }]
 ]
 
 /** One parsed markdown fragment, no wrapper — chunks share a single wrapper div. */
 const MarkdownBody = React.memo(function MarkdownBody({
-  text
+  text,
+  breaks = false
 }: {
   text: string
+  breaks?: boolean
 }): React.JSX.Element {
   return (
     <ReactMarkdown
-      remarkPlugins={REMARK_PLUGINS}
+      remarkPlugins={breaks ? REMARK_PLUGINS_BREAKS : REMARK_PLUGINS}
       rehypePlugins={REHYPE_PLUGINS}
       components={components}
     >
@@ -559,16 +569,19 @@ const MarkdownBody = React.memo(function MarkdownBody({
 export const Markdown = React.memo(function Markdown({
   text,
   cwd = null,
-  className
+  className,
+  breaks = false
 }: {
   text: string
   cwd?: string | null
   className?: string
+  /** Treat single newlines as line breaks. See `REMARK_PLUGINS_BREAKS`. */
+  breaks?: boolean
 }): React.JSX.Element {
   return (
     <div className={cn('markdown text-[14px] leading-[1.6]', className)}>
       <MarkdownCwd.Provider value={cwd}>
-        <MarkdownBody text={text} />
+        <MarkdownBody text={text} breaks={breaks} />
       </MarkdownCwd.Provider>
     </div>
   )

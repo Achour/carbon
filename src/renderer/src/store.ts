@@ -42,6 +42,7 @@ import type {
   BranchChanges,
   ChatEvent,
   ChatMessage,
+  ContextUsage,
   ChatMeta,
   ChatStatus,
   BackgroundJob,
@@ -186,6 +187,12 @@ interface AppState {
   selectedCwd: string | null
   /** Messages of the active chat — the loaded window, not necessarily all of them. */
   messages: ChatMessage[]
+  /**
+   * The active chat's live context breakdown, from the last assistant message.
+   * Null until a turn reports one — an older CLI never does. Renderer-only and
+   * per-session by design: see `ContextUsage`.
+   */
+  contextUsage: ContextUsage | null
   /**
    * How many older messages of the active chat are still in the database and
    * not in `messages`. Zero means the whole chat is here. See `ChatView`.
@@ -914,6 +921,7 @@ export const useApp = create<AppState>((set, get) => ({
   activeId: null,
   selectedCwd: null,
   messages: [],
+  contextUsage: null,
   hiddenBefore: 0,
   loadingOlder: false,
   statuses: {},
@@ -1981,6 +1989,7 @@ export const useApp = create<AppState>((set, get) => ({
         selectedCwd: homeCwdLeaving(outgoing, s.selectedCwd),
         activeId: null,
         messages: [],
+        contextUsage: null,
         hiddenBefore: 0,
         planPanel: null,
         settingsOpen: false,
@@ -1998,6 +2007,7 @@ export const useApp = create<AppState>((set, get) => ({
       ...chatSwitchPatch(s, id),
       activeId: id,
       messages: [],
+      contextUsage: null,
       // Cleared synchronously, or the outgoing chat's count would briefly offer
       // "load earlier" on a chat that has nothing earlier to load.
       hiddenBefore: 0,
@@ -2100,6 +2110,7 @@ export const useApp = create<AppState>((set, get) => ({
         chats: [meta, ...s.chats],
         activeId: meta.id,
         messages: [],
+        contextUsage: null,
         hiddenBefore: 0,
         loadingOlder: false,
         planPanel: null,
@@ -2570,6 +2581,16 @@ export const useApp = create<AppState>((set, get) => ({
         break
       }
 
+      case 'context-usage': {
+        // Only the chat on screen: this feeds one popover, and a map keyed by
+        // chat would retain a breakdown per background chat that is stale as
+        // soon as its next turn runs. Bail before `set` rather than returning
+        // `{}` — a fresh object fails zustand's identity check and would notify
+        // every subscriber for a background chat that changed nothing.
+        if (ev.chatId !== get().activeId) break
+        set({ contextUsage: ev.usage })
+        break
+      }
       case 'meta': {
         set((st) => ({
           // Patch in place. A title landing, a model change or a branch switch

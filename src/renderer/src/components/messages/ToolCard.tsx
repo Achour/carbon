@@ -5,6 +5,7 @@ import {
   Check,
   ChevronRight,
   ClipboardList,
+  ExternalLink,
   FilePenLine,
   FileText,
   Globe,
@@ -13,6 +14,7 @@ import {
   Loader2,
   MessageCircleQuestion,
   Search,
+  Shapes,
   ShieldX,
   SquareTerminal,
   Wrench,
@@ -28,8 +30,15 @@ interface ToolMeta {
   icon: React.ComponentType<{ className?: string }>
   label: string
   summary?: string
-  /** Absolute path the summary names, when the tool acts on one file — makes it openable. */
-  path?: string
+  /**
+   * How the summary opens, when it names something openable. One descriptor
+   * rather than a field per destination: the destinations are mutually
+   * exclusive by construction, which parallel optional strings could only
+   * express by convention.
+   */
+  open?: { kind: 'file' | 'preview'; target: string }
+  /** A published page, opened in the system browser rather than in the app. */
+  external?: string
 }
 
 function str(v: unknown): string | undefined {
@@ -44,11 +53,10 @@ function toolMeta(part: ToolPart, cwd: string): ToolMeta {
   const abs = (p?: string): string | undefined =>
     p === undefined ? undefined : p.startsWith('/') ? p : `${cwd}/${p.replace(/^\.\//, '')}`
   /** A tool acting on one file: relative path for display, absolute one to open. */
-  const file = (
-    icon: ToolMeta['icon'],
-    label: string,
-    p: string | undefined
-  ): ToolMeta => ({ icon, label, summary: rel(p), path: abs(p) })
+  const file = (icon: ToolMeta['icon'], label: string, p: string | undefined): ToolMeta => {
+    const target = abs(p)
+    return { icon, label, summary: rel(p), open: target ? { kind: 'file', target } : undefined }
+  }
 
   switch (part.name) {
     case 'Bash':
@@ -95,6 +103,49 @@ function toolMeta(part: ToolPart, cwd: string): ToolMeta {
       return { icon: ClipboardList, label: 'Plan', summary: 'Present plan for approval' }
     case 'AskUserQuestion':
       return { icon: MessageCircleQuestion, label: 'Question' }
+    // One tool, six actions that read nothing alike: `publish` names the page
+    // being published, the asset ops name the store they act on. An omitted
+    // action means publish, so the fallthrough is the default rather than a
+    // guess. `/design` drives this tool — an artboard is a published artifact
+    // whose media and fonts ride in its asset store.
+    case 'Artifact':
+      switch (str(input.action) ?? 'publish') {
+        case 'list':
+          return { icon: Shapes, label: 'Artifacts', summary: 'List published artifacts' }
+        case 'upload_asset':
+          return file(Shapes, 'Artifact asset', str(input.file_path))
+        case 'list_assets':
+          return { icon: Shapes, label: 'Artifact assets', summary: str(input.url) }
+        case 'read_asset':
+          return { icon: Shapes, label: 'Artifact asset', summary: str(input.asset_id) }
+        case 'delete_asset':
+          return {
+            icon: Shapes,
+            label: 'Artifact asset',
+            summary: `Delete ${str(input.asset_id) ?? 'asset'}`
+          }
+        default: {
+          const src = str(input.file_path)
+          const target = abs(src)
+          return {
+            icon: Shapes,
+            label: 'Artifact',
+            summary: str(input.title) ?? rel(src),
+            // The page *is* the artifact, so an artboard renders rather than
+            // opening its source. Markdown artifacts have no rendered form
+            // here and stay ordinary files.
+            open: target
+              ? { kind: /\.html?$/i.test(src ?? '') ? 'preview' : 'file', target }
+              : undefined,
+            // Scraped from the result rather than read from a typed field: the
+            // publish output's shape has not been checked against a real run,
+            // so a URL that isn't there simply yields no button. Confined to
+            // `publish` — a `list` result enumerates several, and an error may
+            // merely mention one.
+            external: /https:\/\/claude\.ai\/[^\s"'<>)]+/.exec(part.output ?? '')?.[0]
+          }
+        }
+      }
     case 'mcp__preview__status':
       return { icon: Globe, label: 'Preview', summary: 'Status' }
     case 'mcp__preview__start':
@@ -117,37 +168,58 @@ function toolMeta(part: ToolPart, cwd: string): ToolMeta {
 }
 
 /**
- * The file path in a tool card's header, clickable. It lives inside the
- * collapsible's trigger, so every handler stops propagation — clicking the path
- * opens the file, clicking anywhere else on the row still expands the details.
- * A `span[role=button]` rather than a `<button>`: nesting one button in another
- * is invalid HTML.
+ * A clickable affordance inside the collapsible's trigger. Every handler stops
+ * propagation — activating it acts, clicking anywhere else on the row still
+ * expands the details. A `span[role=button]` rather than a `<button>`: nesting
+ * one button in another is invalid HTML.
  */
-function OpenPath({ path, label }: { path: string; label: string }): React.JSX.Element {
-  const open = (): void => {
-    void useApp.getState().openFile(path, { preview: true })
+function RowAction({
+  title,
+  ariaLabel,
+  className,
+  onActivate,
+  children
+}: {
+  title: string
+  ariaLabel?: string
+  className?: string
+  onActivate: () => void
+  children: React.ReactNode
+}): React.JSX.Element {
+  const act = (e: React.SyntheticEvent): void => {
+    e.stopPropagation()
+    e.preventDefault()
+    onActivate()
   }
   return (
     <span
       role="button"
       tabIndex={0}
-      title={`Open ${path}`}
-      className="cursor-pointer underline-offset-2 hover:text-foreground hover:underline"
-      onClick={(e) => {
-        e.stopPropagation()
-        e.preventDefault()
-        open()
-      }}
+      title={title}
+      aria-label={ariaLabel}
+      className={className}
+      onClick={act}
       onKeyDown={(e) => {
         if (e.key !== 'Enter' && e.key !== ' ') return
-        e.stopPropagation()
-        e.preventDefault()
-        open()
+        act(e)
       }}
     >
-      {label}
+      {children}
     </span>
   )
+}
+
+/**
+ * `file://` rather than the published URL for an artboard: the page exists on
+ * disk before it is published, needs no login, and `claude.ai` sends
+ * `frame-ancestors 'self'` so the hosted copy cannot be embedded anyway.
+ */
+function openTarget(open: NonNullable<ToolMeta['open']>, cwd: string): void {
+  if (open.kind === 'preview') {
+    useApp.getState().openPreview(`file://${open.target}`, cwd || undefined)
+  } else {
+    void useApp.getState().openFile(open.target, { preview: true })
+  }
 }
 
 function StatusIcon({ part }: { part: ToolPart }): React.JSX.Element {
@@ -349,10 +421,30 @@ export const ToolCard = React.memo(function ToolCard({
           <span className="shrink-0 text-[13px] font-medium">{meta.label}</span>
           {meta.summary && (
             <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
-              {meta.path ? <OpenPath path={meta.path} label={meta.summary} /> : meta.summary}
+              {meta.open ? (
+                <RowAction
+                  title={`${meta.open.kind === 'preview' ? 'Preview' : 'Open'} ${meta.open.target}`}
+                  className="cursor-pointer underline-offset-2 hover:text-foreground hover:underline"
+                  onActivate={() => openTarget(meta.open!, cwd)}
+                >
+                  {meta.summary}
+                </RowAction>
+              ) : (
+                meta.summary
+              )}
             </span>
           )}
           {!meta.summary && <span className="flex-1" />}
+          {meta.external && (
+            <RowAction
+              title={`Open ${meta.external}`}
+              ariaLabel="Open published artifact in browser"
+              className="shrink-0 cursor-pointer text-muted-foreground/60 hover:text-foreground"
+              onActivate={() => void window.api.openExternal(meta.external!)}
+            >
+              <ExternalLink className="size-3.5" />
+            </RowAction>
+          )}
           <span className="shrink-0">
             <StatusIcon part={part} />
           </span>
