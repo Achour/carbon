@@ -2,7 +2,7 @@ import * as React from 'react'
 import { ArrowDown, FileDiff, Folder, GitBranch } from 'lucide-react'
 import type { GitStatus } from '@shared/types'
 import { basename } from '@/lib/format'
-import { cn, contextPill, contextPillAction } from '@/lib/utils'
+import { cn, contextPill, contextPillAction, missingTag, MISSING_TITLE } from '@/lib/utils'
 import { WithTooltip } from '@/components/ui/tooltip'
 
 /**
@@ -39,6 +39,10 @@ export function ContextStrip({
   onUpdateFromDefault?: () => void
   children?: React.ReactNode
 }): React.JSX.Element {
+  // Said out loud because every other symptom is a lie: git answers a missing
+  // directory exactly as it answers a plain one, so the strip would otherwise
+  // drop the branch and read as "not a repo".
+  const missing = git?.missing === true
   const shown = branch ?? git?.branch
   const changes = git?.isRepo ? git.changes.length : 0
   // Only meaningful for the branch actually checked out here: `branch` is an
@@ -47,9 +51,9 @@ export function ContextStrip({
   const base = git?.defaultBranch ?? 'main'
   return (
     <div data-context-strip className="mb-2 flex items-center gap-2">
-      <WithTooltip label={cwd}>
+      <WithTooltip label={missing ? `${cwd} — ${MISSING_TITLE.toLowerCase()}` : cwd}>
         <div className={contextPill}>
-          <Folder className="size-3 shrink-0" />
+          <Folder className={cn('size-3 shrink-0', missing && 'text-muted-foreground/50')} />
           <span className="max-w-44 truncate">{basename(project ?? cwd)}</span>
           {git?.isRepo && shown && (
             <>
@@ -57,6 +61,11 @@ export function ContextStrip({
               <GitBranch className="size-3 shrink-0" />
               <span className="max-w-32 truncate">{shown}</span>
             </>
+          )}
+          {missing && (
+            <span className={missingTag} title={MISSING_TITLE}>
+              missing
+            </span>
           )}
         </div>
       </WithTooltip>

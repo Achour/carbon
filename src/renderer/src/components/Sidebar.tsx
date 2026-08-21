@@ -29,7 +29,7 @@ import {
 } from 'lucide-react'
 import type { ChatMeta, WorktreeStatus } from '@shared/types'
 import { PROVIDER_LABELS, projectRoot } from '@shared/types'
-import { cn } from '@/lib/utils'
+import { cn, missingTag, MISSING_TITLE } from '@/lib/utils'
 import { basename, dateGroup, relativeTime, shortenPath } from '@/lib/format'
 import { REVEAL_LABEL } from '@/lib/platform'
 import { chatActivity, projectActivity, type ChatActivity } from '@/lib/chatActivity'
@@ -563,10 +563,7 @@ function NewChatDialog({
                   {p.label}
                 </span>
                 {missing[p.cwd] && (
-                  <span
-                    className="shrink-0 rounded bg-warning/10 px-1.5 py-px text-[10px] text-warning"
-                    title="This folder no longer exists on disk"
-                  >
+                  <span className={missingTag} title={MISSING_TITLE}>
                     missing
                   </span>
                 )}

@@ -103,18 +103,36 @@ export function setupCommandFor(
 }
 
 /**
+ * A parsed `worktree list` record. `prunable` stays main-local rather than
+ * joining `WorktreeRef` in the shared contract: `listWorktrees` drops those
+ * refs, so the flag never crosses IPC and no renderer can read it.
+ */
+export interface ParsedWorktree extends WorktreeRef {
+  /** git reports the worktree's directory as gone. */
+  prunable?: boolean
+}
+
+/**
  * Parse `git worktree list --porcelain`. The first record is always the repo's
  * main checkout. A detached worktree reports no branch and is skipped — there's
  * nothing meaningful to label it with in the picker.
  */
-export function parseWorktreeList(stdout: string): WorktreeRef[] {
-  const refs: WorktreeRef[] = []
+export function parseWorktreeList(stdout: string): ParsedWorktree[] {
+  const refs: ParsedWorktree[] = []
   let path = ''
   let branch = ''
+  let prunable = false
   const flush = (): void => {
-    if (path && branch) refs.push({ path, branch, isMain: refs.length === 0 })
+    if (path && branch) {
+      const ref: ParsedWorktree = { path, branch, isMain: refs.length === 0 }
+      // Set only when true: absent is the normal case, and the field reads as a
+      // marker rather than a state every record carries.
+      if (prunable) ref.prunable = true
+      refs.push(ref)
+    }
     path = ''
     branch = ''
+    prunable = false
   }
   for (const line of stdout.split('\n')) {
     if (line.startsWith('worktree ')) {
@@ -123,6 +141,10 @@ export function parseWorktreeList(stdout: string): WorktreeRef[] {
       path = line.slice('worktree '.length).trim()
     } else if (line.startsWith('branch ')) {
       branch = line.slice('branch '.length).trim().replace(/^refs\/heads\//, '')
+    } else if (line.startsWith('prunable')) {
+      // git appends the reason ("gitdir file points to non-existent location"),
+      // which is why this is a prefix test and not an equality one.
+      prunable = true
     }
   }
   flush()
@@ -135,14 +157,33 @@ export function parseWorktreeList(stdout: string): WorktreeRef[] {
  * what marks a worktree as finished so the picker can offer to clean it up.
  * Merged-ness costs one `branch --merged` for the whole list, not one per
  * worktree, and stays undefined when the repo has no recognizable default.
+ *
+ * Worktrees whose directory is gone are dropped rather than listed: git keeps
+ * reporting one until something prunes it, and offering it would start a chat
+ * in a directory that isn't there. Deleting a worktree outside the app is the
+ * only way to reach that state, and nothing else notices it.
  */
 export async function listWorktrees(cwd: string): Promise<WorktreeRef[]> {
   // The picker blocks on this at open, so the independent reads go together.
-  const [refs, def] = await Promise.all([
+  const [all, def] = await Promise.all([
     git(cwd, ['worktree', 'list', '--porcelain']).then(parseWorktreeList).catch(() => null),
     detectDefaultBranch(cwd)
   ])
-  if (!refs) return []
+  if (!all) return []
+
+  // Clearing the metadata behind a vanished worktree is only ours to do when
+  // every stale entry is one we made. `~/.karbun/worktrees` lives under $HOME
+  // and is always mounted, so missing there means gone for good; someone else's
+  // worktree on an unplugged disk is merely absent, and pruning it would
+  // destroy the record they need to plug the disk back in. `prune` takes no
+  // path filter, so it is all of them or none. Either way the stale refs are
+  // filtered out — the fix the picker actually needs doesn't depend on it.
+  const stale = all.filter((w) => w.prunable)
+  if (stale.length > 0 && stale.every((w) => isManagedWorktree(w.path))) {
+    await git(cwd, ['worktree', 'prune'], TIMEOUT).catch(() => {})
+  }
+  const refs = all.filter((w) => !w.prunable)
+
   if (!def) return refs
   const merged = await git(cwd, ['branch', '--merged', def, '--format=%(refname:short)'])
     .then((out) => new Set(out.split('\n').map((l) => l.trim()).filter(Boolean)))

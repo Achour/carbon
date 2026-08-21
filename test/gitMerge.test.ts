@@ -137,3 +137,32 @@ test('gitMergeIntoDefault puts the directory back when the merge conflicts', asy
     await rm(repo, { recursive: true, force: true })
   }
 })
+
+test('gitStatus tells a folder that is gone from one that is not a repo', async () => {
+  const plain = await mkdtemp(join(tmpdir(), 'karbun-status-plain-'))
+  try {
+    const notRepo = await gitStatus(plain)
+    assert.equal(notRepo.isRepo, false)
+    assert.equal(notRepo.missing, undefined, 'a real folder is never reported missing')
+
+    // git fails the same way for both, which is why the stat is what separates
+    // them — this is the state a worktree deleted outside the app leaves.
+    await rm(plain, { recursive: true, force: true })
+    const gone = await gitStatus(plain)
+    assert.equal(gone.isRepo, false)
+    assert.equal(gone.missing, true)
+  } finally {
+    await rm(plain, { recursive: true, force: true })
+  }
+})
+
+test('gitStatus reports a live repo as neither missing nor unreadable', async () => {
+  const repo = await initRepo('karbun-status-live-')
+  try {
+    const status = await gitStatus(repo)
+    assert.equal(status.isRepo, true)
+    assert.equal(status.missing, undefined)
+  } finally {
+    await rm(repo, { recursive: true, force: true })
+  }
+})

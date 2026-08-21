@@ -113,6 +113,87 @@ test('parseWorktreeList marks the main checkout and skips detached trees', () =>
   assert.deepEqual(parseWorktreeList(''), [], 'empty output yields no refs')
 })
 
+test('parseWorktreeList flags a worktree whose directory is gone', () => {
+  const out = [
+    'worktree /repo',
+    'HEAD aaa',
+    'branch refs/heads/main',
+    '',
+    'worktree /wt/gone',
+    'HEAD bbb',
+    'branch refs/heads/karbun/jul19-abcd',
+    // git appends the reason, so the marker is a prefix rather than a whole line.
+    'prunable gitdir file points to non-existent location',
+    ''
+  ].join('\n')
+
+  assert.deepEqual(parseWorktreeList(out), [
+    { path: '/repo', branch: 'main', isMain: true },
+    { path: '/wt/gone', branch: 'karbun/jul19-abcd', isMain: false, prunable: true }
+  ])
+})
+
+test('listWorktrees drops a worktree whose directory was deleted behind our back', async () => {
+  const repo = await initRepo('karbun-worktree-stale-')
+  try {
+    const created = await createWorktree(repo, 'vanishing')
+    assert.ok(
+      (await listWorktrees(repo)).some((w) => w.branch === 'vanishing'),
+      'the worktree lists while it exists'
+    )
+
+    // What a disk cleanup (or `rm -rf ~/.karbun`) leaves behind: git keeps
+    // reporting the worktree until something prunes the metadata.
+    await rm(created.path, { recursive: true, force: true })
+    const raw = parseWorktreeList(await git(repo, ['worktree', 'list', '--porcelain']))
+    assert.equal(
+      raw.find((w) => w.branch === 'vanishing')?.prunable,
+      true,
+      'git still reports it, marked prunable'
+    )
+
+    assert.deepEqual(
+      (await listWorktrees(repo)).map((w) => w.branch),
+      ['main'],
+      'a worktree that is gone is never offered'
+    )
+    // It was ours, under KARBUN_WORKTREES_DIR, so the stale record is cleared too.
+    assert.deepEqual(
+      parseWorktreeList(await git(repo, ['worktree', 'list', '--porcelain'])).map((w) => w.branch),
+      ['main'],
+      'the stale metadata is pruned'
+    )
+  } finally {
+    await rm(repo, { recursive: true, force: true })
+  }
+})
+
+test('listWorktrees leaves a stale worktree it did not create alone', async () => {
+  const repo = await initRepo('karbun-worktree-foreign-')
+  const outside = await mkdtemp(join(tmpdir(), 'karbun-worktree-outside-'))
+  try {
+    // Someone else's worktree, outside the app-owned root — the shape of one
+    // living on a disk that is currently unplugged.
+    const foreign = join(outside, 'theirs')
+    await git(repo, ['worktree', 'add', '-b', 'theirs', foreign])
+    await rm(foreign, { recursive: true, force: true })
+
+    assert.deepEqual(
+      (await listWorktrees(repo)).map((w) => w.branch),
+      ['main'],
+      'still not offered — it cannot be opened either way'
+    )
+    assert.deepEqual(
+      parseWorktreeList(await git(repo, ['worktree', 'list', '--porcelain'])).map((w) => w.branch),
+      ['main', 'theirs'],
+      'but the record survives, so plugging the disk back in restores it'
+    )
+  } finally {
+    await rm(repo, { recursive: true, force: true })
+    await rm(outside, { recursive: true, force: true })
+  }
+})
+
 test('listWorktrees reports the main checkout alongside its worktrees', async () => {
   const repo = await mkdtemp(join(tmpdir(), 'karbun-worktree-list-'))
   let made: string | null = null

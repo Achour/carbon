@@ -1179,6 +1179,14 @@ export interface GitStatus {
    * including while it's the branch checked out.
    */
   defaultBranch?: string
+  /**
+   * The directory itself is gone — a worktree removed outside the app, or a
+   * project that moved. It rides `GitStatus` because git answers a missing
+   * folder with exactly the empty status it gives a plain one, so every view
+   * reading this object would otherwise report "not a git repo" about a
+   * directory that isn't there. One answer, so no two views can disagree.
+   */
+  missing?: boolean
 }
 
 export type GitResult = { ok: true; output?: string } | { ok: false; error: string }

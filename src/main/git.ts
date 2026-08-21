@@ -269,7 +269,14 @@ export async function gitStatus(cwd: string): Promise<GitStatus> {
       '--untracked-files=all'
     ])
   } catch {
-    return EMPTY_STATUS
+    // git fails identically for a folder that isn't a repo and one that isn't
+    // there, and the second is what a worktree deleted outside the app leaves
+    // behind — reported as "not a git repo", it sends you looking in the wrong
+    // place. Only this path pays for the stat, and it is already the slow one.
+    const gone = await stat(cwd)
+      .then((s) => !s.isDirectory())
+      .catch(() => true)
+    return gone ? { ...EMPTY_STATUS, missing: true } : EMPTY_STATUS
   }
 
   const status: GitStatus = { ...EMPTY_STATUS, isRepo: true }

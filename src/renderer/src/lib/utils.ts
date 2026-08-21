@@ -13,6 +13,17 @@ export function cn(...inputs: ClassValue[]): string {
 export const contextPill =
   'flex min-w-0 items-center gap-1.5 rounded-md border border-border/70 bg-secondary/40 px-2 py-1 text-xs text-muted-foreground'
 
+/**
+ * The tag both places that can report a vanished folder render — the project
+ * picker and the context strip. One definition so the two say it the same way;
+ * they were already drifting apart at birth.
+ */
+export const missingTag =
+  'shrink-0 rounded bg-warning/10 px-1.5 py-px text-[10px] text-warning'
+
+/** Wording for the same, so the tooltip agrees with the tag. */
+export const MISSING_TITLE = 'This folder no longer exists on disk'
+
 /** `contextPill` for chips you can click. */
 export const contextPillAction = cn(
   contextPill,
