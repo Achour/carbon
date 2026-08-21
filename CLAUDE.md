@@ -218,6 +218,44 @@ costs the pins a row and never a screenful. It is scoped by the project filter
 exactly as the pins are, for the same reason: a draft from another project
 showing through a filtered sidebar makes the whole list a half-truth.
 
+### Code selections (`lib/codeSelection.ts`, `CodeSelectionLayer`)
+
+Select lines in the file viewer and an "Add to chat" pill (⌘L) puts them in the
+composer as a `selection` attachment. It rides the same `attachmentInbox` seam
+the browser's element picker uses, so nothing new crosses IPC.
+
+- **The snippet and the reference both ship.** `describeSelection`
+  (`main/attachmentText.ts`, shared by all three providers) writes a fenced block
+  under a `path (lines a-b)` heading. The reference alone goes stale the moment
+  the agent edits the file; the snippet alone gives it no address to edit. The
+  fence is sized to outrun the longest backtick run *inside* the selection —
+  source files are full of fenced examples, and a three-backtick fence around one
+  ends at its fence, spilling the rest into the prompt as prose.
+- **Offsets, not line elements.** The viewer is one highlight.js blob with no
+  per-line node, so the only anchor that survives the `<span>` structure is the
+  character offset into the file's own text. `lineSelection` widens that to whole
+  lines — a range reported as "12-14" has to *be* 12-14 — and backs off the
+  newline a downward drag sweeps up on its way to column 0 of the next line,
+  which would otherwise claim one line too many. That arithmetic is pinned by
+  `test/codeSelection.test.ts`; the DOM half (`offsetsInNode`) only clamps.
+- **A selection deliberately does not set `Attachment.path`.** The composer
+  dedupes its inbox on that field, so sharing it would collapse two selections
+  from one file into a single chip. The file lives on `selection.path` instead,
+  the way an element's lives on `element`.
+- **`SELECTION_MAX_CHARS` exists because selections persist.** They carry no
+  `data`, so `persistableAttachments` keeps them in a draft — an uncapped snippet
+  would put a whole file in `localStorage`, which is the quota throw the drafts
+  rule already guards against. Past the cap the line range still names every
+  line, so the agent reads the rest itself.
+- Measured on `mouseup`/`keyup`, not `selectionchange`: resolving an offset walks
+  the text before it, so recomputing every event of a drag through a large file
+  is a string copy per frame. `selectionchange` is watched only for the collapse.
+
+The pill is positioned in the scroller's *content* coordinates so it travels with
+the code; a fixed-position element detaches from the lines it names on the first
+wheel tick. The **diff view is not covered** — its rows carry their own line
+numbers, so mapping a selection there is a different problem, not this one.
+
 ### The task checklist (`lib/taskList.ts`, `TodoCard`)
 
 One card, two completely different provider shapes. Codex sends `TodoWrite`,

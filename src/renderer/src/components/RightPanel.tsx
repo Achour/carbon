@@ -895,6 +895,7 @@ export function RightPanel(): React.JSX.Element | null {
               <FileViewer
                 content={fileContents[current!]}
                 name={activeEntry.name}
+                path={current!}
                 cwd={selectedCwd}
                 mode={mdMode}
               />

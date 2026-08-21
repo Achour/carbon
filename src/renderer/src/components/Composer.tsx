@@ -211,6 +211,7 @@ function AttachmentChip({
     att.kind === 'element' && att.element
       ? [att.element.source?.file, att.element.selector].filter(Boolean).join('\n')
       : undefined
+  const sel = att.kind === 'selection' ? att.selection : undefined
   return (
     <div className="group/att relative shrink-0">
       {att.kind === 'image' ? (
@@ -234,6 +235,16 @@ function AttachmentChip({
           ) : (
             <MousePointerClick className="size-3.5 shrink-0 text-primary" />
           )}
+          <span className="truncate font-mono text-[11px]">{att.name}</span>
+        </div>
+      ) : sel ? (
+        // The snippet goes in the tooltip rather than the chip: a chip sized to
+        // its lines would push the composer's own controls off the row.
+        <div
+          title={`${sel.rel ?? sel.path}\n\n${sel.text}`}
+          className="flex h-8 max-w-52 items-center gap-1.5 rounded-lg border border-border bg-secondary/60 px-2.5"
+        >
+          <FileIcon path={sel.path} />
           <span className="truncate font-mono text-[11px]">{att.name}</span>
         </div>
       ) : (

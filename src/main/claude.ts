@@ -63,6 +63,7 @@ import { fetchGrokModels, generateGrokText, GrokSession } from './grok'
 import { cliAvailable, cliPath, requireCliPath } from './providerCli.ts'
 import { composePrompt, withTimeout, type AgentSession, type Emit } from './session'
 import { DeltaCoalescer } from './deltaCoalescer'
+import { describeSelection } from './attachmentText.ts'
 import { TITLE_SYSTEM, buildTitlePrompt, cleanTitle, deriveTitle, firstUserText } from './titles'
 import {
   HANDOFF_BRIEF_SYSTEM,
@@ -635,6 +636,7 @@ class ClaudeSession implements AgentSession {
         })
       }
       if (a.kind === 'element' && a.element) elementBlocks.push(describeElement(a.element))
+      if (a.kind === 'selection' && a.selection) elementBlocks.push(describeSelection(a.selection))
     }
     const filePaths = attachments.filter((a) => a.kind === 'file' && a.path).map((a) => a.path!)
     const epoch = this.sendEpoch

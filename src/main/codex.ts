@@ -76,6 +76,7 @@ import {
 } from './workspaceCheckpoint.ts'
 import { TITLE_SYSTEM, buildTitlePrompt, cleanTitle, deriveTitle, firstUserText } from './titles.ts'
 import { PREVIEW_SESSION_RULES } from './previewTools.ts'
+import { describeSelection } from './attachmentText.ts'
 
 const OUTPUT_CAP = 100_000
 
@@ -669,6 +670,7 @@ export class CodexSession implements AgentSession {
         }
       }
       if (a.kind === 'element' && a.element) elementNotes.push(describeElement(a.element))
+      if (a.kind === 'selection' && a.selection) elementNotes.push(describeSelection(a.selection))
       if (a.kind === 'file' && a.path) filePaths.push(a.path)
     }
     let prompt = text

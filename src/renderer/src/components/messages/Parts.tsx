@@ -6,6 +6,7 @@ import {
   ArrowRightLeft,
   Check,
   ChevronRight,
+  Code2,
   FileText,
   GitCommitHorizontal,
   Loader2,
@@ -207,6 +208,15 @@ export const UserBubble = React.memo(function UserBubble({
                 className="flex h-8 max-w-56 items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/10 px-2.5"
               >
                 <MousePointerClick className="size-3.5 shrink-0 text-primary" />
+                <span className="truncate font-mono text-[11px]">{att.name}</span>
+              </div>
+            ) : att.kind === 'selection' && att.selection ? (
+              <div
+                key={att.id}
+                title={`${att.selection.rel ?? att.selection.path}\n\n${att.selection.text}`}
+                className="flex h-8 max-w-56 items-center gap-1.5 rounded-lg border border-border bg-secondary/60 px-2.5"
+              >
+                <Code2 className="size-3.5 shrink-0 text-muted-foreground" />
                 <span className="truncate font-mono text-[11px]">{att.name}</span>
               </div>
             ) : (

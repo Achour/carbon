@@ -299,17 +299,57 @@ export interface ElementRef {
   source?: { file: string; line?: number; column?: number }
 }
 
+/**
+ * A run of lines selected in the file viewer and sent to the composer.
+ *
+ * The snippet rides along with the reference rather than replacing it. The
+ * reference alone goes stale the moment the agent edits the file, and the
+ * snippet alone gives it nothing to edit — so a selection carries both: the
+ * text answers "what does this do" with no tool call, and `path`/lines are how
+ * the agent finds it again afterwards.
+ */
+export interface SelectionRef {
+  /** Absolute path of the file the lines came from. */
+  path: string
+  /** Path relative to the chat's cwd, for display; absent outside the project. */
+  rel?: string
+  /** 1-based, inclusive. */
+  startLine: number
+  endLine: number
+  /** The selected lines verbatim, capped at SELECTION_MAX_CHARS. */
+  text: string
+  /** highlight.js language id, used to tag the fence handed to the model. */
+  language?: string
+  /** `text` was cut at the cap — the line range still names the whole run. */
+  truncated?: boolean
+}
+
+/**
+ * A selection is capped rather than unbounded because it is *reference-shaped*
+ * and therefore persists into a draft (see `persistableAttachments`): an
+ * uncapped snippet would put a whole file into `localStorage`. Past the cap the
+ * line range still names every line, so the agent can read the rest itself.
+ */
+export const SELECTION_MAX_CHARS = 4000
+
 export interface Attachment {
   id: string
-  kind: 'image' | 'file' | 'element'
+  kind: 'image' | 'file' | 'element' | 'selection'
   name: string
   /** Images (and element screenshots): IANA media type + raw base64 (no data: prefix). */
   mediaType?: string
   data?: string
-  /** Files: absolute path on disk, passed to Claude as a reference to read. */
+  /**
+   * Files: absolute path on disk, passed to Claude as a reference to read.
+   * Deliberately *not* set for a selection, whose file lives on `selection`
+   * instead: the composer dedupes incoming attachments on `path`, so sharing
+   * the field would collapse two selections from one file into one chip.
+   */
   path?: string
   /** Elements: the picked element's location, markup, and source mapping. */
   element?: ElementRef
+  /** Selections: the file, line range and snippet picked in the file viewer. */
+  selection?: SelectionRef
 }
 
 export interface UserMessage {

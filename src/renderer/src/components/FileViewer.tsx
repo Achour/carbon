@@ -2,6 +2,7 @@ import * as React from 'react'
 import hljs from 'highlight.js'
 import type { FileContent } from '@shared/types'
 import { Markdown } from '@/components/Markdown'
+import { CodeSelectionLayer } from '@/components/CodeSelectionLayer'
 
 function Placeholder({ children }: { children: React.ReactNode }): React.JSX.Element {
   return (
@@ -17,17 +18,23 @@ export const MARKDOWN_RE = /\.(md|markdown|mdx)$/i
 export const FileViewer = React.memo(function FileViewer({
   content,
   name,
+  path,
   cwd = null,
   mode = 'preview'
 }: {
   content: FileContent | undefined
   /** File name, used to detect Markdown for the preview. */
   name?: string
+  /** Absolute path on disk. Without it, selected lines have no address to
+   *  attach and the "Add to chat" pill stays off. */
+  path?: string
   /** Project folder, so the Markdown preview can resolve relative paths. */
   cwd?: string | null
   /** For Markdown files: rendered preview or raw source. */
   mode?: 'preview' | 'source'
 }): React.JSX.Element {
+  const codeRef = React.useRef<HTMLPreElement | null>(null)
+  const scrollRef = React.useRef<HTMLDivElement | null>(null)
   const isMarkdown = !!name && MARKDOWN_RE.test(name)
 
   const highlighted = React.useMemo(() => {
@@ -74,20 +81,38 @@ export const FileViewer = React.memo(function FileViewer({
       }
       const lines = content.content.split('\n')
       return (
-        <div className="h-full select-text overflow-auto font-mono text-[length:var(--code-font-size)] leading-[1.65]">
+        <div
+          ref={scrollRef}
+          className="relative h-full select-text overflow-auto font-mono text-[length:var(--code-font-size)] leading-[1.65]"
+        >
           <div className="flex min-w-max">
-            <pre className="sticky left-0 shrink-0 border-r border-border bg-card px-2.5 py-3 text-right text-muted-foreground/50">
+            {/* Unselectable so a drag that starts in the gutter yields the code
+                alone — line numbers pasted into a prompt are noise the model has
+                to parse back out. */}
+            <pre className="sticky left-0 shrink-0 border-r border-border bg-card px-2.5 py-3 text-right text-muted-foreground/50 select-none">
               {lines.map((_, i) => `${i + 1}\n`).join('')}
             </pre>
             {highlighted ? (
               <pre
+                ref={codeRef}
                 className="flex-1 px-3.5 py-3"
                 dangerouslySetInnerHTML={{ __html: highlighted }}
               />
             ) : (
-              <pre className="flex-1 px-3.5 py-3">{content.content}</pre>
+              <pre ref={codeRef} className="flex-1 px-3.5 py-3">
+                {content.content}
+              </pre>
             )}
           </div>
+          <CodeSelectionLayer
+            codeRef={codeRef}
+            scrollRef={scrollRef}
+            text={content.content}
+            path={path}
+            name={name}
+            cwd={cwd}
+            language={content.language}
+          />
           {content.truncated && (
             <div className="border-t border-border px-3 py-2 text-[11px] text-muted-foreground">
               Preview truncated at 512 KB.
