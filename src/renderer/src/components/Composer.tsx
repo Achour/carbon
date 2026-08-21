@@ -50,6 +50,7 @@ import { useApp } from '@/store'
 import { Button } from '@/components/ui/button'
 import { CompactSelect } from '@/components/ui/select'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { ProviderAvatar } from '@/components/ui/provider-mark'
 import { WithTooltip } from '@/components/ui/tooltip'
 import { SessionPanel } from '@/components/SessionPanel'
 
@@ -478,11 +479,30 @@ function ModelSettingsPicker({
       {/* w-80, not w-72: the Default row carries a label, the model it resolves
           to, and a context badge, which truncates the label at the narrower width. */}
       <PopoverContent side="top" align="start" className="w-80 overflow-hidden p-0">
-        <div className="max-h-72 overflow-y-auto p-1">
-          {groups.map(({ group, models: options }) => (
-            <div key={group}>
-              <div className="px-2 pt-2 pb-1 text-[10px] font-semibold tracking-wider text-muted-foreground/70 uppercase">
-                {PROVIDER_LABELS[group]}
+        {/* px-1 with no *top* padding: the headers are sticky, and a padded
+            scrollport is a band above the pinned header that rows scroll
+            through in plain sight. The first header's own pt-2 replaces it. */}
+        <div className="max-h-72 overflow-y-auto px-1 pb-1">
+          {groups.map(({ group, models: options }, gi) => (
+            // The rule is the separator, and it belongs to the *group* rather
+            // than to its header: on the header it would pin along with it and
+            // sit as a stray line across the top of the list.
+            <div key={group} className={cn(gi > 0 && 'mt-1.5 border-t border-border pt-1.5')}>
+              {/* The mark on its own tinted plate, as in the sidebar and
+                  Settings — three lists of bare model names are told apart by
+                  these headers alone, and a 10px uppercase label reads as
+                  spacing before it reads as a word. Squared off rather than the
+                  avatar's disc: this labels a section, and a circle here would
+                  read as another chat row.
+
+                  Sticky because the list scrolls to about twice its height, so
+                  the header naming what you're looking at is the first thing to
+                  leave. */}
+              <div className="sticky top-0 z-10 flex items-center gap-2 bg-popover px-1.5 pt-2 pb-1.5">
+                <ProviderAvatar provider={group} className="rounded-md" />
+                <span className="text-[10px] font-semibold tracking-wider text-muted-foreground uppercase">
+                  {PROVIDER_LABELS[group]}
+                </span>
               </div>
               {options.map((option) => {
                 // Only ever set on the "Default" row: every other row's label
