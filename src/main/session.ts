@@ -1,5 +1,6 @@
 import type {
   AccountInfo,
+  ChatData,
   AgentInfo,
   Attachment,
   ChatEvent,
@@ -82,5 +83,35 @@ export interface AgentSession {
   listAgents(): Promise<AgentInfo[]>
   accountInfo(): Promise<AccountInfo | null>
   usageInfo(): Promise<UsageInfo | null>
+  /**
+   * Fork this provider's conversation so it ends immediately before the user
+   * message at `index`, returning the id the chat should resume from.
+   *
+   * Genuinely optional, and implemented only by Codex: see `ConversationFork`
+   * for why the other two answer without a session at all.
+   */
+  forkBefore?(index: number): Promise<string | undefined>
   dispose(): void
+}
+
+/**
+ * How one provider rewinds its own conversation — the backing half of
+ * edit-and-resend, and the seam that keeps `ChatManager` from learning what a
+ * fork means to each backend.
+ *
+ * Every implementation produces a *new* conversation rather than mutating the
+ * live one, so a failure part-way through leaves the original intact and the
+ * chat carries on where it was. `undefined` means this provider cannot truncate
+ * and the caller must replay the kept turns into a fresh session instead.
+ *
+ * `needsSession` is what keeps an edit cheap. Only Codex's fork rides a running
+ * CLI, because its turn ids live behind the app-server connection. Claude's is
+ * a module function over the transcript file on disk and Grok's reads nothing
+ * at all — so constructing a session to ask them would spawn a CLI (~700ms,
+ * ~490MB) purely to throw it away a moment later, and could evict another
+ * chat's warm one on the way out.
+ */
+export interface ConversationFork {
+  needsSession: boolean
+  fork(chat: ChatData, index: number, session: AgentSession | null): Promise<string | undefined>
 }

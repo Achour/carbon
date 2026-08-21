@@ -373,6 +373,15 @@ export interface AssistantMessage {
   ts: number
   /** Exact per-turn worktree delta when the provider adapter can snapshot it. */
   fileChanges?: TurnFileChange[]
+  /**
+   * The provider's own id for this transcript entry, when it has one. `id` is
+   * generated here and means nothing to the CLI, so this is the only handle a
+   * conversation rewind has: Claude's `forkSession` truncates at a chain uuid,
+   * and the entry to keep is the last assistant message before the edited
+   * prompt. Absent on every message written before edit-and-resend existed,
+   * which is exactly why `editMessage` has a replay fallback.
+   */
+  providerUuid?: string
 }
 
 export interface TurnFileChange {
@@ -489,6 +498,18 @@ export interface RewindResult {
   filesChanged?: string[]
   insertions?: number
   deletions?: number
+}
+
+/**
+ * Whether an `editMessage` went through. Deliberately no report of HOW the
+ * conversation was rewound: when the provider could not fork and its earlier
+ * turns had to be replayed as a brief, that is said in the transcript itself
+ * (an `event` message), where it stays visible next to the turn it describes
+ * instead of in a toast the user has already dismissed.
+ */
+export interface EditMessageResult {
+  ok: boolean
+  error?: string
 }
 
 /** A single persisted permission rule from a settings file. */
@@ -784,6 +805,11 @@ export type ChatEvent =
   // Transient (not persisted): the AI title is being generated for this chat, so
   // the sidebar can shimmer the placeholder until the real title arrives.
   | { type: 'title-pending'; chatId: string; pending: boolean }
+  // An edit-and-resend rewound the conversation: every message from index
+  // `keep` onward is gone, here and on disk. `keep` counts the WHOLE chat, not
+  // the renderer's loaded window, because that is the only index `seq` (and so
+  // the store) agrees with — the renderer subtracts its own `hiddenBefore`.
+  | { type: 'truncate'; chatId: string; keep: number }
 
 // ---------- Settings ----------
 
@@ -1438,6 +1464,13 @@ export interface Api {
   // ---- Checkpoint / rewind ----
   /** Revert the working tree to its state at a user message. dryRun previews only. */
   rewindFiles(chatId: string, userMessageId: string, dryRun: boolean): Promise<RewindResult>
+  /**
+   * Replace a user message's text and run the turn again, dropping everything
+   * that followed it — from the transcript, from disk, and from the provider's
+   * own conversation. Files on disk are left alone (`rewindFiles` is the
+   * separate, opt-in half of that).
+   */
+  editMessage(chatId: string, messageId: string, text: string): Promise<EditMessageResult>
   // ---- Session introspection ----
   /** Whether the chat has a running CLI session (introspection needs one). */
   sessionLive(chatId: string): Promise<boolean>

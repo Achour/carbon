@@ -2,6 +2,7 @@ import { basename } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import {
   createSdkMcpServer,
+  forkSession,
   query,
   tool,
   type ModelInfo,
@@ -36,6 +37,8 @@ import type {
   PermissionDecision,
   PermissionModeId,
   Provider,
+  EditMessageResult,
+  EventMessage,
   RewindResult,
   ServiceTier,
   SlashCommand,
@@ -45,6 +48,7 @@ import type {
 import {
   CODEX_DEFAULT_MODEL,
   MODEL_OPTIONS,
+  PROVIDER_SHORT_LABELS,
   claudeModelContextWindow,
   claudeModelLabel,
   effortForProvider,
@@ -59,9 +63,15 @@ import type { PreviewManager } from './preview'
 import { runPreviewTool } from './previewTools.ts'
 import { CodexSession, fetchCodexModels, generateCodexText } from './codex'
 import { CodexAppServerClient } from './codexAppServer'
-import { fetchGrokModels, generateGrokText, GrokSession } from './grok'
+import { fetchGrokModels, forkGrokBefore, generateGrokText, GrokSession } from './grok'
 import { cliAvailable, cliPath, requireCliPath } from './providerCli.ts'
-import { composePrompt, withTimeout, type AgentSession, type Emit } from './session'
+import {
+  composePrompt,
+  withTimeout,
+  type AgentSession,
+  type ConversationFork,
+  type Emit
+} from './session'
 import { DeltaCoalescer } from './deltaCoalescer'
 import { describeSelection } from './attachmentText.ts'
 import { TITLE_SYSTEM, buildTitlePrompt, cleanTitle, deriveTitle, firstUserText } from './titles'
@@ -73,6 +83,7 @@ import {
   buildHandoffBriefPrompt,
   buildHandoffContext,
   buildPlanImplementPrompt,
+  buildReplayContext,
   serializeTranscript
 } from './handoff'
 
@@ -1513,6 +1524,11 @@ class ClaudeSession implements AgentSession {
     if (typeof model === 'string' && model) this.lastTurnModel = model
     this.updateContext((msg.message as { usage?: unknown }).usage)
     const message = this.ensureCurrent()
+    // The chain uuid this entry has in the CLI's own transcript. `current` is
+    // cleared at the end of this method, so our AssistantMessages map 1:1 onto
+    // the SDK's and this is never the wrong turn's id. It is the sole anchor
+    // `forkBefore` has — nothing else we persist means anything to the CLI.
+    if (msg.uuid) message.providerUuid = msg.uuid
     // Index the already-streamed tool parts of THIS message by id, so a result
     // that somehow landed before the final assistant message is carried across
     // the wholesale replace below. Read them from the message's own parts rather
@@ -1781,6 +1797,102 @@ class ClaudeSession implements AgentSession {
 // ---------- Manager ----------
 
 /** The outgoing side of a provider switch, snapshotted as the switch applies. */
+/**
+ * Fork Claude's own transcript so it ends just before the user message at
+ * `index`, and hand back the new session id.
+ *
+ * A module function rather than a session method because it needs no running
+ * CLI: `forkSession` reads `~/.claude/projects/**`, remaps every uuid and writes
+ * a new file, touching neither this process's session nor the one it copied.
+ * That is also what makes it safe to call while a session is live.
+ *
+ * `upToMessageId` is INCLUSIVE (verified against the CLI), so the anchor must be
+ * the last assistant entry of the turn BEFORE the edited prompt — anchoring on
+ * the edited user message itself keeps it, and the model would then answer the
+ * old wording as well as the new. Undefined means no such entry can be named, so
+ * the caller replays instead of cutting somewhere that loses real history.
+ */
+export async function forkClaudeBefore(
+  chat: ChatData,
+  index: number
+): Promise<string | undefined> {
+  if (!chat.sessionId) return undefined
+  const anchor = claudeForkAnchor(chat, index)
+  if (!anchor) return undefined
+  try {
+    const forked = await forkSession(chat.sessionId, { upToMessageId: anchor })
+    return forked?.sessionId ?? undefined
+  } catch (err) {
+    console.error('forkSession failed:', err)
+    return undefined
+  }
+}
+
+/**
+ * Whether a transcript card sits only in Carbon's history and not in the CLI's
+ * chain, so a fork may cut straight past it.
+ *
+ * A total map rather than a chain of `!==`, so adding a sixth kind is a compile
+ * error here instead of silently disabling forking for every chat that contains
+ * one. `error` means the turn that wrote the chain ahead of this point did not
+ * finish cleanly; `compact` is a real compaction boundary in the provider's own
+ * history. Neither can be cut at blindly.
+ */
+const FORK_SKIPPABLE_EVENT: Record<EventMessage['kind'], boolean> = {
+  turn: true,
+  info: true,
+  switch: true,
+  error: false,
+  compact: false
+}
+
+/**
+ * The last entry to keep when forking before `index`, as a Claude chain uuid.
+ *
+ * Only the message DIRECTLY before the edited one will do. Reaching further back
+ * for one that happens to carry a `providerUuid` would silently discard whatever
+ * sits between, which is real history the user never asked to lose. A `turn`
+ * stats card sits after EVERY completed turn, so without the skip the previous
+ * message is essentially never the assistant reply and nothing is ever forkable.
+ *
+ * An assistant message still holding tool parts is refused for a subtler reason:
+ * its tool RESULTS are separate entries in the provider's chain that our
+ * transcript folds into the tool cards, so they sit after this uuid and a fork
+ * here would drop them — leaving a tool call with no result, which is a
+ * malformed conversation rather than a shorter one. A completed turn always ends
+ * on a text-only message (the model stopped asking for tools, which is what
+ * ended the turn), so this only fires on turns interrupted or failed mid-tool —
+ * exactly the case that cannot be cut cleanly.
+ */
+function claudeForkAnchor(chat: ChatData, index: number): string | undefined {
+  let cursor = index - 1
+  while (chat.messages[cursor]?.role === 'event') {
+    if (!FORK_SKIPPABLE_EVENT[(chat.messages[cursor] as EventMessage).kind]) return undefined
+    cursor--
+  }
+  const previous = chat.messages[cursor]
+  if (previous?.role !== 'assistant' || !previous.providerUuid) return undefined
+  if (previous.parts.some((part) => part?.type === 'tool')) return undefined
+  return previous.providerUuid
+}
+
+/**
+ * Which fork each backend offers. A total `Record<Provider, …>` rather than a
+ * ternary so a fourth provider is a compile error here, not a silent downgrade
+ * to replay on every edit.
+ */
+const CONVERSATION_FORKS: Record<Provider, ConversationFork> = {
+  claude: { needsSession: false, fork: (chat: ChatData, index: number) => forkClaudeBefore(chat, index) },
+  // The only one that rides a live CLI: Codex's turn ids come back over the
+  // app-server connection, so there is nothing to read off disk.
+  codex: {
+    needsSession: true,
+    fork: async (_chat: ChatData, index: number, session: AgentSession | null) =>
+      session?.forkBefore?.(index)
+  },
+  grok: { needsSession: false, fork: forkGrokBefore }
+}
+
 interface HandoffSnapshot {
   provider: Provider
   model?: string
@@ -2527,6 +2639,93 @@ export class ChatManager {
       }
     }
     return session.rewindFiles(userMessageId, dryRun)
+  }
+
+  /**
+   * Edit-and-resend: replace a user message's text and run it again, dropping
+   * every message that followed it here, on disk, and in the provider's own
+   * conversation.
+   *
+   * The order is load-bearing. The provider is forked FIRST, while the old
+   * conversation id is still on the chat and nothing has been destroyed — every
+   * backend answers by producing a *new* conversation rather than mutating the
+   * live one, so a failure at this point costs nothing and the chat carries on
+   * exactly as it was. Only once there is somewhere to land do we shorten the
+   * transcript, repoint `sessionId`, and drop the session so the next send
+   * resumes the fork (the same disposal an effort change relies on).
+   *
+   * Files on disk are deliberately untouched — Cursor's behavior, and the honest
+   * one: the agent's edits are usually the thing being kept while the prompt
+   * that produced them is reworded. `rewindFiles` is the separate, opt-in half.
+   */
+  async editMessage(chatId: string, messageId: string, text: string): Promise<EditMessageResult> {
+    const chat = this.store.getChat(chatId)
+    if (!chat) return { ok: false, error: 'Chat not found.' }
+    const trimmed = text.trim()
+    if (!trimmed) return { ok: false, error: 'The message cannot be empty.' }
+    const index = chat.messages.findIndex((m) => m.id === messageId)
+    const target = chat.messages[index]
+    if (!target || target.role !== 'user') {
+      return { ok: false, error: 'That message can no longer be edited.' }
+    }
+    // A running turn is appending to the very tail this would delete, and its
+    // session holds tool state keyed to messages that are about to go.
+    const live = this.sessionFor(chatId)
+    if (live && !live.idle) {
+      return { ok: false, error: 'Wait for the current turn to finish, or stop it first.' }
+    }
+    const hiddenBefore = this.store.hiddenBefore(chatId)
+    if (index < hiddenBefore) {
+      return { ok: false, error: 'Load the earlier messages before editing this one.' }
+    }
+
+    // Nothing precedes the edited message, so there is no conversation to keep
+    // and no provider to ask — an empty session IS the whole kept history.
+    // (`index < hiddenBefore` above already rules out a hidden prefix.)
+    const forker = CONVERSATION_FORKS[chat.provider]
+    const forked =
+      index === 0
+        ? undefined
+        : await forker.fork(
+            chat,
+            index,
+            live ?? (forker.needsSession ? this.createSession(chat) : null)
+          )
+
+    const dropped = this.store.truncateMessages(chatId, index)
+    if (dropped === null) {
+      return { ok: false, error: 'This chat could not be rewound — it may be open elsewhere.' }
+    }
+    chat.sessionId = forked
+    // The fork lives in a different conversation, so everything the old session
+    // holds — its CLI process, its tool map, its file checkpoints — is now about
+    // the wrong history. The next send builds a fresh one on the new id.
+    this.disposeChat(chatId)
+    this.emit({ type: 'truncate', chatId, keep: index })
+    this.emit({ type: 'meta', chatId, patch: { sessionId: chat.sessionId } })
+
+    // No fork, but turns worth keeping: hand the fresh session the conversation
+    // it is missing, capped, riding the same hiddenContext seam the
+    // cross-provider handoff uses. An empty transcript means there was nothing
+    // to carry, which is the `index === 0` case rather than a loss.
+    let hidden: string | undefined
+    if (!forked) {
+      const transcript = this.transcriptFor(chat, HANDOFF_FALLBACK_CHARS)
+      if (transcript) hidden = buildReplayContext(transcript)
+    }
+    // Said out loud, in the transcript, because a replay is not what the user
+    // asked for and nothing else would reveal it: the agent keeps a brief of the
+    // earlier turns rather than the turns themselves. This is the COMMON path,
+    // not an exotic one — every message written before `providerUuid` existed
+    // and every Codex turn sent before `clientUserMessageId` did will land here.
+    if (hidden) {
+      this.pushEvent(
+        chat,
+        `${PROVIDER_SHORT_LABELS[chat.provider]} could not rewind its own conversation here, so it was re-briefed on the earlier turns instead of resuming them.`
+      )
+    }
+    this.deliver(chat, trimmed, target.attachments, undefined, hidden)
+    return { ok: true }
   }
 
   async mcpStatus(chatId: string): Promise<McpServerInfo[]> {

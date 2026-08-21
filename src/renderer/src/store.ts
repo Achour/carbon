@@ -68,6 +68,7 @@ import type {
   ProviderCli,
   ProviderCliConfig,
   RateLimitState,
+  EditMessageResult,
   RewindResult,
   ServiceTier,
   SlashCommand,
@@ -254,6 +255,12 @@ interface AppState {
   setProviderCli(provider: Provider, patch: ProviderCliConfig): Promise<void>
   /** Revert the working tree to a user message's checkpoint (dryRun previews only). */
   rewindFiles(userMessageId: string, dryRun: boolean): Promise<RewindResult>
+  /**
+   * Reword a user message and run it again, dropping everything after it. The
+   * transcript is trimmed by the `truncate` event main sends back, not here —
+   * the rewind has to land on disk before the UI claims it happened.
+   */
+  editMessage(messageId: string, text: string): Promise<EditMessageResult>
   /** Pending permission requests, keyed by chat id. */
   permissions: Record<string, PermissionRequestPayload[]>
   /** Messages typed while a turn was running, sent when the chat goes idle. */
@@ -2390,6 +2397,15 @@ export const useApp = create<AppState>((set, get) => ({
     return res
   },
 
+  async editMessage(messageId, text) {
+    const id = get().activeId
+    if (!id) return { ok: false, error: 'No active chat.' }
+    const res = await window.api.editMessage(id, messageId, text)
+    // A resend starts a turn, so the same post-turn refreshes a normal send
+    // gets are already wired; nothing to do here but report.
+    return res
+  },
+
   async deleteChat(id, worktree) {
     // The chat row always goes; a worktree we failed to clean up stays on disk
     // and is handed back so the caller can surface it (gitError would only show
@@ -2681,6 +2697,20 @@ export const useApp = create<AppState>((set, get) => ({
 
       case 'chat-locked': {
         set((st) => ({ lockedChats: { ...st.lockedChats, [ev.chatId]: true } }))
+        break
+      }
+
+      // An edit-and-resend rewound the conversation. `keep` counts the whole
+      // chat, so it has to come back through `hiddenBefore` to address the
+      // window this store actually holds — main truncates to a loaded message,
+      // so the result is never negative and never touches the hidden prefix.
+      case 'truncate': {
+        set((st) => {
+          if (st.activeId !== ev.chatId) return {}
+          const keep = Math.max(0, ev.keep - st.hiddenBefore)
+          if (keep >= st.messages.length) return {}
+          return { messages: st.messages.slice(0, keep) }
+        })
         break
       }
       case 'status': {

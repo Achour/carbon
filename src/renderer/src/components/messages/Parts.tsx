@@ -7,18 +7,18 @@ import {
   Check,
   ChevronRight,
   Code2,
+  Copy,
   FileText,
   GitCommitHorizontal,
   Loader2,
   MousePointerClick,
-  RotateCcw
+  Pencil
 } from 'lucide-react'
-import type { AssistantMessage, EventMessage, RewindResult, ToolPart, UserMessage } from '@shared/types'
+import type { AssistantMessage, EventMessage, ToolPart, UserMessage } from '@shared/types'
 import { cn } from '@/lib/utils'
 import { formatCost, formatDuration } from '@/lib/format'
 import { Markdown, StreamingMarkdown, useStreamText } from '@/components/Markdown'
 import { Button } from '@/components/ui/button'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { WithTooltip } from '@/components/ui/tooltip'
 import { useApp } from '@/store'
 import { FILE_MUTATION_TOOLS, GROUPABLE_TOOLS, ToolCard, ToolGroup } from './ToolCard'
@@ -73,97 +73,117 @@ const TaskListCard = React.memo(function TaskListCard({
 })
 
 /**
- * Rewind affordance on a user message: reverts the working tree to the file
- * checkpoint taken when that message was sent (files only — the conversation is
- * untouched). Opens a popover that previews the impact (dry run) before applying.
+ * One button in a user message's hover row. Shared so the two actions cannot
+ * drift apart in size, spacing or hit area — they sit side by side under the
+ * bubble and any mismatch reads as a mistake at this scale.
  */
-function RewindControl({ messageId }: { messageId: string }): React.JSX.Element {
-  const rewindFiles = useApp((s) => s.rewindFiles)
-  const provider = useApp((s) => s.chats.find((c) => c.id === s.activeId)?.provider)
-  const [open, setOpen] = React.useState(false)
-  const [preview, setPreview] = React.useState<RewindResult | null>(null)
-  const [busy, setBusy] = React.useState(false)
-  const [done, setDone] = React.useState<RewindResult | null>(null)
+function MessageAction({
+  label,
+  icon: Icon,
+  onClick
+}: {
+  label: string
+  icon: React.ComponentType
+  onClick: () => void
+}): React.JSX.Element {
+  return (
+    <WithTooltip label={label}>
+      <Button variant="ghost" size="icon-sm" aria-label={label} onClick={onClick}>
+        <Icon />
+      </Button>
+    </WithTooltip>
+  )
+}
 
+/**
+ * Reword a sent message and run it again, dropping everything after it.
+ *
+ * The transcript is NOT trimmed here — main truncates the store and sends back
+ * a `truncate` event, so what the user sees is what actually reached disk. An
+ * optimistic splice would show the messages gone in the one case they are not:
+ * a chat open in a second Carbon instance, where the write is refused.
+ */
+function MessageEditor({
+  message,
+  onClose
+}: {
+  message: UserMessage
+  onClose: () => void
+}): React.JSX.Element {
+  const [text, setText] = React.useState(message.text)
+  const [busy, setBusy] = React.useState(false)
+  const [error, setError] = React.useState<string | null>(null)
+  const ref = React.useRef<HTMLTextAreaElement>(null)
+  // Frozen at open: the answer must describe the chat the user is looking at,
+  // and a turn cannot start underneath an open editor without main refusing the
+  // edit anyway (which lands in `error` below).
   React.useEffect(() => {
-    if (!open) {
-      setPreview(null)
-      setDone(null)
+    const el = ref.current
+    if (!el) return
+    el.focus()
+    el.setSelectionRange(el.value.length, el.value.length)
+  }, [])
+  // Grow with the content: a reworded prompt is usually about as long as the
+  // one it replaces, and a fixed two-row box would hide most of it.
+  React.useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    el.style.height = '0px'
+    el.style.height = `${Math.min(el.scrollHeight, 420)}px`
+  }, [text])
+
+  const submit = async (): Promise<void> => {
+    const next = text.trim()
+    if (!next || busy) return
+    if (next === message.text.trim()) {
+      onClose()
       return
     }
-    let alive = true
-    void rewindFiles(messageId, true).then((r) => {
-      if (alive) setPreview(r)
-    })
-    return () => {
-      alive = false
-    }
-  }, [open, messageId, rewindFiles])
-
-  // Codex has no file checkpoints — rewind always fails, so don't offer it.
-  // Gated on *is Claude* rather than *is not Codex*: the latter silently began
-  // offering Rewind to Grok the moment a third provider existed, where
-  // `rewindFiles` can only answer `canRewind: false`.
-  if (provider !== 'claude') return <></>
-
-  const noChanges = (preview?.filesChanged?.length ?? 0) === 0
-  const apply = async (): Promise<void> => {
     setBusy(true)
-    const r = await rewindFiles(messageId, false)
+    setError(null)
+    const res = await useApp.getState().editMessage(message.id, next)
     setBusy(false)
-    setDone(r)
-    if (r.canRewind) setTimeout(() => setOpen(false), 1400)
+    if (res.ok) onClose()
+    else setError(res.error ?? 'The message could not be edited.')
   }
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <WithTooltip label="Rewind files to here">
-        <PopoverTrigger
-          aria-label="Rewind files to this message"
-          className="no-drag mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 outline-none transition-opacity group-hover:opacity-100 hover:bg-accent hover:text-foreground data-[popup-open]:opacity-100"
-        >
-          <RotateCcw className="size-3.5" />
-        </PopoverTrigger>
-      </WithTooltip>
-      <PopoverContent side="left" align="start" className="w-64">
-        <div className="text-[13px] font-medium">Rewind files</div>
-        {done ? (
-          <p className={cn('mt-1.5 text-xs', done.canRewind ? 'text-muted-foreground' : 'text-destructive')}>
-            {done.canRewind
-              ? `Reverted ${done.filesChanged?.length ?? 0} file${(done.filesChanged?.length ?? 0) === 1 ? '' : 's'}.`
-              : (done.error ?? 'Rewind failed.')}
-          </p>
-        ) : !preview ? (
-          <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
-            <Loader2 className="size-3.5 animate-spin" /> Checking…
-          </div>
-        ) : preview.canRewind ? (
-          <>
-            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-              Restore the project files to their state when you sent this message. Later chat
-              messages stay.
-            </p>
-            <div className="mt-2 rounded-md border border-border bg-secondary/40 px-2 py-1.5 text-[11px] tabular-nums text-muted-foreground">
-              {noChanges
-                ? 'No file changes to undo.'
-                : `${preview.filesChanged!.length} file${preview.filesChanged!.length === 1 ? '' : 's'} · +${preview.insertions ?? 0} −${preview.deletions ?? 0}`}
-            </div>
-            <div className="mt-2.5 flex justify-end gap-2">
-              <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>
-                Cancel
-              </Button>
-              <Button size="sm" disabled={busy || noChanges} onClick={() => void apply()}>
-                {busy ? <Loader2 className="size-3.5 animate-spin" /> : 'Rewind'}
-              </Button>
-            </div>
-          </>
-        ) : (
-          <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
-            {preview.error ?? 'Can’t rewind to this message.'}
-          </p>
-        )}
-      </PopoverContent>
-    </Popover>
+    <div className="flex w-full max-w-[85%] flex-col gap-2 rounded-2xl border border-border bg-secondary/60 p-2.5">
+      <textarea
+        ref={ref}
+        value={text}
+        rows={1}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') {
+            e.preventDefault()
+            onClose()
+            return
+          }
+          if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+            e.preventDefault()
+            void submit()
+          }
+        }}
+        className="max-h-[420px] w-full resize-none bg-transparent px-1.5 text-[13.5px] leading-relaxed outline-none placeholder:text-muted-foreground"
+      />
+      {error && <div className="px-1.5 text-[11px] text-destructive">{error}</div>}
+      {/* No "this removes N messages below" line: resending replaces the tail of
+          a conversation, which is what the button says. And nothing here
+          predicts whether the provider can rewind itself — that is only known
+          once it has been asked, so main reports it afterwards as an event in
+          the transcript rather than as a guess from the provider id here. */}
+      <div className="flex items-center justify-end gap-3 px-1.5">
+        <div className="flex shrink-0 items-center gap-2">
+          <Button size="sm" variant="ghost" disabled={busy} onClick={onClose}>
+            Cancel
+          </Button>
+          <Button size="sm" disabled={busy || !text.trim()} onClick={() => void submit()}>
+            {busy ? <Loader2 className="size-3.5 animate-spin" /> : 'Resend'}
+          </Button>
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -175,18 +195,28 @@ export const UserBubble = React.memo(function UserBubble({
 }: {
   message: UserMessage
 }): React.JSX.Element {
+  const [editing, setEditing] = React.useState(false)
+  const [copied, setCopied] = React.useState(false)
   // App-initiated actions (e.g. a "Commit" from the source-control button) show
   // as a compact chip, Cursor-style — the verbose prompt behind it stays hidden.
+  // No actions: the text behind the chip is a prompt the app wrote, so editing
+  // it would leave the label describing something that never ran, and copying it
+  // would hand over words the user never typed.
   if (message.label) {
     return (
-      <div className="group flex animate-enter items-center justify-end gap-1">
-        <RewindControl messageId={message.id} />
+      <div className="flex animate-enter items-center justify-end">
         <div className="flex items-center gap-1.5 rounded-full border border-primary/25 bg-primary/10 py-1 pr-3 pl-2.5">
           <GitCommitHorizontal className="size-3.5 shrink-0 text-primary" />
           <span className="text-[12.5px] font-medium text-primary">{message.label}</span>
         </div>
       </div>
     )
+  }
+
+  const copy = (): void => {
+    void navigator.clipboard.writeText(message.text)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1500)
   }
   return (
     <div className="group flex animate-enter flex-col items-end gap-1.5">
@@ -232,18 +262,37 @@ export const UserBubble = React.memo(function UserBubble({
           )}
         </div>
       )}
-      <div className="flex w-full items-start justify-end gap-1">
-        <RewindControl messageId={message.id} />
-        {/* Prompts render as markdown, the same as replies — a pasted list or a
-            fenced snippet reads as one. `breaks` keeps the newlines the user
-            actually typed, which plain markdown would collapse and which every
-            prompt already in the transcript was written expecting. */}
-        {message.text && (
-          <div className="max-w-[85%] min-w-0 select-text rounded-2xl rounded-br-md bg-secondary px-4 py-2.5 break-words">
-            <Markdown text={message.text} breaks className="leading-relaxed" />
-          </div>
-        )}
-      </div>
+      {editing ? (
+        <MessageEditor message={message} onClose={() => setEditing(false)} />
+      ) : (
+        message.text && (
+          <>
+            {/* Prompts render as markdown, the same as replies — a pasted list or
+                a fenced snippet reads as one. `breaks` keeps the newlines the
+                user actually typed, which plain markdown would collapse and
+                which every prompt already in the transcript was written
+                expecting. */}
+            <div className="max-w-[85%] min-w-0 select-text rounded-2xl rounded-br-md bg-secondary px-4 py-2.5 break-words">
+              <Markdown text={message.text} breaks className="leading-relaxed" />
+            </div>
+            {/* Under the bubble rather than beside it: the message is
+                right-aligned and grows leftward, so a column of icons to its
+                left sits at a different x on every row and reads as debris in
+                the margin. Below, they line up with the bubble's own right edge
+                on every message. `-mt-0.5` pulls the row into the gap the flex
+                parent already leaves, so hovering does not shift the
+                transcript. */}
+            <div className="-mt-0.5 flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+              <MessageAction label="Edit and resend" icon={Pencil} onClick={() => setEditing(true)} />
+              <MessageAction
+                label={copied ? 'Copied' : 'Copy prompt'}
+                icon={copied ? Check : Copy}
+                onClick={copy}
+              />
+            </div>
+          </>
+        )
+      )}
     </div>
   )
 })

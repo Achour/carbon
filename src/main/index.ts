@@ -559,6 +559,9 @@ function registerIpc(): void {
     (_e, chatId: string, patch: ChatOptionsPatch) => manager.setOptions(chatId, patch)
   )
 
+  ipcMain.handle('chat:edit-message', (_e, chatId: string, messageId: string, text: string) =>
+    manager.editMessage(chatId, messageId, text)
+  )
   ipcMain.handle('chat:rewind-files', (_e, chatId: string, userMessageId: string, dryRun: boolean) =>
     manager.rewindFiles(chatId, userMessageId, dryRun)
   )

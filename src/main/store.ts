@@ -356,6 +356,13 @@ interface Resident {
 /** Thrown when a write would overwrite another instance's newer state. */
 class StaleView extends Error {}
 
+/**
+ * Thrown by a `guarded` body that has decided not to write after all. Distinct
+ * from `StaleView`: nothing is wrong with the chat or with another instance, so
+ * it must not mark the chat refused or log — it just rolls the transaction back.
+ */
+class Refused extends Error {}
+
 export class Store {
   private chatsDir: string
   private settingsPath: string
@@ -446,6 +453,8 @@ export class Store {
   private selLens!: StatementSync
   private selSeqs!: StatementSync
   private selBody!: StatementSync
+  private selDropped!: StatementSync
+  private delFrom!: StatementSync
 
   constructor(userDataDir: string, opts: StoreOptions = {}) {
     this.budget = opts.residentBudget ?? RESIDENT_BUDGET
@@ -683,6 +692,13 @@ export class Store {
     // the difference between a ~20 ms scan of a 34 MB chat and a ~1 ms one.
     this.selSeqs = this.db.prepare('SELECT seq FROM messages WHERE chat_id = ? ORDER BY seq')
     this.selBody = this.db.prepare('SELECT body FROM messages WHERE chat_id = ? AND seq = ?')
+    // Both halves of a truncation, scoped to the tail being dropped. The sum is
+    // measured before the delete so `entry.bytes` can be adjusted exactly (see
+    // truncateMessages) rather than re-derived from the whole table.
+    this.selDropped = this.db.prepare(
+      'SELECT COALESCE(SUM(length(body)), 0) AS n FROM messages WHERE chat_id = ? AND seq >= ?'
+    )
+    this.delFrom = this.db.prepare('DELETE FROM messages WHERE chat_id = ? AND seq >= ?')
     // A true upsert, not INSERT OR REPLACE: on a rowid table the latter would
     // delete and reinsert, churning the heap on every streaming tail write.
     this.upsertMsg = this.db.prepare(
@@ -1298,6 +1314,69 @@ export class Store {
   }
 
   /**
+   * Drop every message from index `keep` onward — the one write path that
+   * SHORTENS a chat, and the only reason `chat.messages` is no longer strictly
+   * append-only. Returns how many were dropped, or null if the truncation was
+   * refused (another instance owns the chat, or the target sits in history this
+   * process never loaded).
+   *
+   * It deletes rows itself rather than leaving them to the ordinary write pass,
+   * because that pass deliberately never DELETEs: `reconcile` reads a row it
+   * lacks in memory as another instance's history rather than as garbage, and
+   * would leave every dropped message on disk to reappear at the next hydrate.
+   *
+   * The array is shortened only AFTER the transaction commits. That ordering is
+   * what keeps the exception local: while the rows are still on disk they are
+   * still the truth, so a refusal or a failed COMMIT leaves the chat exactly as
+   * it was found and `reconcile` never has to be taught about a chat whose
+   * memory and disk disagree in this particular direction.
+   *
+   * Truncating into the unloaded prefix is refused outright. Those slots hold
+   * placeholders, so the caller cannot have shown the user what it is about to
+   * destroy, and `unloadedMessage` is not the message it stands for.
+   */
+  truncateMessages(id: string, keep: number): number | null {
+    const chat = this.getChat(id)
+    if (!chat) return null
+    const target = Math.max(0, Math.min(Math.trunc(keep), chat.messages.length))
+    if (target === chat.messages.length) return 0
+    const dropped = chat.messages.length - target
+    let freed = 0
+    const ok = this.guarded(id, (entry) => {
+      if (target < this.loadedFrom(entry)) throw new Refused()
+      // Measured before the DELETE, and scoped to the rows going away. The guard
+      // above guarantees every one of them is loaded, so each contributed to
+      // `entry.bytes` and subtracting is exact — where re-summing the table
+      // would silently recharge the unloaded prefix `admit` deliberately counts
+      // as free, and hand a windowed chat its whole size on disk to carry
+      // through the RESIDENT_BUDGET LRU.
+      const row = this.selDropped.get(id, target) as { n?: number } | undefined
+      freed = Number(row?.n ?? 0)
+      this.delFrom.run(id, target)
+    })
+    if (!ok) return null
+    chat.messages.length = target
+    const entry = this.resident.get(id)
+    if (entry) {
+      for (const seq of [...entry.bodies.keys()]) if (seq >= target) entry.bodies.delete(seq)
+      for (const set of [entry.watched, entry.forced, entry.corrupt, entry.unloaded]) {
+        for (const seq of [...set]) if (seq >= target) set.delete(seq)
+      }
+      entry.persisted = target
+      entry.scanCursor = 0
+      entry.bytes = Math.max(0, entry.bytes - freed)
+      this.sizes.set(id, entry.bytes)
+    }
+    this.backupDue = true
+    // `guarded` clears `dirty` on success, but this pass wrote no message rows —
+    // a kept message mutated and not yet flushed would lose its place in the
+    // quit-time flush set. Re-arm the ordinary debounce, which now has a pruned
+    // baseline to re-serialize against.
+    this.saveChatSoon(id)
+    return dropped
+  }
+
+  /**
    * Is any chat other than `exceptId` working in `cwd`? Used before removing a
    * worktree, so a directory another chat still occupies is left alone.
    */
@@ -1558,7 +1637,18 @@ export class Store {
     this.backupDue = true
   }
 
-  private writeChat(id: string, full: boolean, thorough = false): boolean {
+  /**
+   * The envelope every write to a chat has to sit inside: the residency lookup,
+   * the cross-instance advisory lock, and the `chats.rev` guard that is checked
+   * INSIDE the transaction so it cannot straddle another instance's commit.
+   * Returns false when the write was refused or failed; `body` supplies only the
+   * part that differs between an ordinary save and a truncation.
+   *
+   * Shared rather than copied because this is the whole multi-instance safety
+   * protocol — two implementations means the next change to locking or to the
+   * refusal wording lands in one of them.
+   */
+  private guarded(id: string, body: (entry: Resident) => void): boolean {
     if (this.closed) return false
     const entry = this.entryFor(id)
     if (!entry) return false
@@ -1574,7 +1664,6 @@ export class Store {
       return false
     }
     this.denied.delete(id)
-    if (entry.needsFull || Date.now() - entry.reconciledAt >= RECONCILE_FLOOR_MS) full = true
     try {
       this.tx(() => {
         // Inside the transaction, so the check and the write cannot straddle
@@ -1584,7 +1673,7 @@ export class Store {
         // owner's changes landed, silently replacing them.
         const onDisk = this.diskRev(id)
         if (entry.rev >= 0 && onDisk >= 0 && onDisk !== entry.rev) throw new StaleView()
-        return full ? this.reconcile(entry, thorough) : this.writeIncremental(entry)
+        body(entry)
       })
       this.dirty.delete(id)
       return true
@@ -1593,6 +1682,9 @@ export class Store {
         this.refuse(id, entry, 'changed in another Carbon instance since it was opened here')
         return false
       }
+      // A caller declining the write for its own reasons (see truncateMessages);
+      // nothing was committed, so there is nothing to repair or report.
+      if (err instanceof Refused) return false
       // reconcile()/writeIncremental() advance the in-memory baseline (bodies,
       // persisted, reconciledAt) inside the tx body, before COMMIT. A COMMIT that
       // fails (SQLITE_FULL, an fsync error) rolls the rows back but leaves that
@@ -1609,6 +1701,14 @@ export class Store {
       console.error('Failed to save chat:', err)
       return false
     }
+  }
+
+  private writeChat(id: string, full: boolean, thorough = false): boolean {
+    return this.guarded(id, (entry) => {
+      if (entry.needsFull || Date.now() - entry.reconciledAt >= RECONCILE_FLOOR_MS) full = true
+      if (full) this.reconcile(entry, thorough)
+      else this.writeIncremental(entry)
+    })
   }
 
   /** Resolve the write baseline, re-admitting a live-but-evicted chat. */
@@ -1663,10 +1763,11 @@ export class Store {
    * that differ. The sound backstop the incremental predicate is measured
    * against, and the only pass that can repair a row nobody flagged.
    *
-   * It deliberately never DELETEs. `chat.messages` is append-only (nothing in
-   * src/main splices, pops or truncates it), so extra rows can only come from
-   * another process that shares this userData — and dropping them would destroy
-   * real history to satisfy a stale in-memory array.
+   * It deliberately never DELETEs. Extra rows can only come from another process
+   * that shares this userData — and dropping them would destroy real history to
+   * satisfy a stale in-memory array. The one path that shortens a chat
+   * (`truncateMessages`) does its own DELETE inside the same transaction that
+   * shortens the array, so it never leaves work for this pass.
    */
   private reconcile(entry: Resident, thorough = false): void {
     const { chat } = entry

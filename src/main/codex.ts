@@ -364,6 +364,23 @@ function describeElement(el: ElementRef): string {
  * process. Its JSON-RPC events are adapted to the former SDK-shaped thread
  * stream so the established AssistantPart/ChatEvent reducer stays unchanged.
  */
+/**
+ * How far before a message's own timestamp a Codex turn may have started and
+ * still be that message's turn. Covers `startedAt`'s truncation to whole seconds
+ * plus any clock skew between the two stamps.
+ */
+const TURN_CLOCK_SLACK_MS = 60_000
+
+/** The slice of `thread/turns/list` the conversation fork reads. */
+interface RawTurnItem {
+  type?: string
+  clientId?: string | null
+}
+interface TurnsPage {
+  data?: { id?: string; startedAt?: number; items?: RawTurnItem[] }[]
+  nextCursor?: string | null
+}
+
 export class CodexSession implements AgentSession {
   private chat: ChatData
   private emit: Emit
@@ -824,7 +841,13 @@ export class CodexSession implements AgentSession {
         const resumedThreadId = this.threadId
         const thread = await this.ensureThread(turn)
         try {
-          const { events } = await thread.runStreamed(turn.input, { signal: this.abort.signal })
+          const { events } = await thread.runStreamed(turn.input, {
+            signal: this.abort.signal,
+            // Stamps this turn with our own message id so `forkBefore` can find
+            // it again in `thread/turns/list` — across an app restart, and
+            // without persisting a second id beside every message.
+            clientUserMessageId: turn.userMessageId
+          })
           for await (const event of events) {
             if (this.disposed) break
             this.handleEvent(event, turn)
@@ -2172,6 +2195,76 @@ export class CodexSession implements AgentSession {
       return { canRewind: false, error: 'No Codex workspace checkpoint is available for this turn.' }
     }
     return rewindWorkspaceCheckpoint(this.chat.cwd, checkpoint, dryRun)
+  }
+
+  /**
+   * Fork the thread so it ends just before the turn for message `index` started.
+   *
+   * `thread/fork` is the right call rather than `thread/revert`, which the CLI
+   * only serves for threads whose history was promoted to `paginated` (ours are
+   * `legacy`) — and rather than `thread/rollback`, which the app server reports
+   * as deprecated. The fork leaves the source thread untouched and returns a new
+   * id, so a failure here costs nothing.
+   *
+   * The turn is found by the `clientId` our own `clientUserMessageId` put there,
+   * which is why this survives a restart and needs nothing on our messages. A
+   * turn that predates that stamp cannot be named, so the caller replays.
+   */
+  async forkBefore(index: number): Promise<string | undefined> {
+    const message = this.chat.messages[index]
+    if (!this.threadId || !message) return undefined
+    try {
+      const beforeTurnId = await this.findTurnId(this.threadId, message.id, message.ts)
+      if (!beforeTurnId) return undefined
+      const forked = await this.controlRequest<{ thread?: { id?: string } }>('thread/fork', {
+        threadId: this.threadId,
+        beforeTurnId
+      })
+      return forked?.thread?.id ?? undefined
+    } catch (err) {
+      console.error('Codex thread/fork failed:', err)
+      return undefined
+    }
+  }
+
+  /**
+   * The Codex turn whose user message carries `clientId === messageId`.
+   *
+   * Turns come back newest-first, and `sentAt` is what stops the walk: once a
+   * page reaches turns older than the edited message, the target cannot be
+   * further back. Without it the common case is the expensive one — no thread
+   * predating `clientUserMessageId` carries a `clientId` at all, so every one of
+   * them would page to the front of the thread (25 turns and ~366 KB per
+   * request, parsed synchronously on the main process) only to answer null.
+   */
+  private async findTurnId(
+    threadId: string,
+    messageId: string,
+    sentAt: number
+  ): Promise<string | null> {
+    let cursor: string | null = null
+    do {
+      const res: TurnsPage = await this.controlRequest<TurnsPage>('thread/turns/list', {
+        threadId,
+        limit: 25,
+        cursor
+      })
+      for (const turn of res?.data ?? []) {
+        // startedAt is epoch SECONDS, and the turn we want starts a moment AFTER
+        // its message was created here — so truncation alone puts the target up
+        // to a second on the wrong side of `sentAt`, and a bare comparison
+        // rejects the very turn it was walking to. The slack makes the stop mean
+        // "demonstrably older" rather than "older by any amount"; being wrong in
+        // this direction only costs another page.
+        if (turn.startedAt && turn.startedAt * 1000 < sentAt - TURN_CLOCK_SLACK_MS) return null
+        const owns = (turn.items ?? []).some(
+          (item: RawTurnItem) => item?.type === 'userMessage' && item.clientId === messageId
+        )
+        if (owns && turn.id) return turn.id
+      }
+      cursor = res?.nextCursor ?? null
+    } while (cursor)
+    return null
   }
 
   private async controlRequest<T>(method: string, params: unknown): Promise<T> {

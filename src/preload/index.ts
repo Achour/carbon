@@ -81,6 +81,8 @@ const api: Api = {
     invoke('chat:set-options', chatId, patch),
   rewindFiles: (chatId: string, userMessageId: string, dryRun: boolean) =>
     invoke('chat:rewind-files', chatId, userMessageId, dryRun),
+  editMessage: (chatId: string, messageId: string, text: string) =>
+    invoke('chat:edit-message', chatId, messageId, text),
   sessionLive: (chatId: string) => invoke('session:live', chatId),
   mcpStatus: (chatId: string) => invoke('mcp:status', chatId),
   mcpReconnect: (chatId: string, name: string) => invoke('mcp:reconnect', chatId, name),

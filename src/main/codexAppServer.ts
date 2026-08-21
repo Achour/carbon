@@ -139,9 +139,24 @@ export interface AppServerThreadOptions extends ThreadOptions {
   developerInstructions?: string
 }
 
+/**
+ * `TurnOptions` plus the one field the app server takes and the SDK does not.
+ *
+ * `clientUserMessageId` is echoed back verbatim as `clientId` on the turn's
+ * `userMessage` item, which is what lets `thread/turns/list` be read as a map
+ * from Carbon's message ids to Codex's turn ids — the lookup `forkBefore` needs
+ * and the reason a conversation rewind needs nothing persisted on our side.
+ */
+export interface AppServerTurnOptions extends TurnOptions {
+  clientUserMessageId?: string
+}
+
 export interface CodexThreadLike {
   readonly id?: string | null
-  runStreamed(input: Input, options?: TurnOptions): Promise<{ events: AsyncGenerator<ThreadEvent> }>
+  runStreamed(
+    input: Input,
+    options?: AppServerTurnOptions
+  ): Promise<{ events: AsyncGenerator<ThreadEvent> }>
   run(
     input: Input,
     options?: TurnOptions
@@ -632,11 +647,12 @@ class CodexAppServerThread implements CodexThreadLike {
 
   async runStreamed(
     input: Input,
-    turnOptions: TurnOptions = {}
+    turnOptions: AppServerTurnOptions = {}
   ): Promise<{ events: AsyncGenerator<ThreadEvent> }> {
     const threadId = await this.ensureThread()
     const response = (await this.client.request('turn/start', {
       threadId,
+      clientUserMessageId: turnOptions.clientUserMessageId ?? null,
       input: inputForAppServer(input),
       cwd: this.options.workingDirectory ?? null,
       approvalPolicy: this.options.approvalPolicy ?? 'never',

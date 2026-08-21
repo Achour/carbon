@@ -106,6 +106,26 @@ interface PendingQuestion {
   questions: UserQuestion[]
 }
 
+/**
+ * Grok cannot truncate a conversation, so an edit-and-resend always replays.
+ *
+ * The extension exists and is half-wired: `_x.ai/rewind/points` enumerates one
+ * point per user prompt correctly, but `_x.ai/rewind/execute` answers
+ * `success: false` with a null error and leaves the history intact — measured
+ * against grok 1.0.5, on a fresh session and a `session/load`ed one, at every
+ * valid target index and in both `all` and `conversation_only` modes. The read
+ * half working is what makes this worth stating rather than guessing: the CLI's
+ * own `/rewind` drives the same session in-process, so the gap is the bridge,
+ * not the feature. Retry this when the CLI moves.
+ *
+ * `_x.ai/session/fork` is not the missing piece either — it copies a session
+ * whole (`sourceSessionId`, `sourceCwd`, `newCwd`) with no cut point, which is
+ * the worktree hand-off it was built for.
+ */
+export async function forkGrokBefore(): Promise<string | undefined> {
+  return undefined
+}
+
 export class GrokSession implements AgentSession {
   private chat: ChatData
   private emit: Emit

@@ -158,6 +158,37 @@ export function buildPlanImplementPrompt(plan: string, fromLabel: string): strin
 }
 
 /**
+ * The block prepended (invisibly) to the resent prompt when an edit-and-resend
+ * could not truncate the provider's own conversation and had to start a fresh
+ * one — Grok, or a chat whose kept turns predate the anchor we fork on.
+ *
+ * Deliberately not `buildHandoffContext`: nothing was handed over. It is the
+ * same agent, in the same workspace, resuming a conversation whose tail the user
+ * just rewrote — so the framing that matters is that the transcript below is its
+ * OWN history and that the turns after it were withdrawn on purpose. Told
+ * otherwise, the model spends the turn apologising for a switch that never
+ * happened, or tries to reconcile the missing replies.
+ */
+export function buildReplayContext(transcript: string): string {
+  return (
+    '<conversation-replay>\n' +
+    'This conversation is already in progress and the transcript below is your own ' +
+    'history with the user in this workspace (it may be truncated). Your session was ' +
+    'restarted for technical reasons, so continue seamlessly rather than greeting the ' +
+    'user as if this were new.\n\n' +
+    'Everything in that transcript still stands: treat instructions, facts, decisions and ' +
+    'preferences recorded in it as though the user had just told you them, because they ' +
+    'did. Only the turns AFTER it were withdrawn — the user edited their last message and ' +
+    'resent it, so the replies that followed the original wording no longer apply. Do not ' +
+    'try to recover them or ask what happened to them. Trust the workspace over this ' +
+    'transcript: read files when current state matters.\n\n' +
+    `${transcript}\n` +
+    '</conversation-replay>\n\n' +
+    "The user's edited message follows."
+  )
+}
+
+/**
  * The block prepended (invisibly — the UI never shows it) to the user's first
  * message on the new provider. `raw` marks the fallback where the summary is
  * the serialized transcript itself rather than a written brief.
