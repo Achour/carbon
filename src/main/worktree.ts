@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { existsSync } from 'node:fs'
+import { existsSync, realpathSync } from 'node:fs'
 import { mkdir, rmdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
@@ -192,10 +192,34 @@ export async function listWorktrees(cwd: string): Promise<WorktreeRef[]> {
   return refs.map((r) => (r.isMain ? r : { ...r, merged: merged.has(r.branch) }))
 }
 
-/** True when `path` is inside the directory the app owns. Guards destructive ops. */
+/**
+ * True when `path` is inside the directory the app owns. Guards destructive ops.
+ *
+ * Compared on **realpaths**, because git reports one: `git worktree list` echoes
+ * back the resolved path, not the path `worktree add` was handed, so a single
+ * symlink anywhere above the root makes every literal comparison false. The root
+ * is the side that moves — `$TMPDIR` on a mac is `/var/folders/…`, a symlink to
+ * `/private/var/folders/…` — and the failure is silent: stale metadata simply
+ * stops being pruned, and the guard stops recognising worktrees the app made.
+ *
+ * Resolution can fail on either side and must not throw: the caller's whole
+ * reason for asking is often that `path` was deleted behind the app's back, and
+ * the root may not exist until the first worktree is created. Both fall back to
+ * the literal string, and the unresolved root is still checked, so a path that
+ * was already relative to it matches whether or not it can be resolved.
+ */
 export function isManagedWorktree(path: string, root: string = worktreesRoot()): boolean {
-  const base = root.endsWith('/') ? root : `${root}/`
-  return path.startsWith(base)
+  const real = (p: string): string => {
+    try {
+      return realpathSync(p)
+    } catch {
+      return p
+    }
+  }
+  const under = (dir: string): boolean =>
+    path.startsWith(dir.endsWith('/') ? dir : `${dir}/`) ||
+    real(path).startsWith(dir.endsWith('/') ? dir : `${dir}/`)
+  return under(root) || under(real(root))
 }
 
 // ---------- Effectful API ----------

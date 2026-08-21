@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -65,6 +65,37 @@ test('isManagedWorktree only accepts paths inside the app-owned root', () => {
   assert.ok(!isManagedWorktree('/elsewhere/proj/br', '/root'))
   // Prefix-only matches must not pass.
   assert.ok(!isManagedWorktree('/rootless/proj', '/root'))
+})
+
+test('isManagedWorktree matches through a symlinked root', async () => {
+  // git reports realpaths: `worktree list` echoes the resolved directory, never
+  // the path `worktree add` was handed. A root reached through a symlink — the
+  // ordinary case on a mac, where $TMPDIR is /var/folders/… pointing at
+  // /private/var/folders/… — therefore never matched, and pruning silently
+  // stopped happening. Reproduced here with a real symlink rather than a
+  // hand-written pair of strings, since the whole bug is what the filesystem
+  // does and not what the comparison looks like.
+  const real = await mkdtemp(join(tmpdir(), 'karbun-real-'))
+  const link = `${real}-link`
+  try {
+    await symlink(real, link)
+    const inside = join(real, 'proj-1234', 'br')
+    await mkdir(inside, { recursive: true })
+
+    // The path as git reports it (resolved) against the root as we hold it.
+    assert.ok(isManagedWorktree(inside, link), 'resolved path, symlinked root')
+    // And the reverse, for a caller that kept the unresolved form.
+    assert.ok(isManagedWorktree(join(link, 'proj-1234', 'br'), real), 'symlinked path, real root')
+    assert.ok(isManagedWorktree(join(link, 'proj-1234', 'br'), link), 'both symlinked')
+    // A vanished worktree cannot be resolved at all and must still be placed —
+    // that is precisely when the guard is asked.
+    assert.ok(isManagedWorktree(join(real, 'gone', 'br'), link), 'path that no longer exists')
+    // Resolution must not turn an unrelated path into a match.
+    assert.ok(!isManagedWorktree('/elsewhere/proj/br', link))
+  } finally {
+    await rm(link, { force: true })
+    await rm(real, { recursive: true, force: true })
+  }
 })
 
 test('setupCommandFor prefers .karbun, falls back to .codex, and quotes paths', () => {
