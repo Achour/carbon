@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -88,8 +88,14 @@ test('isManagedWorktree matches through a symlinked root', async () => {
     assert.ok(isManagedWorktree(join(link, 'proj-1234', 'br'), real), 'symlinked path, real root')
     assert.ok(isManagedWorktree(join(link, 'proj-1234', 'br'), link), 'both symlinked')
     // A vanished worktree cannot be resolved at all and must still be placed —
-    // that is precisely when the guard is asked.
-    assert.ok(isManagedWorktree(join(real, 'gone', 'br'), link), 'path that no longer exists')
+    // that is precisely when the guard is asked. git recorded the resolved path
+    // when the worktree was added and keeps reporting that form after the
+    // directory goes, so the resolved spelling is the one to pin here; an
+    // unresolved path to a directory that no longer exists is a shape nothing
+    // produces, and matching it would mean resolving the longest surviving
+    // ancestor of every path handed in.
+    const resolvedRoot = await realpath(link)
+    assert.ok(isManagedWorktree(join(resolvedRoot, 'gone', 'br'), link), 'path that no longer exists')
     // Resolution must not turn an unrelated path into a match.
     assert.ok(!isManagedWorktree('/elsewhere/proj/br', link))
   } finally {
