@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-An Electron desktop GUI for coding agents. Claude sessions run through `@anthropic-ai/claude-agent-sdk`; Codex sessions run through `@openai/codex-sdk`; Grok sessions speak ACP to the `grok` CLI, which ships no SDK. All three live in the Electron main process, reuse the user's existing provider login, and operate in whatever project folder the user picks.
+An Electron desktop GUI for coding agents. Claude sessions run through `@anthropic-ai/claude-agent-sdk`; Codex sessions run through `@openai/codex-sdk`; Grok sessions speak ACP to the `grok` CLI, which ships no SDK. All three live in the Electron main process, drive **the CLIs the user installed** (see Provider CLIs below), reuse their existing provider login, and operate in whatever project folder the user picks.
 
 ## Commands
 
@@ -24,6 +24,9 @@ can run the `.ts` directly without a bundler.
 Dev utilities (env vars for `npm run dev`, used for UI iteration without a human clicking):
 - `AIGUI_CAPTURE=/tmp/shot.png` — saves a window screenshot after load. `AIGUI_CAPTURE_DELAY=2000,8000` takes a comma list of delays and saves `shot-1.png`, `shot-2.png`, …
 - `AIGUI_E2E='<js>'` — runs a script in the renderer after load and logs the result to the terminal.
+- `CARBON_CLAUDE_PATH` / `CARBON_CODEX_PATH` / `CARBON_GROK_PATH` — pin a provider's
+  CLI to a specific binary, above the Settings → Providers value. Useful for testing
+  a prerelease CLI, or the "not installed" path (point one at a path that isn't there).
 - `CARBON_UPDATE_REPO=owner/repo` — points the update check at another repo, so a real
   "newer release" can be faked (any repo whose latest tag outranks `package.json`).
 - `CARBON_FAKE_HOMEBREW=1` — forces `installedViaHomebrew`, the only way to reach the
@@ -136,9 +139,13 @@ Four findings drove the design, each measured against the running CLI:
 ACP handshake, so the agent is spawned, `initialize` is answered, and the process
 is killed before a session exists. It returns `[]` when the CLI is absent, and
 that is deliberately how Grok stays out of the picker for anyone who has not
-installed it — `assembleModelOptions` gives Grok no static fallback, unlike the
-two providers that ship with the app. The static `MODEL_OPTIONS` rows still exist
-so `knownProviderForModel` can place a stored `grok-4.6`.
+installed it. Grok is now the *general* case rather than the exception — no CLI
+ships with the app — so the rule lives in `availableProviders`, and what stays
+Grok-specific is only that it has no static fallback at all: Claude's and Codex's
+`MODEL_OPTIONS` rows still stand in for a catalog that hasn't arrived yet *when
+their CLI is present*, because then the fetch is pending rather than impossible.
+Grok's `MODEL_OPTIONS` rows exist solely so `knownProviderForModel` can place a
+stored `grok-4.6`.
 
 ### Persistence (`src/main/store.ts`)
 
@@ -479,6 +486,71 @@ Both exits relocate the chat, so main disposes the session and the next send res
 `branchVsDefault` (git.ts) is the *single* implementation of "where does this branch stand vs main" — one `for-each-ref` + one `rev-list --left-right`. `gitStatus` puts its answer on `GitStatus.defaultBranch` / `behindDefault` / `aheadDefault` (started before the numstat reads so it overlaps them instead of adding a round trip); `worktreeStatus` derives `unmergedCommits` from the same call; the merge guards read it directly. Everything user-facing — the `↓n` staleness chip in `ContextStrip` (click runs "Update from main"), the ⋯ menu labels, the merge dialog's counts — reads the `GitStatus` copy, so the chip, the menu and the dialog can never disagree. Staleness has no other symptom until it surfaces as a conflicted merge, which is why the chip says it out loud while it's still cheap to fix. Note `behindDefault` is *not* `GitStatus.behind`, which is measured against the branch's own upstream. `listWorktrees` tags each ref `merged` from a single `branch --merged`, which is what lets the picker mark a finished worktree and offer to remove it instead of accumulating dead ones. A fresh worktree with no setup script also says so in the chat (`setupMissingFor`); the silence used to read as "installed", and the agent would just start failing on missing dependencies.
 
 ## Provider integration
+
+### Provider CLIs (`src/main/providerCli.ts`)
+
+**Carbon spawns the CLIs the user installed. It ships none of its own.**
+
+That was not always true, and it was never decided — it was a default. Both SDKs
+carry the provider's entire CLI as an *optional dependency* (`@anthropic-ai/
+claude-agent-sdk-darwin-arm64`, `@openai/codex-darwin-arm64`; ~300 MB apiece),
+`npm install` pulls them in, and electron-builder ships the whole production
+tree. So the app shipped a second copy of a tool its users already had, and
+shipped it **stale**: a Carbon release pinned the agent's version, which means a
+CLI fix waited on an app release to reach anyone. Grok was the only provider
+resolved from the system, and only because xAI publishes no SDK to have vendored
+one.
+
+Two lines opt out — `pathToClaudeCodeExecutable` on the Agent SDK's query
+options, and this module's answer where `codexAppServer.ts` used to resolve the
+vendored package — after which `electron-builder.yml` drops the vendored
+packages from the build. The app went from ~860 MB to 299 MB, essentially all of
+which is now Electron.
+
+The cost of the choice is this file, and it is the whole cost: resolution, a
+version floor, and an honest "not installed" answer.
+
+- **Resolution order is env override → PATH → known install locations.** PATH
+  before the installers' own directories, because a version manager's shim
+  (mise, asdf, volta) is what the user's terminal would run and Carbon should
+  agree with it; the known locations answer for the Dock-launched app whose
+  `hydrateShellPath` found nothing. `CARBON_CLAUDE_PATH` / `CARBON_CODEX_PATH` /
+  `CARBON_GROK_PATH` outrank both (the Grok one predates the other two and keeps
+  its spelling).
+- **The binary is discovered, never configured.** There is no path setting, on
+  purpose: it would be a second source of truth for a question resolution
+  already answers, and one that goes stale the moment the CLI moves — the
+  failure mode being a setting that silently stops applying. The env vars cover
+  pointing at a specific build, which is a dev need rather than a user one.
+- **`path` and `installed` are separate fields.** An override that resolves to
+  nothing is reported *as itself* with `installed: false`, so the row can name
+  the path instead of saying "Not installed" and sending someone hunting for an
+  install they already have.
+- **A disabled provider is indistinguishable from a missing one downstream.**
+  Both are absent from `availableProviders`, so neither contributes a model row
+  anywhere. The switch exists because someone with all three installed may want
+  the picker down to the ones they use.
+- **`MIN_CLI_VERSION` is a floor, not the version we built against.** Being
+  *above* it is the normal case and the entire point of using the user's
+  install — it moves faster than Carbon does. Below it, the row warns and
+  nothing is blocked: refusing to run would be the app overruling a version the
+  user chose to keep.
+- **Session construction requires a binary; probes don't.** `requireCliPath`
+  throws a message naming the install command, and `deliver` already wraps
+  session construction, so it lands in the chat as an error card with the prompt
+  preserved. The throwaway probes (`warmModels`, `warmCommands`, the usage read)
+  call `cliPath` and return empty instead — a missing provider is a fact about
+  the machine, not a failure to report each time it's checked.
+- **`hasCompleteModelCatalog` is relative to what's available.** It used to name
+  Claude and Codex as required and exclude Grok. Requiring a provider that isn't
+  installed retries a probe that is correctly returning nothing, forever.
+
+Settings → Providers renders `ProviderCli[]` and re-probes on open, since the
+usual reason to be there is having just installed something in the terminal
+next to the app. Settings live in `settings.json` under `providers`, coerced
+through `knownProvider` on read like every other provider-keyed record.
+
+### Normalizing the three backends
 
 Keep provider behavior behind `AgentSession` and normalize it into `ChatEvent`. Claude has native per-tool permissions and `ExitPlanMode`; Codex maps permission choices to sandbox policies and synthesizes the same plan-review event so the renderer remains provider-neutral; Grok bridges ACP `session/request_permission` to the same event and synthesizes the plan review from a tool call (see Grok Build above).
 

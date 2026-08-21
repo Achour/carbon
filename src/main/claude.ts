@@ -60,6 +60,7 @@ import { runPreviewTool } from './previewTools.ts'
 import { CodexSession, fetchCodexModels, generateCodexText } from './codex'
 import { CodexAppServerClient } from './codexAppServer'
 import { fetchGrokModels, generateGrokText, GrokSession } from './grok'
+import { cliAvailable, cliPath, requireCliPath } from './providerCli.ts'
 import { composePrompt, withTimeout, type AgentSession, type Emit } from './session'
 import { DeltaCoalescer } from './deltaCoalescer'
 import { TITLE_SYSTEM, buildTitlePrompt, cleanTitle, deriveTitle, firstUserText } from './titles'
@@ -253,9 +254,12 @@ async function generateClaudeText(
   systemPrompt: string,
   prompt: string
 ): Promise<string | null> {
+  const claude = cliPath('claude')
+  if (!claude) return null
   const q = query({
     prompt,
     options: {
+      pathToClaudeCodeExecutable: claude,
       cwd: cwd || undefined,
       model,
       systemPrompt,
@@ -451,6 +455,12 @@ class ClaudeSession implements AgentSession {
     this.q = query({
       prompt: this.input.iterate(),
       options: {
+        // Carbon runs the user's own Claude Code install rather than a copy
+        // bundled with the SDK; without this the SDK resolves its vendored
+        // binary, which the packaged app deliberately does not ship. Throws a
+        // user-facing "not installed" message that `deliver` turns into an
+        // error card with the prompt preserved.
+        pathToClaudeCodeExecutable: requireCliPath('claude'),
         cwd: chat.cwd,
         resume: chat.sessionId,
         model: chat.model || undefined,
@@ -1855,10 +1865,13 @@ export class ChatManager {
     const inflight = this.warmups.get(cwd)
     if (inflight) return inflight
     const run = (async (): Promise<SlashCommand[]> => {
+      const claude = cliPath('claude')
+      if (!claude) return []
       const input = createInputQueue()
       const q = query({
         prompt: input.iterate(),
         options: {
+          pathToClaudeCodeExecutable: claude,
           cwd,
           permissionMode: 'default',
           settingSources: ['user', 'project', 'local'],
@@ -1900,8 +1913,13 @@ export class ChatManager {
    * SessionStart hooks (which can be slow, or stall) out of the path.
    */
   private async warmModels(cwd: string): Promise<ModelOption[]> {
+    const claude = cliPath('claude')
+    if (!claude) return []
     const input = createInputQueue()
-    const q = query({ prompt: input.iterate(), options: { cwd } })
+    const q = query({
+      prompt: input.iterate(),
+      options: { pathToClaudeCodeExecutable: claude, cwd }
+    })
     try {
       return (await q.supportedModels()).map(toModelOption)
     } catch {
@@ -1917,6 +1935,7 @@ export class ChatManager {
   }
 
   private async warmCodexModels(): Promise<ModelOption[]> {
+    if (!cliAvailable('codex')) return []
     const client = new CodexAppServerClient({})
     try {
       return await fetchCodexModels(client)

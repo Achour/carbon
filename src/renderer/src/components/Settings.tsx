@@ -11,8 +11,11 @@ import {
   Moon,
   Palette,
   Plus,
+  RefreshCw,
   Rows3,
   Sun,
+  Terminal,
+  TriangleAlert,
   X
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -38,11 +41,14 @@ import {
   UPDATE_VIA_HOMEBREW
 } from '@/components/UpdateBanner'
 import { Button } from '@/components/ui/button'
+import { ProviderAvatar } from '@/components/ui/provider-mark'
 import { WithTooltip } from '@/components/ui/tooltip'
+import { PROVIDER_LABELS, type ProviderCli } from '@shared/types'
 
 const SECTIONS = [
   { id: 'appearance', label: 'Appearance', icon: Palette },
   { id: 'chats', label: 'Chats', icon: MessageSquare },
+  { id: 'providers', label: 'Providers', icon: Terminal },
   { id: 'notifications', label: 'Notifications', icon: Bell },
   { id: 'about', label: 'About', icon: Info }
 ] as const
@@ -255,6 +261,177 @@ function Toggle({
         />
       </span>
     </button>
+  )
+}
+
+/**
+ * One provider's CLI: whether it's there, which binary, which version.
+ *
+ * Carbon drives the providers' real command-line tools and runs the ones the
+ * user installed rather than shipping copies of them — so "is it installed?" is
+ * a question the app genuinely has to answer, and this is where it answers it.
+ * The alternative was bundling a second, frozen copy of each CLI inside the
+ * app, which would pin the agent's version to Carbon's release cadence.
+ *
+ * The switch is separate from the install on purpose: turning a provider off is
+ * how someone with all three installed keeps the model picker down to the ones
+ * they actually use, and it reads identically to "not installed" everywhere
+ * downstream — no rows in any picker.
+ */
+function ProviderRow({ cli }: { cli: ProviderCli }): React.JSX.Element {
+  const setProviderCli = useApp((s) => s.setProviderCli)
+  const [copied, setCopied] = React.useState(false)
+
+  const missing = !cli.installed
+  const label = PROVIDER_LABELS[cli.provider]
+
+  const copyInstall = (): void => {
+    void navigator.clipboard.writeText(cli.installCommand)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1600)
+  }
+
+  return (
+    <div className="rounded-lg border border-border px-3 py-3">
+      <div className="flex items-center gap-3">
+        <ProviderAvatar provider={cli.provider} className="size-6" />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="text-[13px] font-medium">{label}</span>
+            {cli.version && (
+              <span className="rounded bg-secondary px-1.5 py-px font-mono text-[10px] text-muted-foreground tabular-nums">
+                {cli.version}
+              </span>
+            )}
+          </div>
+          <div className="mt-0.5 truncate text-xs text-muted-foreground">
+            {!missing ? (
+              <span className="font-mono">{cli.path}</span>
+            ) : cli.path ? (
+              // Only an env override can put a path here that doesn't run.
+              // Naming it beats "Not installed", which would send someone
+              // hunting for an install they already have.
+              <span className="text-warning">
+                Not executable: <span className="font-mono">{cli.path}</span>
+              </span>
+            ) : (
+              'Not installed'
+            )}
+          </div>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={cli.enabled}
+          aria-label={`Use ${label}`}
+          disabled={missing}
+          onClick={() => void setProviderCli(cli.provider, { enabled: !cli.enabled })}
+          className={cn(
+            'relative h-[18px] w-8 shrink-0 rounded-full transition-colors',
+            cli.enabled && !missing ? 'bg-primary' : 'bg-secondary',
+            missing && 'cursor-not-allowed opacity-40'
+          )}
+        >
+          <span
+            className={cn(
+              'absolute top-[2px] left-[2px] size-3.5 rounded-full bg-background shadow-sm transition-transform',
+              cli.enabled && !missing && 'translate-x-[14px]'
+            )}
+          />
+        </button>
+      </div>
+
+      {/* The install command, shown only when it's the thing to do next — so
+          not when an env override resolved to a path that simply won't run. */}
+      {missing && !cli.path && (
+        <div className="mt-2.5 flex items-center gap-2">
+          <code className="min-w-0 flex-1 truncate rounded-md bg-secondary px-2 py-1.5 font-mono text-[11px]">
+            {cli.installCommand}
+          </code>
+          <Button size="sm" variant="secondary" onClick={copyInstall}>
+            {copied ? 'Copied' : 'Copy'}
+          </Button>
+        </div>
+      )}
+
+      {/* Below the floor Carbon's adapter was written against — a warning, not
+          a block: the turn may work fine, and refusing to run it would be the
+          app overruling a version the user chose to keep. */}
+      {cli.outdated && cli.version && (
+        <div className="mt-2.5 flex items-start gap-2 text-xs text-warning">
+          <TriangleAlert className="mt-px size-3.5 shrink-0" />
+          <span>
+            Carbon expects {cli.minVersion} or newer; this is {cli.version}. Some features may
+            not work.
+          </span>
+        </div>
+      )}
+
+    </div>
+  )
+}
+
+/**
+ * The Providers section. Nothing here is required reading: with the CLIs
+ * installed the app finds them and this page only confirms it. It earns its
+ * place the moment one is missing, sits somewhere unusual, or should be hidden
+ * from the model picker.
+ */
+function ProvidersSection(): React.JSX.Element {
+  const providerClis = useApp((s) => s.providerClis)
+  const loadProviderClis = useApp((s) => s.loadProviderClis)
+  const [rechecking, setRechecking] = React.useState(false)
+
+  // Re-probe on open: the common reason to be here is having just installed
+  // something in a terminal next to the app, and asking the user to press a
+  // button for an answer the app can fetch on its own would be the wrong
+  // default. The button stays for the case of installing *while* looking at it.
+  React.useEffect(() => {
+    void loadProviderClis(true)
+  }, [loadProviderClis])
+
+  const recheck = async (): Promise<void> => {
+    setRechecking(true)
+    await loadProviderClis(true)
+    setRechecking(false)
+  }
+
+  const none = providerClis.length > 0 && providerClis.every((cli) => !cli.installed)
+
+  return (
+    <section>
+      <SectionHeader
+        icon={Terminal}
+        title="Providers"
+        description="Carbon runs the coding agents you have installed. Each one keeps its own login, so signing in stays where you already did it."
+      />
+
+      {none && (
+        <div className="mb-3 flex items-start gap-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2.5 text-xs text-warning">
+          <TriangleAlert className="mt-px size-3.5 shrink-0" />
+          <span>
+            None of the agent CLIs were found, so there is nothing to chat with yet. Install one
+            with the command on its row, then Recheck.
+          </span>
+        </div>
+      )}
+
+      <div className="space-y-2">
+        {providerClis.map((cli) => (
+          <ProviderRow key={cli.provider} cli={cli} />
+        ))}
+      </div>
+
+      <div className="mt-3 flex items-center justify-between">
+        <span className="text-xs text-muted-foreground">
+          Just installed one? Recheck picks it up without a restart.
+        </span>
+        <Button size="sm" variant="secondary" onClick={() => void recheck()} disabled={rechecking}>
+          {rechecking ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+          Recheck
+        </Button>
+      </div>
+    </section>
   )
 }
 
@@ -611,6 +788,8 @@ export function Settings(): React.JSX.Element {
                 </Row>
               </section>
             )}
+
+            {section === 'providers' && <ProvidersSection />}
 
             {section === 'notifications' && (
               <section>

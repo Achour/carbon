@@ -17,6 +17,7 @@ const DEFAULT_BUILD_EFFORTS: Record<Provider, EffortId[]> = {
   codex: ['low', 'medium', 'high', 'xhigh'],
   grok: ['low', 'medium', 'high', 'xhigh']
 }
+import { availableProviders } from '@/lib/modelCatalog'
 import {
   assembleModelOptions,
   canonicalModelId,
@@ -40,6 +41,7 @@ export function PlanContent({
   const chat = useApp((s) => s.chats.find((c) => c.id === s.activeId) ?? null)
   const dynamicModels = useApp((s) => s.models)
   const codexConfigModel = useApp((s) => s.codexConfigModel)
+  const providerClis = useApp((s) => s.providerClis)
   const modelEfforts = useApp((s) => s.defaults?.modelEfforts)
   const [feedback, setFeedback] = React.useState('')
   const [autoAccept, setAutoAccept] = React.useState(false)
@@ -59,11 +61,13 @@ export function PlanContent({
   const buildOptions = React.useMemo(
     () =>
       chat
-        ? assembleModelOptions(dynamicModels, codexConfigModel).filter(
-            (option) => !option.disabled
-          )
+        ? assembleModelOptions(
+            dynamicModels,
+            codexConfigModel,
+            availableProviders(providerClis)
+          ).filter((option) => !option.disabled)
         : [],
-    [chat, dynamicModels, codexConfigModel]
+    [chat, dynamicModels, codexConfigModel, providerClis]
   )
   const currentModel = chat ? canonicalModelId(chat.model ?? '', buildOptions) : ''
   const buildModel = buildPick ?? currentModel

@@ -18,7 +18,11 @@ import { formatCost, formatDuration } from '@/lib/format'
 import { invalidateLocalImages } from '@/lib/imageCache'
 import { gitAction, gitActionPrompt, type GitActionId } from '@/lib/gitActions'
 import { changedPathsFromParts } from '@/lib/turnChanges'
-import { hasCompleteModelCatalog, mergeModelCatalogs } from '@/lib/modelCatalog'
+import {
+  availableProviders,
+  hasCompleteModelCatalog,
+  mergeModelCatalogs
+} from '@/lib/modelCatalog'
 import {
   isEmptyDraft,
   loadDrafts,
@@ -61,6 +65,8 @@ import type {
   PreviewState,
   ChatOptionsPatch,
   Provider,
+  ProviderCli,
+  ProviderCliConfig,
   RateLimitState,
   RewindResult,
   ServiceTier,
@@ -236,6 +242,16 @@ interface AppState {
   /** User-level Codex default, kept separate from Claude's dynamic model rows. */
   codexConfigModel: string | null | undefined
   loadCodexConfigModel(): Promise<void>
+  /**
+   * Each provider's CLI as main resolved it. Carbon runs the user's own
+   * installs, so this is what decides which providers the pickers offer — not a
+   * static list — and what Settings → Providers renders.
+   */
+  providerClis: ProviderCli[]
+  /** `refresh` re-probes the disk, for the Providers section's Recheck. */
+  loadProviderClis(refresh?: boolean): Promise<void>
+  /** Toggle a provider or pin its binary; refetches the model catalog after. */
+  setProviderCli(provider: Provider, patch: ProviderCliConfig): Promise<void>
   /** Revert the working tree to a user message's checkpoint (dryRun previews only). */
   rewindFiles(userMessageId: string, dryRun: boolean): Promise<RewindResult>
   /** Pending permission requests, keyed by chat id. */
@@ -933,6 +949,7 @@ export const useApp = create<AppState>((set, get) => ({
   fastMode: {},
   models: [],
   codexConfigModel: undefined,
+  providerClis: [],
   permissions: {},
   queued: {},
   planPanel: null,
@@ -1438,7 +1455,14 @@ export const useApp = create<AppState>((set, get) => ({
     // The native material already exists in a stable active state; reveal it at
     // boot only when the user's translucency setting is on.
     void window.api.setWindowTranslucent(get().translucentSidebar)
-    const [chats, defaults] = await Promise.all([window.api.listChats(), window.api.getDefaults()])
+    // Awaited with the rest of boot rather than fired off: every model picker
+    // reads from it, and a list that arrives late would render the composer's
+    // chip empty for a beat, or — worse — offer a provider that isn't there.
+    const [chats, defaults, providerClis] = await Promise.all([
+      window.api.listChats(),
+      window.api.getDefaults(),
+      window.api.providerClis().catch(() => [])
+    ])
     // A chat deleted in another window (the database is shared) leaves its draft
     // behind; this is the first moment we can tell. Project drafts are NOT
     // pruned against this list — a draft is often the very first thing in a
@@ -1451,6 +1475,7 @@ export const useApp = create<AppState>((set, get) => ({
       chats,
       chatDrafts,
       defaults,
+      providerClis,
       loading: false,
       selectedCwd: homeCwd(chats, defaults.recentDirs)
     })
@@ -2272,7 +2297,8 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   async loadModels(chatId, cwd) {
-    if (hasCompleteModelCatalog(get().models)) return
+    const available = availableProviders(get().providerClis)
+    if (hasCompleteModelCatalog(get().models, available)) return
     const id = chatId ?? get().activeId
     const folder =
       cwd ??
@@ -2298,7 +2324,7 @@ export const useApp = create<AppState>((set, get) => ({
       if (models.length) {
         set((state) => ({ models: mergeModelCatalogs(state.models, models) }))
       }
-      modelsRetryAt = hasCompleteModelCatalog(get().models)
+      modelsRetryAt = hasCompleteModelCatalog(get().models, available)
         ? Number.POSITIVE_INFINITY
         : Date.now() + MODELS_RETRY_MS
     } catch {
@@ -2327,6 +2353,29 @@ export const useApp = create<AppState>((set, get) => ({
       // The chip can safely retain "Codex (default)" when config is unavailable.
       set({ codexConfigModel: null })
     }
+  },
+
+  async loadProviderClis(refresh = false) {
+    if (!refresh && get().providerClis.length) return
+    try {
+      set({ providerClis: await window.api.providerClis(refresh) })
+    } catch {
+      // Leave the last good answer. An empty list would empty every model
+      // picker, which is a far worse failure than a stale install status.
+    }
+  },
+
+  async setProviderCli(provider, patch) {
+    try {
+      set({ providerClis: await window.api.setProviderCli(provider, patch) })
+    } catch {
+      return
+    }
+    // Enabling a provider makes a catalog fetchable that the retry policy had
+    // already given up on, so the models cache is reset rather than merged.
+    modelsRetryAt = 0
+    set({ models: [] })
+    void get().loadModels()
   },
 
   async rewindFiles(userMessageId, dryRun) {

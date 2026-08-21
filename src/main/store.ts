@@ -20,8 +20,23 @@ import type {
   ChatMeta,
   EffortId,
   PermissionModeId,
+  Provider,
+  ProviderCliConfig,
   ServiceTier
 } from '@shared/types'
+
+/** Drop provider keys this build has no backend for — see `knownProvider`. */
+function knownProviderConfigs(
+  raw: Partial<Record<Provider, ProviderCliConfig>> | undefined
+): Partial<Record<Provider, ProviderCliConfig>> | undefined {
+  if (!raw) return undefined
+  const out: Partial<Record<Provider, ProviderCliConfig>> = {}
+  for (const [key, value] of Object.entries(raw)) {
+    const provider = knownProvider(key)
+    if (provider && value) out[provider] = value
+  }
+  return out
+}
 
 /**
  * Parse a stored chat row back into something *this* build can actually run.
@@ -76,6 +91,12 @@ function writeFileAtomic(path: string, data: string): void {
 
 interface SettingsFile {
   defaults: AppDefaults
+  /**
+   * Per-provider CLI settings. Absent by default — every provider is on and
+   * discovered — so an untouched settings.json carries no `providers` key at
+   * all and a provider added by a later build needs no migration.
+   */
+  providers?: Partial<Record<Provider, ProviderCliConfig>>
   windowBounds?: { x?: number; y?: number; width: number; height: number }
 }
 
@@ -1831,7 +1852,12 @@ export class Store {
         return {
           ...DEFAULT_SETTINGS,
           ...raw,
-          defaults: { ...DEFAULT_SETTINGS.defaults, ...raw.defaults }
+          defaults: { ...DEFAULT_SETTINGS.defaults, ...raw.defaults },
+          // Same coercion as `parseMeta`: settings.json is shared by every build
+          // (userData is pinned), so a branch that adds a fourth provider can
+          // leave a key this one has no backend for. Dropping it here keeps the
+          // record total over `Provider` for every reader downstream.
+          providers: knownProviderConfigs(raw.providers)
         }
       }
     } catch (err) {
@@ -1850,6 +1876,18 @@ export class Store {
 
   getDefaults(): AppDefaults {
     return this.settings.defaults
+  }
+
+  getProviderClis(): Partial<Record<Provider, ProviderCliConfig>> {
+    return this.settings.providers ?? {}
+  }
+
+  /** Merge one provider's CLI settings. */
+  setProviderCli(provider: Provider, patch: ProviderCliConfig): void {
+    const providers = { ...(this.settings.providers ?? {}) }
+    providers[provider] = { ...providers[provider], ...patch }
+    this.settings.providers = providers
+    this.writeSettings()
   }
 
   /**

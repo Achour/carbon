@@ -1,8 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { statSync } from 'node:fs'
-import { createRequire } from 'node:module'
-import { delimiter, dirname, join } from 'node:path'
 import { createInterface } from 'node:readline'
+import { requireCliPath } from './providerCli.ts'
 import type {
   Input,
   ThreadEvent,
@@ -278,74 +276,17 @@ class AppServerTurn {
   }
 }
 
-const PLATFORM_PACKAGE_BY_TARGET: Record<string, string> = {
-  'x86_64-unknown-linux-musl': '@openai/codex-linux-x64',
-  'aarch64-unknown-linux-musl': '@openai/codex-linux-arm64',
-  'x86_64-apple-darwin': '@openai/codex-darwin-x64',
-  'aarch64-apple-darwin': '@openai/codex-darwin-arm64',
-  'x86_64-pc-windows-msvc': '@openai/codex-win32-x64',
-  'aarch64-pc-windows-msvc': '@openai/codex-win32-arm64'
-}
-
-function targetTriple(): string {
-  const platform = process.platform
-  const arch = process.arch
-  if ((platform === 'linux' || platform === 'android') && arch === 'x64')
-    return 'x86_64-unknown-linux-musl'
-  if ((platform === 'linux' || platform === 'android') && arch === 'arm64')
-    return 'aarch64-unknown-linux-musl'
-  if (platform === 'darwin' && arch === 'x64') return 'x86_64-apple-darwin'
-  if (platform === 'darwin' && arch === 'arm64') return 'aarch64-apple-darwin'
-  if (platform === 'win32' && arch === 'x64') return 'x86_64-pc-windows-msvc'
-  if (platform === 'win32' && arch === 'arm64') return 'aarch64-pc-windows-msvc'
-  throw new Error(`Unsupported platform for bundled Codex: ${platform} (${arch})`)
-}
-
-function isFile(path: string): boolean {
-  try {
-    return statSync(path).isFile()
-  } catch {
-    return false
-  }
-}
-
-function isDirectory(path: string): boolean {
-  try {
-    return statSync(path).isDirectory()
-  } catch {
-    return false
-  }
-}
-
-/** Resolve the same optional native package used by @openai/codex-sdk. */
-export function resolveBundledCodex(): { executablePath: string; pathDirs: string[] } {
-  const triple = targetTriple()
-  const platformPackage = PLATFORM_PACKAGE_BY_TARGET[triple]
-  if (!platformPackage) throw new Error(`Unsupported Codex target: ${triple}`)
-  try {
-    const require = createRequire(import.meta.url)
-    const codexPackage = require.resolve('@openai/codex/package.json')
-    const codexRequire = createRequire(codexPackage)
-    const nativePackage = codexRequire.resolve(`${platformPackage}/package.json`)
-    const vendor = join(dirname(nativePackage), 'vendor')
-    const packageRoot = join(vendor, triple)
-    const binaryName = process.platform === 'win32' ? 'codex.exe' : 'codex'
-    const modern = join(packageRoot, 'bin', binaryName)
-    if (isFile(modern)) {
-      const pathDir = join(packageRoot, 'codex-path')
-      return { executablePath: modern, pathDirs: isDirectory(pathDir) ? [pathDir] : [] }
-    }
-    const legacy = join(packageRoot, 'codex', binaryName)
-    if (isFile(legacy)) {
-      const pathDir = join(packageRoot, 'path')
-      return { executablePath: legacy, pathDirs: isDirectory(pathDir) ? [pathDir] : [] }
-    }
-  } catch (error) {
-    throw new Error(
-      `Unable to locate the bundled Codex CLI: ${error instanceof Error ? error.message : String(error)}`
-    )
-  }
-  throw new Error(`The bundled Codex CLI is missing its ${triple} binary.`)
+/**
+ * The Codex binary to spawn `app-server` on: the user's own install, resolved
+ * by `providerCli`. The SDK ships a vendored copy as an optional dependency and
+ * Carbon deliberately doesn't take it — see the note at the head of that module.
+ *
+ * The vendored layout also carried a `codex-path` directory of helper binaries
+ * that had to be prepended to PATH; a real install provides its own, so nothing
+ * is prepended here.
+ */
+function resolveCodexBinary(): string {
+  return requireCliPath('codex')
 }
 
 function inputForAppServer(input: Input): Array<Record<string, unknown>> {
@@ -869,14 +810,12 @@ export class CodexAppServerClient implements CodexClientLike {
   }
 
   private async start(): Promise<void> {
-    const resolved = resolveBundledCodex()
+    const executablePath = resolveCodexBinary()
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       CODEX_INTERNAL_ORIGINATOR_OVERRIDE: 'carbon'
     }
-    const existingPath = env.PATH ?? ''
-    env.PATH = [...resolved.pathDirs, ...existingPath.split(delimiter).filter(Boolean)].join(delimiter)
-    const child = spawn(resolved.executablePath, ['app-server'], {
+    const child = spawn(executablePath, ['app-server'], {
       env,
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true

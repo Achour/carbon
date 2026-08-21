@@ -61,6 +61,7 @@ import {
   type GrokSessionUpdate,
   type GrokToolCall
 } from './grokAcp.ts'
+import { requireCliPath } from './providerCli.ts'
 import { deriveTitle } from './titles.ts'
 import { USD_PER_TICK } from './usageScan.ts'
 import type { PreviewManager } from './preview.ts'
@@ -177,6 +178,10 @@ export class GrokSession implements AgentSession {
     onCommands: (commands: SlashCommand[]) => void = () => {},
     private preview: PreviewManager | null = null
   ) {
+    // Fail here rather than at the ACP spawn: `deliver` wraps session
+    // construction, so a missing or switched-off CLI lands in the chat as an
+    // error card naming the install command, with the prompt preserved.
+    requireCliPath('grok')
     this.chat = chat
     this.emit = emit
     this.store = store

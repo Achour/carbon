@@ -1,6 +1,7 @@
 import { query } from '@anthropic-ai/claude-agent-sdk'
 import type { ProviderUsage, RateLimitWindow, UsageOverview } from '@shared/types'
 import { CodexAppServerClient } from './codexAppServer'
+import { cliPath } from './providerCli.ts'
 import { withTimeout } from './session'
 import { codexWindow, type CodexWindow } from './usageWindows'
 
@@ -47,7 +48,12 @@ function unavailable(provider: ProviderUsage['provider'], note: string): Provide
  * SessionStart hooks out of the path.
  */
 async function readClaude(cwd: string): Promise<ProviderUsage> {
-  const q = query({ prompt: idlePrompt(), options: { cwd } })
+  const claude = cliPath('claude')
+  if (!claude) return unavailable('claude', 'Claude Code isn’t installed.')
+  const q = query({
+    prompt: idlePrompt(),
+    options: { pathToClaudeCodeExecutable: claude, cwd }
+  })
   try {
     const u = await q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET()
     if (!u.rate_limits_available || !u.rate_limits) {

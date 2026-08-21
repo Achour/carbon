@@ -747,6 +747,50 @@ export type ChatEvent =
 
 // ---------- Settings ----------
 
+/**
+ * Per-provider CLI settings, persisted in settings.json. Absent by default — a
+ * provider is on until switched off — so an untouched file carries no entry.
+ *
+ * Deliberately only the switch: the binary is *discovered*, not configured. A
+ * path field would be a second source of truth for a question resolution
+ * already answers, and one that silently goes stale when the CLI moves. The
+ * `CARBON_*_PATH` env vars cover pointing at a specific build.
+ */
+export interface ProviderCliConfig {
+  enabled?: boolean
+}
+
+/** Where a resolved provider binary was found. */
+export type ProviderCliSource = 'configured' | 'path' | 'known'
+
+/**
+ * A provider's CLI as the app currently sees it — what Settings → Providers
+ * renders, and what decides whether the provider appears in a model picker.
+ * Carbon runs the CLIs the user installed rather than bundling copies, so
+ * "installed?" is a real question the app has to answer out loud.
+ */
+export interface ProviderCli {
+  provider: Provider
+  /** The user's switch. A disabled provider is hidden exactly like a missing one. */
+  enabled: boolean
+  /**
+   * The binary that would be spawned, or null when nothing was found. A pinned
+   * path that no longer exists is reported *as itself* with `installed` false,
+   * so the row can name the setting that is the reason.
+   */
+  path: string | null
+  /** `path` exists and is executable. */
+  installed: boolean
+  /** Version the CLI reports; null when it was found but wouldn't run. */
+  version: string | null
+  source: ProviderCliSource | null
+  /** Below `minVersion` — a warning, never a block. */
+  outdated: boolean
+  minVersion: string
+  /** The command to run when nothing was found, shown on the row. */
+  installCommand: string
+}
+
 export interface AppDefaults {
   model?: string
   /** Provider of the remembered model; older settings infer it from the catalog. */
@@ -1403,6 +1447,14 @@ export interface Api {
   /** Open the current branch's PR in the browser (`gh pr view --web`). */
   githubOpenPr(cwd: string): Promise<GitResult>
   getDefaults(): Promise<AppDefaults>
+  /**
+   * Every provider's CLI status. `refresh` re-probes the disk and re-reads each
+   * `--version`, which is what the Providers section's refresh does after the
+   * user installs one without restarting the app.
+   */
+  providerClis(refresh?: boolean): Promise<ProviderCli[]>
+  /** Toggle a provider or pin its binary; returns the re-probed list. */
+  setProviderCli(provider: Provider, patch: ProviderCliConfig): Promise<ProviderCli[]>
   forgetDir(dir: string): Promise<void>
   /** Show a file or folder in the OS file manager, selected in its parent. */
   revealPath(path: string): Promise<void>

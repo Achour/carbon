@@ -2,30 +2,36 @@ import {
   MODEL_OPTIONS,
   canonicalModelId,
   rememberedEffortForModel,
-  type ModelOption
+  type ModelOption,
+  type Provider
 } from '@shared/types'
 
 export { canonicalModelId, rememberedEffortForModel }
 
 /**
- * The full model picker list. Each provider independently prefers its live
- * catalog and falls back to static rows, so one unavailable CLI cannot hide the
- * other provider. Shared by the composer and plan review picker.
+ * The full model picker list, restricted to providers whose CLI is available.
  *
- * Grok is the exception, and only ever appears live. Claude and Codex ship with
- * the app, so their static rows are a safe stand-in for a catalog that has not
- * arrived yet — the CLI is there either way. Grok is a separate install, and
- * its probe returning nothing is the answer "not installed", not "not fetched".
- * Falling back to static rows there would put models in the picker whose every
- * send fails with a missing binary, which is worse than not offering them: the
- * static rows still exist in `MODEL_OPTIONS`, where they place a stored id like
- * `grok-4.6` for `knownProviderForModel` without advertising anything.
+ * Carbon spawns the CLIs the user installed rather than copies of its own, so
+ * "which providers can this machine run" is a real question and `available` is
+ * its answer — a provider missing from it contributes no rows at all, because
+ * every send would fail on a missing binary. That rule started as Grok's alone
+ * (the one CLI the app never shipped) and now covers all three.
+ *
+ * Within an available provider the static `MODEL_OPTIONS` rows still stand in
+ * for a catalog that hasn't arrived yet: the CLI is there, so the fetch is
+ * pending rather than impossible, and the rows it will return are the ones
+ * already listed. Grok keeps no static fallback even when installed — its
+ * catalog is entirely runtime-discovered, and `MODEL_OPTIONS` carries its rows
+ * only so `knownProviderForModel` can place a stored `grok-4.6`.
  */
 export function assembleModelOptions(
   dynamicModels: ModelOption[],
-  codexConfigModel: string | null | undefined
+  codexConfigModel: string | null | undefined,
+  available: Provider[]
 ): ModelOption[] {
+  const can = new Set(available)
   const providerOptions = (provider: ModelOption['provider']): ModelOption[] => {
+    if (!can.has(provider)) return []
     const live = dynamicModels.filter((option) => option.provider === provider)
     return live.length ? live : MODEL_OPTIONS.filter((option) => option.provider === provider)
   }
@@ -34,6 +40,8 @@ export function assembleModelOptions(
       ? { ...option, resolvedModel: codexConfigModel }
       : option
   )
-  const grokModels = dynamicModels.filter((option) => option.provider === 'grok')
+  const grokModels = can.has('grok')
+    ? dynamicModels.filter((option) => option.provider === 'grok')
+    : []
   return [...providerOptions('claude'), ...codexModels, ...grokModels]
 }

@@ -13,6 +13,7 @@ import {
   type Usage
 } from '@openai/codex-sdk'
 import { CODEX_DEFAULT_MODEL, MODEL_OPTIONS } from '../shared/types.ts'
+import { requireCliPath } from './providerCli.ts'
 import type {
   AccountInfo,
   AgentInfo,
@@ -478,6 +479,11 @@ export class CodexSession implements AgentSession {
       ): Promise<Record<string, unknown> | undefined>
     } | null = null
   ) {
+    // Checked here rather than left to the App Server spawn: `deliver` wraps
+    // session construction, so a missing or switched-off CLI becomes an error
+    // card naming the install command instead of a turn that dies mid-flight.
+    // Skipped when a client is injected — those tests never reach a binary.
+    if (!codex) requireCliPath('codex')
     this.chat = chat
     this.emit = emit
     this.store = store

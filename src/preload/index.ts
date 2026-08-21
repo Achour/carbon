@@ -14,6 +14,7 @@ import type {
   PreviewCommandResult,
   PreviewEvent,
   Provider,
+  ProviderCliConfig,
   ChatOptionsPatch,
   ServiceTier,
   TerminalCreateOpts,
@@ -116,6 +117,9 @@ const api: Api = {
   githubState: (cwd: string) => invoke('github:state', cwd),
   githubOpenPr: (cwd: string) => invoke('github:open-pr', cwd),
   getDefaults: () => invoke('app:get-defaults'),
+  providerClis: (refresh?: boolean) => invoke('providers:list', refresh),
+  setProviderCli: (provider: Provider, patch: ProviderCliConfig) =>
+    invoke('providers:set', provider, patch),
   forgetDir: (dir: string) => invoke('app:forget-dir', dir),
   revealPath: (path: string) => invoke('app:reveal-path', path),
   focusWindow: () => invoke('app:focus-window'),

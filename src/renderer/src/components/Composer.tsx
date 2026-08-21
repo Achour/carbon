@@ -40,6 +40,7 @@ import { cn } from '@/lib/utils'
 import { formatTokens } from '@/lib/format'
 import type { ComposerDraft } from '@/lib/drafts'
 import { FileIcon } from '@/lib/fileIcon'
+import { availableProviders } from '@/lib/modelCatalog'
 import {
   assembleModelOptions,
   canonicalModelId,
@@ -728,6 +729,7 @@ export function Composer({
   // placeholders the static list carries.
   const dynamicModels = useApp((s) => s.models)
   const codexConfigModel = useApp((s) => s.codexConfigModel)
+  const providerClis = useApp((s) => s.providerClis)
   const loadCodexConfigModel = useApp((s) => s.loadCodexConfigModel)
   const loadModels = useApp((s) => s.loadModels)
   React.useEffect(() => {
@@ -739,10 +741,13 @@ export function Composer({
   React.useEffect(() => {
     void loadModels(undefined, cwd ?? undefined)
   }, [loadModels, cwd])
-  // Both providers' models are always offered — picking one from the other
+  // Every *available* provider's models are offered — picking one from another
   // provider switches the chat's backend mid-conversation, and main hands the
-  // context over via a handoff brief (see ChatManager.startHandoffBrief).
-  const modelOptions = assembleModelOptions(dynamicModels, codexConfigModel)
+  // context over via a handoff brief (see ChatManager.startHandoffBrief). A
+  // provider whose CLI isn't installed contributes nothing, since its rows
+  // could only fail on send; Settings → Providers is where that is fixed.
+  const available = availableProviders(providerClis)
+  const modelOptions = assembleModelOptions(dynamicModels, codexConfigModel, available)
 
   const selectedModel = React.useMemo(
     () => canonicalModelId(model, modelOptions),

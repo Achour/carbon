@@ -1,11 +1,12 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { existsSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
-import { homedir, tmpdir } from 'node:os'
-import { delimiter, join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { createInterface } from 'node:readline'
 import type { Attachment, ElementRef, ToolPart, UserQuestion } from '@shared/types'
+import { cliAvailable, providerCli } from './providerCli.ts'
 import { isPreviewToolName, type PreviewToolName } from './previewTools.ts'
 import type { StdioMcpServer } from './previewMcpConfig.ts'
 
@@ -249,35 +250,22 @@ export interface GrokAcpOptions {
 }
 
 /**
- * Where the CLI lives. The npm install (`@xai-official/grok`) and the
- * self-installer disagree, and a GUI launched from Finder inherits neither, so
- * the explicit home directory is checked before falling back to PATH — the same
- * reason `hydrateShellPath` exists at all.
+ * Where the CLI lives. Grok was the first provider Carbon resolved this way —
+ * it ships no SDK, so there was never a bundled copy to fall back to — and it
+ * is now one of three: `providerCli` does the resolution, the version read and
+ * the settings override for all of them. `CARBON_GROK_PATH` still works, kept
+ * spelled as it was.
  */
 export function resolveGrokBinary(env: NodeJS.ProcessEnv = process.env): string {
-  const configured = env.CARBON_GROK_PATH?.trim()
-  if (configured) return configured
-  const home = env.HOME ?? homedir()
-  const candidates = [
-    join(home, '.grok', 'bin', 'grok'),
-    join(home, '.local', 'bin', 'grok'),
-    '/opt/homebrew/bin/grok',
-    '/usr/local/bin/grok'
-  ]
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) return candidate
-  }
-  return 'grok'
+  // The *candidate*, not `cliPath`'s installed-gated answer: a path the user
+  // pinned is spawned verbatim so a typo fails as itself, rather than silently
+  // running a different binary that happens to be on PATH.
+  return providerCli('grok', env).path ?? 'grok'
 }
 
 /** True when a `grok` binary can be found — drives the "not installed" notice. */
 export function grokInstalled(env: NodeJS.ProcessEnv = process.env): boolean {
-  const resolved = resolveGrokBinary(env)
-  if (resolved.includes('/')) return existsSync(resolved)
-  for (const dir of (env.PATH ?? '').split(delimiter)) {
-    if (dir && existsSync(join(dir, 'grok'))) return true
-  }
-  return false
+  return cliAvailable('grok', env)
 }
 
 /**

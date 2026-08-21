@@ -28,6 +28,8 @@ import type {
   PreviewCommandResult,
   PreviewEvent,
   Provider,
+  ProviderCli,
+  ProviderCliConfig,
   ChatOptionsPatch,
   ServiceTier,
   TerminalCreateOpts,
@@ -51,6 +53,7 @@ import { checkForUpdate, installedViaHomebrew } from './updates'
 import { readUsageOverview } from './usage'
 import { readUsageReport } from './usageStats'
 import { hydrateShellPath } from './shellEnv'
+import { configureProviderClis, providerClis } from './providerCli.ts'
 import { dockIconSvg } from './dockIcon'
 import {
   createWorktree,
@@ -606,6 +609,17 @@ function registerIpc(): void {
   })
 
   ipcMain.handle('app:get-defaults', () => store.getDefaults())
+  ipcMain.handle('providers:list', (_e, refresh?: boolean) => providerClis(refresh))
+  ipcMain.handle(
+    'providers:set',
+    (_e, provider: Provider, patch: ProviderCliConfig): ProviderCli[] => {
+      store.setProviderCli(provider, patch)
+      // Re-injecting the whole record clears the resolution cache, so the list
+      // returned here already reflects a path the user just pinned.
+      configureProviderClis(store.getProviderClis())
+      return providerClis(true)
+    }
+  )
 
   ipcMain.handle('app:forget-dir', (_e, dir: string) => store.forgetDir(dir))
 
@@ -738,6 +752,11 @@ app.whenReady().then(() => {
     // instance owns the chat.
     onLockDenied: (chatId) => emit({ type: 'chat-locked', chatId })
   })
+  // Provider CLI settings before any manager: session construction, the model
+  // catalog and the usage probes all resolve a binary through this, and a
+  // resolution that ran against an empty config would cache the wrong answer
+  // for a provider the user has switched off or pointed elsewhere.
+  configureProviderClis(store.getProviderClis())
   preview = new PreviewManager(emitPreview, sendPreviewCommand)
   manager = new ChatManager(store, emit, preview)
   terminals = new TerminalManager(emitTerminal)

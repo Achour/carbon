@@ -12,18 +12,28 @@ files:
   - '!**/node-pty/prebuilds/win32-*/**'
   - '!**/node-pty/prebuilds/linux-*/**'
   - '!**/node-pty/prebuilds/darwin-x64/**'
+  # The two agent SDKs each carry the provider's whole CLI as an optional
+  # dependency — ~300MB apiece — and Carbon spawns the user's own install
+  # instead (see main/providerCli.ts), so neither is ever read. Shipping them
+  # would mean a second, frozen copy of a tool the user already keeps current:
+  # a Carbon release would pin the agent's version, and a CLI fix would wait on
+  # an app release to reach anyone. Excluded here rather than uninstalled,
+  # because they are transitive optional deps npm re-adds on every install.
+  - '!**/@anthropic-ai/claude-agent-sdk-*/**'
+  - '!**/@openai/codex-darwin-*/**'
+  - '!**/@openai/codex-linux-*/**'
+  - '!**/@openai/codex-win32-*/**'
 # Only the MAIN process's runtime packages are in package.json `dependencies`
 # (the two agent SDKs + node-pty); every renderer library is a devDependency
 # because vite inlines it into out/renderer at build time. electron-builder ships
 # only the production tree, so those renderer libs (mermaid, react, lucide,
 # base-ui, xterm, the markdown stack, fonts) no longer bloat the app — ~200MB cut.
 #
-# ASAR stays OFF on purpose: the two largest bundled runtimes — the Codex CLI
-# (@openai/codex-*, ~297MB) and the Claude Agent SDK (@anthropic-ai/
-# claude-agent-sdk-*, ~230MB) — are spawned as subprocesses and can't run from
-# inside an asar archive. They're the app's irreducible floor; asar doesn't
-# compress, so with those unpacked it would save almost nothing while risking
-# broken spawn paths.
+# ASAR stays OFF. It used to be load-bearing — the two vendored CLIs were
+# spawned as subprocesses and can't exec from inside an asar archive — and with
+# those gone the reason is smaller: node-pty still loads a native module by
+# path, and the remaining tree is a few MB where asar would save nothing (it
+# doesn't compress) while adding a class of path bug worth avoiding.
 asar: false
 mac:
   category: public.app-category.developer-tools
