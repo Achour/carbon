@@ -803,6 +803,17 @@ export function Sidebar(): React.JSX.Element {
     cwd: string
     count: number
   } | null>(null)
+  // Archiving and hiding delete nothing, but both take a whole project — every
+  // chat in it — out of the sidebar in one click, and in detailed mode they sit
+  // on a *chat's* menu two rows under the chat-level Delete, where the project
+  // they act on is named nowhere else on screen. Naming it is most of what the
+  // dialog is for; the rest is saying how to get the project back, which is a
+  // different answer for each and obvious for neither.
+  const [confirmProject, setConfirmProject] = React.useState<{
+    kind: 'archive' | 'hide'
+    cwd: string
+    count: number
+  } | null>(null)
   const [collapsedProjects, setCollapsedProjects] = React.useState<Record<string, boolean>>(() => {
     try {
       return JSON.parse(localStorage.getItem('collapsedProjects') ?? '{}') as Record<
@@ -937,6 +948,10 @@ export function Sidebar(): React.JSX.Element {
     return i === -1 ? Number.MAX_SAFE_INTEGER : i
   }
   groups.sort((a, b) => orderRank(a.cwd) - orderRank(b.cwd))
+  // Pinned chats included: `group.chats` is the whole project, which is what
+  // leaves the sidebar and so what the three project dialogs have to report.
+  const projectChatCount = (cwd: string): number =>
+    groups.find((g) => g.cwd === cwd)?.chats.length ?? 0
   // Drag-to-reorder: move `from` just before `to`, then persist the full order.
   const moveProject = (from: string, to: string, after: boolean): void => {
     if (from === to) return
@@ -977,7 +992,7 @@ export function Sidebar(): React.JSX.Element {
     newChatProjects.push({
       cwd: root,
       label: projectLabel(root),
-      count: groups.find((g) => g.cwd === root)?.chats.length ?? 0
+      count: projectChatCount(root)
     })
   }
 
@@ -1043,22 +1058,23 @@ export function Sidebar(): React.JSX.Element {
           <ArchiveRestore /> Unarchive project
         </ContextMenuItem>
       ) : (
-        <ContextMenuItem onClick={() => setArchived(cwd, true)}>
-          <Archive /> Archive project
+        <ContextMenuItem
+          onClick={() =>
+            setConfirmProject({ kind: 'archive', cwd, count: projectChatCount(cwd) })
+          }
+        >
+          <Archive /> Archive project…
         </ContextMenuItem>
       )}
-      <ContextMenuItem onClick={() => setProjectHidden(cwd, true)}>
-        <EyeOff /> Hide project
+      <ContextMenuItem
+        onClick={() => setConfirmProject({ kind: 'hide', cwd, count: projectChatCount(cwd) })}
+      >
+        <EyeOff /> Hide project…
       </ContextMenuItem>
       <ContextMenuSeparator />
       <ContextMenuItem
         destructive
-        onClick={() =>
-          setRemovingProject({
-            cwd,
-            count: groups.find((g) => g.cwd === cwd)?.chats.length ?? 0
-          })
-        }
+        onClick={() => setRemovingProject({ cwd, count: projectChatCount(cwd) })}
       >
         <Trash2 /> Delete project…
       </ContextMenuItem>
@@ -1649,6 +1665,59 @@ export function Sidebar(): React.JSX.Element {
               }}
             >
               Remove project
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Archive / hide project. Deliberately NOT a destructive button: red is
+          this app's mark for data loss, and neither of these loses any — saying
+          so is what keeps the red on Remove meaningful. The way back differs by
+          mode as well as by action, so the copy is written per case rather than
+          shared: compact keeps an Archived section on screen, detailed drops the
+          project out of the flat list entirely, and a hidden project is left out
+          of the ⌘N chooser too, which leaves opening the folder as its only way
+          home. */}
+      <Dialog
+        open={confirmProject !== null}
+        onOpenChange={(open) => !open && setConfirmProject(null)}
+      >
+        <DialogContent>
+          <DialogTitle>
+            {confirmProject?.kind === 'hide' ? 'Hide' : 'Archive'} “
+            {confirmProject ? projectLabel(confirmProject.cwd) : ''}”?
+          </DialogTitle>
+          <DialogDescription>
+            The project and its{' '}
+            {confirmProject?.count === 1 ? 'chat' : `${confirmProject?.count ?? 0} chats`}{' '}
+            {confirmProject?.kind === 'hide' ? (
+              <>
+                leave the sidebar. Nothing is deleted — the project comes back when you open the
+                folder again.
+              </>
+            ) : detailed ? (
+              <>
+                leave the sidebar. Nothing is deleted — filter to the project to find it again and
+                unarchive it.
+              </>
+            ) : (
+              <>
+                move to the Archived section at the bottom of the sidebar. Nothing is deleted.
+              </>
+            )}
+          </DialogDescription>
+          <div className="mt-4 flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setConfirmProject(null)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                if (confirmProject?.kind === 'hide') setProjectHidden(confirmProject.cwd, true)
+                else if (confirmProject) setArchived(confirmProject.cwd, true)
+                setConfirmProject(null)
+              }}
+            >
+              {confirmProject?.kind === 'hide' ? 'Hide project' : 'Archive project'}
             </Button>
           </div>
         </DialogContent>
