@@ -497,6 +497,40 @@ test('finishWorktree retires a landed worktree and reports a leftover branch', a
   }
 })
 
+test('createWorktree gives a repo with no commits a base to branch from', async () => {
+  const repo = await mkdtemp(join(tmpdir(), 'karbun-unborn-'))
+  let created: Awaited<ReturnType<typeof createWorktree>> | null = null
+  try {
+    // A folder someone just initialized: a branch, no commit on it. `worktree
+    // add … HEAD` used to fail here with "fatal: invalid reference: HEAD".
+    await git(repo, ['init', '-q', '-b', 'main'])
+    await git(repo, ['config', 'user.name', 'Carbon Test'])
+    await git(repo, ['config', 'user.email', 'karbun@example.test'])
+    // Staged work must survive untouched — the base commit is empty, so nothing
+    // in the folder is committed on the user's behalf.
+    await writeFile(join(repo, 'a.txt'), 'draft\n')
+    await git(repo, ['add', 'a.txt'])
+
+    created = await createWorktree(repo, 'first-run')
+    assert.equal(created.branch, 'first-run')
+    assert.ok(existsSync(created.path))
+    assert.equal((await git(repo, ['status', '--porcelain'])).trim(), 'A  a.txt')
+    // The base landed on the branch HEAD already named, so it is a real ref a
+    // later merge can target — not a detached commit or an orphan history.
+    assert.equal((await git(repo, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim(), 'main')
+    assert.equal((await git(repo, ['rev-list', '--count', 'HEAD'])).trim(), '1')
+    assert.equal((await git(repo, ['show', '--name-only', '--format=', 'HEAD'])).trim(), '')
+
+    // A second worktree in the same repo makes no further commits.
+    const again = await createWorktree(repo, 'second-run')
+    assert.equal((await git(repo, ['rev-list', '--count', 'HEAD'])).trim(), '1')
+    await removeWorktree(repo, again.path, again.branch, true)
+  } finally {
+    if (created) await removeWorktree(repo, created.path, created.branch, true)
+    await rm(repo, { recursive: true, force: true })
+  }
+})
+
 test('createWorktree recovers from a branch-name collision', async () => {
   const repo = await mkdtemp(join(tmpdir(), 'karbun-worktree-collide-'))
   const made: string[] = []

@@ -532,13 +532,58 @@ export async function gitPush(cwd: string): Promise<GitResult> {
   }
 }
 
+/**
+ * Give a repo whose HEAD is unborn a commit to stand on, and report whether one
+ * was needed. A folder that was only just `git init`ed has none, and that is
+ * not a cosmetic gap: `git worktree add … HEAD` refuses outright with
+ * "fatal: invalid reference: HEAD", so New worktree — the first thing a new
+ * project is likely to reach for — dies on the very repo the app just created.
+ * `branchVsDefault` is equally stuck, since an unborn `main` is not a ref that
+ * `for-each-ref` can find.
+ *
+ * Written with plumbing rather than `git commit --allow-empty`, which would
+ * sweep whatever is already staged into a commit the user never asked for and
+ * label it "Initial commit". `commit-tree` against the empty tree touches
+ * neither the index nor the working tree: everything stays exactly as staged or
+ * untracked as it was, and only the missing base appears. The empty tree is
+ * hashed rather than hard-coded because a SHA-256 repository names it
+ * differently.
+ *
+ * `update-ref` follows the HEAD symref, so the base lands on the branch the
+ * repo already believes it is on — `main` becomes a real branch, which is both
+ * what a worktree can branch from and what "Merge into main" can later merge
+ * into. `git worktree add --orphan` would sidestep the failure and leave two
+ * histories that can never meet.
+ */
+export async function ensureRootCommit(cwd: string): Promise<boolean> {
+  // Exits non-zero (and prints nothing) only on an unborn HEAD — the caller is
+  // already known to be inside a repo.
+  const born = await git(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD']).then(
+    (out) => !!out.trim(),
+    () => false
+  )
+  if (born) return false
+  const tree = (await git(cwd, ['hash-object', '-t', 'tree', '/dev/null'])).trim()
+  const commit = (await git(cwd, ['commit-tree', tree, '-m', 'Initial commit'])).trim()
+  // '' as the expected old value: refuse rather than clobber if something else
+  // committed to the branch between the check above and here.
+  await git(cwd, ['update-ref', 'HEAD', commit, ''])
+  return true
+}
+
 export async function gitInit(cwd: string): Promise<GitResult> {
   try {
     await git(cwd, ['init'])
-    return { ok: true }
   } catch (err) {
     return { ok: false, error: errText(err) }
   }
+  // Best-effort, and deliberately not part of the result: the repo genuinely
+  // was initialized, so reporting a failure here would send someone looking for
+  // a repo that is already there. The only realistic way this fails is an
+  // unconfigured `user.email`, and `createWorktree` says so at the point it
+  // actually matters.
+  await ensureRootCommit(cwd).catch(() => {})
+  return { ok: true }
 }
 
 /**

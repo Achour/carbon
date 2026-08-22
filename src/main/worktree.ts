@@ -11,6 +11,7 @@ import {
   currentBranch,
   detectDefaultBranch,
   dirtyFileCount,
+  ensureRootCommit,
   errText,
   git,
   mergeOrAbort,
@@ -231,9 +232,20 @@ export interface WorktreeCreated extends WorktreeInfo {
 /**
  * Create a worktree of `repoRoot` on a new branch, checked out from HEAD.
  * Retries once on a branch-name collision before giving up.
+ *
+ * A worktree branches from a commit, so a repo that has none gets one first
+ * (`ensureRootCommit`) rather than the raw "invalid reference: HEAD" a freshly
+ * initialized project used to hit here.
  */
 export async function createWorktree(repoRoot: string, branch?: string): Promise<WorktreeCreated> {
   const root = (await git(repoRoot, ['rev-parse', '--show-toplevel'], TIMEOUT)).trim()
+  try {
+    await ensureRootCommit(root)
+  } catch (err) {
+    // Reached only when git cannot write a commit at all — in practice an
+    // unconfigured identity, whose own message names the fix.
+    throw new Error(`This project has no commits yet, and one could not be made:\n${errText(err)}`)
+  }
 
   const add = async (name: string): Promise<WorktreeCreated> => {
     const path = worktreePathFor(worktreesRoot(), root, name)
