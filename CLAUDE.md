@@ -523,6 +523,55 @@ Both exits relocate the chat, so main disposes the session and the next send res
 
 `branchVsDefault` (git.ts) is the *single* implementation of "where does this branch stand vs main" — one `for-each-ref` + one `rev-list --left-right`. `gitStatus` puts its answer on `GitStatus.defaultBranch` / `behindDefault` / `aheadDefault` (started before the numstat reads so it overlaps them instead of adding a round trip); `worktreeStatus` derives `unmergedCommits` from the same call; the merge guards read it directly. Everything user-facing — the `↓n` staleness chip in `ContextStrip` (click runs "Update from main"), the ⋯ menu labels, the merge dialog's counts — reads the `GitStatus` copy, so the chip, the menu and the dialog can never disagree. Staleness has no other symptom until it surfaces as a conflicted merge, which is why the chip says it out loud while it's still cheap to fix. Note `behindDefault` is *not* `GitStatus.behind`, which is measured against the branch's own upstream. `listWorktrees` tags each ref `merged` from a single `branch --merged`, which is what lets the picker mark a finished worktree and offer to remove it instead of accumulating dead ones. It also **drops the refs git calls `prunable`**: a worktree deleted outside the app keeps being reported until something prunes it, and offering one starts a chat in a directory that isn't there. The stale metadata behind it is cleared only when *every* prunable entry is app-managed — `prune` takes no path filter, and while `~/.karbun/worktrees` sits under `$HOME` and is always mounted (so missing there means gone), someone else's worktree on an unplugged disk is merely *absent*, and pruning it would destroy the record they need to plug the disk back in. The filtering is what fixes the picker; the prune is only housekeeping, and `prunable` stays a main-local field (`ParsedWorktree`) rather than joining the shared `WorktreeRef`, since those refs are dropped before anything crosses IPC. The renderer-side half of the same blind spot is **`GitStatus.missing`**: git fails identically for a folder that isn't a repo and one that isn't *there*, so a vanished worktree read as "not a git repo" and sent you looking in the wrong place. The stat that separates them sits in `gitStatus`'s existing `catch` — the only path that can be missing, so the normal case pays nothing — rather than beside it in the renderer, which would have been a second field to keep in sync and a second round trip on all 21 `refreshGit` call sites. It rides `GitStatus` for the reason everything else user-facing does: one answer, so no two views can disagree. A fresh worktree with no setup script also says so in the chat (`setupMissingFor`); the silence used to read as "installed", and the agent would just start failing on missing dependencies.
 
+### Publishing a project (`src/main/github.ts`, `PublishDialog.tsx`)
+
+A project with no remote gets one rung — **Publish repository** — and it opens a
+dialog rather than prompting the agent. The three things it needs are decisions,
+not work: who owns the repository, what it is called, and whether the world can
+read it. Delegated, an agent invented a name and quietly chose private, which is
+a reasonable guess made silently about the one step the app cannot take back.
+
+- **The rung is offered whether or not `gh` is ready.** Every other GitHub rung
+  hides itself without a login; this one's first step is *where the login is
+  explained*, with the command (`brew install gh` / `gh auth login`) and a
+  terminal tab to run it in. Hiding it left a project with nowhere to push
+  looking exactly like one with nothing to do.
+- **`publishRepo` is ordered by what is recoverable.** Everything local happens
+  before the remote exists, so a refusal leaves nothing to undo; the push is
+  last because it is the only step whose failure leaves a real repository
+  behind, which is why that one message says so instead of reading like the
+  whole thing failed.
+- **The push runs under gh's credential helper, injected for that one command.**
+  `gh auth login` normally installs it globally; someone who skipped that step
+  would otherwise create a repository and immediately fail to push to it, and
+  writing to their global git config to fix that is not ours to do. The
+  preceding `-c credential.helper=` clears the inherited list, so the answer
+  comes from the account that just created the repo.
+- **`commitAll` is asked, not guessed.** Publishing pushes *commits*, so a
+  project whose files have never been committed publishes an empty repository —
+  correct and useless. The checkbox defaults on exactly when `hasEmptyTree` says
+  nothing has ever been committed; a repo with real history never has its
+  staging decided for it.
+
+**`ensureRootCommit` (`git.ts`) is the shared floor under both this and
+worktrees.** A folder that was only just `git init`ed has no commit, and both
+`git worktree add … HEAD` and `git push` fail outright on an unborn HEAD — the
+first thing a new project hit after Initialize repo was `fatal: invalid
+reference: HEAD`. It is written with plumbing (`commit-tree` against the hashed
+empty tree, `update-ref` following the HEAD symref) rather than `git commit
+--allow-empty`, which would sweep whatever is already staged into a commit the
+user never asked for. Nothing in the index or the working tree moves; only the
+missing base appears, on the branch the repo already believes it is on, so a
+worktree has something to branch from *and* something to merge back into —
+which `git worktree add --orphan` would not have given it.
+
+That base is empty, so a worktree made from a project with nothing committed is
+an empty checkout while the project folder still has files. `WorktreeNotice`
+says so in the chat (`empty-base`, outranking `setup-missing` — absent
+dependencies do not matter in a checkout with no code in it), because the
+alternative was an agent opening on an empty folder with nothing on screen to
+explain why.
+
 ## Provider integration
 
 ### Provider CLIs (`src/main/providerCli.ts`)

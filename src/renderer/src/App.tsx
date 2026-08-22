@@ -6,6 +6,7 @@ import { ChatView } from '@/components/ChatView'
 import { NewChat } from '@/components/NewChat'
 import { RightPanel } from '@/components/RightPanel'
 import { FileSearchDialog } from '@/components/FileSearchDialog'
+import { PublishDialog } from '@/components/PublishDialog'
 import { FindBar } from '@/components/FindBar'
 import { Settings } from '@/components/Settings'
 import { UsageStats } from '@/components/UsageStats'
@@ -188,6 +189,9 @@ export default function App(): React.JSX.Element {
         </ErrorBoundary>
       </div>
       <FileSearchDialog />
+      {/* Global rather than inside GitPanel: the publish rung is reachable from
+          the review dock, which can be closed by the time the dialog opens. */}
+      <PublishDialog />
       <FindBar />
     </TooltipProvider>
   )

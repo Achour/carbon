@@ -27,6 +27,8 @@ import type {
   PreviewCommand,
   PreviewCommandResult,
   PreviewEvent,
+  PublishOpts,
+  WorktreeNotice,
   Provider,
   ProviderCli,
   ProviderCliConfig,
@@ -509,10 +511,20 @@ function registerIpc(): void {
     return removeWorktree(info.repoRoot, path, info.branch, false)
   })
 
-  ipcMain.handle('worktree:setup-command', (_e, chatId: string): string | null => {
+  ipcMain.handle('worktree:notice', async (_e, chatId: string): Promise<WorktreeNotice> => {
     const chat = store.getMeta(chatId)
-    if (!chat?.worktree) return null
-    return setupCommandFor(chat.worktree.repoRoot, chat.cwd)
+    if (!chat?.worktree) return { setupCommand: null, emptyBase: false }
+    // `emptyBase` is asked of the *repo*, not the worktree: the worktree is
+    // empty either way, and what makes that worth saying is the project folder
+    // having files the checkout could not bring along.
+    const [emptyTree, dirty] = await Promise.all([
+      gitOps.hasEmptyTree(chat.worktree.repoRoot),
+      gitOps.dirtyFileCount(chat.worktree.repoRoot).catch(() => 0)
+    ])
+    return {
+      setupCommand: setupCommandFor(chat.worktree.repoRoot, chat.cwd),
+      emptyBase: emptyTree && dirty > 0
+    }
   })
 
   ipcMain.handle('chats:rename', (_e, id: string, title: string) => {
@@ -736,6 +748,10 @@ function registerIpc(): void {
   ipcMain.handle('git:init', (_e, cwd: string) => gitOps.gitInit(cwd))
   ipcMain.handle('github:state', (_e, cwd: string) => githubOps.ghState(cwd))
   ipcMain.handle('github:open-pr', (_e, cwd: string) => githubOps.openPrWeb(cwd))
+  ipcMain.handle('github:publish-info', (_e, cwd: string) => githubOps.ghPublishInfo(cwd))
+  ipcMain.handle('github:publish', (_e, cwd: string, opts: PublishOpts) =>
+    githubOps.publishRepo(cwd, opts)
+  )
 }
 
 app.whenReady().then(() => {

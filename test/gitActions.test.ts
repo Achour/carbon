@@ -65,9 +65,13 @@ test('no remote at all + gh authed → publish to GitHub', () => {
   assert.deepEqual(ids(s), ['publish-github', 'commit'])
 })
 
-test('no remote + gh NOT authed → only a local commit', () => {
-  const s = resolveGitActions(dirty({ hasRemote: false, hasUpstream: false }), { installed: true, authed: false })
-  assert.deepEqual(ids(s), ['commit'])
+test('no remote is offered publish even with gh missing — the dialog explains why', () => {
+  // Hiding the rung until gh was ready left a project with nowhere to push
+  // looking exactly like one with nothing to do.
+  const s = resolveGitActions(dirty({ hasRemote: false, hasUpstream: false }), { installed: false, authed: false })
+  assert.deepEqual(ids(s), ['publish-github', 'commit'])
+  const clean = resolveGitActions(gitStatus({ hasRemote: false, hasUpstream: false, ahead: 0 }), null)
+  assert.equal(clean.primary?.id, 'publish-github')
 })
 
 test('clean but ahead → push, with a create-pr rung when pushed and no PR', () => {

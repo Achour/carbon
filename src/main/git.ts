@@ -571,6 +571,25 @@ export async function ensureRootCommit(cwd: string): Promise<boolean> {
   return true
 }
 
+/**
+ * The tip commit holds no files — nothing has really been committed yet. Not a
+ * commit *count*: `ensureRootCommit` writes a base commit into every repo the
+ * app initializes, so "one commit" and "nothing committed" are the same repo,
+ * and the tree is the only thing that tells them apart. An unborn HEAD has no
+ * tree at all, which is as empty as it gets.
+ */
+export async function hasEmptyTree(cwd: string): Promise<boolean> {
+  try {
+    const [empty, tree] = await Promise.all([
+      git(cwd, ['hash-object', '-t', 'tree', '/dev/null']),
+      git(cwd, ['rev-parse', 'HEAD^{tree}'])
+    ])
+    return empty.trim() === tree.trim()
+  } catch {
+    return true
+  }
+}
+
 export async function gitInit(cwd: string): Promise<GitResult> {
   try {
     await git(cwd, ['init'])

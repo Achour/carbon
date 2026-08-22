@@ -13,6 +13,7 @@ import type {
   PreviewCommand,
   PreviewCommandResult,
   PreviewEvent,
+  PublishOpts,
   Provider,
   ProviderCliConfig,
   ChatOptionsPatch,
@@ -55,7 +56,7 @@ const api: Api = {
   deleteChat: (id: string, worktree?: WorktreeDisposition) =>
     invoke('chats:delete', id, worktree),
   worktreeStatus: (chatId: string) => invoke('worktree:status', chatId),
-  worktreeSetupCommand: (chatId: string) => invoke('worktree:setup-command', chatId),
+  worktreeNotice: (chatId: string) => invoke('worktree:notice', chatId),
   listWorktrees: (cwd: string) => invoke('worktree:list', cwd),
   worktreeHandoff: (chatId: string) => invoke('worktree:handoff', chatId),
   worktreeMerge: (chatId: string) => invoke('worktree:merge', chatId),
@@ -118,6 +119,8 @@ const api: Api = {
   gitInit: (cwd: string) => invoke('git:init', cwd),
   githubState: (cwd: string) => invoke('github:state', cwd),
   githubOpenPr: (cwd: string) => invoke('github:open-pr', cwd),
+  githubPublishInfo: (cwd: string) => invoke('github:publish-info', cwd),
+  githubPublish: (cwd: string, opts: PublishOpts) => invoke('github:publish', cwd, opts),
   getDefaults: () => invoke('app:get-defaults'),
   providerClis: (refresh?: boolean) => invoke('providers:list', refresh),
   setProviderCli: (provider: Provider, patch: ProviderCliConfig) =>

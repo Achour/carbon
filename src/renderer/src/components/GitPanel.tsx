@@ -413,13 +413,13 @@ function GitActionButton(): React.JSX.Element | null {
   const others = available.filter((a) => a.id !== current.id)
 
   const Icon = ACTION_ICON[current.id] ?? Sparkles
-  // push / pull are mechanical (run directly); everything else is delegated.
-  const direct = current.id === 'push' || current.id === 'pull'
-  const tip = direct
-    ? current.id === 'pull'
-      ? 'Pull changes from the remote'
-      : 'Push commits to the remote'
-    : `Asks ${agentName} to do this in the chat`
+  // push / pull / publish are the app's own; everything else is delegated.
+  const TIPS: Partial<Record<GitActionId, string>> = {
+    push: 'Push commits to the remote',
+    pull: 'Pull changes from the remote',
+    'publish-github': 'Create a GitHub repository for this project and push to it'
+  }
+  const tip = TIPS[current.id] ?? `Asks ${agentName} to do this in the chat`
 
   return (
     <div className="flex px-2.5 pb-2">

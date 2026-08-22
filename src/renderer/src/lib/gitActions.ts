@@ -34,7 +34,7 @@ const LABELS: Record<GitActionId, string> = {
   push: 'Push',
   pull: 'Pull',
   'create-pr': 'Create Pull Request',
-  'publish-github': 'Publish to GitHub',
+  'publish-github': 'Publish repository',
   'sync-cleanup': 'Sync & delete branch',
   'update-from-main': 'Update from main'
 }
@@ -81,12 +81,14 @@ export function resolveGitActions(
   const onDefault = isDefaultBranch(git.branch, github?.defaultBranch)
   const hasPr = !!github?.pr
 
-  // No remote at all → publish the whole project to GitHub (needs gh login).
-  if (!git.hasRemote) {
-    if (github?.authed) return set('publish-github', dirty ? ['commit'] : [])
-    // gh unusable here: only a local commit is possible.
-    return set(dirty ? 'commit' : null, [])
-  }
+  // No remote at all → publish the whole project to GitHub.
+  //
+  // Offered whether or not gh is installed and logged in, unlike every other
+  // GitHub rung: this one opens a dialog, and that dialog's first step is where
+  // a missing binary or login is explained. Hiding it until gh was ready left
+  // the state with no affordance at all — a project with nowhere to push looked
+  // exactly like one with nothing to do, and nothing on screen said why.
+  if (!git.hasRemote) return set('publish-github', dirty ? ['commit'] : [])
 
   // The branch's PR has merged → close the loop. `sync-cleanup` switches to the
   // default branch, which git refuses inside a worktree ("already used by
@@ -161,8 +163,6 @@ export function gitActionPrompt(id: GitActionId, opts: { commitScope: string }):
       return `${branch} Then ${commit} Push it with upstream (\`git push -u origin HEAD\`). ${openPr} ${noExtras}`
     case 'create-pr':
       return `Open a GitHub pull request for the current branch with \`gh pr create\`, targeting the repository's default branch, with a clear title and a concise body summarizing the changes. Push the branch first if it isn't published yet. ${noExtras} Print the PR URL.`
-    case 'publish-github':
-      return `Publish this project to GitHub. If there are no commits yet, stage all files and make an initial commit with a clear message. Then create a new PRIVATE GitHub repository from this directory and push to it (\`gh repo create <folder-name> --source . --private --push\`). ${noExtras} Print the repository URL.`
     case 'sync-cleanup':
       return `The pull request for this branch has been merged. Switch to the repository's default branch, pull the latest, and delete the now-merged local branch. ${noExtras} Report what you did.`
     case 'update-from-main':
@@ -172,7 +172,11 @@ export function gitActionPrompt(id: GitActionId, opts: { commitScope: string }):
       return `Bring this branch up to date with the repository's default branch (main or master). Fetch first, then merge the default branch into this one — the remote-tracking copy (\`origin/<default>\`) if there is a remote, the local branch otherwise. If the merge conflicts, resolve each conflict carefully, preserving the intent of both sides, and complete the merge. Do not make any other changes and do not commit unrelated work. Report what came in and how you resolved anything that conflicted.`
     case 'push':
     case 'pull':
-      // Executed directly by the store, not via the agent.
+    case 'publish-github':
+      // Executed by the app, not via the agent. Publishing used to be delegated
+      // — the agent was told to invent a repository name, pick a visibility and
+      // run `gh repo create` — which is three decisions that are the user's to
+      // make, taken silently. It opens the publish dialog now.
       return ''
   }
 }

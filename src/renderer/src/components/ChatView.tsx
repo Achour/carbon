@@ -344,8 +344,10 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
   const togglePanel = useApp((s) => s.togglePanel)
   const reviewChanges = useApp((s) => s.reviewChanges)
   const runGitAction = useApp((s) => s.runGitAction)
-  const setupMissing = useApp((s) => s.setupMissingFor === chat.id)
-  const dismissSetupNotice = useApp((s) => s.dismissSetupNotice)
+  const worktreeNotice = useApp((s) =>
+    s.worktreeNotice?.chatId === chat.id ? s.worktreeNotice.kind : null
+  )
+  const dismissWorktreeNotice = useApp((s) => s.dismissWorktreeNotice)
   const panelOpen = useApp((s) => s.panelOpen)
   const terminalBusy = useApp((s) => s.terminalBusy)
   const busyTerminals = Object.values(terminalBusy)
@@ -702,19 +704,31 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
         </div>
       )}
 
-      {/* A fresh worktree has none of the repo's gitignored files, and with no
-          setup script nothing installed them — say so, or the agent's first
-          "command not found" looks like a bug in the project. */}
-      {setupMissing && (
+      {/* What a fresh worktree cannot say for itself. Without these, the agent's
+          first "command not found" — or its first look at an empty folder —
+          reads as a bug in the project rather than a fact about the checkout. */}
+      {worktreeNotice && (
         <div className="flex items-start gap-2 border-b border-border bg-secondary/40 px-4 py-2 text-xs text-muted-foreground">
           <span className="min-w-0 flex-1">
-            This worktree is a fresh checkout with no dependencies installed — the project has no{' '}
-            <code className="font-mono text-[11px] text-foreground">.karbun/setup.sh</code>. Add one
-            (or run your install command in a terminal tab) if the agent needs them.
+            {worktreeNotice === 'empty-base' ? (
+              <>
+                This worktree is empty: a worktree checks out{' '}
+                <em>committed</em> work, and nothing in{' '}
+                <span className="text-foreground">{basename(chat.worktree?.repoRoot ?? '')}</span>{' '}
+                has been committed yet. Commit the project on This Mac first, or let the agent build
+                here and merge it back.
+              </>
+            ) : (
+              <>
+                This worktree is a fresh checkout with no dependencies installed — the project has
+                no <code className="font-mono text-[11px] text-foreground">.karbun/setup.sh</code>.
+                Add one (or run your install command in a terminal tab) if the agent needs them.
+              </>
+            )}
           </span>
           <button
             type="button"
-            onClick={dismissSetupNotice}
+            onClick={dismissWorktreeNotice}
             aria-label="Dismiss"
             className="shrink-0 rounded p-0.5 transition-colors hover:bg-accent hover:text-foreground"
           >

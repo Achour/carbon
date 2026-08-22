@@ -1255,6 +1255,24 @@ export interface GitStatus {
   missing?: boolean
 }
 
+/**
+ * The two things only a *fresh* worktree can be wrong about, answered together
+ * because they are answered at the same instant — the moment one is created —
+ * and both are things the chat has to say before the agent's first turn makes
+ * them look like its own failure.
+ */
+export interface WorktreeNotice {
+  /** Shell command that provisions the worktree (deps, .env), or null. */
+  setupCommand: string | null
+  /**
+   * The worktree is an empty checkout because the project has never committed
+   * anything, while the project folder itself has files. A worktree can only
+   * check out committed work, so the agent opens on nothing and the files the
+   * user is looking at are invisible to it.
+   */
+  emptyBase: boolean
+}
+
 export type GitResult = { ok: true; output?: string } | { ok: false; error: string }
 
 export interface GitDiffTarget {
@@ -1306,6 +1324,49 @@ export interface GitHubState {
   /** PR for the current branch, if one exists. */
   pr?: PrInfo
 }
+
+/**
+ * Everything the publish dialog needs before it can ask its questions: who the
+ * repository could belong to, and what publishing would actually upload. One
+ * call because it is one moment — the dialog opening — and the two halves are
+ * useless apart. Best-effort like the rest of the gh layer: a missing binary or
+ * login answers with an empty `login`, and the dialog says so rather than
+ * offering a blank owner.
+ */
+export interface PublishInfo {
+  /** The authenticated account's login; '' when gh cannot say. */
+  login: string
+  /** Organizations that account can create repositories in. */
+  orgs: string[]
+  /** The branch a publish would push. */
+  branch: string
+  /** Commits on it — what a publish actually uploads. */
+  commits: number
+  /**
+   * The tip commit holds no files: nothing has really been committed yet, so
+   * publishing as-is would create an empty repository. This is what makes
+   * "Commit all files first" default on, and only this — a repo with real
+   * history never has its staging decided for it.
+   */
+  empty: boolean
+}
+
+/** What "Publish repository" was told to create. */
+export interface PublishOpts {
+  /** Account or organization the repo is created under. */
+  owner: string
+  name: string
+  private: boolean
+  description?: string
+  /**
+   * Stage and commit the whole working tree before pushing. Publishing pushes
+   * commits, so without this an untouched first project publishes an empty
+   * repository — see `publishRepo`.
+   */
+  commitAll?: boolean
+}
+
+export type PublishResult = { ok: true; url: string } | { ok: false; error: string }
 
 // ---------- Terminal ----------
 
@@ -1428,8 +1489,8 @@ export interface Api {
   deleteChat(id: string, worktree?: WorktreeDisposition): Promise<OpResult>
   /** Dirty/unmerged report for a worktree chat; null when the chat has no worktree. */
   worktreeStatus(chatId: string): Promise<WorktreeStatus | null>
-  /** Shell command that provisions a fresh worktree (deps, .env), or null. */
-  worktreeSetupCommand(chatId: string): Promise<string | null>
+  /** What a just-created worktree needs its chat to say (and run) up front. */
+  worktreeNotice(chatId: string): Promise<WorktreeNotice>
   /** Every worktree of the repo `cwd` belongs to, main checkout first. */
   listWorktrees(cwd: string): Promise<WorktreeRef[]>
   /**
@@ -1527,6 +1588,10 @@ export interface Api {
   githubState(cwd: string): Promise<GitHubState>
   /** Open the current branch's PR in the browser (`gh pr view --web`). */
   githubOpenPr(cwd: string): Promise<GitResult>
+  /** Who a new repo could belong to, and what publishing would push. */
+  githubPublishInfo(cwd: string): Promise<PublishInfo>
+  /** Create the GitHub repository, wire it up as `origin`, and push to it. */
+  githubPublish(cwd: string, opts: PublishOpts): Promise<PublishResult>
   getDefaults(): Promise<AppDefaults>
   /**
    * Every provider's CLI status. `refresh` re-probes the disk and re-reads each

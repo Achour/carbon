@@ -63,6 +63,8 @@ import type {
   PermissionRequestPayload,
   PersistedPlanReview,
   PreviewState,
+  PublishOpts,
+  PublishResult,
   ChatOptionsPatch,
   Provider,
   ProviderCli,
@@ -516,6 +518,11 @@ interface AppState {
   /** git fetch, then refresh, so ahead/behind reflects the live remote. */
   fetchRemote(): Promise<void>
   initRepo(): Promise<void>
+  /** The publish dialog is open (the `publish-github` rung opens it). */
+  publishOpen: boolean
+  setPublishOpen(open: boolean): void
+  /** Create the GitHub repo and push to it; refreshes git + GitHub on success. */
+  publishRepo(opts: PublishOpts): Promise<PublishResult>
   /** Run one rung of the source-control ladder (agent-delegated, or direct push/pull). */
   runGitAction(id: GitActionId): Promise<void>
   /** Sticky default for the split button (persisted); the dropdown sets it. */
@@ -576,13 +583,16 @@ interface AppState {
   /** Opens a terminal tab running the project's worktree setup script, if any. */
   runWorktreeSetup(chatId: string): Promise<void>
   /**
-   * Chat whose fresh worktree found no setup script, so nothing installed its
-   * dependencies. Held only until dismissed: it's a creation-time notice, and
-   * nagging about it every time the chat is reopened would be worse than the
-   * silence it replaces.
+   * The one thing a chat's fresh worktree has to say for itself, and which
+   * chat it is about. Held only until dismissed: these are creation-time
+   * notices, and nagging about them every time the chat is reopened would be
+   * worse than the silence they replace.
+   *
+   * `empty-base` outranks `setup-missing` when both are true — missing
+   * dependencies do not matter in a checkout that has no code in it.
    */
-  setupMissingFor: string | null
-  dismissSetupNotice(): void
+  worktreeNotice: { chatId: string; kind: 'setup-missing' | 'empty-base' } | null
+  dismissWorktreeNotice(): void
   /**
    * The three ways a chat leaves its worktree: check the branch out locally and
    * keep working (`handoff`), land it in the default branch (`merge`), or retire
@@ -1795,6 +1805,12 @@ export const useApp = create<AppState>((set, get) => ({
       await get().pullChanges()
       return
     }
+    if (id === 'publish-github') {
+      // The name, the owner and the visibility are the user's three decisions,
+      // so this rung asks them instead of running anything.
+      set({ gitError: null, publishOpen: true })
+      return
+    }
     const git = get().git
     const hasStaged = git?.changes.some((c) => c.staged) ?? false
     // `commitScope` is spliced into the commit-bearing prompts and follows the
@@ -1870,6 +1886,23 @@ export const useApp = create<AppState>((set, get) => ({
     const res = await window.api.gitInit(cwd)
     if (!res.ok) set({ gitError: res.error })
     await get().refreshGit()
+  },
+
+  publishOpen: false,
+
+  setPublishOpen(open) {
+    set({ publishOpen: open })
+  },
+
+  async publishRepo(opts) {
+    const cwd = get().selectedCwd
+    if (!cwd) return { ok: false, error: 'No project selected.' }
+    const res = await window.api.githubPublish(cwd, opts)
+    // Refreshed either way: a failed push still leaves a remote wired up, and a
+    // panel still saying "no remote" would send the user to publish it twice.
+    await get().refreshGit()
+    void get().refreshGithub()
+    return res
   },
 
   async refreshGithub() {
@@ -2233,22 +2266,23 @@ export const useApp = create<AppState>((set, get) => ({
     return res
   },
 
-  setupMissingFor: null,
+  worktreeNotice: null,
 
-  dismissSetupNotice() {
-    set({ setupMissingFor: null })
+  dismissWorktreeNotice() {
+    set({ worktreeNotice: null })
   },
 
   async runWorktreeSetup(chatId) {
-    const command = await window.api.worktreeSetupCommand(chatId)
-    if (!command) {
-      // Silence here used to read as "installed" — the agent would just start
-      // failing on missing dependencies with nothing to explain why.
-      set({ setupMissingFor: chatId })
-      return
+    const { setupCommand, emptyBase } = await window.api.worktreeNotice(chatId)
+    if (setupCommand) {
+      const chat = get().chats.find((c) => c.id === chatId)
+      if (chat) get().openTerminal({ cwd: chat.cwd, command: setupCommand, label: 'Setup' })
     }
-    const chat = get().chats.find((c) => c.id === chatId)
-    if (chat) get().openTerminal({ cwd: chat.cwd, command, label: 'Setup' })
+    // Silence on either of these used to read as "fine": the agent would open
+    // on an empty folder, or start failing on missing dependencies, with
+    // nothing on screen to explain why.
+    if (emptyBase) set({ worktreeNotice: { chatId, kind: 'empty-base' } })
+    else if (!setupCommand) set({ worktreeNotice: { chatId, kind: 'setup-missing' } })
   },
 
   async sendMessage(text, attachments, label) {

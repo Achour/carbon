@@ -1,6 +1,23 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import type { GitHubState, GitResult, PrChecks, PrInfo } from '@shared/types'
+import type {
+  GitHubState,
+  GitResult,
+  PrChecks,
+  PrInfo,
+  PublishInfo,
+  PublishOpts,
+  PublishResult
+} from '@shared/types'
+// The .ts extension keeps `node --test` able to load this module directly (see
+// worktree.ts for the same pattern); git.ts value-imports only node: builtins.
+import {
+  currentBranch,
+  ensureRootCommit,
+  errText as gitErrText,
+  git,
+  hasEmptyTree
+} from './git.ts'
 
 const execFileP = promisify(execFile)
 
@@ -165,6 +182,126 @@ export async function ghState(cwd: string): Promise<GitHubState> {
   }
 
   return { installed: true, authed: true, repo, defaultBranch, pr }
+}
+
+/**
+ * What the publish dialog opens on. Every read is independent and every one of
+ * them is allowed to fail alone: an account with no org access still publishes
+ * under its login, and a repo whose commits can't be counted is still a repo
+ * worth publishing. Losing the whole dialog to any one of them would be the
+ * worst possible trade.
+ *
+ * The two `user` reads are separate because gh has no single endpoint for
+ * "everywhere I can create"; the org list is kept only if the login came back,
+ * so an unauthenticated answer names no owners rather than half of them.
+ * `empty` compares the tip's tree to the empty one
+ * rather than counting commits, because after `git init` here there is always
+ * exactly one commit — the base `ensureRootCommit` writes — and "one commit" and
+ * "nothing committed yet" are the same repo.
+ */
+export async function ghPublishInfo(cwd: string): Promise<PublishInfo> {
+  // All five together, including the org list the login decides to keep: run
+  // sequentially it is two gh round-trips deep, which the dialog waits on with
+  // its owner field empty.
+  const [login, orgs, branch, commits, empty] = await Promise.all([
+    gh(cwd, ['api', 'user', '--jq', '.login'], 10_000)
+      .then((out) => out.trim())
+      .catch(() => ''),
+    gh(cwd, ['api', 'user/orgs', '--jq', '.[].login'], 15_000)
+      .then((out) => out.split('\n').map((l) => l.trim()).filter(Boolean))
+      .catch(() => []),
+    currentBranch(cwd).catch(() => ''),
+    git(cwd, ['rev-list', '--count', 'HEAD'])
+      .then((out) => Number(out.trim()) || 0)
+      .catch(() => 0),
+    hasEmptyTree(cwd)
+  ])
+  return { login, orgs: login ? orgs : [], branch, commits, empty }
+}
+
+/** First github.com URL in gh's output — it also prints progress lines. */
+function repoUrlIn(out: string): string {
+  return /https:\/\/github\.com\/[^\s]+/.exec(out)?.[0]?.replace(/[.,]$/, '') ?? ''
+}
+
+/**
+ * Create the GitHub repository this project should live in, add it as `origin`,
+ * and push. The steps are ordered by what is recoverable: everything local
+ * happens before the remote exists, so a refusal here leaves nothing to undo,
+ * and the push is last because it is the only step whose failure leaves a real
+ * repository behind — which is why that one message says so instead of reading
+ * like the whole thing failed.
+ *
+ * `commitAll` is the caller's answer to the one thing a publish cannot decide
+ * for itself. Publishing pushes *commits*, so a project whose files have never
+ * been committed publishes an empty repository — technically correct and
+ * useless. The dialog asks, defaulting to yes exactly when there is nothing but
+ * the base commit to push, and this stays a parameter rather than a guess so
+ * someone mid-way through staging never has their staging decided for them.
+ *
+ * The push runs under gh's own credential helper, injected for that one command
+ * (`-c credential.helper=` clears the inherited list first, so the answer comes
+ * from the account that just created the repo rather than from whichever helper
+ * the machine happens to try first). `gh auth login` normally installs that
+ * helper globally; someone who skipped that step would otherwise create a
+ * repository and immediately fail to push to it, and writing to their global
+ * git config to fix that is not ours to do.
+ */
+export async function publishRepo(cwd: string, opts: PublishOpts): Promise<PublishResult> {
+  const name = opts.name.trim()
+  const owner = opts.owner.trim()
+  if (!name) return { ok: false, error: 'Give the repository a name.' }
+
+  try {
+    // A push needs a commit, and a folder that was only just initialized has
+    // none — `git push` on an unborn HEAD fails the same way `worktree add` does.
+    await ensureRootCommit(cwd)
+    if (opts.commitAll) {
+      await git(cwd, ['add', '-A'], 60_000)
+      // --allow-empty: the tree may have been committed by something else
+      // between the dialog opening and Publish, and failing the publish over
+      // having nothing left to commit would be a refusal about nothing.
+      await git(cwd, ['commit', '--allow-empty', '-m', 'Initial commit'], 60_000)
+    }
+  } catch (err) {
+    return { ok: false, error: gitErrText(err) }
+  }
+
+  const args = [
+    'repo',
+    'create',
+    owner ? `${owner}/${name}` : name,
+    opts.private ? '--private' : '--public',
+    '--source',
+    cwd,
+    '--remote',
+    'origin'
+  ]
+  const description = opts.description?.trim()
+  if (description) args.push('--description', description)
+
+  let url = ''
+  try {
+    url = repoUrlIn(await gh(cwd, args, 60_000))
+  } catch (err) {
+    return { ok: false, error: errText(err) }
+  }
+  if (!url) url = `https://github.com/${owner ? `${owner}/` : ''}${name}`
+
+  try {
+    const branch = await currentBranch(cwd)
+    await git(
+      cwd,
+      ['-c', 'credential.helper=', '-c', 'credential.helper=!gh auth git-credential', 'push', '-u', 'origin', branch],
+      120_000
+    )
+  } catch (err) {
+    return {
+      ok: false,
+      error: `${url} was created and added as \`origin\`, but the push failed:\n\n${gitErrText(err)}`
+    }
+  }
+  return { ok: true, url }
 }
 
 /** Opens the current branch's PR in the system browser. */
