@@ -8,7 +8,7 @@ import { ErrorBoundary } from './components/ErrorBoundary'
 import { useApp } from './store'
 import { previewForCwd } from './lib/previewRegistry'
 import { bufferText, isDirty, viewForPath } from './lib/editorBuffers'
-import { jumpToDefinition, releaseAllServers } from './lib/lspClient'
+import { jumpToDefinitionAt, jumpFailure, releaseAllServers } from './lib/lspClient'
 import { addSelectionToChat } from './components/CodeEditor'
 import {
   applyCodeFontSize,
@@ -59,7 +59,8 @@ if (import.meta.env.DEV) {
     viewForPath,
     isDirty,
     bufferText,
-    jump: jumpToDefinition,
+    jump: jumpToDefinitionAt,
+    jumpFailure,
     addSel: addSelectionToChat
   }
   window.addEventListener('error', (e) => console.error('[window error]', e.message))

@@ -10,6 +10,7 @@ import {
   type Transport,
   type WorkspaceFile
 } from '@codemirror/lsp-client'
+import type * as lsp from 'vscode-languageserver-protocol'
 import { lspDiagnostics, dropLspDiagnostics } from '@/lib/lspDiagnostics'
 import { lspLanguageId } from '@/lib/editorLanguage'
 import { basename } from '@/lib/format'
@@ -173,6 +174,21 @@ const clients = new Map<string, Promise<LSPClient | null>>()
 /** Server ids in use, so a closing editor can release the right one. */
 const serverIds = new Map<string, string>()
 
+/**
+ * Why a file has no language features, kept so the editor can *say* so.
+ *
+ * This used to be a `console.info` and nothing else, which made go-to-definition
+ * look broken rather than unavailable — the user ⌘-clicks a symbol, nothing
+ * happens, and there is no way to tell a missing server from a missing
+ * definition.
+ */
+export type JumpFailure =
+  | { kind: 'unsupported' }
+  | { kind: 'not-installed'; bin: string; install: string }
+  | { kind: 'failed' }
+
+const failures = new Map<string, JumpFailure>()
+
 async function clientFor(root: string, languageId: string): Promise<LSPClient | null> {
   const key = `${root} ${languageId}`
   const cached = clients.get(key)
@@ -182,11 +198,19 @@ async function clientFor(root: string, languageId: string): Promise<LSPClient | 
     if (!status.ok) {
       // Not an error worth a dialog: a project without a server just has no
       // jumps, exactly as a machine without a provider CLI has no model rows.
-      if (status.reason === 'not-installed') {
-        console.info(
-          `[lsp] no ${status.bin} for ${languageId} — go-to-definition is off for this project. ${status.install}`
-        )
-      }
+      failures.set(
+        key,
+        status.reason === 'not-installed'
+          ? { kind: 'not-installed', bin: status.bin, install: status.install }
+          : { kind: 'unsupported' }
+      )
+      // Deliberately *not* cached, unlike an initialize failure below. Re-probing
+      // costs a few `stat`s in main and spawns nothing, and this is the one
+      // failure that heals on its own: a fresh worktree is opened before
+      // `setup.sh` has finished, so `node_modules` — and with it the project's
+      // own server — appears a minute after the first file does. A cached null
+      // would leave that project with no jumps until it was reopened.
+      clients.delete(key)
       return null
     }
     serverIds.set(key, status.id)
@@ -217,6 +241,7 @@ async function clientFor(root: string, languageId: string): Promise<LSPClient | 
       // not an Error — `String(err)` on one prints "[object Object]" and hides
       // the only sentence that says what is actually wrong.
       console.info(`[lsp] ${languageId} server failed to start in ${root}: ${errorText(err)}`)
+      failures.set(key, { kind: 'failed' })
       client.disconnect()
       void window.api.lspRelease(status.id)
       serverIds.delete(key)
@@ -225,6 +250,7 @@ async function clientFor(root: string, languageId: string): Promise<LSPClient | 
       // a doomed process every time one is opened.
       return null
     }
+    failures.delete(key)
     return client
   })()
   clients.set(key, task)
@@ -252,8 +278,81 @@ export async function lspExtension(path: string): Promise<Extension | null> {
   return client.plugin(pathToUri(path), languageId)
 }
 
-/** ⌘-click / F12. `false` when the file has no server or the symbol has no definition. */
-export { jumpToDefinition } from '@codemirror/lsp-client'
+/** Why this file has no language features, or null when it has them. */
+export function jumpFailure(path: string): JumpFailure | null {
+  const cwd = useApp.getState().selectedCwd
+  const languageId = lspLanguageId(basename(path))
+  if (!cwd || !languageId) return { kind: 'unsupported' }
+  return failures.get(`${cwd} ${languageId}`) ?? null
+}
+
+export type JumpResult = 'jumped' | 'none' | 'unavailable'
+
+/**
+ * A server may answer with a `Location` or — if it decided to, since we do not
+ * ask for them — a `LocationLink`, which names the same thing with different
+ * keys. Normalizing both is three lines and the alternative is a jump that
+ * silently does nothing against a server that prefers the newer shape.
+ */
+function asLocation(value: unknown): { uri: string; range: lsp.Range } | null {
+  if (!value || typeof value !== 'object') return null
+  const loc = value as lsp.Location & lsp.LocationLink
+  if (typeof loc.uri === 'string') return { uri: loc.uri, range: loc.range }
+  if (typeof loc.targetUri === 'string') {
+    return { uri: loc.targetUri, range: loc.targetSelectionRange ?? loc.targetRange }
+  }
+  return null
+}
+
+/**
+ * ⌘-click / F12, as the package's own `jumpToDefinition` does it — with the one
+ * addition that makes the gesture explainable: **a result.**
+ *
+ * The packaged command is a `Command`, so it returns a synchronous boolean that
+ * means "a request was sent", and the interesting outcome — the server answered
+ * with no definition — resolves inside a promise it swallows. Both failures then
+ * look identical from outside (nothing happens), and the one the user hits first
+ * is a *missing server*, which is a fact worth stating rather than a dead click.
+ * Reimplementing costs the ~20 lines below because every piece is public API.
+ */
+export async function jumpToDefinitionAt(view: EditorView): Promise<JumpResult> {
+  const plugin = LSPPlugin.get(view)
+  if (!plugin) return 'unavailable'
+  const client = plugin.client
+  if (client.serverCapabilities?.definitionProvider === false) return 'unavailable'
+  // Push pending edits first, so the server resolves the symbol against the
+  // document actually on screen rather than the one it last heard about.
+  client.sync()
+  const pos = view.state.selection.main.head
+  return client.withMapping(async (mapping): Promise<JumpResult> => {
+    let response: unknown
+    try {
+      response = await client.request('textDocument/definition', {
+        textDocument: { uri: plugin.uri },
+        position: plugin.toPosition(pos)
+      })
+    } catch (err) {
+      plugin.reportError('Find definition failed', err)
+      return 'unavailable'
+    }
+    const loc = asLocation(Array.isArray(response) ? response[0] : response)
+    if (!loc) return 'none'
+    // `displayFile` is the override above: it opens a real Carbon tab and waits
+    // for CodeMirror to mount, which is what makes a cross-file jump work.
+    const target = loc.uri === plugin.uri ? view : await client.workspace.displayFile(loc.uri)
+    if (!target) return 'none'
+    // A file that was already open may have been edited while the request was in
+    // flight; one that was just opened has no mapping and needs a plain convert.
+    const anchor = mapping.getMapping(loc.uri)
+      ? mapping.mapPosition(loc.uri, loc.range.start)
+      : plugin.fromPosition(loc.range.start, target.state.doc)
+    target.dispatch({ selection: { anchor }, scrollIntoView: true, userEvent: 'select.definition' })
+    // Scrolling a symbol into view in an editor that does not have focus leaves
+    // the cursor invisible, which reads as a jump that half-happened.
+    target.focus()
+    return 'jumped'
+  })
+}
 
 /**
  * The agent just finished a turn and may have rewritten half the project. Files

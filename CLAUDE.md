@@ -398,7 +398,7 @@ one color in a message and another in the file it came from.
 
 ### Language servers (`src/main/lsp.ts`, `lib/lspClient.ts`)
 
-⌘-click a symbol and the definition opens, cross-file. This is LSP, and the split
+⌘-click a symbol (or F12) and the definition opens, cross-file. This is LSP, and the split
 is the reverse of every other integration in the app: **main does no protocol
 work at all.** `@codemirror/lsp-client` runs the whole of JSON-RPC in the
 renderer, so `main/lsp.ts` is a spawn plus `Content-Length` framing, and the
@@ -412,20 +412,67 @@ project is written against. Resolution is project `node_modules/.bin` → PATH �
 install prefixes — the *reverse* of `providerCli.ts`'s order, and for the same
 underlying reason. There the user's shim wins because the CLI is a tool they run;
 here the server must agree with the TypeScript version in the repo's lockfile.
+Which, for TypeScript 7, it now literally is: see the first bullet.
 
+- **TypeScript 7 *is* a language server, and it is already in the project.** The
+  native compiler answers `initialize` under `--lsp --stdio` with
+  `definitionProvider: true`, so a modern TS project needs nothing installed at
+  all — the best possible reading of "Carbon ships no servers", since the server
+  is the one in the repo's own lockfile by construction. It is tried **first**,
+  resolved by *path* rather than by name
+  (`node_modules/@typescript/typescript-<platform>-<arch>/lib/tsc`) and gated on
+  that file existing. First place is not a preference, it is a correctness
+  requirement: `vtsls` and `typescript-language-server` both wrap `tsserver.js`,
+  which TypeScript 7 **does not ship**, so on such a project they are not a
+  fallback but a broken one — and the install hint would send the user to fetch a
+  server that cannot read their code. A TS 5 project never has that package, so
+  first place costs it nothing. `ServerSpec.resolve` is what makes this safe:
+  a spec that knows where its server lives skips the generic search entirely,
+  because `bin` is `tsc` and the `tsc` on PATH is usually a *compiler* that would
+  be spawned as though it spoke LSP.
 - **It is `typescript-language-server`, not `tsserver`.** Raw tsserver speaks
-  TypeScript's own protocol and fails `initialize` outright. `vtsls` is tried
-  first, so a project that pins it gets it.
+  TypeScript's own protocol and fails `initialize` outright. For a pre-7 project
+  `vtsls` is tried first, so a repo that pins it gets it; a global `tsgo` comes
+  last, because it says nothing about the project it is pointed at where a
+  project-local `vtsls` was chosen for that project specifically.
 - **An installed server can still refuse to start**, and the common case is
   `typescript-language-server` in a project with no TypeScript for it to load.
   `initialize` is therefore awaited before the extension is handed to the editor,
   which turns that into "no language features" — the same answer as a missing
   binary — instead of an unhandled rejection and an editor posting requests into
-  a dead process. The failure is cached: a server that cannot initialize will not
-  initialize for the next file either, and retrying per tab spawns a doomed
+  a dead process. **That** failure is cached: a server that cannot initialize will
+  not initialize for the next file either, and retrying per tab spawns a doomed
   process every time one is opened.
-- **A missing server is not an error.** It logs and the file simply has no jumps,
-  exactly as a machine without a provider CLI has no model rows.
+- **A missing server, by contrast, is not cached** — and the distinction is the
+  whole point. Re-probing costs a few `stat`s in main and spawns nothing, and this
+  is the one failure that heals on its own: a fresh worktree is opened before
+  `setup.sh` finishes, so `node_modules` — and with it the project's own server —
+  appears a minute after the first file does. A cached null left that project
+  with no jumps until it was reopened.
+- **A missing server is not an error, but it must not be silent either.** It used
+  to be exactly that: a `console.info`, a ⌘-click that did nothing, and no way to
+  tell an absent server from an absent definition. That is a working feature that
+  looks broken. Two things fix it, and neither is a banner — the state is normal,
+  so it may not become permanent chrome:
+  - **The pointer only arms when something can answer.** `cm-jumpArmed` is gated
+    on the LSP plugin actually being present. A hand cursor over every identifier
+    in a project with no server is an affordance that lies.
+  - **A jump that goes nowhere says why**, in a transient notice placed at the
+    symbol — on F12 as well as on a click, which is why F12 is a listener on the
+    editor host rather than a keymap entry: a `Command` returns a boolean and has
+    no way to reach the notice, and a gesture that explains itself with the mouse
+    but not with the keyboard is the same silence half-removed. The wording separates *unavailable* (no server for this language, one
+    not installed, one that failed to start — with the install command, since
+    there is something the user can do) from *absent* (this symbol has no
+    definition, a normal answer about one click).
+- **`jumpToDefinition` is reimplemented rather than imported**, and only to get
+  that distinction. The packaged command is a `Command`, so it returns a
+  synchronous boolean meaning "a request was sent"; the interesting outcome — the
+  server answered with nothing — resolves inside a promise it swallows. Every
+  piece it uses is public API, so the honest version costs ~20 lines and one
+  request. It also normalizes `LocationLink`, which a server may return even
+  though we never ask for it, and which the packaged version would read as a
+  jump to `undefined`.
 - **One server per (project root, language)**, shut down five minutes after the
   client releases it — a cold tsserver on a large repo is seconds of nothing, and
   closing a project then reopening it is common. There is deliberately **no

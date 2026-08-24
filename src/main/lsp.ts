@@ -30,6 +30,15 @@ interface ServerSpec {
   args: string[]
   /** Shown when the binary is missing. */
   install: string
+  /**
+   * A server that ships *inside* the project rather than being installed, and so
+   * is found by knowing where it lives instead of by name. Present means this is
+   * the only lookup performed for the spec: the generic search must not run, or
+   * a `bin` that names a different tool on PATH (`tsc`) would be spawned as
+   * though it were a language server. Such a spec is also never offered as an
+   * install hint — there is nothing for the user to install.
+   */
+  resolve?: (root: string) => string | null
 }
 
 /**
@@ -61,14 +70,48 @@ const SERVERS: Record<string, ServerSpec[]> = {
   ]
 }
 
+/**
+ * TypeScript 7 is a Go program, and it **is** a language server: the same native
+ * binary the project already installed answers `initialize` under `--lsp`, with
+ * `definitionProvider: true`. So a modern TS project needs nothing installed at
+ * all, which is the best possible version of "Carbon ships no servers" — the
+ * server is the one in the repo's own lockfile, by construction.
+ *
+ * It is tried **first**, and only resolves when that package is actually on
+ * disk. `vtsls` and `typescript-language-server` are both wrappers around
+ * `tsserver.js`, which TypeScript 7 does not ship at all — so on a TS 7 project
+ * they are not a fallback, they are broken, and letting either win would send
+ * the user to install a server that cannot serve their code. A TS 5 project
+ * never has this package, so first place costs it nothing.
+ */
+function nativeTypeScript(root: string): string | null {
+  const exe = join(
+    root,
+    'node_modules',
+    '@typescript',
+    `typescript-${process.platform}-${process.arch}`,
+    'lib',
+    'tsc'
+  )
+  return isExecutable(exe) ? exe : null
+}
+
 function tsServers(): ServerSpec[] {
   return [
+    // Named `tsc` only because that is what the platform package calls the
+    // binary; it is the whole compiler, and `--lsp` is one of its modes.
+    { bin: 'tsc', args: ['--lsp', '--stdio'], install: '', resolve: nativeTypeScript },
     { bin: 'vtsls', args: ['--stdio'], install: 'npm install -g @vtsls/language-server' },
     {
       bin: 'typescript-language-server',
       args: ['--stdio'],
       install: 'npm install -g typescript-language-server typescript'
-    }
+    },
+    // The standalone preview of the same native server, which is how it is
+    // installed globally. Last rather than beside its platform-package twin: a
+    // global `tsgo` says nothing about the project it is being pointed at,
+    // where a project-local `vtsls` was chosen for that project specifically.
+    { bin: 'tsgo', args: ['--lsp', '--stdio'], install: 'npm install -g @typescript/native-preview' }
   ]
 }
 
@@ -80,6 +123,10 @@ function tsServers(): ServerSpec[] {
  * version is the one in its lockfile.
  */
 function resolveServer(root: string, spec: ServerSpec): string | null {
+  // A spec that knows where its server lives is answered by that alone — see
+  // `ServerSpec.resolve` for why falling through to the generic search would be
+  // actively wrong rather than merely redundant.
+  if (spec.resolve) return spec.resolve(root)
   const local = join(root, 'node_modules', '.bin', spec.bin)
   if (isExecutable(local)) return local
   const found = onPath(spec.bin, process.env)
@@ -196,7 +243,11 @@ export class LspManager {
         // Try the next candidate.
       }
     }
-    return { ok: false, reason: 'not-installed', install: specs[0].install, bin: specs[0].bin }
+    // Name a server the user can actually install. `specs[0]` is no longer that
+    // by definition: the preferred TypeScript server ships *with the project*,
+    // so telling someone to install it would be advice they cannot act on.
+    const hint = specs.find((spec) => !spec.resolve) ?? specs[0]
+    return { ok: false, reason: 'not-installed', install: hint.install, bin: hint.bin }
   }
 
   send(id: string, message: string): void {

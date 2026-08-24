@@ -53,7 +53,7 @@ import {
   syncBuffer,
   unregisterView
 } from '@/lib/editorBuffers'
-import { lspExtension, jumpToDefinition } from '@/lib/lspClient'
+import { lspExtension, jumpToDefinitionAt, jumpFailure, type JumpResult } from '@/lib/lspClient'
 
 const PILL_HEIGHT = 28
 const GAP = 6
@@ -65,6 +65,20 @@ interface Anchor {
   startLine: number
   endLine: number
 }
+
+/**
+ * A one-line answer to a ⌘-click that went nowhere, placed at the symbol the
+ * user clicked. Transient and unclickable: it explains a gesture rather than
+ * asking for one, so it must not become chrome that outlives the question.
+ */
+interface Notice {
+  top: number
+  left: number
+  text: string
+}
+
+/** Long enough to read a short sentence, short enough not to linger. */
+const NOTICE_MS = 4000
 
 /**
  * Compartments let a mounted view be reconfigured without being rebuilt. Only
@@ -181,6 +195,30 @@ export function addSelectionToChat(path: string): boolean {
   return true
 }
 
+/**
+ * Why a ⌘-click produced no jump, in one sentence.
+ *
+ * The distinction that matters is *unavailable* versus *absent*: a missing
+ * language server means no symbol in the file will ever resolve and there is
+ * something the user can do about it, where a symbol with no definition is a
+ * normal answer about that one click. Collapsing the two — which is what
+ * silence did — makes a working feature look broken.
+ */
+function jumpNoticeText(path: string): string {
+  const failure = jumpFailure(path)
+  if (!failure) return 'No definition found.'
+  switch (failure.kind) {
+    case 'not-installed':
+      return `No language server installed — run “${failure.install}” for go to definition.`
+    case 'failed':
+      return 'The language server for this project failed to start.'
+    default: {
+      const ext = basename(path).slice(basename(path).lastIndexOf('.'))
+      return `No language server for ${ext || 'this'} files.`
+    }
+  }
+}
+
 export const CodeEditor = React.memo(function CodeEditor({
   content,
   path
@@ -198,8 +236,23 @@ export const CodeEditor = React.memo(function CodeEditor({
   // rather than tracked incrementally, but only when a diagnostics effect
   // actually lands, which is once per server push rather than per keystroke.
   const [problems, setProblems] = React.useState({ errors: 0, warnings: 0 })
+  const [notice, setNotice] = React.useState<Notice | null>(null)
   const anchorRef = React.useRef<Anchor | null>(null)
   anchorRef.current = anchor
+  const noticeTimer = React.useRef(0)
+  // Whether a language server is actually behind this editor. A ref rather than
+  // state: it is read from DOM listeners baked into the mount effect, and it
+  // flips once, long after the render that would have consumed it.
+  const lspReady = React.useRef(false)
+
+  const showNotice = React.useCallback((text: string, clientX: number, clientY: number): void => {
+    const host = hostRef.current
+    if (!host) return
+    const box = host.getBoundingClientRect()
+    window.clearTimeout(noticeTimer.current)
+    setNotice({ top: clientY - box.top + GAP * 2, left: Math.max(0, clientX - box.left), text })
+    noticeTimer.current = window.setTimeout(() => setNotice(null), NOTICE_MS)
+  }, [])
 
   // Position the pill in the scroller's own coordinates so it travels with the
   // code. Recomputed on scroll (one `coordsAtPos`, a cheap DOM measure) rather
@@ -307,6 +360,9 @@ export const CodeEditor = React.memo(function CodeEditor({
     let frame = 0
     const onScroll = (): void => {
       setScrollTop(path, view.scrollDOM.scrollTop)
+      // The notice points at a line; it is positioned against the host, so
+      // scrolling would leave it pointing at whatever moved underneath.
+      setNotice(null)
       if (!anchorRef.current || frame) return
       frame = requestAnimationFrame(() => {
         frame = 0
@@ -320,21 +376,57 @@ export const CodeEditor = React.memo(function CodeEditor({
     // same lifetime as the view and would otherwise be a second effect with
     // identical deps, reading `view` back off a ref and silently depending on
     // having run second.
+    const runJump = (clientX: number, clientY: number): void => {
+      const report = (result: JumpResult): void => {
+        if (result === 'jumped') return
+        showNotice(result === 'none' ? 'No definition found.' : jumpNoticeText(path), clientX, clientY)
+      }
+      if (lspReady.current) {
+        void jumpToDefinitionAt(view).then(report)
+        return
+      }
+      // There was no server when this tab mounted — but there may be one now.
+      // A fresh worktree is opened while `setup.sh` is still installing, so the
+      // project's own server appears a minute after its first file does, and
+      // answering from the mount-time "no" would keep saying "not installed"
+      // about a server sitting on disk. Re-probing is a few `stat`s.
+      void connectLsp().then((ok) => {
+        if (ok) void jumpToDefinitionAt(view).then(report)
+        else report('unavailable')
+      })
+    }
     const onJumpClick = (e: MouseEvent): void => {
       if (!(e.metaKey || e.ctrlKey)) return
       const pos = view.posAtCoords({ x: e.clientX, y: e.clientY })
       if (pos == null) return
       e.preventDefault()
-      // The command reads the selection head, so the click has to land there
+      // The jump reads the selection head, so the click has to land there
       // first — a ⌘-click does not move the cursor by itself.
       view.dispatch({ selection: { anchor: pos } })
-      jumpToDefinition(view)
+      // Read the coordinates off the event now: the answer arrives a round trip
+      // to the server later, by which point `e` has been recycled.
+      runJump(e.clientX, e.clientY)
     }
+    // F12, the same jump from the keyboard. On `host` rather than in the
+    // editor's keymap so it can place the notice, which the keymap's `Command`
+    // signature has no way to reach — and a jump that explains itself on a
+    // click but not on a keypress is the silence this just removed.
+    const onJumpF12 = (e: KeyboardEvent): void => {
+      if (e.key !== 'F12' || e.metaKey || e.ctrlKey || e.altKey) return
+      e.preventDefault()
+      const coords = view.coordsAtPos(view.state.selection.main.head)
+      runJump(coords?.left ?? 0, coords?.bottom ?? 0)
+    }
+    // Arming only when something can answer. A pointer that turns into a hand
+    // over every identifier in a project with no language server is an
+    // affordance that lies — it promises a jump on every symbol and delivers
+    // none, which is most of why this looked broken rather than unavailable.
     const onJumpKey = (e: KeyboardEvent): void => {
-      host.classList.toggle('cm-jumpArmed', e.metaKey || e.ctrlKey)
+      host.classList.toggle('cm-jumpArmed', lspReady.current && (e.metaKey || e.ctrlKey))
     }
     const disarm = (): void => host.classList.remove('cm-jumpArmed')
     host.addEventListener('mousedown', onJumpClick)
+    host.addEventListener('keydown', onJumpF12)
     window.addEventListener('keydown', onJumpKey)
     window.addEventListener('keyup', onJumpKey)
     window.addEventListener('blur', disarm)
@@ -348,16 +440,24 @@ export const CodeEditor = React.memo(function CodeEditor({
     }
     // Same for the language server: connecting spawns a process, so it must not
     // hold up first paint.
-    void lspExtension(path).then((ext) => {
-      if (alive && ext) view.dispatch({ effects: lsp.reconfigure(ext) })
-    })
+    const connectLsp = async (): Promise<boolean> => {
+      const ext = await lspExtension(path)
+      if (!alive || !ext) return false
+      view.dispatch({ effects: lsp.reconfigure(ext) })
+      lspReady.current = true
+      return true
+    }
+    void connectLsp()
 
     return () => {
       alive = false
+      lspReady.current = false
+      window.clearTimeout(noticeTimer.current)
       if (frame) cancelAnimationFrame(frame)
       setScrollTop(path, view.scrollDOM.scrollTop)
       view.scrollDOM.removeEventListener('scroll', onScroll)
       host.removeEventListener('mousedown', onJumpClick)
+      host.removeEventListener('keydown', onJumpF12)
       window.removeEventListener('keydown', onJumpKey)
       window.removeEventListener('keyup', onJumpKey)
       window.removeEventListener('blur', disarm)
@@ -409,6 +509,17 @@ export const CodeEditor = React.memo(function CodeEditor({
               </span>
             )}
           </button>
+        )}
+        {notice && (
+          <div
+            // `pointer-events-none`: it answers a click rather than inviting
+            // one, and it lands directly under the pointer — catching the next
+            // click would make the explanation eat the retry.
+            style={{ top: notice.top, left: notice.left }}
+            className="pointer-events-none absolute z-30 max-w-[min(28rem,90%)] rounded-lg border border-border bg-popover px-2.5 py-1.5 text-[11px] text-popover-foreground shadow-md"
+          >
+            {notice.text}
+          </div>
         )}
         {anchor && (
           <button
