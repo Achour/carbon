@@ -4,6 +4,9 @@ import { mkdir, rmdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import type { OpResult, WorktreeInfo, WorktreeRef, WorktreeStatus } from '@shared/types'
+// Naming lives in @shared because the picker previews the name this creates —
+// two implementations would show one branch and make another.
+import { defaultBranchName, sanitizeBranch } from '../shared/branchName.ts'
 // The .ts extension keeps `node --test` able to load this module directly (see
 // codex.ts for the same pattern); git.ts value-imports only node: builtins.
 import {
@@ -22,37 +25,6 @@ import {
 const TIMEOUT = 30_000
 
 // ---------- Pure helpers ----------
-
-/**
- * Coerce a user-supplied name into something `git branch` accepts: no spaces,
- * no ref-illegal characters, no leading/trailing punctuation. Returns '' when
- * nothing usable survives, so callers can fall back to a generated name.
- */
-export function sanitizeBranch(name: string): string {
-  return name
-    .toLowerCase()
-    // Also collapses leading/trailing whitespace into dashes the final trim strips.
-    .replace(/[\s_]+/g, '-')
-    // Anything git refuses in a ref name, plus the shell-hostile set.
-    .replace(/[~^:?*[\]\\@{}!'"`$()<>|;&#]/g, '')
-    .replace(/\.{2,}/g, '.')
-    .replace(/\/{2,}/g, '/')
-    .replace(/-{2,}/g, '-')
-    .slice(0, 64)
-    // Trimmed after the slice — slicing can itself expose a trailing separator.
-    .replace(/^[-./]+|[-./]+$/g, '')
-}
-
-const B36 = 'abcdefghijklmnopqrstuvwxyz0123456789'
-const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
-
-/** Auto branch name, e.g. `karbun/jul19-k3xq`. Deterministic under injection. */
-export function defaultBranchName(now: Date = new Date(), rand: () => number = Math.random): string {
-  const stamp = `${MONTHS[now.getMonth()]}${now.getDate()}`
-  let suffix = ''
-  for (let i = 0; i < 4; i++) suffix += B36[Math.floor(rand() * B36.length)] ?? '0'
-  return `karbun/${stamp}-${suffix}`
-}
 
 /**
  * Deterministic on-disk location for a worktree. The repo hash keeps two
@@ -229,15 +201,36 @@ export interface WorktreeCreated extends WorktreeInfo {
   path: string
 }
 
+/** Branch name or directory already taken — the one error a retry can answer. */
+const COLLISION = /already exists|already used by worktree|not an empty directory/i
+
 /**
- * Create a worktree of `repoRoot` on a new branch, checked out from HEAD.
- * Retries once on a branch-name collision before giving up.
- *
- * A worktree branches from a commit, so a repo that has none gets one first
- * (`ensureRootCommit`) rather than the raw "invalid reference: HEAD" a freshly
- * initialized project used to hit here.
+ * Add a worktree of `root` at this branch's deterministic location. `fresh`
+ * picks the git command: `-b` creates the branch off HEAD, its absence checks
+ * out one that already exists.
  */
-export async function createWorktree(repoRoot: string, branch?: string): Promise<WorktreeCreated> {
+async function addWorktree(
+  root: string,
+  branch: string,
+  fresh: boolean
+): Promise<WorktreeCreated> {
+  const path = worktreePathFor(worktreesRoot(), root, branch)
+  const args = fresh
+    ? ['worktree', 'add', '-b', branch, path, 'HEAD']
+    : ['worktree', 'add', path, branch]
+  try {
+    await mkdir(dirname(path), { recursive: true })
+    await git(root, args, TIMEOUT)
+  } catch (err) {
+    // Normalized once, here, so every caller's failure is git's own stderr and
+    // none of them has to re-wrap it on the way out.
+    throw new Error(errText(err))
+  }
+  return { path, branch, repoRoot: root }
+}
+
+/** `rev-parse --show-toplevel`, plus the base commit a worktree needs to exist. */
+async function worktreeBase(repoRoot: string): Promise<string> {
   const root = (await git(repoRoot, ['rev-parse', '--show-toplevel'], TIMEOUT)).trim()
   try {
     await ensureRootCommit(root)
@@ -246,28 +239,47 @@ export async function createWorktree(repoRoot: string, branch?: string): Promise
     // unconfigured identity, whose own message names the fix.
     throw new Error(`This project has no commits yet, and one could not be made:\n${errText(err)}`)
   }
+  return root
+}
 
-  const add = async (name: string): Promise<WorktreeCreated> => {
-    const path = worktreePathFor(worktreesRoot(), root, name)
-    await mkdir(dirname(path), { recursive: true })
-    await git(root, ['worktree', 'add', '-b', name, path, 'HEAD'], TIMEOUT)
-    return { path, branch: name, repoRoot: root }
-  }
-
+/**
+ * Create a worktree of `repoRoot` on a new branch, checked out from HEAD.
+ *
+ * A worktree branches from a commit, so a repo that has none gets one first
+ * (`ensureRootCommit`) rather than the raw "invalid reference: HEAD" a freshly
+ * initialized project used to hit here.
+ *
+ * The collision retry is deliberately limited to *generated* names, which
+ * collide only by chance and mean nothing to anyone. Retrying a name the user
+ * typed would answer "create `fix-login`" with a worktree on
+ * `karbun/aug24-k3xq` and no indication anything went sideways — a rename is a
+ * worse answer than the error it hides.
+ */
+export async function createWorktree(repoRoot: string, branch?: string): Promise<WorktreeCreated> {
+  const root = await worktreeBase(repoRoot)
+  const named = sanitizeBranch(branch ?? '')
   try {
-    return await add(sanitizeBranch(branch ?? '') || defaultBranchName())
+    return await addWorktree(root, named || defaultBranchName(), true)
   } catch (err) {
-    const msg = errText(err)
-    // Branch or directory already taken — one retry under a fresh generated name.
-    if (!/already exists|already used by worktree|not an empty directory/i.test(msg)) {
-      throw new Error(msg)
-    }
-    try {
-      return await add(defaultBranchName())
-    } catch (retryErr) {
-      throw new Error(errText(retryErr))
-    }
+    if (named || !COLLISION.test((err as Error).message)) throw err
+    return addWorktree(root, defaultBranchName(), true)
   }
+}
+
+/**
+ * Check an existing branch out into a worktree of its own — the picker's
+ * "start on a branch that's already here".
+ *
+ * No retry and no fallback name: the branch is the whole point of the request,
+ * so git's refusal (another worktree holds it, the directory is occupied) is
+ * the answer. `worktreeBase` still runs, since a repo can have a branch ref and
+ * an unborn HEAD in the checkout the request came from.
+ */
+export async function checkoutWorktree(
+  repoRoot: string,
+  branch: string
+): Promise<WorktreeCreated> {
+  return addWorktree(await worktreeBase(repoRoot), branch, false)
 }
 
 /**

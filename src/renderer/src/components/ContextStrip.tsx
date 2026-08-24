@@ -23,8 +23,14 @@ export function ContextStrip({
 }: {
   cwd: string
   git: GitStatus | null
-  /** Overrides the working tree's own branch. Defaults to `git.branch`. */
-  branch?: string
+  /**
+   * Overrides the working tree's own branch; defaults to `git.branch`. `null`
+   * suppresses the segment entirely, for when a chip in `children` is the
+   * branch — the new-chat screen's branch picker, whose whole job is naming a
+   * branch that doesn't exist yet. Showing the checkout's branch beside it
+   * would name the one place the chat is *not* about to run.
+   */
+  branch?: string | null
   /**
    * Repo the chat belongs to, when that isn't `cwd` itself. A worktree's
    * directory is named after its branch, so labelling the pill with `cwd`
@@ -43,11 +49,11 @@ export function ContextStrip({
   // directory exactly as it answers a plain one, so the strip would otherwise
   // drop the branch and read as "not a repo".
   const missing = git?.missing === true
-  const shown = branch ?? git?.branch
+  const shown = branch === null ? undefined : (branch ?? git?.branch)
   const changes = git?.isRepo ? git.changes.length : 0
   // Only meaningful for the branch actually checked out here: `branch` is an
   // override the new-chat screen passes for a worktree it hasn't started in.
-  const behind = branch ? 0 : (git?.behindDefault ?? 0)
+  const behind = branch === undefined ? (git?.behindDefault ?? 0) : 0
   const base = git?.defaultBranch ?? 'main'
   return (
     <div data-context-strip className="mb-2 flex items-center gap-2">

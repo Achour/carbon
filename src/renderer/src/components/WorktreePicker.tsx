@@ -1,8 +1,10 @@
 import * as React from 'react'
 import { Check, ChevronDown, GitBranch, Laptop, Plus } from 'lucide-react'
+import { createsWorktree } from '@shared/types'
 import type { WorktreeRef, WorktreeTarget } from '@shared/types'
-import { cn, contextPillAction } from '@/lib/utils'
+import { contextPillButton } from '@/lib/utils'
 import { GitErrorDialog } from '@/components/BranchActions'
+import { BranchPicker } from '@/components/BranchPicker'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -19,6 +21,9 @@ import {
 const TARGET_LABEL: Record<WorktreeTarget['kind'], string> = {
   local: 'This Mac',
   new: 'New worktree',
+  // A branch target is a worktree too — it differs only in where the branch came
+  // from, which is the *branch* chip's business, not this one's.
+  branch: 'New worktree',
   existing: 'Worktree'
 }
 
@@ -26,6 +31,12 @@ const TARGET_LABEL: Record<WorktreeTarget['kind'], string> = {
  * Where the next chat runs — the main checkout, an existing worktree, or a new
  * one. Sits above the composer as a borderless chip so the composer's own
  * controls row stays uncrowded.
+ *
+ * A new worktree brings a second chip with it: *which branch*. It is a separate
+ * control rather than a submenu because it is a separate question, and it only
+ * has an answer in that one case — This Mac runs on whatever is checked out
+ * (switching it would mutate a directory every other chat and the editor
+ * share), and an existing worktree's branch is a fact about it.
  */
 export function WorktreePicker({
   cwd,
@@ -79,6 +90,7 @@ export function WorktreePicker({
   const repoRoot = worktrees.find((w) => w.isMain)?.path ?? cwd
   const linked = worktrees.filter((w) => !w.isMain)
   const isLocal = value.kind === 'local'
+  const creating = createsWorktree(value)
 
   return (
     <>
@@ -89,7 +101,7 @@ export function WorktreePicker({
           <button
             type="button"
             aria-label="Where this chat runs"
-            className={cn(contextPillAction, 'no-drag [&>svg]:size-3 [&>svg]:shrink-0')}
+            className={contextPillButton}
           >
             {isLocal ? <Laptop /> : <GitBranch />}
             <span className="max-w-40 truncate">{TARGET_LABEL[value.kind]}</span>
@@ -130,13 +142,19 @@ export function WorktreePicker({
           </DropdownMenuItem>
         ))}
         <DropdownMenuSeparator />
+        {/* Picking this leaves the branch unset, which the chip beside it reads
+            as "name it for me" — the answer that needs no further clicks. */}
         <DropdownMenuItem onClick={() => onChange({ kind: 'new' })}>
           <Plus />
           <span className="flex-1">New worktree</span>
-          {value.kind === 'new' && <Check className="opacity-70" />}
+          {creating && <Check className="opacity-70" />}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
+
+    {creating && (
+      <BranchPicker cwd={cwd} value={value} onChange={onChange} disabled={disabled} />
+    )}
 
     {/* Removal is unforced, so git's refusal is the message worth showing. */}
     <GitErrorDialog

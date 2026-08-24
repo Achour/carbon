@@ -97,12 +97,35 @@ export function sameDraft(a: ComposerDraft | undefined, b: ComposerDraft): boole
   )
 }
 
-const targetKey = (target?: WorktreeTarget): string =>
-  target === undefined
-    ? ''
-    : target.kind === 'existing'
-      ? `existing:${target.path}`
-      : target.kind
+/**
+ * Identity of a where-it-runs choice — what change detection compares, and what
+ * the branch picker keys its rows on. The branch has to be in it: a typed name
+ * lives on the target, so keying on `kind` alone means naming a branch never
+ * marks the draft dirty and the name is gone by the next visit.
+ *
+ * Exhaustive with no `default` arm on purpose. That arm is what let the bug
+ * above exist, and it would key the *next* variant's payload away just as
+ * quietly; without it a new kind stops compiling here.
+ *
+ * It lives beside the drafts rather than beside the union in `@shared/types`
+ * because `test/drafts.test.ts` loads this module under `node --test`, which
+ * resolves no `@shared` alias — so anything this file imports for a *value*
+ * would have to be reachable by relative path, and the renderer project doesn't
+ * allow `.ts` extensions the way the main one does.
+ */
+export function worktreeTargetKey(target?: WorktreeTarget): string {
+  if (target === undefined) return ''
+  switch (target.kind) {
+    case 'local':
+      return 'local'
+    case 'new':
+      return `new:${target.branch ?? ''}`
+    case 'branch':
+      return `branch:${target.branch}`
+    case 'existing':
+      return `existing:${target.path}`
+  }
+}
 
 export function sameOptions(a: ProjectDraftOptions, b: ProjectDraftOptions): boolean {
   return (
@@ -111,7 +134,7 @@ export function sameOptions(a: ProjectDraftOptions, b: ProjectDraftOptions): boo
     a.effort === b.effort &&
     a.serviceTier === b.serviceTier &&
     a.permissionMode === b.permissionMode &&
-    targetKey(a.target) === targetKey(b.target)
+    worktreeTargetKey(a.target) === worktreeTargetKey(b.target)
   )
 }
 

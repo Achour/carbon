@@ -7,22 +7,23 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import {
+  checkoutWorktree,
   createWorktree,
   finishWorktree,
   handOffWorktree,
-  defaultBranchName,
   isManagedWorktree,
   listWorktrees,
   mergeWorktree,
   parseWorktreeList,
   removeWorktree,
   resolveWorktree,
-  sanitizeBranch,
   setupCommandFor,
   worktreePathFor,
   worktreeStatus
 } from '../src/main/worktree.ts'
-import { git, initRepo } from './gitRepo.ts'
+import { defaultBranchName, sanitizeBranch } from '../src/shared/branchName.ts'
+import { localBranches } from '../src/main/git.ts'
+import { branchOf, git, initRepo } from './gitRepo.ts'
 
 const execFileP = promisify(execFile)
 
@@ -531,26 +532,84 @@ test('createWorktree gives a repo with no commits a base to branch from', async 
   }
 })
 
-test('createWorktree recovers from a branch-name collision', async () => {
-  const repo = await mkdtemp(join(tmpdir(), 'karbun-worktree-collide-'))
+test('createWorktree refuses to rename a branch the user named', async () => {
+  const repo = await initRepo('karbun-worktree-collide-')
   const made: string[] = []
   try {
-    await git(repo, ['init', '-q', '-b', 'main'])
-    await git(repo, ['config', 'user.name', 'Carbon Test'])
-    await git(repo, ['config', 'user.email', 'karbun@example.test'])
-    await writeFile(join(repo, 'a.txt'), 'hello\n')
-    await git(repo, ['add', '.'])
-    await git(repo, ['commit', '-qm', 'init'])
-
     const first = await createWorktree(repo, 'same-name')
     made.push(first.path)
-    const second = await createWorktree(repo, 'same-name')
-    made.push(second.path)
+    assert.equal(first.branch, 'same-name')
 
-    assert.notEqual(second.branch, first.branch, 'collision falls back to a generated name')
-    assert.ok(existsSync(second.path))
+    // The retry under a generated name is for names that were *generated* —
+    // answering "create same-name" with `karbun/aug24-k3xq` and no error is a
+    // worse outcome than the refusal, since nothing on screen would say so.
+    await assert.rejects(
+      () => createWorktree(repo, 'same-name'),
+      /already exists|already used by worktree|not an empty directory/i
+    )
+
+    // An unnamed request still goes through and gets a generated name; the
+    // retry itself needs a suffix collision, which is 1-in-1.6M by construction.
+    const auto = await createWorktree(repo)
+    made.push(auto.path)
+    assert.ok(auto.branch.startsWith('karbun/'))
   } finally {
     for (const p of made) await rm(p, { recursive: true, force: true })
+    await rm(repo, { recursive: true, force: true })
+  }
+})
+
+test('checkoutWorktree runs a chat on a branch that already exists', async () => {
+  const repo = await initRepo('karbun-worktree-existing-')
+  let created: Awaited<ReturnType<typeof checkoutWorktree>> | null = null
+  try {
+    // A branch with content of its own, left unchecked-out in the main repo.
+    await git(repo, ['switch', '-qc', 'feature-x'])
+    await writeFile(join(repo, 'b.txt'), 'from the branch\n')
+    await git(repo, ['add', '.'])
+    await git(repo, ['commit', '-qm', 'branch work'])
+    await git(repo, ['switch', '-q', 'main'])
+
+    created = await checkoutWorktree(repo, 'feature-x')
+    assert.equal(created.branch, 'feature-x')
+    assert.equal(await branchOf(created.path), 'feature-x')
+    // The branch's own commits are there — this is a checkout, not a new branch.
+    assert.ok(existsSync(join(created.path, 'b.txt')))
+    // The main checkout is untouched: choosing a branch never switches it.
+    assert.equal(await branchOf(repo), 'main')
+
+    // A branch another worktree holds is git's refusal to make, not ours to
+    // work around — the picker filters these out, and a race must still fail.
+    // Asking again for the same branch trips the *directory* first, since a
+    // worktree's path is derived from its branch; a different branch that is
+    // merely checked out elsewhere trips the ref check.
+    await assert.rejects(() => checkoutWorktree(repo, 'feature-x'), /already exists/i)
+    await assert.rejects(() => checkoutWorktree(repo, 'main'), /already used by worktree/i)
+  } finally {
+    if (created) await removeWorktree(repo, created.path, created.branch, true)
+    await rm(repo, { recursive: true, force: true })
+  }
+})
+
+test('localBranches reports every local branch and who has it checked out', async () => {
+  const repo = await initRepo('karbun-local-branches-')
+  let created: Awaited<ReturnType<typeof checkoutWorktree>> | null = null
+  try {
+    await git(repo, ['branch', 'idle-one'])
+    await git(repo, ['branch', 'idle-two'])
+    created = await checkoutWorktree(repo, 'idle-two')
+
+    const refs = await localBranches(repo)
+    const byName = new Map(refs.map((r) => [r.name, r.checkedOut]))
+    assert.deepEqual([...byName.keys()].sort(), ['idle-one', 'idle-two', 'main'])
+    assert.equal(byName.get('idle-one'), false, 'nothing holds it — offerable')
+    assert.equal(byName.get('idle-two'), true, 'the worktree holds it')
+    assert.equal(byName.get('main'), true, 'the main checkout holds it')
+
+    // Outside a repo the picker gets an empty list rather than a rejection.
+    assert.deepEqual(await localBranches(tmpdir()), [])
+  } finally {
+    if (created) await removeWorktree(repo, created.path, created.branch, true)
     await rm(repo, { recursive: true, force: true })
   }
 })

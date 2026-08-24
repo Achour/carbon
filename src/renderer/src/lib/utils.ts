@@ -37,3 +37,11 @@ export const contextPillAction = cn(
   contextPill,
   'transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring outline-none'
 )
+
+/**
+ * `contextPillAction` as an actual `<button>` in the strip: out of the window's
+ * drag region, with the icon sized for a chip. Both pickers in that row render
+ * one, and they sit side by side — a difference between them would read as two
+ * kinds of control rather than two of the same.
+ */
+export const contextPillButton = cn(contextPillAction, 'no-drag [&>svg]:size-3 [&>svg]:shrink-0')

@@ -121,15 +121,37 @@ export interface WorktreeInfo {
 }
 
 /**
- * Where a chat runs: the main checkout, a fresh worktree, or one that already
- * exists. Doubles as the picker's UI selection and the `chats:create` payload —
- * `local` simply means "no worktree". Main re-derives `repoRoot` authoritatively
- * from the path, so the extra fields on `existing` are only for the renderer.
+ * Where a chat runs: the main checkout, a fresh worktree, a worktree on a
+ * branch that already exists, or one that already exists. Doubles as the
+ * picker's UI selection and the `chats:create` payload — `local` simply means
+ * "no worktree". Main re-derives `repoRoot` authoritatively from the path, so
+ * the extra fields on `existing` are only for the renderer.
+ *
+ * `new` and `branch` are separate kinds because the git command is genuinely
+ * different — `worktree add -b <new> <path> HEAD` against
+ * `worktree add <path> <existing>` — and so is the failure they must not share:
+ * a *generated* name may be retried under another when it collides, a branch
+ * the user named or picked may not.
  */
 export type WorktreeTarget =
   | { kind: 'local' }
-  | { kind: 'new' }
+  /** New branch. `branch` is the name the user typed; omitted means generated. */
+  | { kind: 'new'; branch?: string }
+  /** A branch that already exists, checked out into a worktree of its own. */
+  | { kind: 'branch'; branch: string }
   | { kind: 'existing'; path: string; branch: string; repoRoot: string }
+
+/**
+ * This target makes a worktree that doesn't exist yet — the one case where the
+ * branch is still an open question, so the one case the branch chip appears in.
+ * A predicate rather than three `kind === 'new' || kind === 'branch'` tests:
+ * the chip's existence and the strip's decision to stand its own branch segment
+ * down have to be the same answer, and two spellings is how one of them ends up
+ * describing a set the other doesn't.
+ */
+export function createsWorktree(target?: WorktreeTarget): boolean {
+  return target?.kind === 'new' || target?.kind === 'branch'
+}
 
 /** Pre-removal safety report for a worktree. */
 export interface WorktreeStatus {
@@ -154,6 +176,17 @@ export interface WorktreeRef {
    * checkout, which is never "finished").
    */
   merged?: boolean
+}
+
+/** One local branch, for the new-chat branch picker. */
+export interface BranchRef {
+  name: string
+  /**
+   * The main checkout or a linked worktree already holds it. `git worktree add`
+   * refuses those outright, so the picker offers them as neither a destination
+   * nor a name to create — the "Run on" rows and This Mac already reach them.
+   */
+  checkedOut: boolean
 }
 
 
@@ -1660,6 +1693,11 @@ export interface Api {
    * caller always asks about every visible chat at once.
    */
   gitBranches(cwds: string[]): Promise<Record<string, string | null>>
+  /**
+   * Every local branch of the repo `cwd` belongs to, most recently committed
+   * first — the new-chat branch picker's list. Empty outside a repo.
+   */
+  gitLocalBranches(cwd: string): Promise<BranchRef[]>
   gitInit(cwd: string): Promise<GitResult>
   /** GitHub state (PR + checks) for the cwd's current branch; best-effort. */
   githubState(cwd: string): Promise<GitHubState>

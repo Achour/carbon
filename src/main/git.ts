@@ -4,6 +4,7 @@ import { dirname, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import type {
   BranchChanges,
+  BranchRef,
   GitDiffTarget,
   GitFileChange,
   GitResult,
@@ -217,6 +218,33 @@ export async function branchAt(cwd: string): Promise<string | null> {
   } catch {
     return null
   }
+}
+
+/**
+ * Every local branch, most recently committed first — the order a picker wants,
+ * since the branch you mean is almost always one you touched lately, and
+ * `for-each-ref`'s own default is alphabetical.
+ *
+ * `%(worktreepath)` is empty unless some worktree (the main checkout included)
+ * has the branch out, which is exactly the set `git worktree add` refuses. It
+ * costs nothing here and saves cross-referencing `listWorktrees`, whose answer
+ * covers only linked worktrees anyway. NUL-separated because a branch name may
+ * contain almost anything a field separator might be, but never a NUL.
+ */
+export async function localBranches(cwd: string): Promise<BranchRef[]> {
+  const out = await git(cwd, [
+    'for-each-ref',
+    '--sort=-committerdate',
+    '--format=%(refname:short)%00%(worktreepath)',
+    'refs/heads'
+  ]).catch(() => '')
+  const refs: BranchRef[] = []
+  for (const line of out.split('\n')) {
+    if (!line) continue
+    const [name, path] = line.split('\0')
+    if (name) refs.push({ name, checkedOut: !!path })
+  }
+  return refs
 }
 
 /** `branchAt` for a whole set of folders — one map, unknown folders included as null. */

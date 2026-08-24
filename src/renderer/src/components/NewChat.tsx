@@ -12,7 +12,7 @@ import {
   SquareTerminal
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { providerForRememberedModel } from '@shared/types'
+import { createsWorktree, providerForRememberedModel } from '@shared/types'
 import type {
   Attachment,
   EffortId,
@@ -21,7 +21,7 @@ import type {
   ServiceTier,
   WorktreeTarget
 } from '@shared/types'
-import type { ComposerDraft, ProjectDraftOptions } from '@/lib/drafts'
+import { worktreeTargetKey, type ComposerDraft, type ProjectDraftOptions } from '@/lib/drafts'
 import { basename, greeting } from '@/lib/format'
 import { useApp } from '@/store'
 import { Button } from '@/components/ui/button'
@@ -153,6 +153,9 @@ export function NewChat(): React.JSX.Element {
     (next: WorktreeTarget) => setTargetSelection({ cwd, target: next }),
     [cwd]
   )
+  // A worktree that doesn't exist yet: the branch chip is up, and it owns the
+  // branch that both the strip and the spinner are talking about.
+  const creatingWorktree = createsWorktree(target)
   // Creating a worktree is a full checkout — it can take seconds on a big repo,
   // and it can fail. Both need to be visible or sending looks like a no-op.
   const [starting, setStarting] = React.useState(false)
@@ -214,7 +217,7 @@ export function NewChat(): React.JSX.Element {
   // Changing a picker with text already in the box updates that draft in place.
   // With an empty box it does nothing — the pickers alone are not a draft, and
   // they are already remembered as `AppDefaults`.
-  const targetKey = target.kind === 'existing' ? `existing:${target.path}` : target.kind
+  const targetKey = worktreeTargetKey(target)
   React.useEffect(() => {
     if (cwd) patchProjectDraft(cwd, draftOptionsRef.current)
   }, [
@@ -238,8 +241,8 @@ export function NewChat(): React.JSX.Element {
 
   const start = async (text: string, attachments: Attachment[]): Promise<void> => {
     if (!cwd) return
-    // The picker's target decides the chat's directory; branch names for new
-    // worktrees are generated main-side. Creation is scoped to the project the
+    // The picker's target decides the chat's directory; an unnamed new worktree
+    // has its branch generated main-side. Creation is scoped to the project the
     // worktree branched from, so recents and sidebar grouping track the project
     // rather than the worktree — which matters when the selected cwd IS a
     // worktree (arrived from the sidebar).
@@ -316,8 +319,13 @@ export function NewChat(): React.JSX.Element {
                 <ContextStrip
                   cwd={cwd}
                   git={git}
-                  // A worktree target shows its own branch, not the checkout's.
-                  branch={target.kind === 'existing' ? target.branch : undefined}
+                  // A worktree target shows its own branch, not the checkout's —
+                  // and when the branch chip is up, it owns the branch and this
+                  // segment stands down rather than naming the one place the
+                  // chat is *not* about to run.
+                  branch={
+                    creatingWorktree ? null : target.kind === 'existing' ? target.branch : undefined
+                  }
                   onReviewChanges={() => void reviewChanges()}
                 >
                   {git?.isRepo && (
@@ -351,7 +359,7 @@ export function NewChat(): React.JSX.Element {
                   placeholder={`Start working in ${basename(cwd)}…`}
                   disabled={starting}
                 />
-                {starting && target.kind === 'new' && (
+                {starting && creatingWorktree && (
                   <p className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
                     <Loader2 className="size-3 animate-spin" />
                     Creating worktree…

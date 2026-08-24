@@ -133,6 +133,7 @@ const api: Api = {
   gitBranchChanges: (cwd: string, baseBranch?: string) =>
     invoke('git:branch-changes', cwd, baseBranch),
   gitBranches: (cwds: string[]) => invoke('git:branches', cwds),
+  gitLocalBranches: (cwd: string) => invoke('git:local-branches', cwd),
   gitInit: (cwd: string) => invoke('git:init', cwd),
   githubState: (cwd: string) => invoke('github:state', cwd),
   githubOpenPr: (cwd: string) => invoke('github:open-pr', cwd),

@@ -68,6 +68,7 @@ import { hydrateShellPath } from './shellEnv'
 import { configureProviderClis, providerClis } from './providerCli.ts'
 import { dockIconSvg } from './dockIcon'
 import {
+  checkoutWorktree,
   createWorktree,
   finishWorktree,
   handOffWorktree,
@@ -468,7 +469,11 @@ function registerIpc(): void {
     let cwd = opts.cwd
     let worktree: WorktreeInfo | undefined
     if (opts.worktree?.kind === 'new') {
-      const created = await createWorktree(opts.cwd)
+      const created = await createWorktree(opts.cwd, opts.worktree.branch)
+      cwd = created.path
+      worktree = { repoRoot: created.repoRoot, branch: created.branch }
+    } else if (opts.worktree?.kind === 'branch') {
+      const created = await checkoutWorktree(opts.cwd, opts.worktree.branch)
       cwd = created.path
       worktree = { repoRoot: created.repoRoot, branch: created.branch }
     } else if (opts.worktree?.kind === 'existing') {
@@ -841,6 +846,7 @@ function registerIpc(): void {
   ipcMain.handle('git:merge-into-default', (_e, cwd: string) => gitOps.gitMergeIntoDefault(cwd))
   ipcMain.handle('git:fetch', (_e, cwd: string) => gitOps.gitFetch(cwd))
   ipcMain.handle('git:branches', (_e, cwds: string[]) => gitOps.branchesAt(cwds))
+  ipcMain.handle('git:local-branches', (_e, cwd: string) => gitOps.localBranches(cwd))
   ipcMain.handle('git:branch-changes', (_e, cwd: string, baseBranch?: string) =>
     gitOps.gitBranchChanges(cwd, baseBranch)
   )
