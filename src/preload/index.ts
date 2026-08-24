@@ -103,6 +103,23 @@ const api: Api = {
   listDir: (dir: string) => invoke('fs:list', dir),
   readFile: (path: string) => invoke('fs:read', path),
   statPath: (path: string) => invoke('fs:stat', path),
+  writeFile: (path: string, content: string, expectedMtimeMs: number | null) =>
+    invoke('fs:write', path, content, expectedMtimeMs),
+  statFiles: (paths: string[]) => invoke('fs:stat-many', paths),
+  createPath: (parent: string, name: string, kind: 'file' | 'dir') =>
+    invoke('fs:create', parent, name, kind),
+  renamePath: (path: string, name: string) => invoke('fs:rename', path, name),
+  deletePath: (path: string) => invoke('fs:delete', path),
+  setDirtyFileCount: (count: number) => ipcRenderer.send('editor:dirty-count', count),
+  lspEnsure: (root: string, languageId: string) => invoke('lsp:ensure', root, languageId),
+  lspSend: (id: string, message: string) => invoke('lsp:send', id, message),
+  lspRelease: (id: string) => invoke('lsp:release', id),
+  onLspMessage: (cb: (id: string, message: string) => void) => {
+    const listener = (_e: unknown, payload: { id: string; message: string }): void =>
+      cb(payload.id, payload.message)
+    ipcRenderer.on('lsp:message', listener)
+    return () => ipcRenderer.off('lsp:message', listener)
+  },
   searchFiles: (cwd: string, query: string) => invoke('fs:search', cwd, query),
   gitStatus: (cwd: string) => invoke('git:status', cwd),
   gitDiff: (cwd: string, target: GitDiffTarget) => invoke('git:diff', cwd, target),

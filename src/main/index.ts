@@ -44,7 +44,17 @@ import type {
 import { effortForProvider, providerForRememberedModel } from '@shared/types'
 import { ChatManager } from './claude'
 import { readCodexConfigModel } from './codexConfig'
-import { listDir, readFileContent, searchFiles, statPath } from './files'
+import {
+  createPath,
+  listDir,
+  renamePath,
+  readFileContent,
+  searchFiles,
+  statFiles,
+  statPath,
+  writeFileContent
+} from './files'
+import { LspManager } from './lsp'
 import * as gitOps from './git'
 import * as githubOps from './github'
 import { getPermissionRules, removePermissionRule } from './permissions'
@@ -116,9 +126,57 @@ function notifyOnStatus(chatId: string, status: string): void {
   n.show()
 }
 
+/**
+ * How many open editor buffers have unsaved edits. Pushed from the renderer on
+ * every clean ⇄ dirty transition rather than requested at close time: `close`
+ * is synchronous about whether it is vetoed, and an IPC round trip inside it
+ * would have to guess.
+ */
+let dirtyFileCount = 0
+
+/** True while the unsaved-changes prompt is on screen, so it cannot stack. */
+let askingUnsaved = false
+
+/**
+ * Ask before throwing away unsaved editor buffers. Shared by the two exits —
+ * closing the window and quitting the app — because on macOS ⌘Q is the common
+ * one and a guard that only covered ⌘W would miss it.
+ *
+ * Two buttons rather than three on purpose: a "Save All" would need the renderer
+ * to write every buffer and report back before the exit may proceed, and Cancel
+ * already puts the user back where ⌘S works.
+ */
+async function confirmDiscardingEdits(action: string): Promise<boolean> {
+  if (askingUnsaved) return false
+  askingUnsaved = true
+  try {
+    const files = dirtyFileCount === 1 ? '1 file has' : `${dirtyFileCount} files have`
+    const { response } = await dialog.showMessageBox({
+      type: 'warning',
+      buttons: ['Cancel', 'Discard and Continue'],
+      defaultId: 0,
+      cancelId: 0,
+      message: `${files} unsaved changes.`,
+      detail: `${action} discards them. Cancel to go back and save (⌘S).`
+    })
+    if (response !== 1) return false
+    dirtyFileCount = 0
+    return true
+  } finally {
+    askingUnsaved = false
+  }
+}
+
 function emitTerminal(ev: TerminalEvent): void {
   win?.webContents.send('terminal:event', ev)
 }
+
+// Language-server traffic. One channel for every server: the id in the payload
+// is what the renderer's transports demultiplex on, and a channel per server
+// would mean registering and tearing down listeners as servers come and go.
+const lsp = new LspManager((id, message) => {
+  win?.webContents.send('lsp:message', { id, message })
+})
 
 function emitPreview(ev: PreviewEvent): void {
   win?.webContents.send('preview:event', ev)
@@ -203,11 +261,26 @@ function createWindow(): void {
       }
     })
   }
-  win.on('close', () => {
+  win.on('close', (event) => {
     if (win) store.setWindowBounds(win.getBounds())
+    // Closing a *tab* with unsaved edits asks; closing the window used to throw
+    // the same edits away without a word. The buffer is the only copy — nothing
+    // on disk holds it — so this is the last moment the question can be asked.
+    // Skipped during quit: `before-quit` already runs its own teardown, and
+    // vetoing a close from inside it wedges the shutdown.
+    if (dirtyFileCount > 0 && !readyToQuit) {
+      event.preventDefault()
+      void confirmDiscardingEdits('Closing the window').then((ok) => {
+        if (ok) win?.close()
+      })
+    }
   })
   win.on('closed', () => {
     win = null
+    // The renderer is gone and its buffers with it, so nothing is at risk any
+    // more — leaving the count set would veto the next quit over edits that no
+    // longer exist anywhere.
+    dirtyFileCount = 0
   })
 
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -683,6 +756,32 @@ function registerIpc(): void {
   ipcMain.handle('fs:read', (_e, path: string) => readFileContent(path))
 
   ipcMain.handle('fs:stat', (_e, path: string) => statPath(path))
+  ipcMain.handle('fs:write', (_e, path: string, content: string, expectedMtimeMs: number | null) =>
+    writeFileContent(path, content, expectedMtimeMs)
+  )
+  ipcMain.handle('fs:stat-many', (_e, paths: string[]) => statFiles(paths))
+  ipcMain.handle('fs:create', (_e, parent: string, name: string, kind: 'file' | 'dir') =>
+    createPath(parent, name, kind)
+  )
+  // `shell.trashItem` rather than `rm`: a delete from the file tree should be
+  // recoverable from the Finder, the way it is in every other editor. It also
+  // means the confirm dialog can honestly say the work is not gone.
+  ipcMain.handle('fs:rename', (_e, path: string, name: string) => renamePath(path, name))
+  ipcMain.handle('fs:delete', async (_e, path: string) => {
+    try {
+      await shell.trashItem(path)
+      return { ok: true, path }
+    } catch (err) {
+      return { ok: false, message: err instanceof Error ? err.message : String(err) }
+    }
+  })
+  ipcMain.on('editor:dirty-count', (_e, count: number) => {
+    dirtyFileCount = count
+  })
+
+  ipcMain.handle('lsp:ensure', (_e, root: string, languageId: string) => lsp.ensure(root, languageId))
+  ipcMain.handle('lsp:send', (_e, id: string, message: string) => lsp.send(id, message))
+  ipcMain.handle('lsp:release', (_e, id: string) => lsp.release(id))
 
   ipcMain.handle('fs:search', (_e, cwd: string, query: string) => searchFiles(cwd, query))
 
@@ -798,9 +897,20 @@ app.on('before-quit', (event) => {
   if (readyToQuit) return
   event.preventDefault()
   if (quitting) return
+  // ⌘Q is the ordinary way to leave a Mac app, so it has to ask the same
+  // question ⌘W does — otherwise the guard covers the rarer exit and the common
+  // one silently discards the buffers. Confirming clears the count and quits
+  // again, arriving back here with nothing left to ask about.
+  if (dirtyFileCount > 0) {
+    void confirmDiscardingEdits('Quitting').then((ok) => {
+      if (ok) app.quit()
+    })
+    return
+  }
   manager.disposeAll()
   terminals.disposeAll()
   preview.disposeAll()
+  lsp.disposeAll()
   quitting = store.flushAll().finally(() => {
     readyToQuit = true
     app.quit()

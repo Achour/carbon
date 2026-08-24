@@ -18,6 +18,14 @@ export const contextPill =
  * picker and the context strip. One definition so the two say it the same way;
  * they were already drifting apart at birth.
  */
+/**
+ * A full-width notice above the editor: the read-only banner and the conflict
+ * bar. Both say "something about this file is not what you'd assume", and two
+ * bars born in one change is where a drift starts.
+ */
+export const editorNotice =
+  'flex items-center gap-2 border-b border-border bg-warning/10 px-3 py-1.5 text-[11px]'
+
 export const missingTag =
   'shrink-0 rounded bg-warning/10 px-1.5 py-px text-[10px] text-warning'
 

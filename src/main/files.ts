@@ -1,8 +1,12 @@
-import { readdir, readFile, stat } from 'node:fs/promises'
-import { extname, join, relative } from 'node:path'
-import type { FileContent, FileEntry } from '@shared/types'
+import { mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
+import { dirname, extname, join, relative, resolve, sep } from 'node:path'
+import type { FileContent, FileEntry, FsCreateResult, FileWriteResult } from '@shared/types'
 
-const MAX_TEXT_BYTES = 512 * 1024
+// The old 512 KB cap paid for highlight.js highlighting the whole blob eagerly.
+// CodeMirror renders and parses by viewport, so the cost is now roughly the read
+// itself and a file this size opens instantly — the cap is only here so a stray
+// multi-megabyte log can't be pulled through IPC as one string.
+const MAX_TEXT_BYTES = 2 * 1024 * 1024
 const MAX_FILE_BYTES = 4 * 1024 * 1024
 // Images are inlined as data URIs and can legitimately be larger than a text
 // file (e.g. a generated PNG), so give them a higher ceiling.
@@ -99,7 +103,8 @@ export async function readFileContent(path: string): Promise<FileContent> {
       kind: 'text',
       content: data.subarray(0, MAX_TEXT_BYTES).toString('utf8'),
       language: LANGUAGE_BY_EXT[ext],
-      truncated
+      truncated,
+      mtimeMs: info.mtimeMs
     }
   } catch (err) {
     return { kind: 'error', message: err instanceof Error ? err.message : String(err) }
@@ -112,6 +117,149 @@ export async function statPath(path: string): Promise<'file' | 'dir' | null> {
     return s.isDirectory() ? 'dir' : s.isFile() ? 'file' : null
   } catch {
     return null
+  }
+}
+
+/**
+ * Write an edited buffer back.
+ *
+ * `expectedMtimeMs` is the mtime the buffer was read at. The agent edits the
+ * same files the user has open — Carbon's own problem, not one a normal editor
+ * has — so a save whose base has moved is *refused* rather than allowed to win.
+ * `null` forces (the user chose Overwrite at the conflict prompt).
+ *
+ * The mtime comparison is `!==` rather than `>`: a checkout or a revert can move
+ * mtime backwards, and that is still someone else's write.
+ */
+export async function writeFileContent(
+  path: string,
+  content: string,
+  expectedMtimeMs: number | null
+): Promise<FileWriteResult> {
+  try {
+    if (expectedMtimeMs !== null) {
+      const before = await stat(path).catch(() => null)
+      // A file that vanished is not a conflict — recreating it is what the user
+      // asked for. Only a *different* file on disk is.
+      if (before && before.mtimeMs !== expectedMtimeMs) {
+        return { ok: false, reason: 'conflict', mtimeMs: before.mtimeMs }
+      }
+    }
+    await writeFile(path, content, 'utf8')
+    const after = await stat(path)
+    return { ok: true, mtimeMs: after.mtimeMs }
+  } catch (err) {
+    return { ok: false, reason: 'error', message: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+/**
+ * mtimes for a set of paths, `null` where the file is gone. This is what lets
+ * the post-turn refresh re-read only the files that actually changed instead of
+ * pulling every open tab's body back through IPC on every turn boundary.
+ */
+export async function statFiles(paths: string[]): Promise<Record<string, number | null>> {
+  const out: Record<string, number | null> = {}
+  await Promise.all(
+    paths.map(async (p) => {
+      out[p] = await stat(p).then(
+        (s) => s.mtimeMs,
+        () => null
+      )
+    })
+  )
+  return out
+}
+
+/**
+ * Create an empty file or a folder under `parent`.
+ *
+ * `name` may carry slashes, so `lib/util.ts` creates the folders on the way —
+ * that is what the inline input in the tree is for, and it saves making three
+ * folders by hand to put one file in. The trade is that the name has to be
+ * checked rather than trusted: a leading `/` would escape to the filesystem
+ * root and `..` would climb out of the project, and neither is something the
+ * tree should be able to do.
+ */
+/**
+ * Validate a user-typed name against a parent folder and resolve it to a path.
+ *
+ * Shared by create and rename because both take a free-text name from the tree
+ * and both must refuse the same things. A leading `/` escapes to the filesystem
+ * root and `..` climbs out of the project, so the name is *checked* rather than
+ * trusted — and then the resolved path is compared against the parent, which is
+ * what actually proves it stayed inside rather than merely looking like it did.
+ */
+function resolveChildPath(
+  parent: string,
+  name: string
+): { ok: true; path: string; name: string } | { ok: false; message: string } {
+  const trimmed = name.trim().replace(/\/+$/, '')
+  if (!trimmed) return { ok: false, message: 'Name cannot be empty.' }
+  if (trimmed.startsWith('/')) return { ok: false, message: 'Name cannot start with “/”.' }
+  if (trimmed.split('/').some((part) => part === '..' || part === '.')) {
+    return { ok: false, message: 'Name cannot contain “.” or “..” segments.' }
+  }
+  const target = join(parent, trimmed)
+  if (!resolve(target).startsWith(resolve(parent) + sep)) {
+    return { ok: false, message: 'Name must stay inside the folder.' }
+  }
+  return { ok: true, path: target, name: trimmed }
+}
+
+/**
+ * Rename — or move, since a name with slashes in it is a move. The old path is
+ * gone either way, so this is the one tree operation that is *not* undoable
+ * through the Trash; it is undone by renaming back.
+ */
+export async function renamePath(path: string, name: string): Promise<FsCreateResult> {
+  const parent = dirname(path)
+  const resolved = resolveChildPath(parent, name)
+  if (!resolved.ok) return resolved
+  if (resolved.path === path) return { ok: true, path }
+  try {
+    // Case-only renames on a case-insensitive filesystem (`Foo.ts` → `foo.ts`)
+    // land on a path that "exists" — itself — so the existence check has to
+    // exclude that case or the rename every macOS user tries first is refused.
+    if (await stat(resolved.path).then(() => true, () => false)) {
+      if (resolved.path.toLowerCase() !== path.toLowerCase()) {
+        return { ok: false, message: `“${resolved.name}” already exists.` }
+      }
+    }
+    await mkdir(dirname(resolved.path), { recursive: true })
+    await rename(path, resolved.path)
+    return { ok: true, path: resolved.path }
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+export async function createPath(
+  parent: string,
+  name: string,
+  kind: 'file' | 'dir'
+): Promise<FsCreateResult> {
+  const resolved = resolveChildPath(parent, name)
+  if (!resolved.ok) return resolved
+  const target = resolved.path
+  const trimmed = resolved.name
+
+  try {
+    if (await stat(target).then(() => true, () => false)) {
+      return { ok: false, message: `“${trimmed}” already exists.` }
+    }
+    if (kind === 'dir') {
+      await mkdir(target, { recursive: true })
+    } else {
+      await mkdir(dirname(target), { recursive: true })
+      // 'wx' fails rather than truncating, so a file that appeared between the
+      // check above and this line is never silently emptied.
+      await writeFile(target, '', { flag: 'wx' })
+    }
+    return { ok: true, path: target }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return { ok: false, message }
   }
 }
 

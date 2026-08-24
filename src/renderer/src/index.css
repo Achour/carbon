@@ -107,6 +107,16 @@
   --icon-orange: oklch(0.6 0.15 55);
   --icon-red: oklch(0.57 0.18 25);
   --icon-purple: oklch(0.55 0.17 300);
+  /* Syntax tokens — consumed by both highlight.js (index.css rules below) and
+     CodeMirror (lib/editorTheme.ts). Defined once so they cannot drift. */
+  --syn-comment: oklch(0.52 0.01 85);
+  --syn-keyword: oklch(0.5 0.15 320);
+  --syn-string: oklch(0.5 0.12 150);
+  --syn-number: oklch(0.55 0.14 55);
+  --syn-function: oklch(0.5 0.13 250);
+  --syn-variable: oklch(0.5 0.11 85);
+  --syn-builtin: oklch(0.48 0.12 200);
+  --syn-meta: oklch(0.52 0.15 27);
 }
 
 .dark {
@@ -152,6 +162,16 @@
   --icon-orange: oklch(0.74 0.14 55);
   --icon-red: oklch(0.68 0.16 25);
   --icon-purple: oklch(0.7 0.14 300);
+  /* Dark syntax tokens. Lifted, lower-chroma versions of the light set — the
+     same hues, re-tuned for contrast against --card rather than paper. */
+  --syn-comment: oklch(0.56 0.01 85);
+  --syn-keyword: oklch(0.68 0.11 320);
+  --syn-string: oklch(0.7 0.1 150);
+  --syn-number: oklch(0.72 0.12 55);
+  --syn-function: oklch(0.72 0.1 250);
+  --syn-variable: oklch(0.74 0.09 85);
+  --syn-builtin: oklch(0.7 0.11 200);
+  --syn-meta: oklch(0.62 0.12 27);
 }
 
 @theme inline {
@@ -485,49 +505,52 @@
   vertical-align: top;
 }
 
-/* Syntax highlighting — tuned to the app palette */
+/* Syntax highlighting — one palette, two renderers.
+   highlight.js paints chat code blocks and the diff view; CodeMirror paints the
+   editor. Both read these variables, so a token cannot be one color in a
+   message and another in the file it came from. */
 .hljs-comment,
 .hljs-quote {
-  color: oklch(0.56 0.01 85);
+  color: var(--syn-comment);
   font-style: italic;
 }
 .hljs-keyword,
 .hljs-selector-tag,
 .hljs-tag,
 .hljs-name {
-  color: oklch(0.68 0.11 320);
+  color: var(--syn-keyword);
 }
 .hljs-string,
 .hljs-regexp,
 .hljs-addition {
-  color: oklch(0.7 0.1 150);
+  color: var(--syn-string);
 }
 .hljs-number,
 .hljs-literal,
 .hljs-symbol,
 .hljs-bullet {
-  color: oklch(0.72 0.12 55);
+  color: var(--syn-number);
 }
 .hljs-title,
 .hljs-section,
 .hljs-title.function_,
 .hljs-title.class_ {
-  color: oklch(0.72 0.1 250);
+  color: var(--syn-function);
 }
 .hljs-attr,
 .hljs-attribute,
 .hljs-variable,
 .hljs-template-variable,
 .hljs-type {
-  color: oklch(0.74 0.09 85);
+  color: var(--syn-variable);
 }
 .hljs-built_in,
 .hljs-builtin-name {
-  color: oklch(0.7 0.11 200);
+  color: var(--syn-builtin);
 }
 .hljs-meta,
 .hljs-deletion {
-  color: oklch(0.62 0.12 27);
+  color: var(--syn-meta);
 }
 .hljs-emphasis {
   font-style: italic;
@@ -535,38 +558,14 @@
 .hljs-strong {
   font-weight: 600;
 }
-:root:not(.dark) .hljs-comment,
-:root:not(.dark) .hljs-quote {
-  color: oklch(0.52 0.01 85);
-}
-:root:not(.dark) .hljs-keyword,
-:root:not(.dark) .hljs-selector-tag,
-:root:not(.dark) .hljs-tag,
-:root:not(.dark) .hljs-name {
-  color: oklch(0.5 0.15 320);
-}
-:root:not(.dark) .hljs-string,
-:root:not(.dark) .hljs-regexp,
-:root:not(.dark) .hljs-addition {
-  color: oklch(0.5 0.12 150);
-}
-:root:not(.dark) .hljs-number,
-:root:not(.dark) .hljs-literal {
-  color: oklch(0.55 0.14 55);
-}
-:root:not(.dark) .hljs-title,
-:root:not(.dark) .hljs-section,
-:root:not(.dark) .hljs-title.function_,
-:root:not(.dark) .hljs-title.class_ {
-  color: oklch(0.5 0.13 250);
-}
-:root:not(.dark) .hljs-attr,
-:root:not(.dark) .hljs-variable,
-:root:not(.dark) .hljs-type {
-  color: oklch(0.5 0.11 85);
-}
-:root:not(.dark) .hljs-built_in {
-  color: oklch(0.48 0.12 200);
+
+
+/* Holding ⌘ (⌃ off macOS) over the editor arms go-to-definition. The cursor is
+   the whole affordance: underlining the symbol under the pointer would mean
+   hit-testing a position on every mousemove, which is the per-frame document
+   work the pill was just rewritten to avoid. */
+.cm-jumpArmed .cm-content {
+  cursor: pointer;
 }
 
 /* Loading animations are throttled below the display refresh rate (120Hz on

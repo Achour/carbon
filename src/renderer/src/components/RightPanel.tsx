@@ -21,6 +21,12 @@ import {
 import { cn } from '@/lib/utils'
 import { FileIcon } from '@/lib/fileIcon'
 import { useApp, type OpenTab } from '@/store'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle
+} from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { WithTooltip } from '@/components/ui/tooltip'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -40,6 +46,7 @@ function Tab({
   active,
   attention = false,
   preview = false,
+  dirty = false,
   busy,
   onSelect,
   onDoubleClick,
@@ -50,6 +57,8 @@ function Tab({
   active: boolean
   attention?: boolean
   preview?: boolean
+  /** Unsaved edits — the close button becomes a dot until hover, like VS Code. */
+  dirty?: boolean
   /** Foreground process name; renders the activity dot when set. */
   busy?: string
   onSelect: () => void
@@ -59,7 +68,7 @@ function Tab({
   return (
     <div
       className={cn(
-        'group flex h-7 shrink-0 cursor-default items-center gap-1.5 rounded-md pr-1 pl-2 text-xs transition-colors',
+        'group flex h-7 shrink-0 cursor-default items-center gap-1.5 rounded-md pr-1.5 pl-2 text-xs transition-colors',
         active
           ? 'bg-accent text-foreground'
           : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground'
@@ -71,25 +80,34 @@ function Tab({
     >
       <span className={cn(attention && 'text-warning')}>{icon}</span>
       <span className={cn('max-w-36 truncate', preview && 'italic')}>{label}</span>
-      {busy && (
-        <span
-          // Sits before the close button, which only appears on hover — so the
-          // dot marks a running process without the tab ever changing width.
-          className="size-1.5 shrink-0 rounded-full bg-primary group-hover:hidden"
-          title={`${busy} is running`}
-        />
-      )}
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation()
-          onClose()
-        }}
-        aria-label={`Close ${label}`}
-        className="rounded p-0.5 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-secondary"
-      >
-        <X className="size-3" />
-      </button>
+      {/* One fixed-size slot for everything that can appear at the end of a tab:
+          the unsaved dot, the running-process dot, and the close button, which
+          sits on top of either and takes over on hover. Sizing the slot rather
+          than the contents is what actually keeps the width constant — a bare
+          dot next to a `display:none` button made a dirty tab *narrower* than a
+          clean one and left the dot crowding the tab's right edge. */}
+      <span className="relative flex size-4 shrink-0 items-center justify-center">
+        {(busy || dirty) && (
+          <span
+            className={cn(
+              'size-1.5 rounded-full group-hover:hidden',
+              busy ? 'bg-primary' : 'bg-foreground/70'
+            )}
+            title={busy ? `${busy} is running` : 'Unsaved changes'}
+          />
+        )}
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation()
+            onClose()
+          }}
+          aria-label={`Close ${label}`}
+          className="absolute inset-0 flex items-center justify-center rounded opacity-0 transition-opacity group-hover:opacity-100 hover:bg-secondary"
+        >
+          <X className="size-3" />
+        </button>
+      </span>
     </div>
   )
 }
@@ -525,6 +543,18 @@ export function RightPanel(): React.JSX.Element | null {
   const activeTab = useApp((s) => s.activeTab)
   const setActiveTab = useApp((s) => s.setActiveTab)
   const closeFile = useApp((s) => s.closeFile)
+  const dirtyFiles = useApp((s) => s.dirtyFiles)
+  const saveFile = useApp((s) => s.saveFile)
+  // Closing a tab with unsaved edits is the one destructive thing the tab strip
+  // can do, and the buffer is the only copy — nothing on disk holds it.
+  const [confirmClose, setConfirmClose] = React.useState<string | null>(null)
+  const requestCloseFile = React.useCallback(
+    (path: string): void => {
+      if (useApp.getState().dirtyFiles[path]) setConfirmClose(path)
+      else closeFile(path)
+    },
+    [closeFile]
+  )
   const promoteTab = useApp((s) => s.promoteTab)
   const closePlanPanel = useApp((s) => s.closePlanPanel)
   const dockOpen = useApp((s) => s.explorerOpen)
@@ -777,9 +807,10 @@ export function RightPanel(): React.JSX.Element | null {
               label={file.name}
               active={current === file.path}
               preview={file.preview}
+              dirty={!!dirtyFiles[file.path]}
               onSelect={() => setActiveTab(file.path)}
               onDoubleClick={file.preview ? () => promoteTab(file.path) : undefined}
-              onClose={() => closeFile(file.path)}
+              onClose={() => requestCloseFile(file.path)}
             />
           ))}
           {terminals.map((t) => (
@@ -955,6 +986,49 @@ export function RightPanel(): React.JSX.Element | null {
       </div>
       </div>
       )}
+
+      {/* Unsaved edits live only in the CodeMirror buffer — closing the tab is
+          what destroys them, so this is where the question belongs. Save keeps
+          the ladder short: the common answer is "yes, keep it". */}
+      <Dialog open={confirmClose !== null} onOpenChange={(open) => !open && setConfirmClose(null)}>
+        <DialogContent>
+          <DialogTitle>
+            Save changes to “{openFiles.find((f) => f.path === confirmClose)?.name}”?
+          </DialogTitle>
+          <DialogDescription>
+            This file has edits that have not been written to disk. Closing the tab discards them.
+          </DialogDescription>
+          <div className="mt-4 flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setConfirmClose(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                if (confirmClose) closeFile(confirmClose)
+                setConfirmClose(null)
+              }}
+            >
+              Discard
+            </Button>
+            <Button
+              onClick={() => {
+                const path = confirmClose
+                setConfirmClose(null)
+                if (!path) return
+                void saveFile(path).then(() => {
+                  // A conflict means the save did not land; leaving the tab open
+                  // is what lets the user answer the bar instead of losing the
+                  // edits to a close they thought had saved them.
+                  if (!useApp.getState().fileConflicts[path]) closeFile(path)
+                })
+              }}
+            >
+              Save
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </aside>
   )
 }

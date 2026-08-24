@@ -99,7 +99,12 @@ export function providerEnabled(provider: Provider): boolean {
   return config[provider]?.enabled !== false
 }
 
-function isExecutable(path: string): boolean {
+/**
+ * Exported because binary discovery is shared with `lsp.ts`, which resolves
+ * language servers the same way. One implementation: the day a Windows `.cmd`
+ * suffix or a symlink tweak lands, it must not reach only half the app.
+ */
+export function isExecutable(path: string): boolean {
   try {
     if (!statSync(path).isFile()) return false
     accessSync(path, constants.X_OK)
@@ -110,7 +115,7 @@ function isExecutable(path: string): boolean {
 }
 
 /** First executable match for `name` on PATH. */
-function onPath(name: string, env: NodeJS.ProcessEnv): string | null {
+export function onPath(name: string, env: NodeJS.ProcessEnv): string | null {
   for (const dir of (env.PATH ?? '').split(delimiter)) {
     if (!dir) continue
     const candidate = join(dir, name)

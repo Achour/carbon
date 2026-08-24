@@ -1,6 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { lineSelection, selectionLabel } from '../src/renderer/src/lib/codeSelection.ts'
+import {
+  lineSelection,
+  selectionLabel,
+  trimTrailingNewlines
+} from '../src/renderer/src/lib/codeSelection.ts'
 
 // Offsets:      0         10        20        30
 //               |         |         |         |
@@ -97,4 +101,14 @@ test('a selection at the cap exactly is not truncated', () => {
 test('the label collapses a one-line range', () => {
   assert.equal(selectionLabel('foo.ts', 12, 12), 'foo.ts:12')
   assert.equal(selectionLabel('foo.ts', 12, 30), 'foo.ts:12-30')
+})
+
+test('trimTrailingNewlines backs off every swept-up newline, not just one', () => {
+  const text = 'a\n\n\nb'
+  // A drag from 0 to 4 ends at column 0 of "b", having crossed two blank lines.
+  assert.equal(trimTrailingNewlines(0, 4, (i) => text.charCodeAt(i)), 1)
+  // Never past the start: a selection of nothing but newlines keeps its origin.
+  assert.equal(trimTrailingNewlines(1, 4, (i) => text.charCodeAt(i)), 1)
+  // A range not ending on a newline is untouched.
+  assert.equal(trimTrailingNewlines(0, 5, (i) => text.charCodeAt(i)), 5)
 })

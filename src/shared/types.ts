@@ -1186,11 +1186,53 @@ export interface FileEntry {
 }
 
 export type FileContent =
-  | { kind: 'text'; content: string; language?: string; truncated: boolean }
+  | {
+      kind: 'text'
+      content: string
+      language?: string
+      /**
+       * The read hit MAX_TEXT_BYTES and `content` is only the head of the file.
+       * Such a buffer is opened **read-only**: saving it would write the head
+       * back over the whole file and destroy everything past the cap.
+       */
+      truncated: boolean
+      /**
+       * Disk mtime at read time. Sent back with `writeFile` so a save that would
+       * land on top of someone else's write (the agent's, a terminal's) is
+       * refused instead of silently winning.
+       */
+      mtimeMs: number
+    }
   | { kind: 'image'; dataUri: string }
   | { kind: 'binary'; size: number }
   | { kind: 'too-large'; size: number }
   | { kind: 'error'; message: string }
+
+/**
+ * Whether a language server could be started for a (project, language) pair.
+ * `not-installed` names the binary and how to get it, because "no jumps in this
+ * file" with no explanation reads as the feature being broken.
+ */
+export type LspServerStatus =
+  | { ok: true; id: string }
+  | { ok: false; reason: 'unsupported' }
+  | { ok: false; reason: 'not-installed'; bin: string; install: string }
+
+/**
+ * Outcome of creating a file or folder in the tree. Failure carries a sentence
+ * to show, since every reason a create fails (name taken, no permission, a
+ * component of the path is a file) is one the user can act on.
+ */
+export type FsCreateResult = { ok: true; path: string } | { ok: false; message: string }
+
+/**
+ * Outcome of `writeFile`. A `conflict` carries the mtime found on disk, so the
+ * renderer can offer to reload or overwrite without a second round trip.
+ */
+export type FileWriteResult =
+  | { ok: true; mtimeMs: number }
+  | { ok: false; reason: 'conflict'; mtimeMs: number }
+  | { ok: false; reason: 'error'; message: string }
 
 // ---------- Git ----------
 
@@ -1558,6 +1600,41 @@ export interface Api {
   pickDirectory(): Promise<string | null>
   listDir(dir: string): Promise<FileEntry[]>
   readFile(path: string): Promise<FileContent>
+  /**
+   * Overwrite a file. `expectedMtimeMs` is the mtime the buffer was read at;
+   * a mismatch means disk moved underneath the editor and the write is refused.
+   * Pass `null` to force (the user answered the conflict prompt with Overwrite).
+   */
+  writeFile(path: string, content: string, expectedMtimeMs: number | null): Promise<FileWriteResult>
+  /** Cheap change check for open tabs — mtime only, no file body. */
+  statFiles(paths: string[]): Promise<Record<string, number | null>>
+  /**
+   * How many buffers hold unsaved edits. Pushed on every transition so the
+   * window-close guard can decide synchronously.
+   */
+  setDirtyFileCount(count: number): void
+  /**
+   * Rename a file or folder. A name containing slashes is a move, and creates
+   * the folders on the way, exactly as `createPath` does.
+   */
+  renamePath(path: string, name: string): Promise<FsCreateResult>
+  /**
+   * Move a file or folder to the system Trash. Recoverable by design — the
+   * tree should not be able to destroy work outright.
+   */
+  deletePath(path: string): Promise<FsCreateResult>
+  /**
+   * Create an empty file or a folder. `name` may contain slashes — typing
+   * `lib/util.ts` makes the intermediate folders, the way VS Code does.
+   */
+  createPath(parent: string, name: string, kind: 'file' | 'dir'): Promise<FsCreateResult>
+  /** Start or attach to a language server for a project root and LSP language id. */
+  lspEnsure(root: string, languageId: string): Promise<LspServerStatus>
+  /** Raw JSON-RPC message to a server; the protocol itself runs in the renderer. */
+  lspSend(id: string, message: string): Promise<void>
+  /** Detach one editor from a server (it shuts down once idle and unreferenced). */
+  lspRelease(id: string): Promise<void>
+  onLspMessage(cb: (id: string, message: string) => void): () => void
   statPath(path: string): Promise<'file' | 'dir' | null>
   searchFiles(cwd: string, query: string): Promise<{ rel: string; path: string }[]>
   gitStatus(cwd: string): Promise<GitStatus>

@@ -1,5 +1,16 @@
 import * as React from 'react'
-import { ChevronRight, Folder, FolderOpen, MessageSquarePlus, RefreshCw, Search } from 'lucide-react'
+import {
+  ChevronRight,
+  FilePlus,
+  Folder,
+  FolderOpen,
+  FolderPlus,
+  MessageSquarePlus,
+  PenLine,
+  Trash2,
+  RefreshCw,
+  Search
+} from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { basename } from '@/lib/format'
 import { FileIcon } from '@/lib/fileIcon'
@@ -32,6 +43,112 @@ interface TreeDeco {
   dirs: Set<string>
 }
 
+/**
+ * The "name it" row — one component for creating and for renaming, because they
+ * are the same interaction with a different starting value.
+ *
+ * Inline rather than a dialog because the name is only half the decision — the
+ * other half is *where*, and a modal takes the tree off screen at the moment
+ * that matters. Sitting in the tree, the row shows its own answer: the
+ * indentation is the parent folder.
+ */
+function NameRow({
+  depth,
+  kind,
+  initial = '',
+  error,
+  placeholder,
+  onCommit,
+  onCancel
+}: {
+  depth: number
+  kind: 'file' | 'dir'
+  /** Prefilled for a rename; empty for a create. */
+  initial?: string
+  error?: string
+  placeholder: string
+  onCommit: (name: string) => Promise<boolean>
+  onCancel: () => void
+}): React.JSX.Element {
+  const [name, setName] = React.useState(initial)
+  const [busy, setBusy] = React.useState(false)
+  const inputRef = React.useRef<HTMLInputElement | null>(null)
+
+  React.useEffect(() => {
+    const el = inputRef.current
+    if (!el) return
+    el.focus()
+    // Select the base name and leave the extension out of it: renaming is
+    // almost always renaming the *name*, and having to arrow past `.tsx` every
+    // time is the kind of small tax that makes a feature feel unfinished.
+    const dot = initial.lastIndexOf('.')
+    if (dot > 0) el.setSelectionRange(0, dot)
+    else el.select()
+  }, [initial])
+
+  const submit = async (): Promise<void> => {
+    const trimmed = name.trim()
+    if (busy) return
+    // Nothing typed, or nothing changed — treat as "never mind" rather than as
+    // an error the user has to dismiss.
+    if (!trimmed || trimmed === initial) {
+      onCancel()
+      return
+    }
+    setBusy(true)
+    await onCommit(trimmed)
+    setBusy(false)
+  }
+
+  return (
+    <div style={{ paddingLeft: 6 + depth * 14 }} className="pr-2">
+      <div className="flex items-center gap-1.5 py-[3px]">
+        <span className="w-3 shrink-0" />
+        {kind === 'dir' ? (
+          <Folder className="size-3.5 shrink-0 text-muted-foreground" />
+        ) : (
+          <FileIcon path={name || 'untitled'} />
+        )}
+        <input
+          ref={inputRef}
+          value={name}
+          disabled={busy}
+          onChange={(e) => setName(e.target.value)}
+          // Blur commits rather than cancels: clicking away from a name you
+          // just typed reads as "done", and losing it would be the surprise.
+          onBlur={() => void submit()}
+          onKeyDown={(e) => {
+            e.stopPropagation()
+            if (e.key === 'Enter') void submit()
+            if (e.key === 'Escape') onCancel()
+          }}
+          placeholder={placeholder}
+          className="min-w-0 flex-1 rounded-sm border border-primary/60 bg-background px-1 py-px text-[13px] outline-none"
+        />
+      </div>
+      {error && <div className="pb-1 pl-[26px] text-[11px] text-warning">{error}</div>}
+    </div>
+  )
+}
+
+/** The create row for `dir`, wired to `pendingCreate`. */
+function CreateRow({ depth }: { depth: number }): React.JSX.Element | null {
+  const pending = useApp((s) => s.pendingCreate)
+  const cancelCreate = useApp((s) => s.cancelCreate)
+  const commitCreate = useApp((s) => s.commitCreate)
+  if (!pending) return null
+  return (
+    <NameRow
+      depth={depth}
+      kind={pending.kind}
+      error={pending.error}
+      placeholder={pending.kind === 'dir' ? 'folder name' : 'file name'}
+      onCommit={commitCreate}
+      onCancel={cancelCreate}
+    />
+  )
+}
+
 function TreeNode({
   dir,
   depth,
@@ -47,6 +164,13 @@ function TreeNode({
   const openFile = useApp((s) => s.openFile)
   const activeTab = useApp((s) => s.activeTab)
   const addAttachment = useApp((s) => s.addAttachment)
+  const beginCreate = useApp((s) => s.beginCreate)
+  const creatingHere = useApp((s) => s.pendingCreate?.parent === dir)
+  const confirmDelete = useApp((s) => s.confirmDelete)
+  const beginRename = useApp((s) => s.beginRename)
+  const renaming = useApp((s) => s.pendingRename)
+  const commitRename = useApp((s) => s.commitRename)
+  const cancelRename = useApp((s) => s.cancelRename)
 
   if (!entries) {
     return (
@@ -59,12 +183,20 @@ function TreeNode({
     )
   }
 
-  if (entries.length === 0 && depth === 0) {
-    return <div className="px-3 py-2 text-xs text-muted-foreground">This folder is empty.</div>
+  if (entries.length === 0) {
+    if (creatingHere) return <CreateRow depth={depth} />
+    if (depth === 0) {
+      return <div className="px-3 py-2 text-xs text-muted-foreground">This folder is empty.</div>
+    }
+    return null
   }
 
   return (
     <>
+      {/* At the top of the folder rather than in sorted position: the row has no
+          name yet, so it has no place in the sort, and a row that jumped as you
+          typed would be worse than one that simply waits at the top. */}
+      {creatingHere && <CreateRow depth={depth} />}
       {entries.map((entry) => {
         const expanded = entry.kind === 'dir' && expandedDirs[entry.path]
         const dotfile = entry.name.startsWith('.')
@@ -72,6 +204,20 @@ function TreeNode({
         // A folder's own dot is redundant once it's open — the changed rows are
         // right there — so it marks what's still hidden.
         const buried = entry.kind === 'dir' && !expanded && deco.dirs.has(entry.path)
+        if (renaming?.path === entry.path) {
+          return (
+            <NameRow
+              key={entry.path}
+              depth={depth}
+              kind={entry.kind}
+              initial={entry.name}
+              error={renaming.error}
+              placeholder={entry.name}
+              onCommit={commitRename}
+              onCancel={cancelRename}
+            />
+          )
+        }
         return (
           <React.Fragment key={entry.path}>
             <ContextMenu>
@@ -147,8 +293,32 @@ function TreeNode({
                     <ContextMenuSeparator />
                   </>
                 )}
+                {/* On a folder these create *inside* it; on a file, beside it —
+                    which is what "new file here" means when you right-click a
+                    file, and it saves aiming at the folder row above. */}
+                <ContextMenuItem
+                  onClick={() => beginCreate(entry.kind === 'dir' ? entry.path : dir, 'file')}
+                >
+                  <FilePlus /> New File
+                </ContextMenuItem>
+                <ContextMenuItem
+                  onClick={() => beginCreate(entry.kind === 'dir' ? entry.path : dir, 'dir')}
+                >
+                  <FolderPlus /> New Folder
+                </ContextMenuItem>
+                <ContextMenuSeparator />
                 <ContextMenuItem onClick={() => void window.api.revealPath(entry.path)}>
                   <FolderOpen /> {REVEAL_LABEL}
+                </ContextMenuItem>
+                <ContextMenuItem onClick={() => beginRename({ path: entry.path, kind: entry.kind })}>
+                  <PenLine /> Rename
+                </ContextMenuItem>
+                <ContextMenuSeparator />
+                <ContextMenuItem
+                  destructive
+                  onClick={() => confirmDelete({ path: entry.path, kind: entry.kind })}
+                >
+                  <Trash2 /> Delete
                 </ContextMenuItem>
               </ContextMenuContent>
             </ContextMenu>
@@ -167,6 +337,9 @@ export function FileTree(): React.JSX.Element {
   const loadDir = useApp((s) => s.loadDir)
   const refreshFiles = useApp((s) => s.refreshFiles)
   const setFileSearchOpen = useApp((s) => s.setFileSearchOpen)
+  const beginCreate = useApp((s) => s.beginCreate)
+  const cancelCreate = useApp((s) => s.cancelCreate)
+  const cancelRename = useApp((s) => s.cancelRename)
   const [refreshing, setRefreshing] = React.useState(false)
 
   const deco = React.useMemo<TreeDeco>(() => {
@@ -192,6 +365,13 @@ export function FileTree(): React.JSX.Element {
     if (cwd && !loaded) void loadDir(cwd)
   }, [cwd, loaded, loadDir])
 
+  // A row left open after the project changes points at a path that is no
+  // longer on screen, and the next Enter would act there.
+  React.useEffect(() => {
+    cancelCreate()
+    cancelRename()
+  }, [cwd, cancelCreate, cancelRename])
+
   if (!cwd) {
     return (
       <div className="px-3 py-6 text-center text-xs text-muted-foreground">
@@ -207,6 +387,28 @@ export function FileTree(): React.JSX.Element {
           {basename(cwd)}
         </span>
         <div className="flex-1" />
+        <WithTooltip label="New file">
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            className="size-5"
+            aria-label="New file"
+            onClick={() => beginCreate(cwd, 'file')}
+          >
+            <FilePlus />
+          </Button>
+        </WithTooltip>
+        <WithTooltip label="New folder">
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            className="size-5"
+            aria-label="New folder"
+            onClick={() => beginCreate(cwd, 'dir')}
+          >
+            <FolderPlus />
+          </Button>
+        </WithTooltip>
         <WithTooltip label="Search files  ⌘P">
           <Button
             size="icon-sm"
@@ -241,6 +443,7 @@ export function FileTree(): React.JSX.Element {
       >
         <TreeNode dir={cwd} depth={0} deco={deco} />
       </div>
+
     </div>
   )
 }

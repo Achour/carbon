@@ -1,11 +1,11 @@
 /**
- * Mapping a text selection in the file viewer onto a line range.
+ * Mapping a text selection in the editor onto a line range.
  *
- * The viewer renders the file as one highlight.js blob, so there is no per-line
- * element to read a number off — the only durable anchor is the *character
- * offset* into the file's own text, which the highlighted `<span>` structure
- * cannot change. Offsets come from the DOM (`offsetsInNode`), everything after
- * that is arithmetic on the source string and is pinned by tests.
+ * The anchor is the *character offset* into the file's own text. That was
+ * originally the only thing that survived highlight.js's `<span>` structure,
+ * which had no per-line element to read a number off; CodeMirror reports its
+ * selection in exactly the same units, so the arithmetic below outlived the DOM
+ * it was written for and the `offsetsInNode` half that measured it is gone.
  *
  * Dependency-free on purpose: `test/codeSelection.test.ts` runs this `.ts`
  * directly under `node --test`, with no bundler.
@@ -19,6 +19,29 @@ export interface LineSelection {
   text: string
   /** `text` was cut at the cap; the line range still names every line. */
   truncated: boolean
+}
+
+/**
+ * Back off the newlines a downward drag swept up on its way to column 0 of the
+ * following line — counting them would report one line too many. Guarded at
+ * `from` so a selection of nothing but blank lines still resolves to the line it
+ * began on.
+ *
+ * The character accessor is a parameter so this module stays dependency-free
+ * (`test/codeSelection.test.ts` runs the `.ts` directly under `node --test`).
+ * That is also what lets the editor share the rule: it reads characters off
+ * CodeMirror's rope rather than off a string, because materializing the
+ * document to apply four lines of arithmetic is the per-frame allocation the
+ * selection pill exists to avoid.
+ */
+export function trimTrailingNewlines(
+  from: number,
+  to: number,
+  charCodeAt: (index: number) => number
+): number {
+  let end = to
+  while (end > from && charCodeAt(end - 1) === 10) end--
+  return end
 }
 
 function countNewlines(text: string, from: number, to: number): number {
@@ -47,13 +70,9 @@ export function lineSelection(
   cap = Infinity
 ): LineSelection | null {
   const start = Math.max(0, Math.min(from, to))
-  let end = Math.min(text.length, Math.max(from, to))
-  if (end <= start) return null
-
-  // Back off the newlines a downward drag swept up on its way to column 0 of
-  // the following line. Guarded at `start` so a selection of nothing but blank
-  // lines still resolves to the line it began on.
-  while (end > start && text.charCodeAt(end - 1) === 10) end--
+  const raw = Math.min(text.length, Math.max(from, to))
+  if (raw <= start) return null
+  const end = trimTrailingNewlines(start, raw, (i) => text.charCodeAt(i))
 
   const lineStart = text.lastIndexOf('\n', start - 1) + 1
   const nextBreak = text.indexOf('\n', end)
@@ -79,45 +98,4 @@ export function lineSelection(
 /** `foo.ts:12` for one line, `foo.ts:12-30` for a run. */
 export function selectionLabel(name: string, startLine: number, endLine: number): string {
   return startLine === endLine ? `${name}:${startLine}` : `${name}:${startLine}-${endLine}`
-}
-
-/**
- * Character offsets of `range` within `node`'s text, clamped to it.
- *
- * A drag that begins in the line-number gutter (a sibling `<pre>`) or ends past
- * the end of the code produces boundary points outside `node`; comparing
- * against the node's own range is what turns those into 0 / length instead of a
- * `setEnd` that throws.
- */
-export function offsetsInNode(node: Node, range: Range): { from: number; to: number } | null {
-  const whole = document.createRange()
-  whole.selectNodeContents(node)
-  // No overlap at all — the selection is somewhere else on the page entirely.
-  if (
-    range.compareBoundaryPoints(Range.START_TO_END, whole) < 0 ||
-    range.compareBoundaryPoints(Range.END_TO_START, whole) > 0
-  ) {
-    return null
-  }
-  const length = whole.toString().length
-  // Text from the node's start up to a boundary point *is* that point's offset.
-  const offsetOf = (container: Node, offset: number, fallback: number): number => {
-    const probe = document.createRange()
-    probe.selectNodeContents(node)
-    try {
-      probe.setEnd(container, offset)
-    } catch {
-      return fallback
-    }
-    return probe.toString().length
-  }
-  const from =
-    range.compareBoundaryPoints(Range.START_TO_START, whole) < 0
-      ? 0
-      : offsetOf(range.startContainer, range.startOffset, 0)
-  const to =
-    range.compareBoundaryPoints(Range.END_TO_END, whole) > 0
-      ? length
-      : offsetOf(range.endContainer, range.endOffset, length)
-  return { from, to }
 }

@@ -7,7 +7,9 @@ import { NewChat } from '@/components/NewChat'
 import { RightPanel } from '@/components/RightPanel'
 import { FileSearchDialog } from '@/components/FileSearchDialog'
 import { PublishDialog } from '@/components/PublishDialog'
+import { DeleteFileDialog } from '@/components/DeleteFileDialog'
 import { FindBar } from '@/components/FindBar'
+import { openEditorSearch } from '@/lib/editorSearch'
 import { Settings } from '@/components/Settings'
 import { UsageStats } from '@/components/UsageStats'
 import { useApp } from '@/store'
@@ -117,7 +119,22 @@ export default function App(): React.JSX.Element {
       }
       if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
         e.preventDefault()
-        useApp.getState().setFindOpen(true)
+        // FindBar walks the DOM of the viewer, and CodeMirror only materializes
+        // the *viewport* — that is how it stays fast on a large file, and it
+        // means a DOM search would quietly report matches from the visible
+        // screenful alone. Editor tabs get CodeMirror's own search panel, which
+        // searches the document.
+        if (!openEditorSearch()) useApp.getState().setFindOpen(true)
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+        // ⌘S works from anywhere in the window, not only with the editor
+        // focused: the file tree, the tab strip and the chat are all places you
+        // can be looking at an unsaved tab from.
+        const path = useApp.getState().activeTab
+        if (path && useApp.getState().dirtyFiles[path]) {
+          e.preventDefault()
+          void useApp.getState().saveFile(path)
+        }
       }
       if ((e.metaKey || e.ctrlKey) && e.key === 'j') {
         e.preventDefault()
@@ -192,6 +209,7 @@ export default function App(): React.JSX.Element {
       {/* Global rather than inside GitPanel: the publish rung is reachable from
           the review dock, which can be closed by the time the dialog opens. */}
       <PublishDialog />
+      <DeleteFileDialog />
       <FindBar />
     </TooltipProvider>
   )

@@ -218,9 +218,9 @@ costs the pins a row and never a screenful. It is scoped by the project filter
 exactly as the pins are, for the same reason: a draft from another project
 showing through a filtered sidebar makes the whole list a half-truth.
 
-### Code selections (`lib/codeSelection.ts`, `CodeSelectionLayer`)
+### Code selections (`lib/codeSelection.ts`, `CodeEditor`)
 
-Select lines in the file viewer and an "Add to chat" pill (⌘L) puts them in the
+Select lines in the editor and an "Add to chat" pill (⌘L) puts them in the
 composer as a `selection` attachment. It rides the same `attachmentInbox` seam
 the browser's element picker uses, so nothing new crosses IPC.
 
@@ -231,13 +231,15 @@ the browser's element picker uses, so nothing new crosses IPC.
   fence is sized to outrun the longest backtick run *inside* the selection —
   source files are full of fenced examples, and a three-backtick fence around one
   ends at its fence, spilling the rest into the prompt as prose.
-- **Offsets, not line elements.** The viewer is one highlight.js blob with no
-  per-line node, so the only anchor that survives the `<span>` structure is the
-  character offset into the file's own text. `lineSelection` widens that to whole
-  lines — a range reported as "12-14" has to *be* 12-14 — and backs off the
-  newline a downward drag sweeps up on its way to column 0 of the next line,
-  which would otherwise claim one line too many. That arithmetic is pinned by
-  `test/codeSelection.test.ts`; the DOM half (`offsetsInNode`) only clamps.
+- **Offsets, not line elements.** `lineSelection` widens a character range to the
+  whole lines it touches — a range reported as "12-14" has to *be* 12-14 — and
+  backs off the newline a downward drag sweeps up on its way to column 0 of the
+  next line, which would otherwise claim one line too many. That arithmetic is
+  pinned by `test/codeSelection.test.ts`. It was written against a highlight.js
+  blob, where a character offset was the only anchor that survived the `<span>`
+  structure, and it **outlived that DOM**: CodeMirror reports its selection in
+  exactly the same units, so the module carried over untouched when the editor
+  landed. Only `offsetsInNode`, the half that measured the blob, is gone.
 - **A selection deliberately does not set `Attachment.path`.** The composer
   dedupes its inbox on that field, so sharing it would collapse two selections
   from one file into a single chip. The file lives on `selection.path` instead,
@@ -247,14 +249,256 @@ the browser's element picker uses, so nothing new crosses IPC.
   would put a whole file in `localStorage`, which is the quota throw the drafts
   rule already guards against. Past the cap the line range still names every
   line, so the agent reads the rest itself.
-- Measured on `mouseup`/`keyup`, not `selectionchange`: resolving an offset walks
-  the text before it, so recomputing every event of a drag through a large file
-  is a string copy per frame. `selectionchange` is watched only for the collapse.
+- **The pill's label is computed from line numbers, its text is not.** Placing
+  the pill runs on every selection transaction — every mousemove of a drag, every
+  shift+arrow — so it reads `doc.lineAt`, which is O(log n) on CodeMirror's rope.
+  `lineSelection` needs the document *as a string*, and calling it there would
+  allocate a full copy of the file per frame; it runs once, in
+  `addSelectionToChat`, when the click actually happens. The newline back-off is
+  `trimTrailingNewlines`, shared by both: it takes a character accessor rather
+  than a string so the module stays dependency-free *and* the editor can read off
+  the rope. Written twice it had already drifted — the copy backed off one
+  newline where the tested original backs off every one, so a pill could name a
+  line the attachment did not. The pre-editor version had the same rule for
+  the same reason, enforced differently: it measured on `mouseup` rather than
+  `selectionchange`, because resolving a DOM offset walked the text before it.
 
-The pill is positioned in the scroller's *content* coordinates so it travels with
-the code; a fixed-position element detaches from the lines it names on the first
-wheel tick. The **diff view is not covered** — its rows carry their own line
-numbers, so mapping a selection there is a different problem, not this one.
+The pill is positioned in the editor's *content* coordinates and recomputed on
+scroll, so it travels with the code; a fixed-position element detaches from the
+lines it names on the first wheel tick. The **diff view is not covered** — its
+rows carry their own line numbers, so mapping a selection there is a different
+problem, not this one.
+
+### The file editor (`CodeEditor.tsx`, `lib/editorBuffers.ts`)
+
+Files are **editable**, not just readable. `FileViewer`'s `text` branch is a
+CodeMirror 6 view; every other branch (Markdown preview, image, binary,
+too-large) is untouched, and `DiffView` is deliberately not covered — its rows
+carry their own line numbers and are a different problem.
+
+CodeMirror over Monaco because Monaco brings VS Code's chrome and ~5 MB with it,
+and because CM6 themes off CSS variables — which is what lets the editor repaint
+on a theme change with **no** JS involvement. `editorTheme.ts` is installed once
+and never rebuilt; the alternative is reconfiguring every open view each time the
+appearance flips.
+
+- **Dirtiness is cached, and compared as a rope.** `dispatchTransactions` fires
+  for *every* transaction, and selection-only ones vastly outnumber edits —
+  `MouseSelection` dispatches one per mousemove of a drag. So the early return
+  sits above any comparison, and the answer is a field on the buffer. The
+  comparison itself is `Text.eq` against a `baseDoc`, not a string compare
+  against a `base`: `eq` skips shared subtrees by reference, so an untouched
+  buffer settles on an identity check and an undone one on a few pointer
+  comparisons, where flattening rebuilt the whole file each time.
+- **The buffer lives outside React and outside zustand.** Outside React because
+  `EditorState` has to survive a tab switch: the inactive editor is unmounted,
+  and rebuilding its state on return loses undo history, cursor and scroll.
+  Outside zustand because the document changes on every keystroke, and routing
+  that through the store re-renders every subscriber twice a second — the same
+  reasoning that keeps draft text in the composer. The store learns only about
+  **transitions** (clean ⇄ dirty), which happen once per edit session.
+- **Dirtiness is `doc !== base`, not a sticky flag**, so typing a character and
+  deleting it leaves the tab clean, and so does undoing back to the saved text.
+  The `length` check in front settles insertions and deletions without reading a
+  character.
+- **Everything keyed by a path is released by one call.** `dropBuffer` drops the
+  state *and* the scroll offset; the offset used to live in the component, which
+  made disposal a two-call ritual the sites disagreed about, and put a
+  `store → component` import in the one direction this app never has.
+- **A truncated read is never saveable.** `readFileContent` caps at
+  `MAX_TEXT_BYTES`, and writing that buffer back would put the head of a file
+  over the whole of it. Such a buffer opens read-only with a bar saying so. The
+  cap itself moved 512 KB → 2 MB because its reason was highlight.js
+  highlighting the whole blob eagerly; CodeMirror parses and renders by viewport,
+  so the cost is now the read.
+- **The post-turn refresh reconciles, it does not re-read.** `refreshFiles` runs
+  at the end of every turn and used to pull every open tab's body back over IPC
+  and overwrite it — correct for a viewer, *data loss* for an editor. It now
+  stats first (`fs:stat-many`, mtime only), skips what hasn't moved, and for a
+  file that has, dispatches the new text into the mounted view rather than
+  replacing it, which would lose scroll and flash the pane.
+- **`fs:write` takes the mtime the buffer was read at** and refuses on a
+  mismatch. This collision is Carbon's own: the agent writes the files the user
+  is editing, and neither side can be assumed to win — the buffer may be a
+  half-finished thought, or a stale copy of what the agent just rewrote. So
+  `ConflictBar` states the fact and offers both. The comparison is `!==` rather
+  than `>`: a checkout or a revert moves mtime backwards and is still someone
+  else's write.
+- **A dirty preview tab stops being disposable.** Single-clicking another file
+  reuses the preview slot, Cursor-style; doing that to a tab the user has typed
+  into would destroy the only copy of those edits, so it gets pinned instead and
+  the new file opens beside it. Closing a dirty tab asks (Save / Discard /
+  Cancel), and a Save that hits a conflict leaves the tab open — closing it then
+  would discard the edits under cover of the word "Save".
+- **⌘F routes to CodeMirror's search panel on editor tabs.** `FindBar` collects
+  ranges by walking the DOM under `#editor-find-scope`, and CodeMirror only
+  materializes the *viewport* — a DOM search would silently report matches from
+  the visible screenful alone, which looks exactly like a complete answer.
+  FindBar still serves the diff view and the Markdown preview.
+- **Unsaved edits survive both exits.** Closing a tab asks; closing the *window*
+  and **quitting** ask the same question through one guard, because on macOS ⌘Q
+  is the ordinary way to leave an app and a guard that only covered ⌘W would miss
+  the common case. `dirtyFileCount` is pushed to main on every transition rather
+  than requested at close time: `close` is synchronous about whether it is
+  vetoed, and an IPC round trip inside it would have to guess. Two buttons, not
+  three — a "Save All" would need the renderer to write every buffer and report
+  back before the exit may proceed, and Cancel already puts the user where ⌘S
+  works.
+- **New files are named in the tree, not in a dialog.** The name is only half
+  the decision — the other half is *where* — and a modal takes the tree off
+  screen at the moment that matters. The inline row shows its own answer: the
+  indentation is the parent folder. It sits at the top of that folder's children
+  rather than in sorted position, because a row with no name yet has no place in
+  the sort and one that jumped as you typed would be worse. `createPath`
+  (`main/files.ts`) accepts slashes, so `lib/util.ts` makes the folders on the
+  way — which is why the name is *checked* rather than trusted: a leading `/`
+  escapes to the filesystem root and `..` climbs out of the project, and the
+  resolved path is compared against the parent to prove neither happened
+  (`test/createPath.test.ts`). Files are created with `wx` so a name that
+  appeared between the existence check and the write is never silently emptied.
+- **Renaming re-keys the buffer instead of reopening the file.** The document,
+  its undo history, its cursor and its *unsaved* state are properties of the
+  file, not of its name — so dropping the buffer and re-reading would silently
+  discard edits at the moment the user was only relabelling something. The view
+  is deliberately not moved with it: `CodeEditor`'s mount effect is keyed on
+  `path`, so it rebuilds against the re-keyed buffer, which is also what rebinds
+  the language server to the new uri. A renamed folder rewrites every descendant
+  path — tabs, contents, dirty flags, expanded state — by prefix, carrying the
+  separator so renaming `src` cannot rewrite a sibling `src-old`. The inline row
+  is the same component as the create row with a starting value, and it selects
+  the base name rather than the whole thing: renaming is almost always renaming
+  the *name*, and arrowing past `.tsx` every time is the kind of small tax that
+  makes a feature feel unfinished. `renamePath` shares `createPath`'s validation
+  (`resolveChildPath`) because both take a free-text name from the tree and must
+  refuse the same escapes — and it excludes the target-exists check for a
+  case-only change, since on a case-insensitive filesystem `Foo.ts` → `foo.ts`
+  collides with itself and is the first rename every macOS user tries.
+- **Deleting goes to the Trash, and always asks.** `shell.trashItem`, not an
+  unlink: a delete from the tree should be recoverable from the Finder the way
+  it is in every other editor, and that is also what lets the confirm dialog say
+  something true — the question is "are you sure", not "is this gone forever".
+  A folder takes its contents, so every tab *under* it closes and its buffer is
+  released; the prefix match carries a separator so deleting `src` cannot close
+  a tab in a sibling called `src-old`. The dialog is rendered by `App`, beside
+  `PublishDialog` and `FileSearchDialog`, because its state is store state and
+  the tree it was opened from unmounts whenever the dock switches to the changes
+  view — which would take the question off screen with the answer still pending.
+  Failures are reported *on* the dialog rather than through `gitError`: the
+  question is still up, and a locked file is something the user may be able to
+  fix and retry.
+- **Grammars are lazy.** `@codemirror/language-data` descriptors are `import()`s,
+  so a user who only opens TypeScript never pays for Haskell; the mode lands a
+  frame or two after first paint and is swapped into the live view through a
+  `Compartment` rather than rebuilding it.
+
+`--syn-*` (`index.css`) is the syntax palette, and it is now **one** definition
+consumed by both highlighters — highlight.js for chat code blocks and the diff
+view, CodeMirror for the editor. They were separate, which meant a token could be
+one color in a message and another in the file it came from.
+
+### Language servers (`src/main/lsp.ts`, `lib/lspClient.ts`)
+
+⌘-click a symbol and the definition opens, cross-file. This is LSP, and the split
+is the reverse of every other integration in the app: **main does no protocol
+work at all.** `@codemirror/lsp-client` runs the whole of JSON-RPC in the
+renderer, so `main/lsp.ts` is a spawn plus `Content-Length` framing, and the
+`Transport` seam the package asks for is satisfied by IPC that already existed.
+That keeps the protocol next to the editor that needs it, and keeps main off the
+critical path of every keystroke's `didChange`.
+
+**Carbon ships no servers**, for the reason `providerCli.ts` ships no CLIs: a
+vendored server is stale by the next release, and the user's own is the one their
+project is written against. Resolution is project `node_modules/.bin` → PATH →
+install prefixes — the *reverse* of `providerCli.ts`'s order, and for the same
+underlying reason. There the user's shim wins because the CLI is a tool they run;
+here the server must agree with the TypeScript version in the repo's lockfile.
+
+- **It is `typescript-language-server`, not `tsserver`.** Raw tsserver speaks
+  TypeScript's own protocol and fails `initialize` outright. `vtsls` is tried
+  first, so a project that pins it gets it.
+- **An installed server can still refuse to start**, and the common case is
+  `typescript-language-server` in a project with no TypeScript for it to load.
+  `initialize` is therefore awaited before the extension is handed to the editor,
+  which turns that into "no language features" — the same answer as a missing
+  binary — instead of an unhandled rejection and an editor posting requests into
+  a dead process. The failure is cached: a server that cannot initialize will not
+  initialize for the next file either, and retrying per tab spawns a doomed
+  process every time one is opened.
+- **A missing server is not an error.** It logs and the file simply has no jumps,
+  exactly as a machine without a provider CLI has no model rows.
+- **One server per (project root, language)**, shut down five minutes after the
+  client releases it — a cold tsserver on a large repo is seconds of nothing, and
+  closing a project then reopening it is common. There is deliberately **no
+  refcount in main**: the renderer caches one client per key, so it asks once and
+  releases once, and a count here would have described a lifecycle main never
+  sees. One owner — the renderer decides when a server is done, `LspManager`
+  decides how long to wait before believing it, and `releaseAllServers` rides
+  `beforeunload`.
+- **`CarbonWorkspace` exists for `displayFile`.** The package's default workspace
+  can only return an editor that is *already* open, which makes a jump into an
+  unopened file silently do nothing — and that is the majority of jumps. The
+  override goes through the store's own `openFile`, so the target lands in a
+  normal Carbon tab, then waits for CodeMirror to mount.
+- **Diagnostics are a client concern, and there are two of them.** Two traps
+  stacked here. First, `languageServerSupport()` and `languageServerExtensions()`
+  look interchangeable and are not — only the latter carries
+  `serverDiagnostics()`, because `publishDiagnostics` is a server-*initiated*
+  notification whose handler belongs to the `LSPClient` rather than to any one
+  editor; wiring the editor bundle gives completion, hover, signature help and
+  jumps with no squiggle anywhere. Second, `serverDiagnostics()` cannot be used
+  *at all* here: it dispatches `setDiagnostics`, which **replaces** the entire
+  diagnostic set, so it and any `linter()` erase each other and the file shows
+  its syntax errors or its type errors depending on which fired last. Lint
+  *sources*, by contrast, are collected and batched — so `lspDiagnostics.ts`
+  re-implements the handler to park the raw payload and re-emit it from a
+  source, and `editorDiagnostics.ts` joins it with the grammar's. The client
+  therefore takes the bundle spelled out minus `serverDiagnostics()`, and each
+  editor takes `client.plugin(uri, languageId)`.
+- **Syntax errors need no server.** Lezer already parses every open file to
+  highlight it, and it recovers from bad input by marking error nodes rather
+  than stopping — so "where are the syntax errors" is a walk of a tree that
+  exists anyway. That is what makes an unclosed brace visible on a machine with
+  nothing installed, which is the normal case: Carbon ships no servers. Type
+  errors, imports and symbols still need one. Two shapes have to be handled: a
+  *missing* token is a zero-length node, and a zero-width range draws no squiggle
+  at all, so `widenPoint` (dependency-free, `test/diagnosticRange.test.ts`) moves
+  it onto a real character **on its own line** — taking the newline would mark
+  the line below. An error on a blank line, which is where an unclosed bracket at
+  end-of-file lands every time a file ends in a newline, falls back to the last
+  line with content; dropping it instead meant the single most common syntax
+  mistake rendered nothing at all.
+- **The raw LSP payload is stored, not the converted diagnostics.** Positions are
+  line/character pairs against the document the server last saw, so converting
+  them at lint time — through the plugin's `fromPosition` and its record of
+  unsynced local edits — is *more* accurate than converting on arrival and
+  letting the result drift behind subsequent typing.
+- **Errors below the fold need a number.** A squiggle only says something about
+  the lines on screen, so a count chip sits bottom-right and opens
+  CodeMirror's lint panel. It recomputes only when a `setDiagnosticsEffect`
+  actually lands — once per server push, not per keystroke. Squiggles are a real
+  `text-decoration: underline wavy` rather than CodeMirror's repeating
+  background image, so they stay crisp at any zoom and take a theme color:
+  `--destructive` / `--warning`, which mean *state*, and deliberately not a
+  `--syn-*` hue, which means *identity*.
+- **A finished turn invalidates the server's view of the project.** Open tabs
+  re-sync themselves, but a file the agent rewrote and the user never opened is
+  still cached, and a server answering from it sends you to a line that has
+  moved. `workspace/didChangeWatchedFiles` on the idle transition is what stops
+  that, keyed off the same `lastTurnEditedPaths` the git scope uses.
+
+`LspManager` takes its emitter in the constructor, like `TerminalManager` and
+`PreviewManager` — the other two modules in main that own live child processes.
+Its one concession is an explicit field instead of a parameter property, because
+`test/lspFrames.test.ts` imports this file directly and `node --test`'s
+type-stripping rejects the shorthand. Binary discovery is `providerCli.ts`'s
+`isExecutable`/`onPath`, exported rather than copied; only the *ordering* differs
+(project-local first here, PATH first there), which is the real distinction.
+
+`splitFrames` is pure and pinned by `test/lspFrames.test.ts`: `Content-Length`
+counts **bytes**, a message can arrive split across several `data` events and
+several can arrive in one, and slicing the decoded string instead of the Buffer
+is off by one per non-ASCII character — which is every file with an emoji or a
+curly quote in it.
 
 ### The task checklist (`lib/taskList.ts`, `TodoCard`)
 

@@ -18,6 +18,20 @@ import { formatCost, formatDuration } from '@/lib/format'
 import { invalidateLocalImages } from '@/lib/imageCache'
 import { gitAction, gitActionPrompt, type GitActionId } from '@/lib/gitActions'
 import { changedPathsFromParts } from '@/lib/turnChanges'
+import { basename } from '@/lib/format'
+import {
+  adoptDisk,
+  bufferMtime,
+  bufferText,
+  dropBuffer,
+  getBuffer,
+  isDirty,
+  markSaved,
+  rebaseTo,
+  renameBuffer,
+  setDirtyListener
+} from '@/lib/editorBuffers'
+import { notifyWatchedChanges } from '@/lib/lspClient'
 import {
   availableProviders,
   hasCompleteModelCatalog,
@@ -177,6 +191,21 @@ export interface DiffTabMeta {
  * - `branch`      — everything on the branch vs its base (committed + uncommitted)
  */
 export type ChangeScope = 'last-turn' | 'uncommitted' | 'branch'
+
+/**
+ * Whether a tab names a real file on disk — the only kind that can be read,
+ * buffered, saved or conflict-checked. The tab strip carries four other kinds
+ * (`diff:` ids, the `changes:` working-tree view, Untitled placeholders,
+ * terminals and previews) that are all shaped like `{ path, name }` and would
+ * otherwise be indistinguishable from a file.
+ *
+ * One predicate rather than a repeated prefix test: what it guards used to be
+ * cosmetic and is now a buffer, so the next tab kind added has to be caught
+ * here rather than remembered at each site.
+ */
+export function isFileTab(tab: OpenTab): boolean {
+  return !tab.diff && !tab.untitled && !tab.path.startsWith('changes:')
+}
 
 export interface OpenTab {
   /** Absolute file path, a `diff:` id for diff tabs, or an `untitled:N` id. */
@@ -475,6 +504,34 @@ interface AppState {
   tabsByChat: Record<string, { openFiles: OpenTab[]; activeTab: string | null }>
   /** Panel visibility remembered per chat. */
   panelOpenByChat: Record<string, boolean>
+  /**
+   * The inline "name it" row in the file tree, if one is open. Lives in the
+   * store rather than in `TreeNode` because the row can be opened from three
+   * places — the header buttons and either kind of context menu — and
+   * `TreeNode` recurses, so a prop would have to be threaded through every
+   * level to reach the one folder that wants it.
+   */
+  pendingCreate: { parent: string; kind: 'file' | 'dir'; error?: string } | null
+  /**
+   * The delete the tree is asking about. Deleting is the one thing in the tree
+   * that touches work the user cannot get back from the app, so it is always a
+   * question — never a menu click that acts.
+   */
+  pendingDelete: { path: string; kind: 'dir' | 'file'; error?: string } | null
+  /** The inline rename row, if one is open. Same shape and reasons as `pendingCreate`. */
+  pendingRename: { path: string; kind: 'dir' | 'file'; error?: string } | null
+  /**
+   * Paths with unsaved edits. Only the *transition* is stored here — the text
+   * itself lives in the CodeMirror buffer (`lib/editorBuffers.ts`), because
+   * routing keystrokes through zustand re-renders every subscriber.
+   */
+  dirtyFiles: Record<string, boolean>
+  /**
+   * Files whose disk copy moved under a buffer that has unsaved edits — the
+   * agent and the user editing the same file. The value is the mtime found on
+   * disk; the tab shows a bar offering Reload or Overwrite.
+   */
+  fileConflicts: Record<string, number>
 
   togglePanel(): void
   loadDir(dir: string): Promise<void>
@@ -487,6 +544,27 @@ interface AppState {
   promoteTab(path: string): void
   setActiveTab(tab: string): void
   refreshFiles(options?: { invalidateImages?: boolean }): Promise<void>
+  /** Open the delete confirmation for a tree row. */
+  confirmDelete(target: { path: string; kind: 'dir' | 'file' } | null): void
+  /**
+   * Move a file or folder to the Trash and clean up after it: any tab showing
+   * it — or anything inside it — is closed, and its buffer released.
+   */
+  deletePath(path: string): Promise<boolean>
+  /** Replace a tree row with an editable name. */
+  beginRename(target: { path: string; kind: 'dir' | 'file' }): void
+  cancelRename(): void
+  /** Apply it. Returns false and leaves the row open with an error on failure. */
+  commitRename(name: string): Promise<boolean>
+  /** Open the inline naming row inside `parent` (expanding it if collapsed). */
+  beginCreate(parent: string, kind: 'file' | 'dir'): void
+  cancelCreate(): void
+  /** Create it. Returns false and leaves the row open with an error on failure. */
+  commitCreate(name: string): Promise<boolean>
+  /** Write the buffer back. No-op when clean, read-only, or already saving. */
+  saveFile(path: string): Promise<void>
+  /** Answer the conflict bar: take disk, or overwrite it with the buffer. */
+  resolveConflict(path: string, choice: 'reload' | 'overwrite'): Promise<void>
 
   // ---- Git ----
   git: GitStatus | null
@@ -1554,6 +1632,11 @@ export const useApp = create<AppState>((set, get) => ({
   filesByDir: {},
   expandedDirs: {},
   openFiles: [],
+  pendingCreate: null,
+  pendingDelete: null,
+  pendingRename: null,
+  dirtyFiles: {},
+  fileConflicts: {},
   untitledSeq: 0,
   fileContents: {},
   activeTab: null,
@@ -1604,6 +1687,7 @@ export const useApp = create<AppState>((set, get) => ({
     // in the same slot, so picking a file doesn't leave the blank tab behind.
     const replace = opts?.replace
     const name = path.split('/').pop() ?? path
+    const before = get().openFiles.map((f) => f.path)
     set((s) => {
       const existing = s.openFiles.find((f) => f.path === path)
       let openFiles = s.openFiles
@@ -1617,16 +1701,30 @@ export const useApp = create<AppState>((set, get) => ({
       } else if (replace && s.openFiles.some((f) => f.path === replace)) {
         openFiles = s.openFiles.map((f) => (f.path === replace ? { path, name } : f))
       } else if (preview) {
-        // A single-clicked file reuses the current preview slot, like Cursor.
-        const slot = openFiles.findIndex((f) => f.preview)
+        // A single-clicked file reuses the current preview slot, like Cursor —
+        // but a preview tab the user has typed into is no longer disposable.
+        // Pin it instead of replacing it: the alternative is unsaved edits
+        // vanishing on a single click somewhere else in the tree.
+        const slot = openFiles.findIndex((f) => f.preview && !isDirty(f.path))
         const tab: OpenTab = { path, name, preview: true }
-        openFiles =
-          slot === -1 ? [...openFiles, tab] : openFiles.map((f, i) => (i === slot ? tab : f))
+        if (slot === -1) {
+          openFiles = [...openFiles.map((f) => (f.preview ? { ...f, preview: false } : f)), tab]
+        } else {
+          openFiles = openFiles.map((f, i) => (i === slot ? tab : f))
+        }
       } else {
         openFiles = [...openFiles, { path, name }]
       }
       return { openFiles, activeTab: path, ...panelPatch(s, true) }
     })
+    // Any tab the set above dropped (a replaced preview slot, a consumed
+    // placeholder) takes its buffer with it — otherwise every previewed file
+    // stays resident for the session with its full undo history.
+    const stillOpen = new Set(get().openFiles.map((f) => f.path))
+    for (const gone of before) {
+      if (!stillOpen.has(gone)) dropBuffer(gone)
+    }
+
     const content = await window.api.readFile(path)
     set((s) => ({ fileContents: { ...s.fileContents, [path]: content } }))
   },
@@ -1650,6 +1748,10 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   closeFile(path) {
+    // The buffer outlives the component (it survives tab switches), so closing
+    // the tab is the one place it has to be released — otherwise every file ever
+    // opened stays in memory with its full undo history for the session.
+    dropBuffer(path)
     set((s) => {
       const openFiles = s.openFiles.filter((f) => f.path !== path)
       const fileContents = { ...s.fileContents }
@@ -1660,12 +1762,143 @@ export const useApp = create<AppState>((set, get) => ({
       if (activeTab === path) {
         activeTab = openFiles[openFiles.length - 1]?.path ?? (s.planPanel ? 'plan' : null)
       }
-      return { openFiles, fileContents, diffContents, activeTab }
+      return {
+        openFiles,
+        fileContents,
+        diffContents,
+        activeTab,
+        // `dropBuffer` above fires the clean transition that clears
+        // `dirtyFiles`; nothing else clears `fileConflicts`.
+        fileConflicts: omit(s.fileConflicts, [path])
+      }
     })
   },
 
   setActiveTab(tab) {
     set({ activeTab: tab })
+  },
+
+  beginRename(target) {
+    set({ pendingRename: target, pendingCreate: null })
+  },
+
+  cancelRename() {
+    set({ pendingRename: null })
+  },
+
+  async commitRename(name) {
+    const pending = get().pendingRename
+    if (!pending) return false
+    const from = pending.path
+    const result = await window.api.renamePath(from, name)
+    if (!result.ok) {
+      set((s) => (s.pendingRename ? { pendingRename: { ...pending, error: result.message } } : {}))
+      return false
+    }
+    const to = result.path
+    set({ pendingRename: null })
+    if (to !== from) {
+      // Everything keyed by the old path follows it. A renamed *folder* takes
+      // its descendants, so the rewrite is a prefix substitution — carrying the
+      // separator, so renaming `src` cannot also rewrite a sibling `src-old`.
+      const moved = (p: string): string | null =>
+        p === from ? to : p.startsWith(`${from}/`) ? to + p.slice(from.length) : null
+      for (const tab of get().openFiles) {
+        const next = moved(tab.path)
+        if (next) renameBuffer(tab.path, next)
+      }
+      set((s) => ({
+        openFiles: s.openFiles.map((f) => {
+          const next = moved(f.path)
+          return next ? { ...f, path: next, name: basename(next) } : f
+        }),
+        activeTab: (s.activeTab && moved(s.activeTab)) ?? s.activeTab,
+        fileContents: Object.fromEntries(
+          Object.entries(s.fileContents).map(([p, c]) => [moved(p) ?? p, c])
+        ),
+        dirtyFiles: Object.fromEntries(
+          Object.entries(s.dirtyFiles).map(([p, d]) => [moved(p) ?? p, d])
+        ),
+        expandedDirs: Object.fromEntries(
+          Object.entries(s.expandedDirs).map(([d, v]) => [moved(d) ?? d, v])
+        ),
+        // The listings are re-read below; dropping the stale ones keeps a
+        // folder that no longer exists from lingering in the tree.
+        filesByDir: Object.fromEntries(
+          Object.entries(s.filesByDir).filter(([d]) => !moved(d))
+        )
+      }))
+    }
+    const parent = from.slice(0, from.lastIndexOf('/'))
+    await get().loadDir(parent)
+    const newParent = to.slice(0, to.lastIndexOf('/'))
+    if (newParent !== parent) await get().loadDir(newParent)
+    void get().refreshGit()
+    return true
+  },
+
+  confirmDelete(target) {
+    set({ pendingDelete: target })
+  },
+
+  async deletePath(path) {
+    const result = await window.api.deletePath(path)
+    if (!result.ok) {
+      // Reported on the dialog rather than through `gitError`: the question is
+      // still on screen, and this is the answer to it. A locked file or a
+      // permission problem is also something the user may be able to fix and
+      // retry without reopening the menu.
+      set((s) => (s.pendingDelete ? { pendingDelete: { ...s.pendingDelete, error: result.message } } : {}))
+      return false
+    }
+    // A folder takes its contents with it, so every tab *under* it goes too —
+    // matching on the path prefix with a separator, so deleting `src` cannot
+    // also close a tab in a sibling called `src-old`.
+    const inside = (p: string): boolean => p === path || p.startsWith(`${path}/`)
+    for (const tab of get().openFiles.filter((f) => inside(f.path))) get().closeFile(tab.path)
+    set((s) => ({
+      // Collapsed/expanded state and the cached listing for a folder that no
+      // longer exists would otherwise keep it alive in the tree.
+      expandedDirs: Object.fromEntries(Object.entries(s.expandedDirs).filter(([d]) => !inside(d))),
+      filesByDir: Object.fromEntries(Object.entries(s.filesByDir).filter(([d]) => !inside(d)))
+    }))
+    const parent = path.slice(0, path.lastIndexOf('/'))
+    await get().loadDir(parent)
+    void get().refreshGit()
+    set({ pendingDelete: null })
+    return true
+  },
+
+  beginCreate(parent, kind) {
+    // The two inline rows are the same slot in the tree; only one can be open.
+    set({ pendingCreate: { parent, kind }, pendingRename: null })
+    // The row is rendered among that folder's children, so a collapsed folder
+    // would take the input somewhere nobody can see it.
+    if (!get().expandedDirs[parent]) get().toggleDir(parent)
+  },
+
+  cancelCreate() {
+    set({ pendingCreate: null })
+  },
+
+  async commitCreate(name) {
+    const pending = get().pendingCreate
+    if (!pending) return false
+    const result = await window.api.createPath(pending.parent, name, pending.kind)
+    if (!result.ok) {
+      // The row stays open carrying the reason: every way this fails is
+      // something the user can fix by typing a different name.
+      set((s) => (s.pendingCreate ? { pendingCreate: { ...pending, error: result.message } } : {}))
+      return false
+    }
+    set({ pendingCreate: null })
+    await get().loadDir(pending.parent)
+    // A new file is almost always about to be edited; a new folder is about to
+    // be filled, so it opens instead.
+    if (pending.kind === 'file') await get().openFile(result.path)
+    else if (!get().expandedDirs[result.path]) get().toggleDir(result.path)
+    void get().refreshGit()
+    return true
   },
 
   async refreshFiles(options) {
@@ -1678,15 +1911,109 @@ export const useApp = create<AppState>((set, get) => ({
       ...(s.selectedCwd ? [s.selectedCwd] : []),
       ...Object.keys(s.expandedDirs).filter((d) => s.expandedDirs[d] && s.filesByDir[d])
     ]
-    await Promise.all(dirs.map((d) => s.loadDir(d)))
+    // Open files are *reconciled*, never re-read wholesale. Two reasons, and the
+    // first one is data loss: this runs at the end of every turn, and blindly
+    // re-reading would throw away whatever the user has typed into an open tab
+    // since. The second is cost — one `stat` per tab settles the common case
+    // (nothing changed) without pulling any file bodies back through IPC.
+    const paths = s.openFiles.filter(isFileTab).map((f) => f.path)
+
+    // The stat batch depends on nothing the directory listings produce, so the
+    // two go out together — this runs on every turn boundary, and serializing
+    // them put the whole tree walk in front of it.
+    const [, mtimes] = await Promise.all([
+      Promise.all(dirs.map((d) => s.loadDir(d))),
+      paths.length > 0
+        ? window.api.statFiles(paths)
+        : Promise.resolve({} as Record<string, number | null>)
+    ])
+
     await Promise.all(
-      s.openFiles
-        .filter((f) => !f.diff)
-        .map(async (f) => {
-          const content = await window.api.readFile(f.path)
-          set((st) => ({ fileContents: { ...st.fileContents, [f.path]: content } }))
-        })
+      paths.map(async (path) => {
+        const disk = mtimes[path]
+        const prev = get().fileContents[path]
+        const known = bufferMtime(path) ?? (prev?.kind === 'text' ? prev.mtimeMs : undefined)
+        // Unchanged on disk, or gone (the tab keeps showing what it had rather
+        // than blanking — the file may be mid-rename).
+        if (disk === null || disk === undefined) return
+        if (known !== undefined && disk === known) return
+
+        if (isDirty(path)) {
+          // Both sides moved. Don't pick a winner — the bar asks.
+          set((st) => ({ fileConflicts: { ...st.fileConflicts, [path]: disk } }))
+          return
+        }
+
+        const content = await window.api.readFile(path)
+        set((st) => ({ fileContents: { ...st.fileContents, [path]: content } }))
+        if (content.kind !== 'text') return
+        // Moves the buffer whether or not its editor is mounted — a background
+        // tab left holding stale text is how an agent's edit gets reverted by
+        // the next ⌘S. Updates a mounted view in place rather than rebuilding it.
+        adoptDisk(path, content.content, content.mtimeMs)
+      })
     )
+  },
+
+  async saveFile(path) {
+    const buf = getBuffer(path)
+    if (!buf || buf.state.readOnly || !isDirty(path)) return
+    const text = bufferText(path)
+    if (text === null) return
+    const result = await window.api.writeFile(path, text, buf.mtimeMs)
+    if (result.ok) {
+      markSaved(path, result.mtimeMs)
+      set((st) => {
+        const prev = st.fileContents[path]
+        return {
+        fileContents: {
+          ...st.fileContents,
+          [path]: {
+            kind: 'text',
+            content: text,
+            // Carry the language forward: it comes from the extension, which a
+            // save cannot change.
+            language: prev?.kind === 'text' ? prev.language : undefined,
+            truncated: false,
+            mtimeMs: result.mtimeMs
+          }
+        },
+        fileConflicts: omit(st.fileConflicts, [path])
+        }
+      })
+      // The edit is a working-tree change like any other — the diff chip and the
+      // tree's status colors are wrong until git is re-read.
+      void get().refreshGit()
+      notifyWatchedChanges([path])
+      return
+    }
+    if (result.reason === 'conflict') {
+      set((st) => ({ fileConflicts: { ...st.fileConflicts, [path]: result.mtimeMs } }))
+      return
+    }
+    set({ gitError: `Could not save ${basename(path)}: ${result.message}` })
+  },
+
+  async resolveConflict(path, choice) {
+    if (choice === 'reload') {
+      const content = await window.api.readFile(path)
+      set((st) => ({
+        fileContents: { ...st.fileContents, [path]: content },
+        fileConflicts: omit(st.fileConflicts, [path])
+      }))
+      if (content.kind !== 'text') return
+      // `adoptDisk` refuses a dirty buffer by design; `force` is the user's
+      // answer to the conflict bar. Going through it rather than dispatching
+      // here is what makes an unmounted tab reload too, and what clears the
+      // dirty flag — the same path a background adopt takes.
+      adoptDisk(path, content.content, content.mtimeMs, { force: true })
+      return
+    }
+    // Overwrite: rebase onto the mtime that caused the refusal and write again.
+    const disk = get().fileConflicts[path]
+    if (disk !== undefined) rebaseTo(path, disk)
+    set((st) => ({ fileConflicts: omit(st.fileConflicts, [path]) }))
+    await get().saveFile(path)
   },
 
   // ---- Git ----
@@ -2797,6 +3124,17 @@ export const useApp = create<AppState>((set, get) => ({
             if (s.panelOpen || s.openFiles.length > 0) {
               void get().refreshFiles({ invalidateImages: false })
             }
+            // Language servers cache the whole project, not just the open tabs.
+            // A turn that rewrote a file the user has *not* opened leaves the
+            // server answering from its old copy — so jumps land on a line that
+            // has moved, which is worse than no jump at all.
+            const cwd = get().selectedCwd
+            if (cwd) {
+              // `lastTurnEditedPaths` answers in repo-relative paths; a server
+              // wants uris, so they have to be rejoined onto the root first.
+              const touched = lastTurnEditedPaths(get(), cwd).map((rel) => `${cwd}/${rel}`)
+              if (touched.length > 0) notifyWatchedChanges(touched)
+            }
           }
         }
         break
@@ -2858,3 +3196,20 @@ export const useApp = create<AppState>((set, get) => ({
     }
   }
 }))
+
+// The editor buffers live outside React and outside this store (see
+// `lib/editorBuffers.ts`); this is the one wire back. It fires on clean ⇄ dirty
+// transitions only — once per edit session rather than once per keystroke — so
+// the tab's unsaved dot can be a plain subscription without making every
+// character typed a store write.
+setDirtyListener((path, dirty) => {
+  useApp.setState((s) =>
+    dirty
+      ? { dirtyFiles: { ...s.dirtyFiles, [path]: true } }
+      : { dirtyFiles: omit(s.dirtyFiles, [path]) }
+  )
+  // Main needs the count at `close` time, which is synchronous about whether the
+  // close is vetoed — so it is pushed on the transition rather than asked for.
+  // Counted off the map just written rather than by re-testing every buffer.
+  window.api.setDirtyFileCount(Object.keys(useApp.getState().dirtyFiles).length)
+})
