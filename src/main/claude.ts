@@ -42,6 +42,7 @@ import type {
   RewindResult,
   ServiceTier,
   SlashCommand,
+  ThinkingPart,
   ToolPart,
   UsageInfo
 } from '@shared/types'
@@ -169,6 +170,68 @@ function extractImages(content: unknown): { mediaType: string; data: string }[] 
     images.push({ mediaType, data })
   }
   return images.length ? images : undefined
+}
+
+/**
+ * A tool result's displayable text.
+ *
+ * Not every block in a result carries `text`. `ToolSearch` — which Claude Code
+ * now calls before every deferred tool, the checklist included — answers in
+ * `tool_reference` blocks that carry a tool *name* and nothing else, so a mapper
+ * that reads `text` alone rendered the whole card empty: a step the user can see
+ * the model take, with no way to tell what it fetched.
+ */
+function toolResultText(content: unknown): string {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  return (content as Array<Record<string, unknown>>)
+    .map((c) => {
+      if (c?.type === 'text') return typeof c.text === 'string' ? c.text : ''
+      if (c?.type === 'tool_reference') return typeof c.tool_name === 'string' ? c.tool_name : ''
+      return ''
+    })
+    .filter(Boolean)
+    .join('\n')
+}
+
+/** The one server-side tool Claude Code ships: `server_tool_use` name `advisor`. */
+const ADVISOR_TOOL = 'advisor'
+
+/**
+ * The advisor's answer, as the CLI's own UI states it.
+ *
+ * `advisor` is a **server-side** tool: the call arrives as a `server_tool_use`
+ * block and its answer as an `advisor_tool_result` block in the *same* assistant
+ * stream — never as a `tool_result` on a following user message, which is the
+ * only completion path `handleToolResults` knows. Left unhandled the card spins
+ * for the rest of the chat and says nothing, which is exactly what a consult
+ * that did happen must not look like.
+ *
+ * The content is normally `advisor_redacted_result`: the advice is encrypted for
+ * the model and there is no text to show, so the honest line is the one Claude
+ * Code prints — that it was consulted and the feedback is being applied.
+ * `advisor_result` carries real text on the paths that aren't redacted, and
+ * `advisor_tool_result_error` names a failure the user can act on.
+ */
+function advisorOutcome(content: unknown): { output: string; error: boolean } {
+  const c = (content ?? {}) as Record<string, unknown>
+  const applied = 'Advisor has reviewed the conversation and will apply the feedback'
+  switch (c.type) {
+    case 'advisor_result':
+      return { output: typeof c.text === 'string' && c.text.trim() ? c.text : applied, error: false }
+    case 'advisor_redacted_result':
+      return { output: applied, error: false }
+    case 'advisor_tool_result_error': {
+      const code = typeof c.error_code === 'string' ? c.error_code : 'unknown'
+      return { output: `Advisor unavailable (${code})`, error: true }
+    }
+    case 'advisor_tool_interrupted':
+      return { output: 'Advisor was interrupted', error: true }
+    // A variant this build doesn't know. Reporting the consult as finished is
+    // still true and still better than a spinner that never settles.
+    default:
+      return { output: applied, error: false }
+  }
 }
 
 /** Renders a picked UI element as a text block the agent can act on. */
@@ -495,7 +558,18 @@ class ClaudeSession implements AgentSession {
         // only when the user hasn't: `=0` is their opt-out, and the CLI reads it
         // as a boolean. `env` REPLACES the subprocess environment rather than
         // merging, hence the spread — and PATH is the hydrated one (shellEnv).
-        env: { ...process.env, CLAUDE_CODE_ENABLE_CFC: process.env.CLAUDE_CODE_ENABLE_CFC ?? '1' },
+        // The checklist tools are behind a rollout gate the same way. Claude
+        // Code 2.1's `TaskCreate`/`TaskUpdate`/`TaskList`/`TaskGet` are only
+        // registered when `CLAUDE_CODE_ENABLE_TODO_TOOLS` is set or the
+        // `tengu_rosy_wren` flag is on for the account — so a chat that showed a
+        // task list last week silently stopped having one, with nothing in the
+        // transcript to say why. Carbon's whole task card depends on those
+        // calls existing, so it asks for them; `=0` is the user's opt-out.
+        env: {
+          ...process.env,
+          CLAUDE_CODE_ENABLE_CFC: process.env.CLAUDE_CODE_ENABLE_CFC ?? '1',
+          CLAUDE_CODE_ENABLE_TODO_TOOLS: process.env.CLAUDE_CODE_ENABLE_TODO_TOOLS ?? '1'
+        },
         mcpServers: { preview: buildPreviewServer(chat.cwd, preview) },
         canUseTool: async (toolName, input, opts) => {
           // The preview tools are safe, local, and app-mediated — never prompt.
@@ -1174,6 +1248,14 @@ class ClaudeSession implements AgentSession {
           }
         } else if (msg.subtype === 'permission_denied') {
           this.markToolDenied(msg.tool_use_id)
+        } else if (msg.subtype === 'thinking_tokens') {
+          // The authoritative size of the thought being streamed: cumulative for
+          // the block (it restarts at each one) and, unlike the stream deltas,
+          // corrected at the end — a thought whose deltas summed to 50 finishes
+          // here at 83. Summing the deltas stays as the fallback for a CLI that
+          // doesn't send this, which is why that path isn't simply removed.
+          const total = (msg as unknown as { estimated_tokens?: number }).estimated_tokens
+          if (typeof total === 'number' && total > 0) this.setThinkingTokens(total)
         }
         break
 
@@ -1349,6 +1431,14 @@ class ClaudeSession implements AgentSession {
     const settle = (part: ToolPart): boolean => {
       let changed = false
       if (part.status === 'running' || part.status === 'pending') {
+        // A `server_tool_use` whose result block never came. That is a normal
+        // outcome for the advisor — a turn can end with the consult still open,
+        // and the CLI strips such a pair out of the history it resends — but
+        // "✓ Advisor" with an empty body claims an answer that was never given,
+        // which is the exact confusion an unsettled card already caused.
+        if (part.name === ADVISOR_TOOL && part.output === undefined) {
+          part.output = 'Advisor did not answer before the turn ended'
+        }
         part.status = status
         changed = true
       }
@@ -1367,6 +1457,65 @@ class ClaudeSession implements AgentSession {
     }
   }
 
+  /**
+   * Record the size of the thought currently streaming.
+   *
+   * Targets the live message when there is one and otherwise the last assistant
+   * message on the chat: the CLI ships each content block as its own assistant
+   * message, so `current` is null for the moment between one reconciling and the
+   * next block opening — and a count that lands in that gap belongs to the
+   * thought that just closed, which is exactly when the corrected total arrives.
+   */
+  private setThinkingTokens(total: number): void {
+    const message =
+      this.current ??
+      [...this.chat.messages].reverse().find((m): m is AssistantMessage => m.role === 'assistant')
+    if (!message) return
+    for (let i = message.parts.length - 1; i >= 0; i--) {
+      const part = message.parts[i]
+      if (part?.type !== 'thinking') continue
+      // Only ever upward. The count restarts at ~50 for each new thought, so a
+      // reading that arrives before its block has opened would otherwise
+      // overwrite the finished thought above it with the opening estimate of the
+      // one below. Corrections observed only ever raise the number, so the guard
+      // costs nothing real and removes the whole class of mis-attribution.
+      if (total <= (part.tokens ?? 0)) return
+      part.tokens = total
+      this.emitPart(message, i)
+      return
+    }
+  }
+
+  /**
+   * Apply a server-side tool's outcome to the card that declared it.
+   *
+   * Located through `toolLoc` like any other result, and pruned from it the same
+   * way — a server tool answers exactly once, so the entry is dead weight after.
+   */
+  private settleServerTool(
+    toolUseId: string | undefined,
+    outcome: { output: string; error: boolean }
+  ): void {
+    if (!toolUseId) return
+    const loc = this.toolLoc.get(toolUseId)
+    if (!loc) return
+    const part = loc.message.parts[loc.index]
+    if (part?.type !== 'tool') return
+    part.output = outcome.output
+    if (!part.denied) part.status = outcome.error ? 'error' : 'success'
+    this.deltas.flush()
+    this.emit({
+      type: 'tool-update',
+      chatId: this.chat.id,
+      messageId: loc.message.id,
+      toolUseId: part.toolUseId,
+      patch: { status: part.status, output: part.output, denied: part.denied }
+    })
+    this.flagBuriedMutation(loc.message.id)
+    this.store.saveChatSoon(this.chat.id)
+    this.toolLoc.delete(toolUseId)
+  }
+
   private handleStreamEvent(event: {
     type: string
     index?: number
@@ -1380,13 +1529,26 @@ class ClaudeSession implements AgentSession {
         break
 
       case 'content_block_start': {
-        const message = this.ensureCurrent()
-        const index = event.index ?? message.parts.length
         const block = event.content_block as {
           type: string
           id?: string
           name?: string
+          tool_use_id?: string
+          content?: unknown
         }
+        // A server tool's result never arrives as a `tool_result` on a later
+        // user message — the only completion path `handleToolResults` knows —
+        // but as a block of its own, which the CLI ships as a *separate*
+        // assistant message. So it settles a card that already exists and
+        // contributes none of its own, and it is handled above `ensureCurrent`
+        // for exactly that reason: the fallthrough below would otherwise open a
+        // message for it and write an empty text part into it.
+        if (block.type === 'advisor_tool_result') {
+          this.settleServerTool(block.tool_use_id, advisorOutcome(block.content))
+          break
+        }
+        const message = this.ensureCurrent()
+        const index = event.index ?? message.parts.length
         let part: AssistantPart
         if (block.type === 'text') {
           part = { type: 'text', text: '' }
@@ -1422,6 +1584,7 @@ class ClaudeSession implements AgentSession {
           type: string
           text?: string
           thinking?: string
+          estimated_tokens?: number | null
           partial_json?: string
         }
         if (delta.type === 'text_delta' && part.type === 'text') {
@@ -1429,7 +1592,16 @@ class ClaudeSession implements AgentSession {
           this.deltas.queue(message.id, index, delta.text ?? '')
         } else if (delta.type === 'thinking_delta' && part.type === 'thinking') {
           part.text += delta.thinking ?? ''
-          this.deltas.queue(message.id, index, delta.thinking ?? '')
+          // A redacted thought streams its *size* instead of its text, and the
+          // number on the delta is itself a delta (50 then 150 for a 200-token
+          // thought) — the CLI's own handler calls it `estimatedTokensDelta`. So
+          // it accumulates. The run's last one is `null`, which is where the
+          // exact count arrives instead, on the `thinking_tokens` system message.
+          if (typeof delta.estimated_tokens === 'number') {
+            part.tokens = (part.tokens ?? 0) + delta.estimated_tokens
+            this.emitPart(message, index)
+          }
+          if (delta.thinking) this.deltas.queue(message.id, index, delta.thinking)
         } else if (delta.type === 'input_json_delta') {
           this.jsonAcc.set(index, (this.jsonAcc.get(index) ?? '') + (delta.partial_json ?? ''))
         }
@@ -1544,9 +1716,13 @@ class ClaudeSession implements AgentSession {
     // ordinal and keep them; a block that carried no text either way is dropped
     // rather than kept as an empty part, since an empty part is still a message
     // in the transcript and in the renderer's layout.
-    const priorThoughts = message.parts
-      .filter((part) => part?.type === 'thinking' && part.text)
-      .map((part) => (part as { text: string }).text)
+    // Matched by ordinal, and carrying `tokens` as well as text: a thought whose
+    // content the CLI withheld has nothing *but* its size, and dropping it —
+    // which is what filtering on text alone did — removed the only sign that the
+    // model spent twenty seconds reasoning.
+    const priorThoughts = message.parts.filter(
+      (part): part is ThinkingPart => part?.type === 'thinking' && (!!part.text || !!part.tokens)
+    )
     let thoughtIndex = 0
     const parts: AssistantPart[] = []
     for (const block of msg.message.content as unknown as Array<Record<string, unknown>>) {
@@ -1554,9 +1730,11 @@ class ClaudeSession implements AgentSession {
       if (type === 'text') {
         parts.push({ type: 'text', text: (block.text as string) ?? '' })
       } else if (type === 'thinking') {
-        const text = (block.thinking as string) || (priorThoughts[thoughtIndex] ?? '')
+        const prior = priorThoughts[thoughtIndex]
         thoughtIndex++
+        const text = (block.thinking as string) || prior?.text || ''
         if (text) parts.push({ type: 'thinking', text })
+        else if (prior?.tokens) parts.push({ type: 'thinking', text: '', tokens: prior.tokens })
       } else if (type === 'redacted_thinking') {
         parts.push({ type: 'thinking', text: '[Thinking redacted]' })
       } else if (type === 'tool_use' || type === 'server_tool_use') {
@@ -1577,6 +1755,27 @@ class ClaudeSession implements AgentSession {
           // childToolLoc indexes stay valid).
           children: existing?.children
         })
+      } else if (type === 'advisor_tool_result') {
+        // Contributes no part — it settles the call, which the CLI ships as its
+        // own earlier assistant message, so the target is almost never in the
+        // `parts` this pass is building. The stream path has usually settled it
+        // already and this is a no-op; it is not redundant, because a turn that
+        // arrives without partial messages (a replay, or `includePartialMessages`
+        // off) reaches reconcile with the card still 'running' and nothing else
+        // would ever settle it. Both lookups are needed for the same reason the
+        // tool branch above consults `priorTools`: the pending card may be in
+        // this message or in one already reconciled.
+        const id = block.tool_use_id as string
+        const outcome = advisorOutcome(block.content)
+        const here = parts.find((p): p is ToolPart => p.type === 'tool' && p.toolUseId === id)
+        if (here) {
+          if (here.status !== 'success' && here.status !== 'error') {
+            here.output = outcome.output
+            here.status = outcome.error ? 'error' : 'success'
+          }
+        } else {
+          this.settleServerTool(id, outcome)
+        }
       }
     }
     // No parts normally means the final message told us nothing the stream had
@@ -1584,7 +1783,11 @@ class ClaudeSession implements AgentSession {
     // the exception: it reconciles to nothing on purpose, and keeping its husk
     // is what would leave a blank message behind.
     const streamedNothing = message.parts.every(
-      (part) => !part || ((part.type === 'text' || part.type === 'thinking') && !part.text)
+      (part) =>
+        !part ||
+        ((part.type === 'text' || part.type === 'thinking') &&
+          !part.text &&
+          !(part.type === 'thinking' && part.tokens))
     )
     if (parts.length > 0 || streamedNothing) {
       message.parts = parts
@@ -1628,15 +1831,7 @@ class ClaudeSession implements AgentSession {
       if (!loc) continue
       const part = loc.message.parts[loc.index]
       if (part?.type !== 'tool') continue
-      let output = ''
-      if (typeof block.content === 'string') {
-        output = block.content
-      } else if (Array.isArray(block.content)) {
-        output = block.content
-          .map((c: { type: string; text?: string }) => (c.type === 'text' ? (c.text ?? '') : ''))
-          .filter(Boolean)
-          .join('\n')
-      }
+      const output = toolResultText(block.content)
       part.output = output.length > 100_000 ? `${output.slice(0, 100_000)}\n… (truncated)` : output
       part.outputImages = extractImages(block.content)
       if (!part.denied) part.status = block.is_error ? 'error' : 'success'
@@ -1738,15 +1933,7 @@ class ClaudeSession implements AgentSession {
       if (!loc?.parent.children) continue
       const part = loc.parent.children[loc.index]
       if (part?.type !== 'tool') continue
-      let output = ''
-      if (typeof block.content === 'string') {
-        output = block.content
-      } else if (Array.isArray(block.content)) {
-        output = block.content
-          .map((c: { type: string; text?: string }) => (c.type === 'text' ? (c.text ?? '') : ''))
-          .filter(Boolean)
-          .join('\n')
-      }
+      const output = toolResultText(block.content)
       // New object reference so a memoized child card picks up the result.
       loc.parent.children[loc.index] = {
         ...part,

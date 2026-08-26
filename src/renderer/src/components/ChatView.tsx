@@ -85,11 +85,19 @@ function isGroupableMsg(m: ChatMessage): boolean {
 /** An assistant message that renders nothing — the CLI ships thinking blocks
  *  with their text withheld, and each one arrives as its own message. Left in
  *  the list it would both split a run of groupable tool calls in two and, being
- *  a zero-height flex item, open a message-sized gap where no message is. */
+ *  a zero-height flex item, open a message-sized gap where no message is.
+ *  A withheld thought that still reported its *size* is not blank: it draws the
+ *  "Thought · N tokens" row, which is now the only sign the model reasoned. */
 function isBlankMsg(m: ChatMessage): boolean {
   return (
     m.role === 'assistant' &&
-    m.parts.every((p) => !p || ((p.type === 'text' || p.type === 'thinking') && !p.text))
+    m.parts.every(
+      (p) =>
+        !p ||
+        ((p.type === 'text' || p.type === 'thinking') &&
+          !p.text &&
+          !(p.type === 'thinking' && p.tokens))
+    )
   )
 }
 

@@ -12,7 +12,8 @@ import {
   GitCommitHorizontal,
   Loader2,
   MousePointerClick,
-  Pencil
+  Pencil,
+  Sparkles
 } from 'lucide-react'
 import type { AssistantMessage, EventMessage, ToolPart, UserMessage } from '@shared/types'
 import { cn } from '@/lib/utils'
@@ -299,14 +300,38 @@ export const UserBubble = React.memo(function UserBubble({
 
 export const ThinkingBlock = React.memo(function ThinkingBlock({
   text,
+  tokens,
   active
 }: {
   text: string
+  /** Size of a thought whose text was withheld — see `ThinkingPart.tokens`. */
+  tokens?: number
   active: boolean
 }): React.JSX.Element {
   // Thinking streams as raw deltas (~25/s); commit at the same throttled rate
   // as streaming markdown so a long thought doesn't relayout on every token.
   const shown = useStreamText(text, active)
+  // Claude Code 2.1 withholds thinking content and streams only its size, so
+  // there is nothing to expand. It is still worth a row: the alternative is a
+  // transcript that goes silent for the whole time the model is reasoning.
+  if (!text) {
+    return (
+      <div
+        className={cn(
+          'animate-enter flex items-center gap-1.5 py-0.5 text-xs font-medium text-muted-foreground',
+          active && 'shimmer-text'
+        )}
+      >
+        <Sparkles className="size-3" />
+        {active ? 'Thinking…' : 'Thought'}
+        {!!tokens && (
+          <span className="text-muted-foreground/70 tabular-nums">
+            {tokens.toLocaleString()} tokens
+          </span>
+        )}
+      </div>
+    )
+  }
   return (
     <Collapsible.Root className="animate-enter">
       <Collapsible.Trigger
@@ -390,7 +415,13 @@ export const AssistantBlock = React.memo(function AssistantBlock({
     // than returning null from the map below: an item that renders null still
     // occupies a slot in the parent's `gap`, so it would show up as a blank
     // band between cards.
-    if ((part.type === 'text' || part.type === 'thinking') && !part.text) return
+    if (
+      (part.type === 'text' || part.type === 'thinking') &&
+      !part.text &&
+      !(part.type === 'thinking' && part.tokens)
+    ) {
+      return
+    }
     if (part.type === 'tool' && superseded.has(part.toolUseId)) return
     if (
       part.type === 'tool' &&
@@ -429,7 +460,14 @@ export const AssistantBlock = React.memo(function AssistantBlock({
           )
         }
         if (part.type === 'thinking') {
-          return <ThinkingBlock key={i} text={part.text} active={streaming && isLast} />
+          return (
+            <ThinkingBlock
+              key={i}
+              text={part.text}
+              tokens={part.tokens}
+              active={streaming && isLast}
+            />
+          )
         }
         if (part.name === 'TodoWrite') {
           return <LiveTodoCard key={part.toolUseId} part={part} />

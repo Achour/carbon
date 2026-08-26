@@ -298,6 +298,17 @@ export interface TextPart {
 export interface ThinkingPart {
   type: 'thinking'
   text: string
+  /**
+   * Size of a thought whose text was withheld.
+   *
+   * Claude Code 2.1 stopped shipping thinking *content*: the block arrives with
+   * `thinking: ""` and a signature, and the only thing that streams is an
+   * `estimated_tokens` count on each delta. A part with no text is dropped, so
+   * the whole "Thinking…" affordance silently disappeared — the model still
+   * reasons for twenty seconds, and the transcript shows nothing at all
+   * happening. This is what a redacted thought has left to say.
+   */
+  tokens?: number
 }
 
 export interface ToolPart {

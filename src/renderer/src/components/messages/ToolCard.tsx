@@ -5,6 +5,7 @@ import {
   Check,
   ChevronRight,
   ClipboardList,
+  Compass,
   ExternalLink,
   FilePenLine,
   FileText,
@@ -13,9 +14,11 @@ import {
   ListChecks,
   Loader2,
   MessageCircleQuestion,
+  PackageSearch,
   Search,
   Shapes,
   ShieldX,
+  Sparkles,
   SquareTerminal,
   Wrench,
   X
@@ -103,6 +106,46 @@ function toolMeta(part: ToolPart, cwd: string): ToolMeta {
       return { icon: ClipboardList, label: 'Plan', summary: 'Present plan for approval' }
     case 'AskUserQuestion':
       return { icon: MessageCircleQuestion, label: 'Question' }
+    // Claude Code defers most of its catalog now — the checklist tools included —
+    // so a run that plans anything opens with one of these. Naming the query is
+    // what makes it read as a step rather than an unexplained wrench.
+    case 'ToolSearch':
+      return { icon: PackageSearch, label: 'Find tools', summary: str(input.query) }
+    // A server-side tool: the model consulting a stronger one. It has no input
+    // at all, so the default branch gave it a bare "advisor" and no summary —
+    // a card that says a consult happened and nothing about it. The *outcome*
+    // is the only thing this call has to say, so it goes on the collapsed row
+    // rather than one expand away: whether the advice landed, whether the turn
+    // ended before it did, or why it was unavailable. Read from the output
+    // verbatim, so main owns the wording and the two can't drift.
+    case 'advisor':
+      return {
+        icon: Sparkles,
+        label: 'Advisor',
+        // The label already says Advisor; the outcome sentences are written to
+        // stand alone because they are also the expanded body, so the row drops
+        // the repeated subject rather than the two being worded separately and
+        // drifting.
+        summary: str(part.output)?.replace(/^Advisor\s+/, '') ?? 'Consulting a stronger model…'
+      }
+    case 'Skill':
+      return { icon: Sparkles, label: 'Skill', summary: str(input.skill) ?? str(input.name) }
+    case 'Workflow':
+      return { icon: Layers, label: 'Workflow', summary: str(input.name) ?? str(input.description) }
+    case 'ListAgents':
+      return { icon: Bot, label: 'Agents', summary: 'List available agents' }
+    case 'SendMessage':
+      return { icon: Bot, label: 'Message', summary: str(input.to) }
+    case 'Monitor':
+      return { icon: Compass, label: 'Monitor', summary: str(input.description) ?? str(input.command) }
+    // The background-agent family, which is not the checklist: keyed by a
+    // snake_case `task_id` hash rather than the checklist's numeric `taskId`.
+    case 'TaskOutput':
+      return { icon: Bot, label: 'Agent output', summary: str(input.task_id) }
+    case 'TaskStop':
+      return { icon: Bot, label: 'Stop agent', summary: str(input.task_id) }
+    case 'TaskGet':
+      return { icon: ListChecks, label: 'Tasks', summary: 'Read a task' }
     // One tool, six actions that read nothing alike: `publish` names the page
     // being published, the asset ops name the store they act on. An omitted
     // action means publish, so the fallthrough is the default rather than a
@@ -472,6 +515,10 @@ export const GROUPABLE_TOOLS = new Set([
   ...FILE_MUTATION_TOOLS,
   'WebFetch',
   'WebSearch',
+  // Deferring most of the catalog means a run that plans anything now opens by
+  // fetching the tools it needs. It is a lookup like the rest of these — it
+  // reads nothing and changes nothing — so it collapses into the same run.
+  'ToolSearch',
   'Task',
   'Agent'
 ])
@@ -493,6 +540,8 @@ function groupTitle(label: string | undefined, n: number): string {
       return `Fetched ${plural('page', 'pages')}`
     case 'Search':
       return `${n} web ${n === 1 ? 'search' : 'searches'}`
+    case 'Find tools':
+      return `Found ${plural('tool', 'tools')}`
     case 'Terminal':
     case 'Run':
     case 'Git':

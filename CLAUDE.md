@@ -86,6 +86,10 @@ Path aliases: `@` → `src/renderer/src`, `@shared` → `src/shared` (renderer a
 - Permissions: the SDK's `canUseTool` callback returns a Promise held in a `pending` map until the renderer answers via `chat:respond-permission`. "Always allow" uses the SDK's permission `suggestions`.
 - Changing **effort** has no live SDK setter — `setOptions` disposes the session and the next send resumes it in a fresh process. Model and permission mode change live.
 - Sub-agent traffic is skipped in the UI: messages with `parent_tool_use_id` are ignored.
+- **Three things the model does are invisible unless they are decoded, and all three used to be.** Each is a shape the SDK grew that a text-only reader drops on the floor, and the symptom is identical every time: a step the user can see happen with nothing to show for it.
+  - **A `tool_result` block is not always text.** `ToolSearch` — which Claude Code now calls ahead of every deferred tool — answers in `tool_reference` blocks carrying a tool *name* and no `text` at all, so a mapper reading `text` alone rendered the whole card empty. `toolResultText` is the one decoder, shared by the main-agent and sub-agent result paths so they cannot drift.
+  - **`advisor` is a *server-side* tool.** The call arrives as a `server_tool_use` block and its answer as an `advisor_tool_result` block — never as a `tool_result` on a following user message, the only completion path `handleToolResults` knows. Unhandled, the card spun for the rest of the chat. Two paths have to settle it, and both are load-bearing: `handleStreamEvent` (mid-turn, so the card settles while the user is watching) and `reconcileAssistant` (a replay, or `includePartialMessages` off, reaches reconcile with the card still `running` and nothing else would ever settle it). The result is its own assistant message, *after* the one holding the call, which is why the reconcile branch falls back to `settleServerTool`'s `toolLoc` lookup rather than searching the parts it is building — and why the block is handled **above** `ensureCurrent`, which would otherwise open a message for a block that belongs to an earlier one. The content is normally `advisor_redacted_result`: encrypted for the model, with no text to show, so the honest line is the CLI's own — that it was consulted and the feedback is being applied. It goes on the *collapsed* row rather than one expand away, because the outcome is the only thing this call has to say. **An advisor call can also simply never be answered** — the turn ends with the consult still open and the CLI strips the pair out of the history it resends — so `terminalizeRunning` says that instead of leaving a green tick over an empty body.
+  - **Thinking now ships with its text withheld.** The block arrives as `thinking: ""` plus a signature, and the only thing that streams is an `estimated_tokens` on each delta — itself a *delta*, which the CLI's own handler calls `estimatedTokensDelta`, so it accumulates. The last one is `null`, and that is where the corrected total arrives instead, on the `thinking_tokens` system message; `setThinkingTokens` applies it upward-only, because the count restarts at ~50 per thought and a reading landing before its block opened would otherwise overwrite the finished thought above it. A part with no text is dropped, so the entire "Thinking…" affordance disappeared and a twenty-second reasoning pass showed nothing at all. `ThinkingPart.tokens` is what a redacted thought has left to say; it draws an unexpandable row, and it has to be excluded from *every* blank-part filter (`isBlankMsg`, `AssistantBlock`) or it is thrown away one layer further down.
 - **Claude in Chrome needs `CLAUDE_CODE_ENABLE_CFC`, and it is the CLI that decides.** `shouldEnableClaudeInChrome` bails on `!isInteractive()` *before* it reads `claudeInChromeDefaultEnabled`, so the browser tools a user paired in the terminal reach no session the SDK spawns — the setting they flipped is never consulted. That env var is the one check sitting above the bail (the `--chrome` flag, which the SDK cannot pass, is the other), so Carbon sets it unless the user already has: `=0` is then their opt-out, since the CLI reads it as a boolean. `env` **replaces** the subprocess environment rather than merging it, hence the `process.env` spread — and that spread is what carries the PATH `shellEnv` hydrated. The tools arrive as an MCP server named `claude-in-chrome` and go through the ordinary permission prompt; only `mcp__preview__*` is auto-allowed. Wiring it also makes the CLI rewrite `~/.claude/chrome/chrome-native-host` to point at whichever binary wired it last — Carbon's bundled one here, the user's `~/.local/share/claude/versions/…` after their next interactive run. It is one global file the two rewrite back and forth, and each repair is a session start, so the failure mode is self-healing rather than sticky.
 
 ### Grok Build (`src/main/grokAcp.ts`, `grok.ts`)
@@ -692,6 +696,21 @@ several times a second mid-turn, and threading them through props would
 re-render every transcript row on each flip. That only works because
 `reconcileSnapshots` carries unchanged lists forward *by identity* — a fresh
 array per fold would defeat the whole arrangement.
+
+**The tools themselves are behind a flag, and that is why the card once vanished
+outright.** Claude Code 2.1 registers `TaskCreate`/`TaskUpdate`/`TaskList`/
+`TaskGet` only when `CLAUDE_CODE_ENABLE_TODO_TOOLS` is set *or* an account-level
+rollout flag is on — so a chat that had a checklist last week silently stopped
+having one, with nothing in the transcript to say why and no fold to fix. Carbon
+asks for them in the session `env` (`claude.ts`), the same shape and the same
+rule as `CLAUDE_CODE_ENABLE_CFC`: set unless the user already set it, so `=0` is
+their opt-out. It lands at spawn, so a session already running keeps the old
+answer until it is disposed — the lifecycle an effort change already has.
+
+They are also **deferred**, so a checklist run now opens with a `ToolSearch`
+call fetching them. That card is not hidden: hiding a step the model actually
+took is the same mistake as the silent checklist. It says which tools came back
+(see `tool_reference` under Session flow) and groups with the other lookups.
 
 ### File icons (`lib/fileIcon.tsx`)
 
