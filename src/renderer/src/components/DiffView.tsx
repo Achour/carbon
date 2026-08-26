@@ -1,149 +1,248 @@
 import * as React from 'react'
+import { ChevronDown, ChevronUp } from 'lucide-react'
 import { highlightLine } from '@/lib/highlight'
+import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
+import {
+  diffItems,
+  expandStep,
+  mergeRanges,
+  parseDiff,
+  type LineRange
+} from '@/lib/diffRows'
 
-const MAX_ROWS = 5000
+/** The most rows one file's diff will ever draw. Exported because the changes
+ *  view sizes an unmounted file's placeholder from its line count, and a
+ *  placeholder for rows that are never going to be drawn is simply wrong. */
+export const MAX_ROWS = 5000
 
-interface Row {
-  kind: 'add' | 'del' | 'ctx' | 'hunk' | 'note'
-  old: number | null
-  new: number | null
-  text: string
-  /** For hunk rows: how many unchanged lines git elided before this hunk. */
-  hidden?: number
-}
+/**
+ * Ask git for the same diff with enough context to cover the whole file, so a
+ * fold can be opened. Returns undefined when the caller has no target to
+ * re-fetch (the plain `text`-only uses), which leaves gaps unexpandable.
+ */
+export type ExpandDiff = () => Promise<string | undefined>
 
-function parseDiff(diff: string): Row[] {
-  const rows: Row[] = []
-  let oldN = 0
-  let newN = 0
-  let lastNew = 0 // highest new-file line number emitted so far
-  // Track whether we're inside a hunk. Content lines only appear inside one, and
-  // the `--- `/`+++ ` file headers only appear in a file's preamble — so a body
-  // line like `-- comment` (diff line `--- comment`) must NOT be mistaken for a
-  // header (which would drop it and desync every following line number).
-  let inHunk = false
-  const lines = diff.split('\n')
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]
-    if (line === '' && i === lines.length - 1) break
-    if (rows.length >= MAX_ROWS) {
-      rows.push({ kind: 'note', old: null, new: null, text: '… diff truncated' })
-      break
-    }
-    if (line.startsWith('diff --git')) {
-      // Start of a(nother) file: back into preamble.
-      inHunk = false
-    } else if (line.startsWith('@@')) {
-      const m = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line)
-      let hidden = 0
-      if (m) {
-        oldN = Number(m[1])
-        newN = Number(m[2])
-        // Unchanged lines git elided between the last shown line and this hunk.
-        hidden = Math.max(0, newN - 1 - lastNew)
-      }
-      inHunk = true
-      rows.push({ kind: 'hunk', old: null, new: null, text: line, hidden })
-    } else if (!inHunk) {
-      // Preamble: keep a binary-file notice; skip all other header noise.
-      if (line.startsWith('Binary files')) {
-        rows.push({ kind: 'note', old: null, new: null, text: line })
-      }
-    } else if (line.startsWith('+')) {
-      const n = newN++
-      lastNew = n
-      rows.push({ kind: 'add', old: null, new: n, text: line.slice(1) })
-    } else if (line.startsWith('-')) {
-      rows.push({ kind: 'del', old: oldN++, new: null, text: line.slice(1) })
-    } else if (line.startsWith('\\')) {
-      rows.push({ kind: 'note', old: null, new: null, text: line })
-    } else if (line.startsWith(' ')) {
-      const o = oldN++
-      const n = newN++
-      lastNew = n
-      rows.push({ kind: 'ctx', old: o, new: n, text: line.slice(1) })
-    } else {
-      rows.push({ kind: 'note', old: null, new: null, text: line })
-    }
-  }
-  return rows
-}
+/**
+ * `-U` for a fold expansion: more lines than any file has, so one re-fetch
+ * covers every gap in it. Asking git again rather than reading the file is what
+ * makes this correct for a *staged* diff, whose new side is the index.
+ */
+export const FULL_CONTEXT = 1_000_000
+
+/** Shared gutter metrics — the change bar is the cell's own left border, which
+ *  puts it at the row's outer edge and stretches it to the row's full height. */
+const GUTTER =
+  'w-12 min-w-12 border-l-2 pr-2.5 pl-1 text-right align-top ' +
+  'text-[length:calc(var(--code-font-size)-1px)] tabular-nums select-none'
+
+/** The fold row's two directional expanders. `icon-sm` is 26px and two of them
+ *  do not fit the 48px gutter, so they take the gutter's own scale — the point
+ *  is that they sit where a line number would, reading as part of the ruler. */
+const gapLabel = (count: number): string =>
+  `⋯ ${count} unmodified line${count === 1 ? '' : 's'}`
+
+const EXPANDER =
+  'size-4 rounded-sm text-muted-foreground/35 group-hover/gap:text-muted-foreground/70 [&_svg]:size-3'
 
 /** The bare diff table (no scroll wrapper) — used standalone and stacked in the
  *  multi-file changes view. */
 export const DiffTable = React.memo(function DiffTable({
   text,
-  language
+  language,
+  wrap = false,
+  expand
 }: {
   text: string
   /** highlight.js language id; when set, code lines are syntax-highlighted. */
   language?: string
+  /** Soft-wrap long lines instead of scrolling horizontally. */
+  wrap?: boolean
+  expand?: ExpandDiff
 }): React.JSX.Element {
-  const rows = React.useMemo(() => parseDiff(text), [text])
-  // Per-line hljs HTML for code rows (null when no language is known).
+  // The full-context diff, once a fold has been opened. Until then we render
+  // git's own `-U3` text and its gaps are counts rather than lines in hand.
+  const [full, setFull] = React.useState<string | undefined>(undefined)
+  const [revealed, setRevealed] = React.useState<LineRange[]>([])
+  const [busy, setBusy] = React.useState(false)
+
+  // A *different* diff (the working tree moved under us) invalidates both: the
+  // reveals name line numbers that no longer mean the same thing.
+  React.useEffect(() => {
+    setFull(undefined)
+    setRevealed([])
+  }, [text])
+
+  const parsed = React.useMemo(() => parseDiff(full ?? text), [full, text])
+  // A file deleted outright has no new side at all, so the ruler below would be
+  // blank from top to bottom. There the old numbers are the only ones there are.
+  const oldRuler = React.useMemo(
+    () => parsed.rows.length > 0 && parsed.rows.every((r) => r.kind === 'del' || r.kind === 'note'),
+    [parsed]
+  )
+  const items = React.useMemo(
+    () => diffItems(parsed, { full: full !== undefined, revealed, maxRows: MAX_ROWS }),
+    [parsed, full, revealed]
+  )
+  // Per-line hljs HTML, computed over what is *drawn* — a full-context diff of a
+  // large file is mostly folded away, and highlighting the folded rows would be
+  // the expensive half of a view that never shows them.
   const html = React.useMemo(
     () =>
       language
-        ? rows.map((r) =>
-            r.kind === 'add' || r.kind === 'del' || r.kind === 'ctx'
-              ? highlightLine(r.text, language)
-              : ''
+        ? items.map((it) =>
+            it.kind === 'row' && it.row.kind !== 'note' ? highlightLine(it.row.text, language) : ''
           )
         : null,
-    [rows, language]
+    [items, language]
   )
 
-  if (rows.length === 0) {
+  const reveal = React.useCallback(
+    (lines: LineRange) => {
+      setRevealed((p) => mergeRanges([...p, lines]))
+      if (full !== undefined || !expand) return
+      setBusy(true)
+      void expand()
+        .then((t) => {
+          // `gitDiff` reports a failure as its return value, so a refetch can
+          // come back as an error string — which parses to nothing and would
+          // blank the file. Anything shorter than what is already on screen
+          // hides lines rather than revealing them, the one outcome an expand
+          // must never produce, so it is dropped and the fold simply stays shut.
+          if (t === undefined || parseDiff(t).rows.length < parsed.rows.length) return
+          setFull(t)
+        })
+        .finally(() => setBusy(false))
+    },
+    [full, expand, parsed]
+  )
+
+  if (items.length === 0) {
     return <div className="px-3 py-2.5 text-xs text-muted-foreground/70">No textual changes.</div>
   }
 
   return (
-    <table className="w-full border-collapse font-mono text-[length:var(--code-font-size)] leading-relaxed">
+    <table
+      className={cn(
+        'border-collapse font-mono text-[length:var(--code-font-size)] leading-[1.5]',
+        wrap ? 'w-full' : 'w-max min-w-full'
+      )}
+    >
       <tbody>
-        {rows.map((row, i) => {
-          // Hunk boundaries: a full-width fold bar standing in for the unchanged
-          // lines git elided, Cursor-style — never git's raw "@@ … @@" heading.
-          if (row.kind === 'hunk') {
+        {items.map((item, i) => {
+          if (item.kind === 'note') {
             return (
               <tr key={i}>
-                <td
-                  colSpan={2}
-                  className="border-y border-border/30 bg-muted/20 px-3 py-[3px] text-[10.5px] text-muted-foreground/55 select-none"
-                >
-                  {row.hidden
-                    ? `⋯  ${row.hidden} unmodified line${row.hidden === 1 ? '' : 's'}`
-                    : '⋯'}
+                <td colSpan={2} className="px-3 py-1 text-[length:var(--code-font-size)] text-muted-foreground">
+                  {item.text}
                 </td>
               </tr>
             )
           }
+
+          // A fold: quiet, the height of a line and a half, with the count in
+          // the code column and the two directional expanders in the gutter —
+          // where a line number would be, so they read as part of the ruler.
+          if (item.kind === 'gap') {
+            const { lines, count } = item
+            return (
+              <tr key={i} className="group/gap">
+                <td className={cn(GUTTER, 'border-l-transparent')}>
+                  {expand && (
+                    <span className="flex items-center justify-end gap-0.5">
+                      <Button
+                        size="icon-sm"
+                        variant="ghost"
+                        className={EXPANDER}
+                        aria-label={`Show the lines above line ${lines[1] + 1}`}
+                        title="Show 20 lines above"
+                        onClick={() => reveal(expandStep(lines, 'bottom'))}
+                      >
+                        <ChevronUp />
+                      </Button>
+                      <Button
+                        size="icon-sm"
+                        variant="ghost"
+                        className={EXPANDER}
+                        aria-label={`Show the lines below line ${lines[0] - 1}`}
+                        title="Show 20 lines below"
+                        onClick={() => reveal(expandStep(lines, 'top'))}
+                      >
+                        <ChevronDown />
+                      </Button>
+                    </span>
+                  )}
+                </td>
+                <td className="py-[3px] pl-3 align-middle whitespace-pre">
+                  {/* With no re-fetch target this is not a control at all, so it
+                      renders as the label it is rather than a disabled button. */}
+                  {expand ? (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => reveal(lines)}
+                      className={cn(
+                        'h-5 rounded px-1 text-[length:var(--code-font-size)] font-normal text-muted-foreground/45',
+                        busy && 'shimmer-text'
+                      )}
+                    >
+                      {gapLabel(count)}
+                    </Button>
+                  ) : (
+                    <span className="px-1 text-[length:var(--code-font-size)] text-muted-foreground/45">
+                      {gapLabel(count)}
+                    </span>
+                  )}
+                </td>
+              </tr>
+            )
+          }
+
+          const { row } = item
           return (
             <tr
               key={i}
+              // The anchor the review's next/previous-change buttons jump to.
+              data-diff-hunk={item.hunkStart ? '' : undefined}
               className={
                 row.kind === 'add'
-                  ? 'bg-emerald-500/10'
+                  ? 'bg-[var(--diff-add-bg)]'
                   : row.kind === 'del'
-                    ? 'bg-red-500/10'
+                    ? 'bg-[var(--diff-del-bg)]'
                     : undefined
               }
             >
-              {/* A single line-number gutter that doubles as the change indicator:
-                  a colored left bar + tinted number (new line for adds/context, old
-                  line for deletions), so no second column or +/− glyph is needed. */}
+              {/* One line-number gutter that doubles as the change indicator: a
+                  colored bar at the row's outer edge plus a tinted number, so no
+                  second column and no +/− glyph is needed.
+
+                  The numbers are the *new* file's, and a deleted line therefore
+                  has none — it is not in that file. Printing its old number
+                  instead is what a one-column unified diff usually does, and it
+                  reads as a fault: a deletion at old line 70 between new lines
+                  96 and 97 makes the ruler count 96, 70, 71, 97. Blank keeps the
+                  column monotonic, which is the only thing a reader uses it for;
+                  the bar and the tint already say the line was removed. The one
+                  exception is a file deleted outright, where there is no new
+                  side and blanking every row would leave no ruler at all. */}
               <td
-                className={
-                  'w-11 min-w-11 border-r border-l-2 border-border/40 pr-2 text-right align-top text-[10px] select-none ' +
-                  (row.kind === 'del'
-                    ? 'border-l-red-500/70 text-red-500/80'
+                className={cn(
+                  GUTTER,
+                  row.kind === 'del'
+                    ? 'border-l-[var(--diff-del-bar)] text-muted-foreground/45'
                     : row.kind === 'add'
-                      ? 'border-l-emerald-500/70 text-emerald-600/90 dark:text-emerald-400/90'
-                      : 'border-l-transparent text-muted-foreground/50')
-                }
+                      ? 'border-l-[var(--diff-add-bar)] text-[var(--diff-add-num)]'
+                      : 'border-l-transparent text-muted-foreground/45'
+                )}
               >
-                {row.new ?? row.old ?? ''}
+                {row.kind === 'del' ? (oldRuler ? row.old : '') : (row.new ?? '')}
               </td>
-              <td className="pr-1.5 pl-2.5 align-top break-all whitespace-pre-wrap">
+              <td
+                className={cn(
+                  'pr-4 pl-3 align-top',
+                  wrap ? '[overflow-wrap:anywhere] whitespace-pre-wrap' : 'whitespace-pre'
+                )}
+              >
                 {row.kind === 'note' ? (
                   <span className="text-muted-foreground">{row.text}</span>
                 ) : !row.text ? (
@@ -164,10 +263,14 @@ export const DiffTable = React.memo(function DiffTable({
 
 export const DiffView = React.memo(function DiffView({
   text,
-  language
+  language,
+  wrap,
+  expand
 }: {
   text: string | undefined
   language?: string
+  wrap?: boolean
+  expand?: ExpandDiff
 }): React.JSX.Element {
   if (text === undefined) {
     return (
@@ -178,7 +281,7 @@ export const DiffView = React.memo(function DiffView({
   }
   return (
     <div className="h-full overflow-auto">
-      <DiffTable text={text} language={language} />
+      <DiffTable text={text} language={language} wrap={wrap} expand={expand} />
     </div>
   )
 })

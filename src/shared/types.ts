@@ -1356,6 +1356,13 @@ export interface GitDiffTarget {
   untracked?: boolean
   /** Branch scope: diff the working tree against this base sha instead of the index. */
   base?: string
+  /**
+   * Lines of context around each hunk (`-U`). Omitted means git's default 3.
+   * The review view asks for a huge number to expand a fold: the *new* side of
+   * a staged diff is the index, not the working tree, so re-running the diff is
+   * the only way to reveal hidden lines that is correct for every target shape.
+   */
+  context?: number
 }
 
 // ---------- GitHub (gh CLI) ----------

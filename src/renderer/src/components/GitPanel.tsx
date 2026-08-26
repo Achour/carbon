@@ -1,7 +1,6 @@
 import * as React from 'react'
 import {
   ArrowDown,
-  ArrowUp,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -16,7 +15,6 @@ import {
   CloudUpload,
   Minus,
   Plus,
-  RefreshCw,
   Sparkles,
   Upload,
   XCircle,
@@ -53,9 +51,13 @@ export function LineDeltas({
 }): React.JSX.Element | null {
   if (!additions && !deletions) return null
   return (
-    <span className={cn('flex shrink-0 items-center gap-1 text-[10.5px] tabular-nums', className)}>
-      {additions ? <span className="text-emerald-500">+{additions}</span> : null}
-      {deletions ? <span className="text-red-500">−{deletions}</span> : null}
+    <span className={cn('flex shrink-0 items-center gap-1 text-[length:var(--ui-row)] tabular-nums', className)}>
+      {additions ? (
+        <span className="text-emerald-500">+{additions.toLocaleString()}</span>
+      ) : null}
+      {deletions ? (
+        <span className="text-red-500">−{deletions.toLocaleString()}</span>
+      ) : null}
     </span>
   )
 }
@@ -98,13 +100,13 @@ function ChangeRow({
       >
         <span
           className={cn(
-            'w-3 shrink-0 text-center font-mono text-[11px] font-bold',
+            'w-3.5 shrink-0 text-center font-mono text-[length:var(--ui-row)]',
             GIT_STATUS_COLOR[change.status] ?? 'text-muted-foreground'
           )}
         >
           {change.status === '?' ? 'U' : change.status}
         </span>
-        <span className="truncate text-[12.5px]">{name}</span>
+        <span className="truncate text-[length:var(--ui-row)]">{name}</span>
       </button>
       {readOnly && change.committed && (
         <WithTooltip label="Already committed on this branch">
@@ -218,15 +220,15 @@ function TreeLevel({
             >
               <ChevronRight
                 className={cn(
-                  'size-3 shrink-0 text-muted-foreground/70 transition-transform',
+                  'size-3.5 shrink-0 text-muted-foreground/70 transition-transform',
                   open && 'rotate-90'
                 )}
               />
-              <Folder className="size-3 shrink-0 text-muted-foreground/60" />
-              <span className="truncate text-[11.5px] text-muted-foreground">
+              <Folder className="size-3.5 shrink-0 text-muted-foreground/60" />
+              <span className="truncate text-[length:var(--ui-row)] text-muted-foreground">
                 {dir.name.replace(/\//g, ' / ')}
               </span>
-              <span className="shrink-0 text-[10px] text-muted-foreground/50">
+              <span className="shrink-0 text-[length:var(--ui-row)] text-muted-foreground/50">
                 {countFiles(dir)}
               </span>
             </button>
@@ -273,10 +275,10 @@ function Section({
   return (
     <div className="mb-1">
       <div className="group/section flex items-center gap-1.5 px-2.5 pt-2 pb-0.5">
-        <span className="text-[10.5px] font-semibold tracking-wide text-muted-foreground uppercase">
+        <span className="text-[length:var(--ui-row)] text-muted-foreground">
           {title}
         </span>
-        <span className="rounded-full bg-secondary px-1.5 text-[10px] text-muted-foreground">
+        <span className="rounded-full bg-secondary px-1.5 text-[length:var(--ui-row)] text-muted-foreground">
           {count}
         </span>
         <div className="flex-1" />
@@ -316,7 +318,7 @@ function prAppearance(pr: PrInfo): {
 /** Compact CI rollup: `✗2 •1 ✓4`, only showing the nonzero buckets. */
 function ChecksSummary({ checks }: { checks: PrChecks }): React.JSX.Element {
   return (
-    <span className="flex shrink-0 items-center gap-1.5 text-[10.5px] tabular-nums">
+    <span className="flex shrink-0 items-center gap-1.5 text-[length:var(--ui-row)] tabular-nums">
       {checks.failed > 0 && (
         <span className="flex items-center gap-0.5 text-red-500">
           <XCircle className="size-3" />
@@ -351,23 +353,24 @@ function PrCard(): React.JSX.Element | null {
 
   const { Icon, color, label } = prAppearance(pr)
   return (
-    <div className="px-2.5 pb-2">
+    <div className="px-2.5 pt-2 pb-2">
       <WithTooltip label={`#${pr.number} · ${label} — open on GitHub`}>
-        <button
-          type="button"
+        <Button
+          variant="outline"
+          size="sm"
           onClick={() => void openPr()}
-          className="flex w-full items-center gap-1.5 rounded-md border border-border/60 px-2 py-1.5 text-left transition-colors hover:bg-accent/60"
+          className="h-auto w-full justify-start gap-1.5 rounded-md px-2 py-1.5 text-left font-normal"
         >
           <Icon className={cn('size-3.5 shrink-0', color)} />
-          <span className="shrink-0 text-[11px] font-semibold text-muted-foreground tabular-nums">
+          <span className="shrink-0 text-[length:var(--ui-row)] text-muted-foreground tabular-nums">
             #{pr.number}
           </span>
-          <span className="min-w-0 flex-1 truncate text-[12px]">{pr.title}</span>
+          <span className="min-w-0 flex-1 truncate text-[length:var(--ui-row)]">{pr.title}</span>
           {pr.reviewDecision === 'APPROVED' && (
             <Check className="size-3 shrink-0 text-emerald-500" />
           )}
           {pr.checks && <ChecksSummary checks={pr.checks} />}
-        </button>
+        </Button>
       </WithTooltip>
     </div>
   )
@@ -386,7 +389,7 @@ const ACTION_ICON: Partial<Record<GitActionId, LucideIcon>> = {
  * repo's current state (see `resolveGitActions`), and the chevron opens the
  * fuller ladder. Every rung but `push` is delegated to the chat's agent.
  */
-function GitActionButton(): React.JSX.Element | null {
+export function GitActionButton(): React.JSX.Element | null {
   const git = useApp((s) => s.git)
   const github = useApp((s) => s.github)
   const gitBusy = useApp((s) => s.gitBusy)
@@ -422,11 +425,21 @@ function GitActionButton(): React.JSX.Element | null {
   const tip = TIPS[current.id] ?? `Asks ${agentName} to do this in the chat`
 
   return (
-    <div className="flex px-2.5 pb-2">
+    // No `flex-1`: the bar already has one spacer, and a second one here pushed
+    // this button to the right edge *away from* the controls beside it — two
+    // clusters with a hole between them once the panel was wide.
+    <div className="flex min-w-0 shrink-0">
       <WithTooltip label={tip}>
         <Button
           size="sm"
-          className={cn('h-6.5 min-w-0 flex-1 text-xs', others.length > 0 && 'rounded-r-none')}
+          variant="default"
+          className={cn(
+            'h-6 min-w-0 rounded-full pr-2.5 pl-2.5 text-[length:var(--ui-row)] font-normal',
+            // The two halves share one pill: the split is where you click, not
+            // something to draw. A divider between them made it read as two
+            // controls stuck together.
+            others.length > 0 && 'rounded-r-none pr-1.5'
+          )}
           disabled={gitBusy}
           onClick={() => void runGitAction(current.id)}
         >
@@ -440,7 +453,8 @@ function GitActionButton(): React.JSX.Element | null {
             render={
               <Button
                 size="sm"
-                className="h-6.5 shrink-0 rounded-l-none border-l border-primary-foreground/25 px-1.5"
+                variant="default"
+                className="h-6 shrink-0 rounded-full rounded-l-none pr-2 pl-0.5"
                 disabled={gitBusy}
                 aria-label="Choose the default source-control action"
               >
@@ -482,7 +496,6 @@ export function GitPanel(): React.JSX.Element {
   const activeId = useApp((s) => s.activeId)
   const chats = useApp((s) => s.chats)
   const messages = useApp((s) => s.messages)
-  const [refreshing, setRefreshing] = React.useState(false)
 
   const rawChanges = React.useMemo(
     () => scopedChanges({ changeScope, git, branchChanges, activeId, chats, messages }, cwd ?? ''),
@@ -523,7 +536,7 @@ export function GitPanel(): React.JSX.Element {
         <Button size="sm" variant="secondary" onClick={() => void initRepo()}>
           <GitBranch /> Initialize repository
         </Button>
-        {gitError && <p className="text-[11px] break-words text-destructive">{gitError}</p>}
+        {gitError && <p className="text-[length:var(--ui-row)] break-words text-destructive">{gitError}</p>}
       </div>
     )
   }
@@ -543,50 +556,12 @@ export function GitPanel(): React.JSX.Element {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {/* Branch header */}
-      <div className="flex items-center gap-1.5 px-3 pt-1 pb-1.5">
-        <GitBranch className="size-3 shrink-0 text-muted-foreground/70" />
-        <span className="truncate text-[11px] font-semibold text-muted-foreground">
-          {git.branch || 'no branch'}
-        </span>
-        {git.ahead > 0 && (
-          <span className="flex items-center text-[10px] text-muted-foreground">
-            {git.ahead}
-            <ArrowUp className="size-2.5" />
-          </span>
-        )}
-        {git.behind > 0 && (
-          <span className="flex items-center text-[10px] text-muted-foreground">
-            {git.behind}
-            <ArrowDown className="size-2.5" />
-          </span>
-        )}
-        <div className="flex-1" />
-        <WithTooltip label="Fetch & refresh">
-          <Button
-            size="icon-sm"
-            variant="ghost"
-            className="size-5"
-            aria-label="Fetch and refresh git status"
-            onClick={() => {
-              setRefreshing(true)
-              void fetchRemote().finally(() => setRefreshing(false))
-            }}
-          >
-            <RefreshCw className={cn(refreshing && 'animate-spin')} />
-          </Button>
-        </WithTooltip>
-      </div>
-
-      {/* Context-aware source-control action (agent-delegated), Cursor-style */}
-      <GitActionButton />
-
       {/* GitHub PR status card, once a PR exists for this branch */}
       <PrCard />
 
       {/* Changes (scope is chosen from the review panel's header) */}
       <div
-        className="min-h-0 flex-1 overflow-y-auto border-t border-border/60 pb-2 outline-none"
+        className="min-h-0 flex-1 overflow-y-auto pt-1 pb-2 outline-none"
         tabIndex={0}
         role="tree"
         onKeyDown={handleTreeKeyDown}
@@ -633,7 +608,7 @@ export function GitPanel(): React.JSX.Element {
       </div>
 
       {gitError && (
-        <div className="border-t border-border/60 px-3 py-2 text-[11px] break-words text-destructive">
+        <div className="border-t border-border/60 px-3 py-2 text-[length:var(--ui-row)] break-words text-destructive">
           {gitError}
         </div>
       )}

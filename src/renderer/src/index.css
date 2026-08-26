@@ -5,8 +5,21 @@
 @custom-variant dark (&:is(.dark *));
 
 :root {
-  /* User-adjustable in Settings → Appearance; JS overrides this inline. */
+  /* User-adjustable in Settings → Appearance; JS overrides these inline. */
   --code-font-size: 12px;
+  /*
+   * One size for every label in a file list — the source-control tree, the file
+   * tree and the review's stacked headers. A name, the directory beside it, the
+   * `+n −n` deltas, a folder's count, the section heading and the scope control
+   * are all this, and the hierarchy between them is carried by *color alone*.
+   *
+   * There is no second token on purpose. It was a two-size ladder first, and
+   * that is exactly what kept breaking: the same file is named twice on one
+   * screen, once in the review header and once in the changes tree, so every
+   * extra rung was another pair that could disagree. Weight is not a loophole
+   * either — `font-medium` at one size reads as a larger size.
+   */
+  --ui-row: 13px;
   --background: oklch(0.985 0 0);
   --foreground: oklch(0.25 0 0);
   --card: oklch(1 0 0);
@@ -117,6 +130,18 @@
   --syn-variable: oklch(0.5 0.11 85);
   --syn-builtin: oklch(0.48 0.12 200);
   --syn-meta: oklch(0.52 0.15 27);
+  /* Diff surfaces. The tint sits *behind syntax-highlighted code*, so it has to
+     stay far enough back that `--syn-*` still reads as itself — the whole point
+     of sharing one palette with the editor. Hence a low alpha plus a solid bar
+     at the row's outer edge: the bar carries the "this line changed" signal and
+     the fill only groups the run, the way an editor's diff gutter does. Add and
+     delete are also *states*, so they take `--success` / `--destructive` hues
+     rather than an invented pair. */
+  --diff-add-bg: oklch(0.62 0.15 150 / 0.09);
+  --diff-del-bg: oklch(0.58 0.19 25 / 0.08);
+  --diff-add-bar: oklch(0.6 0.14 150 / 0.75);
+  --diff-del-bar: oklch(0.58 0.19 25 / 0.7);
+  --diff-add-num: oklch(0.55 0.05 150);
 }
 
 .dark {
@@ -172,6 +197,13 @@
   --syn-variable: oklch(0.74 0.09 85);
   --syn-builtin: oklch(0.7 0.11 200);
   --syn-meta: oklch(0.62 0.12 27);
+  /* Dark diff surfaces. A tint reads considerably louder on a dark ground than
+     the same alpha does on paper, so both fills drop rather than rise. */
+  --diff-add-bg: oklch(0.72 0.15 150 / 0.11);
+  --diff-del-bg: oklch(0.68 0.18 25 / 0.1);
+  --diff-add-bar: oklch(0.72 0.15 150 / 0.8);
+  --diff-del-bar: oklch(0.66 0.18 25 / 0.75);
+  --diff-add-num: oklch(0.68 0.045 150);
 }
 
 @theme inline {

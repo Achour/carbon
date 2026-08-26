@@ -34,8 +34,9 @@ import { PlanContent } from '@/components/PlanPanel'
 import { FileViewer, MARKDOWN_RE } from '@/components/FileViewer'
 import { FileTree } from '@/components/FileTree'
 import { GitPanel } from '@/components/GitPanel'
-import { DiffView } from '@/components/DiffView'
+import { DiffView, FULL_CONTEXT, type ExpandDiff } from '@/components/DiffView'
 import { MultiDiffView } from '@/components/MultiDiffView'
+import { ReviewBar } from '@/components/ReviewBar'
 import { languageForPath } from '@/lib/highlight'
 import { TerminalPane } from '@/components/TerminalPanel'
 import { BrowserPane } from '@/components/BrowserPane'
@@ -566,6 +567,7 @@ export function RightPanel(): React.JSX.Element | null {
   const closePreview = useApp((s) => s.closePreview)
   const selectedCwd = useApp((s) => s.selectedCwd)
   const diffContents = useApp((s) => s.diffContents)
+  const diffWrap = useApp((s) => s.diffWrap)
   const panelMaximized = useApp((s) => s.panelMaximized)
   const togglePanelMaximized = useApp((s) => s.togglePanelMaximized)
   const sidebarOpen = useApp((s) => s.sidebarOpen)
@@ -703,6 +705,14 @@ export function RightPanel(): React.JSX.Element | null {
   const currentIsChanges = typeof current === 'string' && current.startsWith('changes:')
   const currentIsPlan = current === 'plan'
   const activeEntry = openFiles.find((f) => f.path === current)
+  // A diff tab can open its own folds — same re-fetch the stacked review uses.
+  const diffMeta = activeEntry?.diff
+  const diffExpand = React.useMemo<ExpandDiff | undefined>(() => {
+    // An untracked file's diff is its whole content already; nothing is folded.
+    if (!diffMeta || diffMeta.untracked) return undefined
+    const { cwd, file, staged, base } = diffMeta
+    return () => window.api.gitDiff(cwd, { path: file, staged, base, context: FULL_CONTEXT })
+  }, [diffMeta])
   const activeIsMarkdown = !!activeEntry && !activeEntry.diff && MARKDOWN_RE.test(activeEntry.name)
   const isUntitled = !!activeEntry?.untitled
   // Nothing open at all → show the launcher (vs. `current === 'files'`, which is
@@ -863,6 +873,10 @@ export function RightPanel(): React.JSX.Element | null {
         </WithTooltip>
       </header>
 
+      {/* The review's own bar, spanning the diffs *and* the dock beside them —
+          so the panel has one strip across the top rather than one per column. */}
+      {currentIsChanges && selectedCwd && <ReviewBar cwd={selectedCwd} />}
+
       {/* Breadcrumb row with the file-tree toggle at its right, Cursor-style. */}
       {showBreadcrumb && (
         <div className="flex h-8 shrink-0 items-center gap-2 border-b border-border/60 pr-1.5 pl-3">
@@ -919,6 +933,8 @@ export function RightPanel(): React.JSX.Element | null {
               <DiffView
                 text={diffContents[current!]}
                 language={languageForPath(activeEntry.diff.file)}
+                wrap={diffWrap}
+                expand={diffExpand}
               />
             ) : isUntitled ? (
               <UntitledView tabPath={current!} />

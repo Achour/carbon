@@ -201,15 +201,16 @@ function Stepper({
       >
         <Minus />
       </Button>
-      <button
-        type="button"
+      <Button
+        variant="ghost"
+        size="sm"
         onClick={onReset}
         title={onReset ? 'Reset to default' : undefined}
-        className="w-12 rounded-md py-1 text-center text-xs tabular-nums transition-colors hover:bg-accent"
+        className="w-12 rounded-md px-0 font-normal tabular-nums"
       >
         {value}
         {suffix}
-      </button>
+      </Button>
       <Button
         size="icon-sm"
         variant="outline"

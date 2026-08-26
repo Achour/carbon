@@ -123,10 +123,10 @@ function NameRow({
             if (e.key === 'Escape') onCancel()
           }}
           placeholder={placeholder}
-          className="min-w-0 flex-1 rounded-sm border border-primary/60 bg-background px-1 py-px text-[13px] outline-none"
+          className="min-w-0 flex-1 rounded-sm border border-primary/60 bg-background px-1 py-px text-[length:var(--ui-row)] outline-none"
         />
       </div>
-      {error && <div className="pb-1 pl-[26px] text-[11px] text-warning">{error}</div>}
+      {error && <div className="pb-1 pl-[26px] text-[length:var(--ui-row)] text-warning">{error}</div>}
     </div>
   )
 }
@@ -175,7 +175,7 @@ function TreeNode({
   if (!entries) {
     return (
       <div
-        className="py-1 text-[11px] text-muted-foreground/60"
+        className="py-1 text-[length:var(--ui-row)] text-muted-foreground/60"
         style={{ paddingLeft: 14 + depth * 14 }}
       >
         Loading…
@@ -236,7 +236,7 @@ function TreeNode({
                     if (entry.kind === 'file') void openFile(entry.path)
                   }}
                   className={cn(
-                    'flex w-full items-center gap-1.5 rounded-md py-[3px] pr-2 text-left text-[13px] transition-colors outline-none hover:bg-accent/60 focus-visible:bg-accent focus-visible:ring-1 focus-visible:ring-primary/50',
+                    'flex w-full items-center gap-1.5 rounded-md py-[3px] pr-2 text-left text-[length:var(--ui-row)] transition-colors outline-none hover:bg-accent/60 focus-visible:bg-accent focus-visible:ring-1 focus-visible:ring-primary/50',
                     activeTab === entry.path && 'bg-accent',
                     dotfile && 'opacity-60'
                   )}
@@ -246,7 +246,7 @@ function TreeNode({
                     <>
                       <ChevronRight
                         className={cn(
-                          'size-3 shrink-0 text-muted-foreground/70 transition-transform duration-150',
+                          'size-3.5 shrink-0 text-muted-foreground/70 transition-transform duration-150',
                           expanded && 'rotate-90'
                         )}
                       />
@@ -383,7 +383,7 @@ export function FileTree(): React.JSX.Element {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex items-center gap-1.5 px-3 pt-1 pb-1.5">
-        <span className="truncate text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+        <span className="truncate text-[length:var(--ui-row)] text-muted-foreground">
           {basename(cwd)}
         </span>
         <div className="flex-1" />

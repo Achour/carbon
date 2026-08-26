@@ -412,10 +412,24 @@ export async function gitStatus(cwd: string): Promise<GitStatus> {
 
 export async function gitDiff(cwd: string, target: GitDiffTarget): Promise<string> {
   try {
+    // `-U<n>`, only when asked: the review view expands a fold by re-running the
+    // diff with enough context to cover the file.
+    const ctx =
+      target.context !== undefined && Number.isFinite(target.context)
+        ? [`-U${Math.max(0, Math.floor(target.context))}`]
+        : []
     if (target.untracked) {
       // --no-index exits 1 whenever the files differ; the diff is still on stdout.
       try {
-        return await git(cwd, ['diff', '--no-color', '--no-index', '--', '/dev/null', target.path])
+        return await git(cwd, [
+          'diff',
+          '--no-color',
+          ...ctx,
+          '--no-index',
+          '--',
+          '/dev/null',
+          target.path
+        ])
       } catch (err) {
         const e = err as { stdout?: string }
         if (typeof e.stdout === 'string' && e.stdout.length > 0) return e.stdout
@@ -424,10 +438,10 @@ export async function gitDiff(cwd: string, target: GitDiffTarget): Promise<strin
     }
     // Branch scope: diff the whole branch delta for this file (base → working tree).
     const args = target.base
-      ? ['diff', '--no-color', target.base, '--', target.path]
+      ? ['diff', '--no-color', ...ctx, target.base, '--', target.path]
       : target.staged
-        ? ['diff', '--no-color', '--cached', '--', target.path]
-        : ['diff', '--no-color', '--', target.path]
+        ? ['diff', '--no-color', ...ctx, '--cached', '--', target.path]
+        : ['diff', '--no-color', ...ctx, '--', target.path]
     return await git(cwd, args)
   } catch (err) {
     return `error: ${errText(err)}`

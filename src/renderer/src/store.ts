@@ -441,6 +441,7 @@ interface AppState {
   translucentSidebar: boolean
   setTranslucentSidebar(on: boolean): void
   codeFontSize: number
+  /** Interface text size as a percent — everything that is not code. */
   notifyPrefs: NotifyPrefs
   openSettings(): void
   closeSettings(): void
@@ -581,6 +582,23 @@ interface AppState {
   branchChanges: BranchChanges | null
   /** Diff text per diff tab id. */
   diffContents: Record<string, string>
+
+  /**
+   * Soft-wrap diff lines instead of scrolling them horizontally. Off by
+   * default — a review reads as code, and a wrapped line breaks mid-token —
+   * but the panel is narrow enough that some files are unreadable otherwise.
+   */
+  diffWrap: boolean
+  toggleDiffWrap(): void
+  /**
+   * Which files in the stacked review are collapsed, keyed `w:path`/`s:path`.
+   * It lives here rather than in `MultiDiffView` because the review's bar spans
+   * the whole panel and is rendered by `RightPanel`, above both columns — so
+   * "collapse all" is pressed outside the component holding the sections.
+   */
+  diffCollapsed: Record<string, boolean>
+  setDiffCollapsed(next: Record<string, boolean>): void
+  toggleDiffFile(key: string): void
 
   /** The file-tree / source-control dock on the right edge of the panel. */
   explorerOpen: boolean
@@ -2019,6 +2037,8 @@ export const useApp = create<AppState>((set, get) => ({
   // ---- Git ----
 
   explorerOpen: localStorage.getItem('rightDockOpen') === 'true',
+  diffWrap: localStorage.getItem('diffWrap') === 'true',
+  diffCollapsed: {},
   git: null,
   gitBusy: false,
   gitError: null,
@@ -2041,6 +2061,20 @@ export const useApp = create<AppState>((set, get) => ({
 
   toggleExplorer() {
     get().setExplorerOpen(!get().explorerOpen)
+  },
+
+  toggleDiffWrap() {
+    const wrap = !get().diffWrap
+    localStorage.setItem('diffWrap', String(wrap))
+    set({ diffWrap: wrap })
+  },
+
+  setDiffCollapsed(next) {
+    set({ diffCollapsed: next })
+  },
+
+  toggleDiffFile(key) {
+    set((s) => ({ diffCollapsed: { ...s.diffCollapsed, [key]: !s.diffCollapsed[key] } }))
   },
 
   browseFiles() {
