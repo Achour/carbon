@@ -413,6 +413,14 @@ inside a scroller so panning is the browser's own job.
   one that is true of these files. `width = natural × scale ÷ dpr`, and `dpr`
   is tracked live (`useDevicePixelRatio`) because it moves with both the display
   and the UI zoom.
+- **The size is read twice, and the second read is the one that matters.**
+  `load` fires *before* React attaches `onLoad` whenever the picture is already
+  decoded — which is every click on one, since it was just on screen in the
+  transcript. The event never arrives, so an unmeasured image renders at its
+  *intrinsic* size: a 2× screenshot at 3024px in a 1377px pane, clipped, with
+  every zoom control moving the percentage and nothing else. A layout effect
+  reads `complete`/`naturalWidth` off the element for that case, and beats the
+  paint that would show it.
 - **A plain scroll pans; only ⌘-scroll and pinch zoom.** The bail condition also
   required `deltaY === 0`, so every ordinary two-finger scroll zoomed instead —
   and scrolling back only zoomed the other way, which is what left a picture

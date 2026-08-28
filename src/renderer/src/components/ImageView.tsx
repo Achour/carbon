@@ -64,15 +64,27 @@ export function ImageView({
   autoFocus?: boolean
 }): React.JSX.Element {
   const scrollRef = React.useRef<HTMLDivElement>(null)
+  const imgRef = React.useRef<HTMLImageElement>(null)
   const [natural, setNatural] = React.useState<{ w: number; h: number } | null>(null)
   const [box, setBox] = React.useState<{ w: number; h: number } | null>(null)
   const [scale, setScale] = React.useState<number | null>(null)
   const dpr = useDevicePixelRatio()
 
-  // A new image is a new fit.
-  React.useEffect(() => {
+  /**
+   * A new image is a new fit — and its size is read here as well as from
+   * `onLoad`, because **`load` can fire before React attaches the handler**.
+   * The picture that opens is almost always one already on screen in the
+   * transcript, so its data URI is decoded and the element is `complete` in the
+   * same commit that mounts it; the event then never arrives, `natural` stays
+   * null, and an image with no width renders at its *intrinsic* size — a 2×
+   * screenshot at 3024px in a 1377px pane, clipped, with every zoom control
+   * moving the percentage and nothing else. A layout effect (not a passive one)
+   * because it also has to beat the paint that would otherwise show that.
+   */
+  React.useLayoutEffect(() => {
     setScale(null)
-    setNatural(null)
+    const el = imgRef.current
+    setNatural(el?.complete && el.naturalWidth ? { w: el.naturalWidth, h: el.naturalHeight } : null)
   }, [src])
 
   React.useEffect(() => {
@@ -228,6 +240,7 @@ export function ImageView({
             keeps the scroller's content box exactly the image's size. */}
         <div className="flex min-h-full min-w-full items-center justify-center p-4">
           <img
+            ref={imgRef}
             src={src}
             alt={alt ?? ''}
             draggable={false}
@@ -246,7 +259,10 @@ export function ImageView({
                     // mush; nearest-neighbour keeps the pixels readable.
                     imageRendering: effective > 1.5 ? 'pixelated' : 'auto'
                   }
-                : undefined
+                : // Unmeasured, so nothing knows how big it should be: keep it
+                  // inside the pane rather than letting it overflow at its
+                  // intrinsic size, which is the one state with no way out.
+                  { maxWidth: '100%', maxHeight: '100%' }
             }
             className="max-w-none rounded-md border border-border select-none"
           />
