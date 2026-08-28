@@ -400,6 +400,27 @@ consumed by both highlighters — highlight.js for chat code blocks and the diff
 view, CodeMirror for the editor. They were separate, which meant a token could be
 one color in a message and another in the file it came from.
 
+### The image viewer (`ImageView.tsx`)
+
+Click an image in a message and it opens full-window, sized in real pixels
+inside a scroller so panning is the browser's own job.
+
+- **Scale is device pixels, not CSS pixels.** Nearly every image here is a
+  Retina screenshot, where a CSS-pixel 100% is *twice* the size the capture was
+  taken at — so a window filled edge to edge reported **43%**, a number that
+  reads as a bug rather than as a fitted picture. 100% is now one image pixel
+  per physical screen pixel, which is Preview's meaning of the word and the only
+  one that is true of these files. `width = natural × scale ÷ dpr`, and `dpr`
+  is tracked live (`useDevicePixelRatio`) because it moves with both the display
+  and the UI zoom.
+- **A plain scroll pans; only ⌘-scroll and pinch zoom.** The bail condition also
+  required `deltaY === 0`, so every ordinary two-finger scroll zoomed instead —
+  and scrolling back only zoomed the other way, which is what left a picture
+  stuck too large with no way out.
+- **Fit subtracts the padding the image sits in.** Counting that room as usable
+  made the content 32px wider than the pane at "fit", so the fitted state always
+  carried a scrollbar.
+
 ### The turn's changed files (`TurnChangesCard`, `lib/turnChanges.ts`)
 
 One card at the end of a turn saying what it edited: a count, the turn's line

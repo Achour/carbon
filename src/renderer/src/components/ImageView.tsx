@@ -10,15 +10,42 @@ const MIN_SCALE = 0.05
 const MAX_SCALE = 16
 const clamp = (n: number): number => Math.min(MAX_SCALE, Math.max(MIN_SCALE, n))
 
+/** The scroller's inner padding (`p-4`), in CSS px — fit has to leave room for it. */
+const PAD = 16
+
+/**
+ * `devicePixelRatio`, kept current. It moves when the window is dragged to
+ * another display *and* when the UI is zoomed (⌘+ multiplies it), and a stale
+ * reading would size every image against the wrong screen. `matchMedia` on the
+ * current value is the only event a change fires, so the query is rebuilt each
+ * time it does.
+ */
+function useDevicePixelRatio(): number {
+  const [dpr, setDpr] = React.useState(() => window.devicePixelRatio || 1)
+  React.useEffect(() => {
+    const mq = window.matchMedia(`(resolution: ${dpr}dppx)`)
+    const onChange = (): void => setDpr(window.devicePixelRatio || 1)
+    mq.addEventListener('change', onChange)
+    return () => mq.removeEventListener('change', onChange)
+  }, [dpr])
+  return dpr
+}
+
 /**
  * An image you can actually read.
  *
  * "Fit to the pane" is the right *default* and a useless *only* option: the
  * images that land here are screenshots and diagrams — a 2560px-wide capture
  * scaled into a side panel is a picture of unreadable text. So the image is
- * sized in real pixels (`width = natural × scale`) inside a scroller, which
- * makes panning the browser's own job and keeps the zoom honest: 100% means
- * 100%.
+ * sized in real pixels inside a scroller, which makes panning the browser's own
+ * job and keeps the zoom honest.
+ *
+ * **Scale is measured in device pixels, not CSS pixels**, so 100% is one image
+ * pixel per physical screen pixel — Preview's meaning of the word, and the only
+ * one that is true of the pictures this viewer actually gets. Almost all of them
+ * are Retina screenshots, where a CSS-pixel 100% is *twice* the size the capture
+ * was taken at: a window filled edge to edge would report 43%, which reads as a
+ * broken number rather than a fitted image. `width = natural × scale ÷ dpr`.
  *
  * Scale is `null` until the user touches it, meaning "fit" — held as absence
  * rather than as a computed number so a resize (dragging the panel wider,
@@ -40,6 +67,7 @@ export function ImageView({
   const [natural, setNatural] = React.useState<{ w: number; h: number } | null>(null)
   const [box, setBox] = React.useState<{ w: number; h: number } | null>(null)
   const [scale, setScale] = React.useState<number | null>(null)
+  const dpr = useDevicePixelRatio()
 
   // A new image is a new fit.
   React.useEffect(() => {
@@ -63,11 +91,15 @@ export function ImageView({
   }, [])
 
   // Fit never *enlarges*: a 200px icon blown up to fill a panel is a blurry lie
-  // about what the file contains. Zooming in is then an explicit act.
+  // about what the file contains. Zooming in is then an explicit act. The pane
+  // is measured in device pixels to match the scale, minus the padding the image
+  // sits inside — counting that room as usable put a scrollbar on every fit.
   const fit = React.useMemo(() => {
     if (!natural || !box || !natural.w || !natural.h || !box.w || !box.h) return 1
-    return Math.min(box.w / natural.w, box.h / natural.h, 1)
-  }, [natural, box])
+    const w = Math.max(1, box.w - 2 * PAD) * dpr
+    const h = Math.max(1, box.h - 2 * PAD) * dpr
+    return Math.min(w / natural.w, h / natural.h, 1)
+  }, [natural, box, dpr])
   const effective = scale ?? fit
 
   /**
@@ -107,7 +139,12 @@ export function ImageView({
     const el = scrollRef.current
     if (!el) return undefined
     const onWheel = (e: WheelEvent): void => {
-      if (!e.ctrlKey && !e.metaKey && e.deltaY === 0) return
+      // Zoom is ⌘-scroll and pinch (which arrives as a wheel event with ctrlKey
+      // set); a plain scroll must *pan*, which is the scroller's own job. The
+      // test used to also require `deltaY === 0` to bail, so every ordinary
+      // two-finger scroll zoomed instead — and scrolling back only zoomed the
+      // other way, which is what left a picture stuck too large.
+      if (!e.ctrlKey && !e.metaKey) return
       e.preventDefault()
       const rect = el.getBoundingClientRect()
       zoomTo(effective * Math.exp(-e.deltaY / 300), {
@@ -203,8 +240,8 @@ export function ImageView({
             style={
               natural
                 ? {
-                    width: Math.max(1, Math.round(natural.w * effective)),
-                    height: Math.max(1, Math.round(natural.h * effective)),
+                    width: Math.max(1, Math.round((natural.w * effective) / dpr)),
+                    height: Math.max(1, Math.round((natural.h * effective) / dpr)),
                     // Above ~1:1 the browser's smoothing turns a screenshot into
                     // mush; nearest-neighbour keeps the pixels readable.
                     imageRendering: effective > 1.5 ? 'pixelated' : 'auto'
