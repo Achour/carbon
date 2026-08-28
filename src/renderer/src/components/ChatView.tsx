@@ -23,6 +23,8 @@ import { cn } from '@/lib/utils'
 import { basename } from '@/lib/format'
 import { useApp } from '@/store'
 import { useTaskList } from '@/taskListStore'
+import { useAgents } from '@/agentsStore'
+import { foldAgentRuns, reconcileAgentRuns, type AgentRunView } from '@shared/agentRuns'
 import { TASK_LIST_TOOLS, foldTaskParts, reconcileSnapshots } from '@/lib/taskList'
 import type { TaskSnapshots, TranscriptItem } from '@/lib/taskList'
 import { Button } from '@/components/ui/button'
@@ -43,6 +45,7 @@ import { Input } from '@/components/ui/input'
 import { WithTooltip } from '@/components/ui/tooltip'
 import { Composer } from '@/components/Composer'
 import { ContextStrip } from '@/components/ContextStrip'
+import { AgentActivityBar } from '@/components/AgentsPanel'
 import {
   MergeIntoMainDialog,
   WorktreeFinishDialog,
@@ -510,6 +513,30 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
   }, [messages])
   const taskSnapshots = taskFold.snapshots
 
+  // Sub-agent runs are folded out of the same window, for the panel and the
+  // activity bar rather than for the transcript — which is why the result goes
+  // to `agentsStore` instead of down through props. `reconcileAgentRuns` keeps
+  // an unmoved list at its old identity so neither subscriber re-renders on a
+  // token that changed nothing about any agent.
+  const agentRunsRef = React.useRef<AgentRunView[]>([])
+  const agentRuns = React.useMemo(() => {
+    const next = reconcileAgentRuns(agentRunsRef.current, foldAgentRuns(messages))
+    agentRunsRef.current = next
+    return next
+  }, [messages])
+  const setAgentRuns = useAgents((s) => s.setRuns)
+  React.useEffect(() => {
+    setAgentRuns(agentRuns)
+  }, [agentRuns, setAgentRuns])
+  // Clear on unmount, in an effect of its own so it fires *only* then: folded
+  // into the publish above it would empty the store between every two updates
+  // and flicker the tab out of the strip on each one. The store outlives this
+  // component, and the panel is the active chat's — without this, leaving a
+  // chat for the home screen leaves the dead chat's roster on screen, since
+  // nothing else ever publishes an empty list. `ChatView` is keyed by chat id,
+  // so React runs this cleanup before the next chat's publish.
+  React.useEffect(() => () => setAgentRuns([]), [setAgentRuns])
+
   // The most recent checklist call is the live task list; earlier ones collapse.
   // A full backward scan per stream token is wasteful — a chat with no todos
   // would re-walk its whole history on every token. Streaming keeps earlier
@@ -832,6 +859,7 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
       {/* Composer */}
       <div className="shrink-0 px-6 pb-5">
         <div className="mx-auto max-w-3xl">
+          <AgentActivityBar />
           <ContextStrip
             cwd={chat.cwd}
             project={projectRoot(chat)}

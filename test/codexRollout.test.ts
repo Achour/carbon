@@ -131,3 +131,53 @@ test('parses live text, terminal activity, and completion from a child rollout',
     ]
   )
 })
+
+test('parses a child agent’s model, effort and token total', () => {
+  const source = { kind: 'child' as const, threadId: 'child-thread' }
+  // The child's own rollout file is the only record of what a sub-agent is
+  // running on; the parent transcript never says.
+  assert.deepEqual(
+    parseCodexRolloutRecord({ type: 'turn_context', payload: { model: 'gpt-5.6-luna' } }, source),
+    [{ type: 'agent-usage', threadId: 'child-thread', model: 'gpt-5.6-luna' }]
+  )
+
+  assert.deepEqual(
+    parseCodexRolloutRecord(
+      {
+        type: 'event_msg',
+        payload: {
+          type: 'thread_settings_applied',
+          thread_settings: { model: 'gpt-5.6-luna', reasoning_effort: 'max' }
+        }
+      },
+      source
+    ),
+    [{ type: 'agent-usage', threadId: 'child-thread', model: 'gpt-5.6-luna', effort: 'max' }]
+  )
+
+  // `total_token_usage` is the running total for the thread — `last_token_usage`
+  // is the call that just finished, and summing that instead would count every
+  // earlier call again on each event.
+  assert.deepEqual(
+    parseCodexRolloutRecord(
+      {
+        type: 'event_msg',
+        payload: {
+          type: 'token_count',
+          info: {
+            total_token_usage: { input_tokens: 34_074, output_tokens: 768, total_tokens: 34_842 },
+            last_token_usage: { total_tokens: 17_797 }
+          }
+        }
+      },
+      source
+    ),
+    [{ type: 'agent-usage', threadId: 'child-thread', tokens: 34_842 }]
+  )
+
+  // The same records in the PARENT transcript say nothing about a child.
+  assert.deepEqual(
+    parseCodexRolloutRecord({ type: 'turn_context', payload: { model: 'gpt-5.6-luna' } }, { kind: 'parent' }),
+    []
+  )
+})

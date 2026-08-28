@@ -655,6 +655,78 @@ several can arrive in one, and slicing the decoded string instead of the Buffer
 is off by one per non-ASCII character — which is every file with an emoji or a
 curly quote in it.
 
+### The agent roster (`shared/agentRuns.ts`, `AgentsPanel`, `AgentActivityBar`)
+
+A fan-out is **state, not an event**, and the transcript can only show events.
+Five spawn cards land where they were made and scroll away under the output of
+whichever agent answered first — so "what is running right now, on what, at what
+cost" had no home. The roster is a right-panel tab that answers exactly that,
+and it is fed by the parts the transcript already holds rather than by a second
+channel: `ToolPart.agent` (`AgentRun`) carries the vitals, `children` carries
+the work, and `foldAgentRuns` reads both. One consequence worth keeping: the
+panel describes runs from a chat the app has since restarted through, because
+the parts are persisted.
+
+**The three providers report these numbers at three different moments, and one
+of them reports nothing.** That asymmetry is the whole reason the vitals live on
+the part instead of in a live-only map:
+
+- **Claude** puts `model` and `usage` on every sub-agent assistant message, so
+  the fold is one read per step in `handleSubAgentAssistant`. Two traps there.
+  The CLI ships each content block as its *own* assistant message carrying the
+  same `message.id` and the same `usage`, so adding every one triples a
+  text+tool step — hence a one-entry-per-spawn cursor (`agentUsageMsg`), which
+  is bounded where a set of every id would grow for the life of the chat. And
+  `reconcileAssistant` rebuilds every part from a final message that carries no
+  vitals at all, so `agent` has to be carried across it exactly the way
+  `children` already is; without that, every agent's model and token count
+  blanks at the moment its turn ends.
+- **Codex** reports nothing about a child in the parent transcript — the model,
+  the effort and the totals are in the *child's own* rollout file, which is
+  already being tailed for its text and tools, so they are three more record
+  types on a read that is happening anyway (`agent-usage`). `total_token_usage`
+  is a running total, so it replaces; `last_token_usage` is the call that just
+  finished and summing that instead counts every earlier call again.
+- **Grok** reports neither: ACP carries no nested traffic for a sub-agent and no
+  per-agent usage, so a Grok row is a description, a status and a clock. It is
+  drawn *missing* rather than filled in from the parent chat's model — a
+  plausible-looking guess about the one thing the panel exists to state is worse
+  than a blank.
+
+**Tokens are counted the way the Usage page counts them** — input + cache reads
++ cache writes + output. Summing input and output alone is the obvious reading
+and a useless one: measured on real sub-agent transcripts it reports 26 tokens
+for a six-step agent that spent 113k, because a sub-agent's context lives in
+cached input.
+
+- **`endedAt` is the agent's last activity, not the moment its call returned.** A
+  backgrounded agent's `tool_result` lands at spawn, so reading the end off it
+  reports every such run as having taken no time. For the same reason "still
+  working" is `part.status` **or** a child still moving — one rule, in
+  `agentRuns.ts`, so the card and the panel cannot show a tick and a spinner for
+  the same agent.
+- **The fold is published to `agentsStore`, not threaded through props.** Agent
+  vitals churn harder than anything else in a turn, and the transcript wants
+  none of it — the `taskListStore` arrangement, for the `taskListStore` reason.
+  `reconcileAgentRuns` carries an unmoved list forward by identity so the
+  panel's subscribers see nothing when nothing moved. Elapsed time ticks in the
+  components (1s, only while something runs); a clock in the store would be a
+  state write per second for a value two components read.
+- **The panel is never auto-selected.** A spawn mid-read would take the file you
+  are looking at off screen. The way in is the activity bar above the composer —
+  which exists only while something is running — or the tab, which exists only
+  while the chat has runs. Clicking a row scrolls to that card *and* opens it
+  (`focusId`/`focusTick`; the counter is what makes a second click work after
+  you collapse the card again), because a scroll that lands on a collapsed
+  header answers half the question.
+- **A run of spawns keeps its collapsed group row**, but the row now says what
+  the roster says — `3 agents · 2 working · Σ 67.8k tok` — instead of naming
+  whatever the last call touched. The collapsed card's own line is deliberately
+  *shorter* than the panel's: a model id beside the description wins the width
+  fight in a chat column and leaves the card reading "Agent · claude-sonnet-5"
+  with the task truncated away, so identity moved to the expanded body and to
+  the roster.
+
 ### The task checklist (`lib/taskList.ts`, `TodoCard`)
 
 One card, two completely different provider shapes. Codex sends `TodoWrite`,

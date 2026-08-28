@@ -59,6 +59,7 @@ import {
   providerForModel
 } from '@shared/types'
 import { CODEX_SLASH_COMMANDS, parseCodexSlashCommand } from '@shared/codexCommands'
+import { AGENT_TOOLS } from '@shared/agentRuns'
 import type { Store } from './store'
 import type { PreviewManager } from './preview'
 import { runPreviewTool } from './previewTools.ts'
@@ -455,6 +456,8 @@ class ClaudeSession implements AgentSession {
   // Sub-agent tool calls live inside a parent Task tool's `children`, not a
   // message's parts — so they need their own location map for result matching.
   private childToolLoc = new Map<string, { parent: ToolPart; index: number }>()
+  /** Last sub-agent response id folded per spawn — see applyAgentUsage. */
+  private agentUsageMsg = new Map<string, string>()
   private pending = new Map<string, PendingPermission>()
   /** Serializes prompt enqueues so a send can await its handoff context (see send). */
   private sendChain: Promise<void> = Promise.resolve()
@@ -1440,6 +1443,7 @@ class ClaudeSession implements AgentSession {
           part.output = 'Advisor did not answer before the turn ended'
         }
         part.status = status
+        if (part.agent && !part.agent.endedAt) part.agent.endedAt = Date.now()
         changed = true
       }
       if (part.children) {
@@ -1555,11 +1559,16 @@ class ClaudeSession implements AgentSession {
         } else if (block.type === 'thinking' || block.type === 'redacted_thinking') {
           part = { type: 'thinking', text: '' }
         } else if (block.type === 'tool_use' || block.type === 'server_tool_use') {
+          const name = block.name ?? 'Tool'
           part = {
             type: 'tool',
             toolUseId: block.id ?? randomUUID(),
-            name: block.name ?? 'Tool',
-            status: 'pending'
+            name,
+            status: 'pending',
+            // Stamped where the spawn is *seen*, not where its first reply
+            // lands: a cold sub-agent is several seconds of nothing, and that
+            // wait is exactly what the Agents panel exists to show.
+            ...(AGENT_TOOLS.has(name) ? { agent: { startedAt: Date.now() } } : {})
           }
           this.jsonAcc.set(index, '')
         } else {
@@ -1752,8 +1761,22 @@ class ClaudeSession implements AgentSession {
           outputImages: existing?.outputImages,
           denied: existing?.denied,
           // Keep sub-agent activity across the reconcile (same array ref, so
-          // childToolLoc indexes stay valid).
-          children: existing?.children
+          // childToolLoc indexes stay valid). `agent` rides along for the same
+          // reason and is the easier one to lose: the reconcile rebuilds every
+          // part from the final message, which carries no vitals at all, so
+          // dropping it would blank each agent's model and token count at the
+          // exact moment the turn ended.
+          children: existing?.children,
+          // Minting a clock is gated on a turn actually running: a message
+          // reconciled outside one is history arriving, not a spawn happening,
+          // and stamping it would print a duration measured from the moment the
+          // app read the record. A run with no stamp reports no duration, which
+          // is the honest answer for one nothing timed.
+          agent:
+            existing?.agent ??
+            (this.turnActive && AGENT_TOOLS.has((block.name as string) ?? '')
+              ? { startedAt: Date.now() }
+              : undefined)
         })
       } else if (type === 'advisor_tool_result') {
         // Contributes no part — it settles the call, which the CLI ships as its
@@ -1835,6 +1858,7 @@ class ClaudeSession implements AgentSession {
       part.output = output.length > 100_000 ? `${output.slice(0, 100_000)}\n… (truncated)` : output
       part.outputImages = extractImages(block.content)
       if (!part.denied) part.status = block.is_error ? 'error' : 'success'
+      if (part.agent) part.agent.endedAt = Date.now()
       this.deltas.flush()
       this.emit({
         type: 'tool-update',
@@ -1845,7 +1869,8 @@ class ClaudeSession implements AgentSession {
           status: part.status,
           output: part.output,
           outputImages: part.outputImages,
-          denied: part.denied
+          denied: part.denied,
+          ...(part.agent ? { agent: { ...part.agent } } : {})
         }
       })
       this.flagBuriedMutation(loc.message.id)
@@ -1874,11 +1899,67 @@ class ClaudeSession implements AgentSession {
       chatId: this.chat.id,
       messageId,
       toolUseId: parent.toolUseId,
-      // Fresh array so the renderer's shallow compare re-renders the card.
-      patch: { children: parent.children ? [...parent.children] : [] }
+      // Fresh array (and a fresh vitals object) so the renderer's shallow
+      // compare re-renders the card and the Agents panel.
+      patch: {
+        children: parent.children ? [...parent.children] : [],
+        ...(parent.agent ? { agent: { ...parent.agent } } : {})
+      }
     })
     this.flagBuriedMutation(messageId)
     this.store.saveChatSoon(this.chat.id)
+  }
+
+  /**
+   * What the sub-agent is running on, and what it has spent.
+   *
+   * The numbers are on the sub-agent's own assistant messages — `model` and
+   * `usage`, exactly as the main agent reports them — so this costs one read
+   * per step and no extra traffic. Two things it must get right:
+   *
+   * - **The same response arrives more than once.** The CLI ships each content
+   *   block as its own assistant message carrying the *same* `message.id` and
+   *   the same `usage`, so adding every one triples a text+tool step. Blocks of
+   *   one response are consecutive within a given agent, so remembering the last
+   *   id per spawn is enough to drop the repeats — and is bounded, where a set
+   *   of every id would grow for the life of the chat.
+   * - **`endedAt` is the last thing the agent did**, not the moment its spawning
+   *   call returned. A backgrounded agent's `tool_result` lands at spawn, so
+   *   reading the end off it would report every such run as having taken no
+   *   time at all.
+   */
+  private applyAgentUsage(
+    parentToolUseId: string,
+    part: ToolPart,
+    msg: SDKAssistantMessage
+  ): void {
+    const message = msg.message as unknown as {
+      id?: string
+      model?: string
+      usage?: Record<string, unknown>
+    }
+    const agent = (part.agent ??= { startedAt: Date.now() })
+    agent.endedAt = Date.now()
+    // '<synthetic>' is the CLI's placeholder for a turn it answered without
+    // calling a model; naming it would be worse than naming nothing.
+    const model = message.model
+    if (typeof model === 'string' && model && model !== '<synthetic>') agent.model = model
+    const id = message.id
+    if (id && this.agentUsageMsg.get(parentToolUseId) === id) return
+    if (id) {
+      this.agentUsageMsg.set(parentToolUseId, id)
+      this.capMap(this.agentUsageMsg)
+    }
+    const usage = message.usage
+    if (!usage) return
+    const n = (value: unknown): number =>
+      typeof value === 'number' && Number.isFinite(value) ? value : 0
+    const spent =
+      n(usage.input_tokens) +
+      n(usage.output_tokens) +
+      n(usage.cache_creation_input_tokens) +
+      n(usage.cache_read_input_tokens)
+    if (spent > 0) agent.tokens = (agent.tokens ?? 0) + spent
   }
 
   /**
@@ -1889,6 +1970,7 @@ class ClaudeSession implements AgentSession {
   private handleSubAgentAssistant(parentToolUseId: string, msg: SDKAssistantMessage): void {
     const parent = this.parentToolPart(parentToolUseId)
     if (!parent) return
+    this.applyAgentUsage(parentToolUseId, parent.part, msg)
     const children = parent.part.children ?? (parent.part.children = [])
     for (const block of msg.message.content as unknown as Array<Record<string, unknown>>) {
       const type = block.type as string
@@ -1941,6 +2023,7 @@ class ClaudeSession implements AgentSession {
         status: block.is_error ? 'error' : 'success'
       }
       changed = true
+      if (parent.part.agent) parent.part.agent.endedAt = Date.now()
       // A sub-agent tool's result arrives once, after its assistant block; the
       // child part now holds the output, so the routing entry is dead weight.
       this.childToolLoc.delete(block.tool_use_id)
@@ -1955,12 +2038,18 @@ class ClaudeSession implements AgentSession {
     if (part?.type !== 'tool') return
     part.status = 'error'
     part.denied = true
+    // A denied spawn never runs, so its clock stops here or never at all.
+    if (part.agent) part.agent.endedAt = Date.now()
     this.emit({
       type: 'tool-update',
       chatId: this.chat.id,
       messageId: loc.message.id,
       toolUseId,
-      patch: { status: 'error', denied: true }
+      patch: {
+        status: 'error',
+        denied: true,
+        ...(part.agent ? { agent: { ...part.agent } } : {})
+      }
     })
     this.flagBuriedMutation(loc.message.id)
     this.store.saveChatSoon(this.chat.id)

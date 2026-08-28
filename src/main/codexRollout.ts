@@ -66,6 +66,23 @@ export type CodexRolloutEvent =
       result?: string
       failed: boolean
     }
+  /**
+   * What the child is running on and what it has spent.
+   *
+   * A sub-agent's model, effort and token totals are in its *own* rollout file
+   * and nowhere else — the parent transcript records that a child exists, never
+   * what it cost. The file is already being tailed for the child's text and
+   * tools, so these are three more record types on a read that is happening
+   * anyway.
+   */
+  | {
+      type: 'agent-usage'
+      threadId: string
+      model?: string
+      effort?: string
+      /** Running total for the child thread, not a delta — already summed by the CLI. */
+      tokens?: number
+    }
 
 export interface CodexRolloutWatcher {
   start(parentThreadId: string, sinceMs: number): void
@@ -216,6 +233,31 @@ export function parseCodexRolloutRecord(
   }
 
   const threadId = source.threadId
+  // `turn_context` is a record type of its own; the settings event carries the
+  // effort as well, which `turn_context` does not.
+  if (record.type === 'turn_context') {
+    const model = string(payload.model)
+    return model ? [{ type: 'agent-usage', threadId, model }] : []
+  }
+
+  if (record.type === 'event_msg' && payload.type === 'thread_settings_applied') {
+    const settings = object(payload.thread_settings)
+    const model = string(settings?.model)
+    const effort = string(settings?.reasoning_effort)
+    return model || effort ? [{ type: 'agent-usage', threadId, model, effort }] : []
+  }
+
+  if (record.type === 'event_msg' && payload.type === 'token_count') {
+    // `total_token_usage` is the thread's running total (`last_token_usage` is
+    // the call that just finished), so this replaces rather than accumulates —
+    // summing it would count every earlier call again on each event.
+    const total = object(object(payload.info)?.total_token_usage)
+    const tokens = total?.total_tokens
+    return typeof tokens === 'number' && Number.isFinite(tokens)
+      ? [{ type: 'agent-usage', threadId, tokens }]
+      : []
+  }
+
   if (record.type === 'event_msg' && payload.type === 'agent_message') {
     const text = string(payload.message)
     return text ? [{ type: 'agent-text', threadId, text }] : []

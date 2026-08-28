@@ -1138,7 +1138,13 @@ test('Codex collaboration items render and update one Agent card', async () => {
 
   const assistant = h.chat.messages.find((message) => message.role === 'assistant')
   assert.equal(assistant?.parts.length, 1)
-  assert.deepEqual(assistant?.parts[0], {
+  const card = assistant?.parts[0]
+  assert.ok(card?.type === 'tool')
+  // The spawn is timed from the moment it is seen and its clock stops with its
+  // status — the Agents panel reads both off this part.
+  assert.equal(typeof card.agent?.startedAt, 'number')
+  assert.equal(typeof card.agent?.endedAt, 'number')
+  assert.deepEqual({ ...card, agent: undefined }, {
     type: 'tool',
     toolUseId: 'codex-agent-child-1',
     name: 'Agent',
@@ -1149,7 +1155,8 @@ test('Codex collaboration items render and update one Agent card', async () => {
     },
     status: 'success',
     children: [],
-    output: 'Renderer inspected.'
+    output: 'Renderer inspected.',
+    agent: undefined
   })
   cleanup(h)
 })

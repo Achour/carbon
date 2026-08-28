@@ -1,5 +1,6 @@
 import * as React from 'react'
 import {
+  Bot,
   ClipboardList,
   Code2,
   Eye,
@@ -31,6 +32,8 @@ import { Button } from '@/components/ui/button'
 import { WithTooltip } from '@/components/ui/tooltip'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { PlanContent } from '@/components/PlanPanel'
+import { AgentsPanel } from '@/components/AgentsPanel'
+import { useAgents } from '@/agentsStore'
 import { FileViewer, MARKDOWN_RE } from '@/components/FileViewer'
 import { FileTree } from '@/components/FileTree'
 import { GitPanel } from '@/components/GitPanel'
@@ -64,7 +67,10 @@ function Tab({
   busy?: string
   onSelect: () => void
   onDoubleClick?: () => void
-  onClose: () => void
+  /** Omitted by tabs that are derived state rather than something opened — the
+      Agents roster exists exactly while the chat has agents, so there is nothing
+      a close button could do that the next spawn would not undo. */
+  onClose?: () => void
 }): React.JSX.Element {
   return (
     <div
@@ -97,17 +103,19 @@ function Tab({
             title={busy ? `${busy} is running` : 'Unsaved changes'}
           />
         )}
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation()
-            onClose()
-          }}
-          aria-label={`Close ${label}`}
-          className="absolute inset-0 flex items-center justify-center rounded opacity-0 transition-opacity group-hover:opacity-100 hover:bg-secondary"
-        >
-          <X className="size-3" />
-        </button>
+        {onClose && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              onClose()
+            }}
+            aria-label={`Close ${label}`}
+            className="absolute inset-0 flex items-center justify-center rounded opacity-0 transition-opacity group-hover:opacity-100 hover:bg-secondary"
+          >
+            <X className="size-3" />
+          </button>
+        )}
       </span>
     </div>
   )
@@ -683,6 +691,12 @@ export function RightPanel(): React.JSX.Element | null {
   }
 
   const showPlan = planPanel !== null && planPanel.chatId === activeId
+  // The Agents tab is a property of the chat: it exists exactly while the chat
+  // has spawned something. It is never auto-selected — a spawn mid-read would
+  // otherwise take the file you are looking at off screen — so the way in is the
+  // activity bar above the composer, or the tab itself.
+  const showAgents = useAgents((s) => s.runs.length > 0)
+  const agentsRunning = useAgents((s) => s.totals.running > 0)
   const current =
     activeTab === 'files'
       ? 'files'
@@ -692,6 +706,8 @@ export function RightPanel(): React.JSX.Element | null {
         ? activeTab!
         : activeTab === 'plan' && showPlan
           ? 'plan'
+          : activeTab === 'agents' && showAgents
+          ? 'agents'
           : openFiles.some((f) => f.path === activeTab)
             ? activeTab!
             : showPlan
@@ -704,6 +720,7 @@ export function RightPanel(): React.JSX.Element | null {
   const currentIsPreview = previews.some((p) => p.id === current)
   const currentIsChanges = typeof current === 'string' && current.startsWith('changes:')
   const currentIsPlan = current === 'plan'
+  const currentIsAgents = current === 'agents'
   const activeEntry = openFiles.find((f) => f.path === current)
   // A diff tab can open its own folds — same re-fetch the stacked review uses.
   const diffMeta = activeEntry?.diff
@@ -722,6 +739,7 @@ export function RightPanel(): React.JSX.Element | null {
   // the plan has no path to show and docks no tree to toggle.
   const showBreadcrumb =
     !currentIsPlan &&
+    !currentIsAgents &&
     !currentIsTerminal &&
     !currentIsPreview &&
     !currentIsChanges &&
@@ -800,6 +818,15 @@ export function RightPanel(): React.JSX.Element | null {
               attention={planPanel.requestId !== null}
               onSelect={() => setActiveTab('plan')}
               onClose={closePlanPanel}
+            />
+          )}
+          {showAgents && (
+            <Tab
+              icon={<Bot className="size-3.5" />}
+              label="Agents"
+              active={current === 'agents'}
+              busy={agentsRunning ? 'Agent' : undefined}
+              onSelect={() => setActiveTab('agents')}
             />
           )}
           {openFiles.map((file) => (
@@ -927,6 +954,8 @@ export function RightPanel(): React.JSX.Element | null {
           >
             {current === 'plan' && planPanel ? (
               <PlanContent panel={planPanel} hasSuggestions={hasSuggestions} />
+            ) : currentIsAgents ? (
+              <AgentsPanel />
             ) : currentIsChanges && selectedCwd ? (
               <MultiDiffView cwd={selectedCwd} />
             ) : activeEntry?.diff ? (
@@ -978,7 +1007,12 @@ export function RightPanel(): React.JSX.Element | null {
                 </div>
               ))}
         </div>
-        {dockOpen && !isEmpty && !currentIsPlan && !currentIsTerminal && !currentIsPreview && (
+        {dockOpen &&
+          !isEmpty &&
+          !currentIsPlan &&
+          !currentIsAgents &&
+          !currentIsTerminal &&
+          !currentIsPreview && (
         <div
           data-right-dock
           style={{ width: `min(${dockWidth}px, calc(100% - ${VIEWER_RESERVED_PX}px))` }}

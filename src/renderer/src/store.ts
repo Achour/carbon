@@ -645,6 +645,12 @@ interface AppState {
   setSelectedCwd(cwd: string | null): void
   openPlanPanel(panel: PlanPanelState): void
   closePlanPanel(): void
+  /** Absolute path of the image shown full-window, or null. See ImageLightbox. */
+  lightbox: string | null
+  openLightbox(path: string): void
+  closeLightbox(): void
+  /** Reveal the sub-agent roster in the right panel (see AgentsPanel). */
+  openAgentsPanel(): void
   openChat(id: string | null): Promise<void>
   /** Prepend the next window of older messages to the active chat. */
   loadOlderMessages(): Promise<void>
@@ -1641,6 +1647,21 @@ export const useApp = create<AppState>((set, get) => ({
       planPanel: null,
       activeTab: s.activeTab === 'plan' ? (s.openFiles[0]?.path ?? null) : s.activeTab
     }))
+  },
+
+  lightbox: null,
+  openLightbox(path) {
+    set({ lightbox: path })
+  },
+  closeLightbox() {
+    // Guarded so closing an already-closed lightbox doesn't notify subscribers.
+    set((s) => (s.lightbox === null ? s : { lightbox: null }))
+  },
+
+  // The tab itself is derived from the active chat's runs (RightPanel), so this
+  // only has to select it and make sure the panel is showing.
+  openAgentsPanel() {
+    set((s) => ({ activeTab: 'agents', ...panelPatch(s, true) }))
   },
 
   // ---- Files ----

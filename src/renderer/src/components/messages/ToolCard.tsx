@@ -24,10 +24,17 @@ import {
   X
 } from 'lucide-react'
 import type { AssistantPart, ToolPart } from '@shared/types'
+import {
+  formatAgentDuration,
+  formatAgentTokens,
+  isAgentPart,
+  summarizeAgentParts
+} from '@shared/agentRuns'
 import { cn } from '@/lib/utils'
 import { humanizeShellCommand } from '@/lib/toolLabels'
 import { Markdown } from '@/components/Markdown'
 import { useApp } from '@/store'
+import { useAgents } from '@/agentsStore'
 
 interface ToolMeta {
   icon: React.ComponentType<{ className?: string }>
@@ -591,8 +598,21 @@ export const ToolGroup = React.memo(function ToolGroup({
 
   const title = uniform ? groupTitle(uniform.label, n) : `Workspace activity · ${n} actions`
   const Icon = uniform?.icon ?? Layers
+  // A run of spawns is the one group whose collapsed row can say something
+  // better than "what the last call touched": how many of them are still
+  // working and what they have spent between them. Same numbers as the Agents
+  // panel and the activity bar, off the same fold, so the three cannot disagree.
+  const agents = parts.every(isAgentPart) ? summarizeAgentParts(parts) : null
+  const agentTrailing = agents
+    ? [
+        agents.running > 0 ? `${agents.running} working` : null,
+        agents.tokens > 0 ? `Σ ${formatAgentTokens(agents.tokens)} tok` : null
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    : ''
   // While running, surface the file/target of the last call for a sense of motion.
-  const trailing = running ? metas[metas.length - 1]?.summary : undefined
+  const trailing = agentTrailing || (running ? metas[metas.length - 1]?.summary : undefined)
   // Groups follow the same stable layout as individual tools: their status is
   // visible in the header and details open only on explicit user interaction.
   const [open, setOpen] = React.useState(false)
@@ -670,6 +690,25 @@ function SubAgentStream({
   )
 }
 
+/**
+ * A live clock for a running agent. Ticks in the component and only while the
+ * agent runs, so a settled card costs nothing and the transcript's state is
+ * never rewritten once a second.
+ */
+function useAgentElapsed(agent: ToolPart['agent'], running: boolean): string | null {
+  const [now, setNow] = React.useState(() => Date.now())
+  React.useEffect(() => {
+    if (!running) return
+    setNow(Date.now())
+    const id = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(id)
+  }, [running])
+  if (!agent?.startedAt) return null
+  const end = running ? now : agent.endedAt
+  if (end == null) return null
+  return formatAgentDuration(end - agent.startedAt)
+}
+
 /** A spawned sub-agent, with its live activity nested under the parent tool. */
 function AgentCard({ part, cwd }: { part: ToolPart; cwd: string }): React.JSX.Element {
   const input = (part.input ?? {}) as Record<string, unknown>
@@ -688,10 +727,38 @@ function AgentCard({ part, cwd }: { part: ToolPart; cwd: string }): React.JSX.El
 
   // Collapsed by default — the header shows live status; expand to watch.
   const [open, setOpen] = React.useState(false)
+  // A click in the Agents panel opens this card as it scrolls it into view.
+  // Selecting down to a number keeps every other agent card out of the update.
+  const focusTick = useAgents((s) => (s.focusId === part.toolUseId ? s.focusTick : 0))
+  React.useEffect(() => {
+    if (focusTick > 0) setOpen(true)
+  }, [focusTick])
+  const elapsed = useAgentElapsed(part.agent, running)
+  // What the agent has spent, when its provider says. The collapsed row is
+  // deliberately *short* of the panel's line: the description is the thing a
+  // reader is scanning for, and a model id beside it wins the width fight in a
+  // chat column and leaves the card saying "Agent · claude-sonnet-5" with the
+  // task itself truncated away. Identity belongs on the expanded body below,
+  // and in the roster.
+  const vitals = [
+    part.agent?.tokens ? `${formatAgentTokens(part.agent.tokens)} tok` : null,
+    steps > 0 ? `${steps} ${steps === 1 ? 'step' : 'steps'}` : null,
+    elapsed
+  ].filter(Boolean) as string[]
+  // The full identity, for the expanded body.
+  const identity = [
+    part.agent?.model,
+    part.agent?.effort,
+    part.agent?.tokens ? `${formatAgentTokens(part.agent.tokens)} tokens` : null,
+    elapsed
+  ].filter(Boolean) as string[]
 
   return (
     <Collapsible.Root open={open} onOpenChange={setOpen} className="animate-enter">
       <div
+        // The Agents panel scrolls the transcript to this card, the way the
+        // review's next/previous change walks `[data-diff-hunk]`.
+        data-agent-run={part.toolUseId}
         className={cn(
           'overflow-hidden rounded-xl border transition-colors',
           running ? 'border-warning/40 bg-warning/[0.04]' : 'border-primary/25 bg-primary/[0.03]'
@@ -713,16 +780,13 @@ function AgentCard({ part, cwd }: { part: ToolPart; cwd: string }): React.JSX.El
           ) : (
             <span className="flex-1" />
           )}
-          {running ? (
-            <span className="shimmer-text shrink-0 text-[11px] font-medium">
-              {steps > 0 ? `Working · ${steps} ${steps === 1 ? 'step' : 'steps'}` : 'Working…'}
+          {running && (
+            <span className="shimmer-text shrink-0 text-[11px] font-medium">Working</span>
+          )}
+          {vitals.length > 0 && (
+            <span className="shrink-0 font-mono text-[11px] text-muted-foreground/70 tabular-nums">
+              {vitals.join(' · ')}
             </span>
-          ) : (
-            steps > 0 && (
-              <span className="shrink-0 text-[11px] text-muted-foreground/70 tabular-nums">
-                {steps} {steps === 1 ? 'step' : 'steps'}
-              </span>
-            )
           )}
           <span className="shrink-0">
             {running ? (
@@ -734,6 +798,11 @@ function AgentCard({ part, cwd }: { part: ToolPart; cwd: string }): React.JSX.El
         </Collapsible.Trigger>
         <Collapsible.Panel className="h-[var(--collapsible-panel-height)] overflow-hidden transition-[height] duration-200 ease-out data-[ending-style]:h-0 data-[starting-style]:h-0">
           <div className="space-y-3 border-t border-primary/15 px-3 py-3">
+            {identity.length > 0 && (
+              <div className="font-mono text-[11px] text-muted-foreground/70">
+                {identity.join(' · ')}
+              </div>
+            )}
             {children.length > 0 ? (
               <div className="border-l-2 border-primary/20 pl-3">
                 <SubAgentStream parts={children} cwd={cwd} />

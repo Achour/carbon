@@ -27,6 +27,7 @@ import {
   type UsageInfo,
   type UserQuestion
 } from '@shared/types'
+import { AGENT_TOOLS } from '@shared/agentRuns'
 import type { Store } from './store'
 import { composePrompt, withTimeout, type AgentSession, type Emit } from './session.ts'
 import { DeltaCoalescer } from './deltaCoalescer.ts'
@@ -622,7 +623,13 @@ export class GrokSession implements AgentSession {
         name,
         input: grokToolInput(name, call.rawInput),
         status: toolStatus(call.status),
-        ...(images ? { outputImages: images } : {})
+        ...(images ? { outputImages: images } : {}),
+        // A Grok spawn is timed and nothing else. ACP carries no nested traffic
+        // for a sub-agent and no per-agent usage — the CLI runs it inside its
+        // own process and reports only that the call is open — so the panel
+        // shows this run's status and its clock, and no model or token count
+        // rather than an invented one.
+        ...(AGENT_TOOLS.has(name) ? { agent: { startedAt: Date.now() } } : {})
       }
       message.parts.push(part)
       const index = message.parts.length - 1
@@ -649,6 +656,9 @@ export class GrokSession implements AgentSession {
     if (images) patch.outputImages = images
     if (patch.status === 'error' && !patch.output && part.output === undefined) {
       patch.output = output ?? 'Tool failed.'
+    }
+    if (part.agent && patch.status && patch.status !== 'running' && patch.status !== 'pending') {
+      patch.agent = { ...part.agent, endedAt: Date.now() }
     }
     Object.assign(part, patch)
     this.emit({

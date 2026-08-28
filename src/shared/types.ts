@@ -323,6 +323,42 @@ export interface ToolPart {
   denied?: boolean
   /** Sub-agent activity for Task/Agent tools: the spawned agent's own stream. */
   children?: AssistantPart[]
+  /** Vitals for Task/Agent tools: what the spawned agent is running on, and for how long. */
+  agent?: AgentRun
+}
+
+/**
+ * What a spawned sub-agent is costing, on which model, since when.
+ *
+ * It rides the Task/Agent `ToolPart` rather than a live-only side channel for
+ * two reasons: the part is already the persisted record of the spawn, so the
+ * Agents panel can describe a run the app has since restarted through; and the
+ * three providers report these numbers at completely different moments (Claude
+ * on every sub-agent assistant message, Codex from the child's own rollout
+ * file, Grok not at all), so a shape they all patch into is the only thing that
+ * keeps the renderer from learning which backend it is looking at.
+ *
+ * Every field except `startedAt` is optional *because a provider may simply not
+ * say*. An absent `model` is drawn as an absent model, never as a guess — the
+ * panel's whole value is that its numbers came from the agent itself.
+ */
+export interface AgentRun {
+  /** Epoch ms the spawn was first seen. */
+  startedAt: number
+  /** Epoch ms the agent settled; absent while it is still working. */
+  endedAt?: number
+  /** Model the sub-agent runs on, as its own provider names it. */
+  model?: string
+  /** Reasoning effort, when the provider reports one per agent (Codex does). */
+  effort?: string
+  /**
+   * Tokens the agent has spent, on the accounting the Usage page uses —
+   * input + cache reads + cache writes + output. Summing input and output alone
+   * is the obvious reading and a useless one: measured on real sub-agent
+   * transcripts it reports 26 tokens for a six-step agent that actually spent
+   * 113k, because cached input is where a sub-agent's context lives.
+   */
+  tokens?: number
 }
 
 export type AssistantPart = TextPart | ThinkingPart | ToolPart

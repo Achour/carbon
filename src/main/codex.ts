@@ -1614,7 +1614,10 @@ export class CodexSession implements AgentSession {
         agent_id: threadId
       },
       status: 'running',
-      children: []
+      children: [],
+      // Timed from the moment the spawn is seen. The model, effort and token
+      // total arrive later, off the child's own rollout file.
+      agent: { startedAt: Date.now() }
     }
     const index = message.parts.length
     message.parts[index] = part
@@ -1660,6 +1663,20 @@ export class CodexSession implements AgentSession {
     loc: { message: AssistantMessage; index: number; part: ToolPart },
     patch: Partial<Omit<ToolPart, 'type' | 'toolUseId' | 'name'>>
   ): void {
+    // A terminal status stops the run's clock, whichever path reported it — the
+    // child's own rollout file, a collab item, or the parent turn ending. Doing
+    // it here rather than at each site is what keeps a Codex agent from being
+    // drawn finished with no duration at all.
+    const status = patch.status
+    if (
+      loc.part.agent &&
+      !patch.agent &&
+      status &&
+      status !== 'running' &&
+      status !== 'pending'
+    ) {
+      patch = { ...patch, agent: { ...loc.part.agent, endedAt: Date.now() } }
+    }
     Object.assign(loc.part, patch)
     this.emit({
       type: 'tool-update',
@@ -1735,6 +1752,37 @@ export class CodexSession implements AgentSession {
     this.emitCodexChildren(loc)
   }
 
+  /**
+   * Fold the child's own reported vitals onto its card.
+   *
+   * `tokens` replaces rather than accumulates — the CLI already reports a
+   * running total per thread. A no-op when nothing moved, because the watcher
+   * re-reads a `token_count` line for every poll of a file that has grown, and
+   * an update per poll would repaint the panel for a number that is unchanged.
+   */
+  private applyCodexAgentUsage(
+    threadId: string,
+    usage: { model?: string; effort?: string; tokens?: number }
+  ): void {
+    const loc = this.codexAgents.get(threadId)
+    if (!loc) return
+    const prior = loc.part.agent ?? { startedAt: Date.now() }
+    const next = {
+      ...prior,
+      ...(usage.model ? { model: usage.model } : {}),
+      ...(usage.effort ? { effort: usage.effort } : {}),
+      ...(usage.tokens != null ? { tokens: usage.tokens } : {})
+    }
+    if (
+      prior.model === next.model &&
+      prior.effort === next.effort &&
+      prior.tokens === next.tokens
+    ) {
+      return
+    }
+    this.updateCodexAgent(loc, { agent: next })
+  }
+
   private completeCodexAgent(
     threadId: string,
     failed: boolean,
@@ -1796,6 +1844,13 @@ export class CodexSession implements AgentSession {
         break
       case 'agent-complete':
         this.completeCodexAgent(event.threadId, event.failed, event.result)
+        break
+      case 'agent-usage':
+        this.applyCodexAgentUsage(event.threadId, {
+          model: event.model,
+          effort: event.effort,
+          tokens: event.tokens
+        })
         break
     }
   }
