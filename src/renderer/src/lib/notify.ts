@@ -1,20 +1,29 @@
-/** Notification preferences + the completion chime. */
+/** Notification preferences. The cues themselves live in `lib/sounds.ts`. */
+
+import { DEFAULT_SOUND_PACK, knownSoundPack, type SoundPackId } from '@/lib/sounds'
 
 export interface NotifyPrefs {
   /** Notify when a turn finishes while the app is in the background. */
   finish: boolean
   /** Notify when Claude is waiting for an approval. */
   permission: boolean
-  /** Play a chime when a turn finishes. */
+  /** Play a cue when a turn finishes, fails, or the agent needs an answer. */
   sound: boolean
+  /** Which voice those cues are played in. */
+  pack: SoundPackId
 }
 
-const DEFAULTS: NotifyPrefs = { finish: true, permission: true, sound: true }
+const DEFAULTS: NotifyPrefs = {
+  finish: true,
+  permission: true,
+  sound: true,
+  pack: DEFAULT_SOUND_PACK
+}
 
 export function loadNotifyPrefs(): NotifyPrefs {
   try {
     const raw = JSON.parse(localStorage.getItem('notifyPrefs') ?? '{}') as Partial<NotifyPrefs>
-    return { ...DEFAULTS, ...raw }
+    return { ...DEFAULTS, ...raw, pack: knownSoundPack(raw.pack) }
   } catch {
     return DEFAULTS
   }
@@ -22,41 +31,6 @@ export function loadNotifyPrefs(): NotifyPrefs {
 
 export function saveNotifyPrefs(prefs: NotifyPrefs): void {
   localStorage.setItem('notifyPrefs', JSON.stringify(prefs))
-}
-
-let audio: AudioContext | null = null
-let audioIdle: ReturnType<typeof setTimeout> | null = null
-
-/** Soft two-note chime for turn completion. */
-export function playChime(): void {
-  try {
-    audio ??= new AudioContext()
-    // A running AudioContext holds a realtime output stream open forever
-    // (~100 silent callbacks/s across the renderer and coreaudiod, and it
-    // blocks process idling). Wake it just for the chime; suspend once the
-    // tail has faded.
-    if (audio.state === 'suspended') void audio.resume()
-    if (audioIdle) clearTimeout(audioIdle)
-    audioIdle = setTimeout(() => void audio?.suspend(), 1200)
-    const t0 = audio.currentTime
-    for (const [freq, at] of [
-      [660, 0],
-      [990, 0.12]
-    ] as const) {
-      const osc = audio.createOscillator()
-      const gain = audio.createGain()
-      osc.type = 'sine'
-      osc.frequency.value = freq
-      gain.gain.setValueAtTime(0.0001, t0 + at)
-      gain.gain.exponentialRampToValueAtTime(0.09, t0 + at + 0.02)
-      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + at + 0.4)
-      osc.connect(gain).connect(audio.destination)
-      osc.start(t0 + at)
-      osc.stop(t0 + at + 0.45)
-    }
-  } catch {
-    // audio unavailable — never block the event flow over a chime
-  }
 }
 
 /** Native desktop notification; clicking focuses the app via onClick. */

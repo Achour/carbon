@@ -13,7 +13,8 @@ import {
   storedTranslucent
 } from '@/lib/themes'
 import type { ResolvedAppearance, ThemeMode } from '@/lib/themes'
-import { loadNotifyPrefs, notify, playChime, saveNotifyPrefs, type NotifyPrefs } from '@/lib/notify'
+import { loadNotifyPrefs, notify, saveNotifyPrefs, type NotifyPrefs } from '@/lib/notify'
+import { playCue } from '@/lib/sounds'
 import { formatCost, formatDuration } from '@/lib/format'
 import { invalidateLocalImages } from '@/lib/imageCache'
 import { gitAction, gitActionPrompt, type GitActionId } from '@/lib/gitActions'
@@ -782,7 +783,10 @@ function notifyTurnDone(
   }
   const prefs = s.notifyPrefs
   const failed = ev.message.kind === 'error'
-  if (prefs.sound && !failed) playChime()
+  // A turn the user stopped never reaches here as an error — every adapter
+  // suppresses the event on an intentional interrupt — so the failure cue only
+  // ever fires on a failure the user didn't ask for.
+  if (prefs.sound) playCue(failed ? 'error' : 'complete', prefs.pack)
   if (prefs.finish && !document.hasFocus()) {
     const chat = s.chats.find((c) => c.id === ev.chatId)
     const title = chat?.title || PROVIDER_SHORT_LABELS[chat?.provider ?? 'claude']
@@ -3202,9 +3206,9 @@ export const useApp = create<AppState>((set, get) => ({
             [ev.chatId]: [...(st.permissions[ev.chatId] ?? []), ev.request]
           }
         }))
-        // Waiting on the user: always chime, and notify if the app is in the
-        // background (the notification stays silent — the chime is the sound).
-        if (s.notifyPrefs.sound) playChime()
+        // Waiting on the user: always sound, and notify if the app is in the
+        // background (the notification stays silent — the cue is the sound).
+        if (s.notifyPrefs.sound) playCue('attention', s.notifyPrefs.pack)
         if (s.notifyPrefs.permission && !document.hasFocus()) {
           const chat = s.chats.find((c) => c.id === ev.chatId)
           const agent = PROVIDER_SHORT_LABELS[chat?.provider ?? 'claude']

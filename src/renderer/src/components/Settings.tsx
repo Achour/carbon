@@ -27,7 +27,7 @@ import {
   type ThemeDef,
   type ThemeMode
 } from '@/lib/themes'
-import { playChime } from '@/lib/notify'
+import { playCue, SOUND_PACKS, type CueKind, type SoundPackId } from '@/lib/sounds'
 import {
   CHATS_PER_PROJECT_DEFAULT,
   CHATS_PER_PROJECT_MAX,
@@ -635,6 +635,82 @@ function ThemeGrid({
   )
 }
 
+/**
+ * The voice the alerts are played in.
+ *
+ * A grid of names rather than a dropdown, for `ThemeGrid`'s reason at one
+ * remove: you cannot compare sounds side by side, so the next best thing is
+ * having every one of them a single click away. Selecting *is* the preview —
+ * a separate play button beside each name would be a second control for the
+ * one question the row exists to answer.
+ *
+ * The three cues are auditionable separately because the pack is only half the
+ * choice: what a user actually wants to know is whether "finished" and "needs
+ * you" are far enough apart to tell from the next room, and that is a question
+ * about the pair.
+ */
+function SoundPicker({
+  pack,
+  enabled,
+  onSelect
+}: {
+  pack: SoundPackId
+  enabled: boolean
+  onSelect: (id: SoundPackId) => void
+}): React.JSX.Element {
+  const cues: { kind: CueKind; label: string }[] = [
+    { kind: 'complete', label: 'Finished' },
+    { kind: 'attention', label: 'Needs you' },
+    { kind: 'error', label: 'Failed' }
+  ]
+  return (
+    // Dimmed rather than disabled when sound is off: a click here is an
+    // explicit request to hear something, and refusing it would leave the only
+    // way to audition a pack behind a toggle you have to flip first.
+    <div className={cn('px-2 pb-2.5', !enabled && 'opacity-60')}>
+      <div className="text-[13px] font-medium">Alert sound</div>
+      <div className="mt-0.5 mb-2 text-xs text-muted-foreground">
+        The voice for every cue — click one to hear it
+      </div>
+      <div role="group" aria-label="Alert sound" className="grid grid-cols-2 gap-2">
+        {SOUND_PACKS.map((candidate) => (
+          <button
+            key={candidate.id}
+            type="button"
+            aria-pressed={candidate.id === pack}
+            onClick={() => {
+              onSelect(candidate.id)
+              playCue('complete', candidate.id)
+            }}
+            className={cn(
+              'rounded-lg border px-2.5 py-2 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring',
+              candidate.id === pack
+                ? 'border-primary/70 bg-accent/50'
+                : 'border-border bg-card/40 hover:bg-accent/30'
+            )}
+          >
+            <div className="text-[13px] font-medium">{candidate.name}</div>
+            <div className="mt-0.5 text-xs text-muted-foreground">{candidate.description}</div>
+          </button>
+        ))}
+      </div>
+      <div className="mt-2 flex items-center gap-1">
+        <span className="mr-1 text-xs text-muted-foreground">Hear:</span>
+        {cues.map((cue) => (
+          <button
+            key={cue.kind}
+            type="button"
+            onClick={() => playCue(cue.kind, pack)}
+            className="rounded-md px-1.5 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-accent/40 hover:text-foreground"
+          >
+            {cue.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export function Settings(): React.JSX.Element {
   const theme = useApp((s) => s.theme)
   const setTheme = useApp((s) => s.setTheme)
@@ -814,12 +890,17 @@ export function Settings(): React.JSX.Element {
                   />
                   <Toggle
                     label="Sound"
-                    description="Play a soft chime when a turn finishes or the agent needs your input"
+                    description="Play a cue when a turn finishes, fails, or the agent needs your input"
                     checked={notifyPrefs.sound}
                     onChange={(sound) => {
                       setNotifyPrefs({ sound })
-                      if (sound) playChime()
+                      if (sound) playCue('complete', notifyPrefs.pack)
                     }}
+                  />
+                  <SoundPicker
+                    pack={notifyPrefs.pack}
+                    enabled={notifyPrefs.sound}
+                    onSelect={(pack) => setNotifyPrefs({ pack })}
                   />
                 </div>
               </section>
