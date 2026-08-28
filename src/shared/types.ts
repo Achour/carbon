@@ -303,10 +303,14 @@ export interface ThinkingPart {
    *
    * Claude Code 2.1 stopped shipping thinking *content*: the block arrives with
    * `thinking: ""` and a signature, and the only thing that streams is an
-   * `estimated_tokens` count on each delta. A part with no text is dropped, so
-   * the whole "Thinking…" affordance silently disappeared — the model still
-   * reasons for twenty seconds, and the transcript shows nothing at all
-   * happening. This is what a redacted thought has left to say.
+   * `estimated_tokens` count on each delta. This is all a redacted thought has
+   * left to say — and it is deliberately **not drawn**: a token count is a
+   * number the reader can act on in no way, and one arrives between every pair
+   * of tool calls, so the rows both littered the transcript and split the runs
+   * the grouping exists to collapse. The turn's own "Thinking…" / "Working…"
+   * indicator is the live record instead. Kept on the contract because main
+   * already accumulates it correctly (`setThinkingTokens`) and it is the only
+   * handle on a redacted thought if a use for one appears.
    */
   tokens?: number
 }

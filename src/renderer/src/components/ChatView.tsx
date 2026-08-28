@@ -76,12 +76,16 @@ const NO_QUEUED: never[] = []
 const GROUP_MIN = 2
 
 /** True when a message is nothing but read/search tool calls — each such call
- *  arrives as its own assistant message, so these are what pile up. */
+ *  arrives as its own assistant message, so these are what pile up. A withheld
+ *  thought riding along with one draws nothing (see `isBlankMsg`), so it must
+ *  not break the run either: Claude Code puts one on almost every message, and
+ *  a message-level test that counted it split a ten-call sequence into ten
+ *  cards with a "Thought" row between each pair. */
 function isGroupableMsg(m: ChatMessage): boolean {
+  if (m.role !== 'assistant') return false
+  const parts = m.parts.filter((p) => !!p && !(p.type === 'thinking' && !p.text))
   return (
-    m.role === 'assistant' &&
-    m.parts.length > 0 &&
-    m.parts.every((p) => !!p && p.type === 'tool' && GROUPABLE_TOOLS.has(p.name))
+    parts.length > 0 && parts.every((p) => p.type === 'tool' && GROUPABLE_TOOLS.has(p.name))
   )
 }
 
@@ -89,18 +93,18 @@ function isGroupableMsg(m: ChatMessage): boolean {
  *  with their text withheld, and each one arrives as its own message. Left in
  *  the list it would both split a run of groupable tool calls in two and, being
  *  a zero-height flex item, open a message-sized gap where no message is.
- *  A withheld thought that still reported its *size* is not blank: it draws the
- *  "Thought · N tokens" row, which is now the only sign the model reasoned. */
+ *
+ *  Its reported *size* does not rescue it. A "Thought · 450 tokens" row is a
+ *  number the reader can do nothing with, and one lands between every pair of
+ *  tool calls — so the transcript became a ladder of token counts with the
+ *  grouping they broke on either side. The live record of the model reasoning
+ *  is the "Thinking…" / "Working…" indicator at the foot of the transcript,
+ *  which runs for exactly as long as the turn does; a withheld thought leaves
+ *  no trace in history, because it has nothing to say there. */
 function isBlankMsg(m: ChatMessage): boolean {
   return (
     m.role === 'assistant' &&
-    m.parts.every(
-      (p) =>
-        !p ||
-        ((p.type === 'text' || p.type === 'thinking') &&
-          !p.text &&
-          !(p.type === 'thinking' && p.tokens))
-    )
+    m.parts.every((p) => !p || ((p.type === 'text' || p.type === 'thinking') && !p.text))
   )
 }
 
