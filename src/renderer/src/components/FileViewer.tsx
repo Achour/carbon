@@ -3,6 +3,7 @@ import type { FileContent } from '@shared/types'
 import { Markdown } from '@/components/Markdown'
 import { CodeEditor } from '@/components/CodeEditor'
 import { ConflictBar } from '@/components/ConflictBar'
+import { ImageView } from '@/components/ImageView'
 
 function Placeholder({ children }: { children: React.ReactNode }): React.JSX.Element {
   return (
@@ -49,15 +50,7 @@ export const FileViewer = React.memo(function FileViewer({
         <Placeholder>File is too large to preview ({(content.size / 1024 / 1024).toFixed(1)} MB)</Placeholder>
       )
     case 'image':
-      return (
-        <div className="flex h-full items-center justify-center overflow-auto p-6">
-          <img
-            src={content.dataUri}
-            className="max-h-full max-w-full rounded-md border border-border"
-            alt=""
-          />
-        </div>
-      )
+      return <ImageView src={content.dataUri} alt={name} />
     case 'text': {
       if (isMarkdown && mode === 'preview') {
         return (

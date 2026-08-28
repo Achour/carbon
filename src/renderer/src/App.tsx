@@ -8,6 +8,7 @@ import { RightPanel } from '@/components/RightPanel'
 import { FileSearchDialog } from '@/components/FileSearchDialog'
 import { PublishDialog } from '@/components/PublishDialog'
 import { DeleteFileDialog } from '@/components/DeleteFileDialog'
+import { ImageLightbox } from '@/components/ImageView'
 import { FindBar } from '@/components/FindBar'
 import { openEditorSearch } from '@/lib/editorSearch'
 import { Settings } from '@/components/Settings'
@@ -210,6 +211,7 @@ export default function App(): React.JSX.Element {
           the review dock, which can be closed by the time the dialog opens. */}
       <PublishDialog />
       <DeleteFileDialog />
+      <ImageLightbox />
       <FindBar />
     </TooltipProvider>
   )

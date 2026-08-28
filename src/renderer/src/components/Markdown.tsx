@@ -482,7 +482,9 @@ function LocalImage({
       src={uri}
       alt={alt ?? ''}
       title={abs ?? undefined}
-      onClick={() => abs && void useApp.getState().openFile(abs, { preview: true })}
+      // Full-window, not a tab: the tab is the narrowest column on screen and
+      // had no zoom, so "show me that bigger" produced something smaller.
+      onClick={() => abs && useApp.getState().openLightbox(abs)}
       className="my-2 max-h-96 cursor-zoom-in rounded-lg border border-border object-contain"
     />
   )
