@@ -85,3 +85,60 @@ export function turnPresentations(
   flush(!busy)
   return result
 }
+
+/** A changed file and its line deltas — `TurnFileChange`, or the same summed out of git. */
+export interface ChangedFile {
+  path: string
+  additions: number
+  deletions: number
+}
+
+export type ChangeEntry =
+  | { kind: 'file'; file: ChangedFile }
+  | { kind: 'group'; dir: string; files: ChangedFile[]; additions: number; deletions: number }
+
+function dirOf(path: string): string {
+  const cut = path.lastIndexOf('/')
+  return cut > 0 ? path.slice(0, cut) : ''
+}
+
+/**
+ * Fold a turn's changed files into the rows the card draws: one collapsible row
+ * per directory holding **two or more** of them, and a plain file row for
+ * everything else.
+ *
+ * Grouping only pays where files pile up in one place. A turn that touches
+ * three files in three directories is the common shape, and a group row apiece
+ * would double the card's height to say what each file's own path already
+ * says — so a lone file keeps its directory as a dimmed prefix instead. The
+ * directory is the file's own, not a tree: `web/src/lib` is one row, the way
+ * the review panel names it, rather than three nested ones.
+ *
+ * Entries are ordered by directory so a group and the loose files beside it
+ * read as one alphabetical list; root files sort first.
+ */
+export function groupChanges(files: ChangedFile[]): ChangeEntry[] {
+  const byDir = new Map<string, ChangedFile[]>()
+  for (const file of files) {
+    const dir = dirOf(file.path)
+    const bucket = byDir.get(dir)
+    if (bucket) bucket.push(file)
+    else byDir.set(dir, [file])
+  }
+  const entries: ChangeEntry[] = []
+  for (const [dir, bucket] of [...byDir].sort(([a], [b]) => a.localeCompare(b))) {
+    const sorted = [...bucket].sort((a, b) => a.path.localeCompare(b.path))
+    if (!dir || sorted.length < 2) {
+      for (const file of sorted) entries.push({ kind: 'file', file })
+      continue
+    }
+    entries.push({
+      kind: 'group',
+      dir,
+      files: sorted,
+      additions: sorted.reduce((sum, file) => sum + file.additions, 0),
+      deletions: sorted.reduce((sum, file) => sum + file.deletions, 0)
+    })
+  }
+  return entries
+}

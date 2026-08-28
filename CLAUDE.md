@@ -400,6 +400,37 @@ consumed by both highlighters — highlight.js for chat code blocks and the diff
 view, CodeMirror for the editor. They were separate, which meant a token could be
 one color in a message and another in the file it came from.
 
+### The turn's changed files (`TurnChangesCard`, `lib/turnChanges.ts`)
+
+One card at the end of a turn saying what it edited: a count, the turn's line
+totals, **Undo**, and **Open diff** — which opens the review panel, the same
+surface the diff chip does, so the card is a way *in* to the review rather than a
+second review of its own.
+
+- **Grouping only where grouping pays.** `groupChanges` gives a collapsible row
+  to a directory holding **two or more** of the changed files and a plain row to
+  everything else, the file's own directory dimmed beside its name — the idiom
+  the review header and both trees already use. A nested tree (`GitPanel`'s
+  `buildTree`) is the obvious reuse and is wrong at this size: the common turn
+  touches three files in three directories, and a tree spends a row per level
+  restating what each path already says. `web/src/lib` is one row here, not
+  three, and one file in a directory of its own is not a group at all.
+- **Every file is listed.** It was the first three and a "Show 2 more" control —
+  a row spent to hide two, on the one card whose whole job is naming what
+  changed. Grouping is what makes showing all of them affordable, and the header
+  chevron is there for the turn that rewrote forty.
+- **A row opens that file's diff, and falls back to the file.** Once the change
+  is committed there is no diff left to show, and an inert row would be worse
+  than one that opens what it names.
+- **The deltas can be absent, and that is honest.** Codex reports exact
+  per-file counts (`AssistantMessage.fileChanges`); Claude reports paths, so the
+  numbers are summed out of the working tree and are simply gone once the turn's
+  work is committed. `LineDeltas` (shared with the review and the source-control
+  tree) draws nothing rather than `+0 −0`.
+- **Undo stays.** It is the one thing on this card that no other surface offers,
+  and it is a popover that *checks first* — the preview round-trip is what lets
+  it say how many files it would restore, or why it can't.
+
 ### The review (`DiffView.tsx`, `MultiDiffView.tsx`, `lib/diffRows.ts`)
 
 Every changed file stacked in one scroller under a sticky, collapsible header.

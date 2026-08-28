@@ -1,19 +1,16 @@
 import * as React from 'react'
-import { ChevronDown, FileDiff, Loader2, RotateCcw } from 'lucide-react'
+import { Collapsible } from '@base-ui/react/collapsible'
+import { ChevronRight, FileDiff, Folder, Loader2, RotateCcw } from 'lucide-react'
 import type { AssistantMessage, GitFileChange, RewindResult } from '@shared/types'
 import { cn } from '@/lib/utils'
-import { changedPathsFromParts } from '@/lib/turnChanges'
+import { changedPathsFromParts, groupChanges, type ChangedFile } from '@/lib/turnChanges'
+import { FileIcon } from '@/lib/fileIcon'
 import { useApp } from '@/store'
+import { LineDeltas } from '@/components/GitPanel'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 
-interface FileSummary {
-  path: string
-  additions: number
-  deletions: number
-}
-
-function summarize(paths: string[], changes: GitFileChange[]): FileSummary[] {
+function summarize(paths: string[], changes: GitFileChange[]): ChangedFile[] {
   return paths.map((path) => {
     const rows = changes.filter((change) => change.path === path)
     return {
@@ -22,6 +19,38 @@ function summarize(paths: string[], changes: GitFileChange[]): FileSummary[] {
       deletions: rows.reduce((sum, row) => sum + (row.deletions ?? 0), 0)
     }
   })
+}
+
+/** A file row: its name, then the directory it sits in, dimmed — the way every
+ *  other file list in the app names one. Inside a directory group the prefix is
+ *  already the row above, so `dir` is omitted there. */
+function FileRow({
+  file,
+  dir,
+  depth,
+  onOpen
+}: {
+  file: ChangedFile
+  dir?: string
+  depth: number
+  onOpen: (path: string) => void
+}): React.JSX.Element {
+  const name = file.path.split('/').pop() ?? file.path
+  return (
+    <button
+      type="button"
+      title={`Open ${file.path}`}
+      onClick={() => onOpen(file.path)}
+      className="group flex w-full items-center gap-1.5 rounded-md py-1 pr-1.5 text-left text-xs transition-colors hover:bg-accent/50"
+      style={{ paddingLeft: 6 + depth * 16 }}
+    >
+      <FileIcon path={file.path} className="size-3.5 shrink-0" />
+      <span className="truncate text-foreground/90 group-hover:text-foreground">{name}</span>
+      {dir && <span className="min-w-0 flex-1 truncate text-muted-foreground/70">{dir}</span>}
+      {!dir && <span className="flex-1" />}
+      <LineDeltas additions={file.additions} deletions={file.deletions} className="text-xs" />
+    </button>
+  )
 }
 
 export const TurnChangesCard = React.memo(function TurnChangesCard({
@@ -43,7 +72,9 @@ export const TurnChangesCard = React.memo(function TurnChangesCard({
     () => message.fileChanges ?? summarize(paths, git?.changes ?? []),
     [message.fileChanges, paths, git?.changes]
   )
-  const [expanded, setExpanded] = React.useState(false)
+  const entries = React.useMemo(() => groupChanges(files), [files])
+  const [open, setOpen] = React.useState(true)
+  const [closedDirs, setClosedDirs] = React.useState<Record<string, boolean>>({})
   const [undoOpen, setUndoOpen] = React.useState(false)
   const [preview, setPreview] = React.useState<RewindResult | null>(null)
   const [busy, setBusy] = React.useState(false)
@@ -81,7 +112,6 @@ export const TurnChangesCard = React.memo(function TurnChangesCard({
   )
 
   if (files.length === 0) return null
-  const visible = expanded ? files : files.slice(0, 3)
   const additions = files.reduce((sum, file) => sum + file.additions, 0)
   const deletions = files.reduce((sum, file) => sum + file.deletions, 0)
 
@@ -97,97 +127,119 @@ export const TurnChangesCard = React.memo(function TurnChangesCard({
   }
 
   return (
-    <div className="animate-enter overflow-hidden rounded-xl border border-border bg-card/60">
-      <div className="flex items-center gap-3 px-3.5 py-3">
-        <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-code">
-          <FileDiff className="size-4.5 text-muted-foreground" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="text-[13px] font-semibold">
-            {undone ? 'Changes undone' : `Edited ${files.length} ${files.length === 1 ? 'file' : 'files'}`}
-          </div>
-          {!undone && (additions > 0 || deletions > 0) && (
-            <div className="mt-0.5 flex gap-1.5 text-xs tabular-nums">
-              <span className="text-success">+{additions}</span>
-              <span className="text-destructive">−{deletions}</span>
-            </div>
+    <Collapsible.Root
+      open={open && !undone}
+      onOpenChange={setOpen}
+      className="animate-enter overflow-hidden rounded-xl border border-border bg-card/60"
+    >
+      <div className="flex items-center gap-1.5 px-2.5 py-1.5">
+        <Collapsible.Trigger
+          disabled={undone}
+          className="group flex min-w-0 flex-1 items-center gap-2 rounded-md py-1 pr-1 text-left outline-none disabled:cursor-default"
+        >
+          {!undone && (
+            <ChevronRight className="size-3.5 shrink-0 text-muted-foreground/60 transition-transform duration-200 group-data-[panel-open]:rotate-90" />
           )}
-        </div>
+          <span className="shrink-0 text-[13px] font-medium">
+            {undone
+              ? 'Changes undone'
+              : `${files.length} changed ${files.length === 1 ? 'file' : 'files'}`}
+          </span>
+          {!undone && <LineDeltas additions={additions} deletions={deletions} className="text-xs" />}
+        </Collapsible.Trigger>
         {!undone && (
-          <Popover open={undoOpen} onOpenChange={setUndoOpen}>
-            <PopoverTrigger
-              render={
-                <Button size="sm" variant="ghost">
-                  <RotateCcw /> Undo
-                </Button>
-              }
-            />
-            <PopoverContent side="top" align="end" className="w-72">
-              <div className="text-[13px] font-medium">Undo this turn’s file changes?</div>
-              {busy && !preview ? (
-                <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
-                  <Loader2 className="size-3.5 animate-spin" /> Checking workspace…
-                </div>
-              ) : preview?.canRewind ? (
-                <>
-                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                    Restore {preview.filesChanged?.length ?? files.length} files to their state before this turn.
-                  </p>
-                  <div className="mt-3 flex justify-end gap-2">
-                    <Button size="sm" variant="ghost" onClick={() => setUndoOpen(false)}>
-                      Cancel
-                    </Button>
-                    <Button size="sm" disabled={busy} onClick={() => void applyUndo()}>
-                      {busy ? <Loader2 className="animate-spin" /> : <RotateCcw />} Undo changes
-                    </Button>
+          <>
+            <Popover open={undoOpen} onOpenChange={setUndoOpen}>
+              <PopoverTrigger
+                render={
+                  <Button size="sm" variant="ghost">
+                    <RotateCcw /> Undo
+                  </Button>
+                }
+              />
+              <PopoverContent side="top" align="end" className="w-72">
+                <div className="text-[13px] font-medium">Undo this turn’s file changes?</div>
+                {busy && !preview ? (
+                  <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+                    <Loader2 className="size-3.5 animate-spin" /> Checking workspace…
                   </div>
-                </>
-              ) : (
-                <p className="mt-1.5 text-xs leading-relaxed text-destructive">
-                  {preview?.error ?? 'These changes cannot be undone safely.'}
-                </p>
-              )}
-            </PopoverContent>
-          </Popover>
+                ) : preview?.canRewind ? (
+                  <>
+                    <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                      Restore {preview.filesChanged?.length ?? files.length} files to their state
+                      before this turn.
+                    </p>
+                    <div className="mt-3 flex justify-end gap-2">
+                      <Button size="sm" variant="ghost" onClick={() => setUndoOpen(false)}>
+                        Cancel
+                      </Button>
+                      <Button size="sm" disabled={busy} onClick={() => void applyUndo()}>
+                        {busy ? <Loader2 className="animate-spin" /> : <RotateCcw />} Undo changes
+                      </Button>
+                    </div>
+                  </>
+                ) : (
+                  <p className="mt-1.5 text-xs leading-relaxed text-destructive">
+                    {preview?.error ?? 'These changes cannot be undone safely.'}
+                  </p>
+                )}
+              </PopoverContent>
+            </Popover>
+            <Button size="sm" variant="secondary" onClick={() => void reviewChanges()}>
+              <FileDiff /> Open diff
+            </Button>
+          </>
         )}
-        <Button size="sm" variant="secondary" onClick={() => void reviewChanges()}>
-          Review
-        </Button>
       </div>
 
-      {!undone && (
-        <div className="border-t border-border/70 px-3.5 py-1.5">
-          {visible.map((file) => (
-            <button
-              key={file.path}
-              type="button"
-              title={`Open ${file.path}`}
-              onClick={() => openChange(file.path)}
-              className="group -mx-1.5 flex w-[calc(100%+0.75rem)] items-center gap-3 rounded-md px-1.5 py-1.5 text-left text-xs hover:bg-accent/50"
-            >
-              <span className="min-w-0 flex-1 truncate text-muted-foreground group-hover:text-foreground">
-                {file.path}
-              </span>
-              {(file.additions > 0 || file.deletions > 0) && (
-                <span className="flex shrink-0 gap-1.5 tabular-nums">
-                  <span className="text-success">+{file.additions}</span>
-                  <span className="text-destructive">−{file.deletions}</span>
-                </span>
-              )}
-            </button>
-          ))}
-          {files.length > 3 && (
-            <button
-              type="button"
-              onClick={() => setExpanded((value) => !value)}
-              className="flex items-center gap-1 py-1.5 text-xs font-medium text-foreground hover:text-primary"
-            >
-              {expanded ? 'Show less' : `Show ${files.length - 3} more ${files.length - 3 === 1 ? 'file' : 'files'}`}
-              <ChevronDown className={cn('size-3.5 transition-transform', expanded && 'rotate-180')} />
-            </button>
-          )}
+      <Collapsible.Panel className="h-[var(--collapsible-panel-height)] overflow-hidden transition-[height] duration-200 ease-out data-[ending-style]:h-0 data-[starting-style]:h-0">
+        <div className="border-t border-border/70 px-2 py-1">
+          {entries.map((entry) => {
+            if (entry.kind === 'file') {
+              const cut = entry.file.path.lastIndexOf('/')
+              return (
+                <FileRow
+                  key={entry.file.path}
+                  file={entry.file}
+                  dir={cut > 0 ? entry.file.path.slice(0, cut) : undefined}
+                  depth={0}
+                  onOpen={openChange}
+                />
+              )
+            }
+            const dirOpen = !closedDirs[entry.dir]
+            return (
+              <div key={entry.dir}>
+                <button
+                  type="button"
+                  onClick={() => setClosedDirs((prev) => ({ ...prev, [entry.dir]: !prev[entry.dir] }))}
+                  className="flex w-full items-center gap-1.5 rounded-md py-1 pr-1.5 pl-1 text-left text-xs transition-colors hover:bg-accent/40"
+                  title={entry.dir}
+                >
+                  <ChevronRight
+                    className={cn(
+                      'size-3 shrink-0 text-muted-foreground/60 transition-transform',
+                      dirOpen && 'rotate-90'
+                    )}
+                  />
+                  <Folder className="size-3.5 shrink-0 text-muted-foreground/60" />
+                  <span className="truncate text-muted-foreground">{entry.dir}</span>
+                  <span className="flex-1" />
+                  <LineDeltas
+                    additions={entry.additions}
+                    deletions={entry.deletions}
+                    className="text-xs"
+                  />
+                </button>
+                {dirOpen &&
+                  entry.files.map((file) => (
+                    <FileRow key={file.path} file={file} depth={1} onOpen={openChange} />
+                  ))}
+              </div>
+            )
+          })}
         </div>
-      )}
-    </div>
+      </Collapsible.Panel>
+    </Collapsible.Root>
   )
 })

@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   changedPathsFromParts,
+  groupChanges,
   turnPresentations
 } from '../src/renderer/src/lib/turnChanges.ts'
 
@@ -125,4 +126,43 @@ test('prefers exact Codex file changes over structured tool fallbacks', () => {
     { path: 'src/app.ts', additions: 4, deletions: 1 }
   ])
   assert.equal(presentation?.hasChanges, true)
+})
+
+const changed = (path: string, additions = 1, deletions = 0): {
+  path: string
+  additions: number
+  deletions: number
+} => ({ path, additions, deletions })
+
+test('groups a directory holding several files and sums its deltas', () => {
+  const entries = groupChanges([
+    changed('backend/api.ts', 200, 3),
+    changed('backend/db.ts', 187, 1),
+    changed('web/src/lib/ui.ts', 149, 0)
+  ])
+
+  assert.deepEqual(
+    entries.map((entry) => (entry.kind === 'group' ? `dir:${entry.dir}` : entry.file.path)),
+    ['dir:backend', 'web/src/lib/ui.ts']
+  )
+  const group = entries[0]
+  assert.equal(group.kind === 'group' && group.additions, 387)
+  assert.equal(group.kind === 'group' && group.deletions, 4)
+  assert.deepEqual(
+    group.kind === 'group' ? group.files.map((file) => file.path) : [],
+    ['backend/api.ts', 'backend/db.ts']
+  )
+})
+
+test('a directory with one file stays a plain row, as do files at the root', () => {
+  const entries = groupChanges([
+    changed('src/only.ts'),
+    changed('README.md'),
+    changed('.gitignore')
+  ])
+
+  assert.deepEqual(
+    entries.map((entry) => (entry.kind === 'file' ? entry.file.path : `dir:${entry.dir}`)),
+    ['.gitignore', 'README.md', 'src/only.ts']
+  )
 })
