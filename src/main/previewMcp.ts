@@ -101,9 +101,16 @@ export async function handleMcpCall(
   }
 }
 
+/**
+ * MCP stdio is newline-delimited JSON — one message per line. It is *not* LSP,
+ * whose `Content-Length` frames this used to write: Codex's and Grok's clients
+ * both read lines, so the framed `initialize` reply was never parsed and the
+ * server was dropped after their 30s startup timeout, with no preview tools
+ * reaching the model. `JSON.stringify` never emits a literal newline, so the
+ * one-message-per-line invariant holds without escaping.
+ */
 export function writeMcpFrame(stream: NodeJS.WritableStream, payload: unknown): void {
-  const json = JSON.stringify(payload)
-  stream.write(`Content-Length: ${Buffer.byteLength(json, 'utf8')}\r\n\r\n${json}`)
+  stream.write(`${JSON.stringify(payload)}\n`)
 }
 
 export async function* readMcpMessages(

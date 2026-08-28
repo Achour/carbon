@@ -87,10 +87,17 @@ test('readMcpMessages understands Content-Length frames and NDJSON', async () =>
   assert.deepEqual(lines, [{ id: 2, method: 'ping' }])
 })
 
-test('writeMcpFrame prefixes Content-Length', () => {
+test('writeMcpFrame writes NDJSON — one message per line, as MCP stdio requires', () => {
   const chunks: string[] = []
-  writeMcpFrame({ write: (chunk: string) => chunks.push(chunk) } as NodeJS.WritableStream, { ok: true })
-  assert.equal(chunks.join(''), 'Content-Length: 11\r\n\r\n{"ok":true}')
+  const stream = { write: (chunk: string) => chunks.push(chunk) } as NodeJS.WritableStream
+  writeMcpFrame(stream, { ok: true })
+  writeMcpFrame(stream, { text: 'a\nb' })
+  // LSP `Content-Length` frames here are what left Codex and Grok waiting on an
+  // initialize reply their line-based readers could never parse.
+  const written = chunks.join('')
+  assert.equal(written, '{"ok":true}\n{"text":"a\\nb"}\n')
+  const lines = written.split('\n').filter(Boolean)
+  assert.deepEqual(lines.map((line) => JSON.parse(line)), [{ ok: true }, { text: 'a\nb' }])
 })
 
 test('the loopback bridge runs preview tools behind a bearer token', async () => {
