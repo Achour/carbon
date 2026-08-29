@@ -11,6 +11,7 @@ import { DeleteFileDialog } from '@/components/DeleteFileDialog'
 import { ImageLightbox } from '@/components/ImageView'
 import { FindBar } from '@/components/FindBar'
 import { openEditorSearch } from '@/lib/editorSearch'
+import { preloadHeavyChunks } from '@/lib/preloadHeavy'
 import { Settings } from '@/components/Settings'
 import { UsageStats } from '@/components/UsageStats'
 import { useApp } from '@/store'
@@ -42,6 +43,9 @@ export default function App(): React.JSX.Element {
 
   React.useEffect(() => {
     void init()
+    // The editor, terminal and diagram chunks are no longer in the entry
+    // bundle; this is what keeps them from being a wait on first use instead.
+    preloadHeavyChunks()
     const offEvents = window.api.onChatEvent(applyEvent)
     const offNewChat = window.api.onNewChat(() => useApp.getState().startNewChat())
     const offOpenChat = window.api.onOpenChat((id) => void openChat(id))

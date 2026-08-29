@@ -1,4 +1,3 @@
-import { openSearchPanel } from '@codemirror/search'
 import { useApp } from '@/store'
 import { viewForPath } from '@/lib/editorBuffers'
 
@@ -19,6 +18,10 @@ export function openEditorSearch(): boolean {
   const view = viewForPath(path)
   if (!view) return false
   view.focus()
-  openSearchPanel(view)
+  // Dynamic, but never actually a wait: a *view* exists, so the editor chunk
+  // that owns `@codemirror/search` is already loaded and this resolves on a
+  // microtask. Statically it would have pulled that chunk into the entry for
+  // every session, to answer a question that is `false` until a file is open.
+  void import('@codemirror/search').then(({ openSearchPanel }) => openSearchPanel(view))
   return true
 }

@@ -1,4 +1,38 @@
-import hljs from 'highlight.js'
+import hljs from 'highlight.js/lib/core'
+import { common } from 'lowlight'
+import dockerfile from 'highlight.js/lib/languages/dockerfile'
+import type { LanguageFn } from 'highlight.js'
+
+/**
+ * The grammars both highlighters get, and the reason there is a list at all.
+ *
+ * `import hljs from 'highlight.js'` registers all ~190 languages — 1,034 KB of
+ * the renderer's startup chunk, parsed and evaluated before first paint by
+ * every session, including the overwhelming majority that never open a Zephir
+ * or Mercury fence. It bought nothing even in principle: the *finished*
+ * markdown in a message is highlighted by `rehype-highlight`, which defaults to
+ * lowlight's `common` set, so the extra 150-odd languages could only ever
+ * appear on the two surfaces that call `highlightCode` directly — a streaming
+ * fence and the diff view — and would then *lose* their colour the moment the
+ * turn ended and the full-text parse replaced them. The larger set was an
+ * inconsistency, not a feature.
+ *
+ * So the set is declared once, here, and fed to both: `hljs` below, and
+ * `rehype-highlight`'s `languages` option in `Markdown.tsx`. Same reason
+ * `--syn-*` is one palette for the two highlighters rather than two that agree
+ * by coincidence — a fence that is one colour while it streams and another
+ * once it lands is exactly what one shared definition prevents.
+ *
+ * `dockerfile` is the one addition: `LANGUAGE_BY_EXT` maps `.dockerfile` and
+ * lowlight's common set does not carry it. Everything else that map names is
+ * already in `common`, and `registerLanguage` pulls each grammar's own aliases
+ * in with it (`ts`, `js`, `sh`, `yml`, `py`, `rs`), so fence tags keep working.
+ */
+export const HLJS_LANGUAGES: Record<string, LanguageFn> = { ...common, dockerfile }
+
+for (const [name, grammar] of Object.entries(HLJS_LANGUAGES)) {
+  hljs.registerLanguage(name, grammar)
+}
 
 // Mirrors src/main/files.ts LANGUAGE_BY_EXT — highlight.js language per extension.
 const LANGUAGE_BY_EXT: Record<string, string> = {

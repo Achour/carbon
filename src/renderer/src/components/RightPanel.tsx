@@ -41,8 +41,17 @@ import { DiffView, FULL_CONTEXT, type ExpandDiff } from '@/components/DiffView'
 import { MultiDiffView } from '@/components/MultiDiffView'
 import { ReviewBar } from '@/components/ReviewBar'
 import { languageForPath } from '@/lib/highlight'
-import { TerminalPane } from '@/components/TerminalPanel'
 import { BrowserPane } from '@/components/BrowserPane'
+
+/**
+ * xterm is ~410 KB and matters only once a terminal tab exists — which for many
+ * sessions is never. Preloaded on idle like the editor, so opening a tab does
+ * not wait on a fetch.
+ */
+const TerminalPane = React.lazy(() =>
+  import('@/components/TerminalPanel').then((m) => ({ default: m.TerminalPane }))
+)
+
 
 function Tab({
   icon,
@@ -993,7 +1002,9 @@ export function RightPanel(): React.JSX.Element | null {
                 current !== t.id && 'invisible pointer-events-none'
               )}
             >
-              <TerminalPane id={t.id} active={current === t.id} />
+              <React.Suspense fallback={null}>
+                <TerminalPane id={t.id} active={current === t.id} />
+              </React.Suspense>
             </div>
           ))}
           {/* A hidden webview remains a live Chromium renderer. Mount only the

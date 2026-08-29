@@ -92,18 +92,100 @@ interface ChatDetail {
   text: string
 }
 
-function ChatItem({
+/**
+ * Everything a chat row can do, as one object built once per Sidebar mount.
+ *
+ * Each handler takes the chat (or project) it acts on rather than closing over
+ * it, which is what lets a single object serve every row — and one *stable*
+ * object is the point: `ChatItem` is memoized, and a fresh `onOpen` per render
+ * would defeat that for every row at once. Anything volatile a handler needs
+ * (a project's chat count, which is derived from `chats`) is read at click time
+ * through `Sidebar`'s `latest` ref rather than captured here, so a stable
+ * identity never means a stale answer.
+ */
+interface RowActions {
+  open(chat: ChatMeta): void
+  rename(chat: ChatMeta): void
+  remove(chat: ChatMeta): void
+  /** Move the chat to (or out of) the Pinned section at the top of the sidebar. */
+  togglePin(chat: ChatMeta): void
+  /** Start another chat — possibly on another provider — in the same worktree. */
+  newInWorktree(chat: ChatMeta): void
+  newChatIn(cwd: string): void
+  renameProject(cwd: string): void
+  revealProject(cwd: string): void
+  setProjectArchived(cwd: string, archived: boolean): void
+  confirmProject(kind: 'archive' | 'hide', cwd: string): void
+  removeProject(cwd: string): void
+}
+
+/** A project's own actions — the compact project row's menu, and the tail of a
+ *  chat row's when no project row is on screen to carry them. */
+function ProjectMenuItems({
+  cwd,
+  archived,
+  actions
+}: {
+  cwd: string
+  archived: boolean
+  actions: RowActions
+}): React.JSX.Element {
+  return (
+    <>
+      <ContextMenuItem onClick={() => actions.renameProject(cwd)}>
+        <Pencil /> Rename project…
+      </ContextMenuItem>
+      <ContextMenuItem onClick={() => actions.revealProject(cwd)}>
+        <FolderOpen /> {REVEAL_LABEL}
+      </ContextMenuItem>
+      <ContextMenuSeparator />
+      {archived ? (
+        <ContextMenuItem onClick={() => actions.setProjectArchived(cwd, false)}>
+          <ArchiveRestore /> Unarchive project
+        </ContextMenuItem>
+      ) : (
+        <ContextMenuItem onClick={() => actions.confirmProject('archive', cwd)}>
+          <Archive /> Archive project…
+        </ContextMenuItem>
+      )}
+      <ContextMenuItem onClick={() => actions.confirmProject('hide', cwd)}>
+        <EyeOff /> Hide project…
+      </ContextMenuItem>
+      <ContextMenuSeparator />
+      <ContextMenuItem destructive onClick={() => actions.removeProject(cwd)}>
+        <Trash2 /> Delete project…
+      </ContextMenuItem>
+    </>
+  )
+}
+
+/** The project a chat row has to name in its own menu, already labelled. */
+interface RowProjectMenu {
+  cwd: string
+  label: string
+  archived: boolean
+}
+
+const sameActivity = (a: ChatActivity, b: ChatActivity): boolean =>
+  a.kind === b.kind &&
+  a.label === b.label &&
+  (a.kind === 'background' ? a.count : 0) === (b.kind === 'background' ? b.count : 0)
+
+const sameDetail = (a: ChatDetail | null, b: ChatDetail | null): boolean =>
+  a === b || (!!a && !!b && a.kind === b.kind && a.project === b.project && a.text === b.text)
+
+const sameProjectMenu = (a: RowProjectMenu | null, b: RowProjectMenu | null): boolean =>
+  a === b ||
+  (!!a && !!b && a.cwd === b.cwd && a.label === b.label && a.archived === b.archived)
+
+function ChatItemRow({
   chat,
   active,
   activity,
   titling,
   detail,
   projectMenu,
-  onOpen,
-  onRename,
-  onDelete,
-  onTogglePin,
-  onNewInWorktree
+  actions
 }: {
   chat: ChatMeta
   active: boolean
@@ -112,22 +194,21 @@ function ChatItem({
   /** Second line for a detailed row; null renders the compact single-line row. */
   detail: ChatDetail | null
   /**
-   * This chat's *project* actions, appended to the right-click menu. Detailed
-   * mode has no project rows to carry them, and a mode where archiving or
-   * hiding a project silently disappears is not a mode — so the row the project
-   * is named on carries them instead. Null in compact mode, where the project
-   * row's own menu already does.
+   * This chat's *project*, whose actions are appended to the right-click menu.
+   * Detailed mode has no project rows to carry them, and a mode where archiving
+   * or hiding a project silently disappears is not a mode — so the row the
+   * project is named on carries them instead. Null in compact mode, where the
+   * project row's own menu already does.
    */
-  projectMenu: React.ReactNode
-  onOpen: () => void
-  onRename: () => void
-  onDelete: () => void
-  /** Move the chat to (or out of) the Pinned section at the top of the sidebar. */
-  onTogglePin: () => void
-  /** Start another chat — possibly on the other provider — in the same worktree. */
-  onNewInWorktree: () => void
+  projectMenu: RowProjectMenu | null
+  actions: RowActions
 }): React.JSX.Element {
   const [menuOpen, setMenuOpen] = React.useState(false)
+  const onOpen = (): void => actions.open(chat)
+  const onRename = (): void => actions.rename(chat)
+  const onDelete = (): void => actions.remove(chat)
+  const onTogglePin = (): void => actions.togglePin(chat)
+  const onNewInWorktree = (): void => actions.newInWorktree(chat)
   const pinned = chat.pinnedAt !== undefined
   // Cursor-style: inactive chats are muted, the open one is bright — the
   // brightness gap (plus the filled highlight) marks the active chat.
@@ -283,11 +364,54 @@ function ChatItem({
         <ContextMenuItem destructive onClick={onDelete}>
           <Trash2 /> Delete
         </ContextMenuItem>
-        {projectMenu}
+        {projectMenu && (
+          <>
+            <ContextMenuSeparator />
+            <ContextMenuGroup>
+              <ContextMenuLabel>{projectMenu.label}</ContextMenuLabel>
+              <ContextMenuItem onClick={() => actions.newChatIn(projectMenu.cwd)}>
+                <Plus /> New chat here
+              </ContextMenuItem>
+              <ProjectMenuItems
+                cwd={projectMenu.cwd}
+                archived={projectMenu.archived}
+                actions={actions}
+              />
+            </ContextMenuGroup>
+          </>
+        )}
       </ContextMenuContent>
     </ContextMenu>
   )
 }
+
+/**
+ * A chat row re-renders only when something it draws actually moved.
+ *
+ * The sidebar is one of the largest trees in the app and every subscriber of
+ * `chats` re-renders it whole, so the rows are where that lands: a turn's
+ * status and permission traffic would otherwise rebuild every row's button,
+ * avatar, tooltip and two menus several times over. `chats.map` preserves the
+ * identity of every untouched chat, so the `chat` check below is what does most
+ * of the work.
+ *
+ * The comparison is written out rather than left to `React.memo`'s default
+ * because two props are freshly-built values — `chatActivity` and `chatDetail`
+ * return a new object per call, which a shallow compare reads as a change every
+ * time. Both are flat, so comparing them by value is exact. Being explicit
+ * means a prop added later is silently *excluded*: add it here too.
+ */
+const ChatItem = React.memo(
+  ChatItemRow,
+  (prev, next) =>
+    prev.chat === next.chat &&
+    prev.active === next.active &&
+    prev.titling === next.titling &&
+    prev.actions === next.actions &&
+    sameActivity(prev.activity, next.activity) &&
+    sameDetail(prev.detail, next.detail) &&
+    sameProjectMenu(prev.projectMenu, next.projectMenu)
+)
 
 /**
  * How many chats the detailed mode's flat list shows at a time. Per-batch
@@ -1039,90 +1163,73 @@ export function Sidebar(): React.JSX.Element {
   // Everything you can do to a project, in one definition — the project row's
   // menu in compact mode, and the tail of a chat row's menu in detailed mode,
   // which has no project rows.
-  const projectMenuItems = (cwd: string, archived: boolean): React.JSX.Element => (
-    <>
-      <ContextMenuItem
-        onClick={() => {
-          setProjectNameValue(projectLabel(cwd))
-          setRenamingProject(cwd)
-        }}
-      >
-        <Pencil /> Rename project…
-      </ContextMenuItem>
-      <ContextMenuItem onClick={() => void window.api.revealPath(cwd)}>
-        <FolderOpen /> {REVEAL_LABEL}
-      </ContextMenuItem>
-      <ContextMenuSeparator />
-      {archived ? (
-        <ContextMenuItem onClick={() => setArchived(cwd, false)}>
-          <ArchiveRestore /> Unarchive project
-        </ContextMenuItem>
-      ) : (
-        <ContextMenuItem
-          onClick={() =>
-            setConfirmProject({ kind: 'archive', cwd, count: projectChatCount(cwd) })
-          }
-        >
-          <Archive /> Archive project…
-        </ContextMenuItem>
-      )}
-      <ContextMenuItem
-        onClick={() => setConfirmProject({ kind: 'hide', cwd, count: projectChatCount(cwd) })}
-      >
-        <EyeOff /> Hide project…
-      </ContextMenuItem>
-      <ContextMenuSeparator />
-      <ContextMenuItem
-        destructive
-        onClick={() => setRemovingProject({ cwd, count: projectChatCount(cwd) })}
-      >
-        <Trash2 /> Delete project…
-      </ContextMenuItem>
-    </>
-  )
+  // Volatile helpers the row actions need at *click* time. Read through a ref
+  // rather than captured, so `actions` below can be built once: a handler that
+  // closed over this render's `projectChatCount` would either churn the object
+  // every render (defeating the row memo) or go stale (reporting last render's
+  // count in a confirm dialog). The ref is refreshed on every render, so it is
+  // neither.
+  const latest = React.useRef({ projectChatCount, newChatIn, setArchived, projectLabel })
+  latest.current = { projectChatCount, newChatIn, setArchived, projectLabel }
 
-  // A chat row is identical wherever it appears — in its project group or in the
-  // Pinned section — so both sites render through here.
-  const renderChatItem = (chat: ChatMeta): React.JSX.Element => (
-    <ChatItem
-      key={chat.id}
-      chat={chat}
-      active={chat.id === activeId}
-      activity={chatActivity(statuses[chat.id], backgroundJobs[chat.id], permissions[chat.id])}
-      titling={!!titling[chat.id]}
-      detail={detailed ? chatDetail(chat, !filterProject) : null}
-      projectMenu={
-        // Whenever no project row is on screen to carry them — always in
-        // detailed, and in compact once a filter has collapsed the list to one
-        // project and its row along with it.
-        detailed || filterProject ? (
-          <>
-            <ContextMenuSeparator />
-            <ContextMenuGroup>
-              <ContextMenuLabel>{projectLabel(projectRoot(chat))}</ContextMenuLabel>
-              <ContextMenuItem onClick={() => newChatIn(projectRoot(chat))}>
-                <Plus /> New chat here
-              </ContextMenuItem>
-              {projectMenuItems(projectRoot(chat), !!archivedProjects[projectRoot(chat)])}
-            </ContextMenuGroup>
-          </>
-        ) : null
-      }
-      onOpen={() => void openChat(chat.id)}
-      onRename={() => {
+  // Built once per mount. Every dependency is either a store action or a
+  // `useState` setter — both stable by contract — or reached through `latest`,
+  // which is why the dependency list is genuinely empty rather than
+  // conveniently so.
+  const actions = React.useMemo<RowActions>(
+    () => ({
+      open: (chat) => void openChat(chat.id),
+      rename: (chat) => {
         setRenameValue(chat.title)
         setRenaming(chat)
-      }}
-      onDelete={() => setDeleting(chat)}
-      onTogglePin={() => void setChatPinned(chat.id, chat.pinnedAt === undefined)}
-      onNewInWorktree={() => {
+      },
+      remove: (chat) => setDeleting(chat),
+      togglePin: (chat) => void setChatPinned(chat.id, chat.pinnedAt === undefined),
+      newInWorktree: (chat) => {
         // Drops to the composer with the worktree preselected; the model picker
         // there chooses the provider, so a Codex chat can pick up a worktree
         // Claude started.
         if (chat.worktree) void startInWorktree(chat.cwd, chat.worktree)
-      }}
-    />
+      },
+      newChatIn: (cwd) => latest.current.newChatIn(cwd),
+      renameProject: (cwd) => {
+        setProjectNameValue(latest.current.projectLabel(cwd))
+        setRenamingProject(cwd)
+      },
+      revealProject: (cwd) => void window.api.revealPath(cwd),
+      setProjectArchived: (cwd, archived) => latest.current.setArchived(cwd, archived),
+      confirmProject: (kind, cwd) =>
+        setConfirmProject({ kind, cwd, count: latest.current.projectChatCount(cwd) }),
+      removeProject: (cwd) =>
+        setRemovingProject({ cwd, count: latest.current.projectChatCount(cwd) })
+    }),
+    [openChat, setChatPinned, startInWorktree]
   )
+
+  // A chat row is identical wherever it appears — in its project group or in the
+  // Pinned section — so both sites render through here.
+  const renderChatItem = (chat: ChatMeta): React.JSX.Element => {
+    const root = projectRoot(chat)
+    return (
+      <ChatItem
+        key={chat.id}
+        chat={chat}
+        active={chat.id === activeId}
+        activity={chatActivity(statuses[chat.id], backgroundJobs[chat.id], permissions[chat.id])}
+        titling={!!titling[chat.id]}
+        detail={detailed ? chatDetail(chat, !filterProject) : null}
+        // Whenever no project row is on screen to carry the project's actions —
+        // always in detailed, and in compact once a filter has collapsed the
+        // list to one project and its row along with it.
+        projectMenu={
+          detailed || filterProject
+            ? { cwd: root, label: projectLabel(root), archived: !!archivedProjects[root] }
+            : null
+        }
+        actions={actions}
+      />
+    )
+  }
 
   return (
     <aside
@@ -1482,7 +1589,7 @@ export function Sidebar(): React.JSX.Element {
                         <ContextMenuSeparator />
                       </>
                     )}
-                    {projectMenuItems(group.cwd, archived)}
+                    <ProjectMenuItems cwd={group.cwd} archived={archived} actions={actions} />
                   </ContextMenuContent>
                 </ContextMenu>
                 )}

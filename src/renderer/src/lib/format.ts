@@ -31,6 +31,21 @@ export function resetsIn(ts: number): string {
   return `${Math.floor(hours / 24)}d`
 }
 
+/**
+ * True when two timestamps would draw identically everywhere the sidebar shows
+ * one — the row's own `relativeTime`, and the date bucket a detailed row sits
+ * in. Both are coarse (a minute, then a day), so a chat's `updatedAt` can move
+ * many times inside one rendered value.
+ *
+ * That gap is the point. In the renderer `updatedAt` is *display state* — main
+ * owns the persisted value and re-states it in a `meta` patch at the turn's
+ * end — so a bump nothing would draw differently costs a new `chats` array, a
+ * new row object, and a full Sidebar re-render for no visible change.
+ */
+export function sameDisplayedTime(a: number, b: number): boolean {
+  return relativeTime(a) === relativeTime(b) && dateGroup(a) === dateGroup(b)
+}
+
 export function dateGroup(ts: number): string {
   const date = new Date(ts)
   const today = new Date()

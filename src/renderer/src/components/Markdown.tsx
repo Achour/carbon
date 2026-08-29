@@ -4,12 +4,12 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkBreaks from 'remark-breaks'
 import rehypeHighlight from 'rehype-highlight'
-import mermaid from 'mermaid'
 import { Check, Code2, Copy, Maximize2, RotateCcw, X, ZoomIn, ZoomOut } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useApp } from '@/store'
 import { getImageEpoch, readImageOnce, subscribeImageEpoch } from '@/lib/imageCache'
 import {
+  HLJS_LANGUAGES,
   highlightCode,
   isMermaidFence,
   languageFromFenceInfo,
@@ -33,7 +33,35 @@ function nodeText(node: React.ReactNode): string {
 
 // ---- Mermaid diagrams ----
 
-function initMermaid(dark: boolean): void {
+/**
+ * Mermaid is loaded on the first diagram, not at startup.
+ *
+ * It is ~900 KB with its own dependencies (dompurify, marked, roughjs, a
+ * handful of d3 packages) and it was a top-level import in this file, which
+ * every message in the transcript renders through — so the parse and evaluation
+ * of a diagram engine sat in front of the first paint of every session,
+ * including the great majority that never show a diagram. Its *renderers* were
+ * already split out (`flowDiagram-…`, `sequenceDiagram-…`); only the core was
+ * eager, which is the half that costs.
+ *
+ * The load rides a path that was already asynchronous and already has a
+ * fallback: the effect below debounces 120 ms, and until a diagram parses the
+ * block shows its raw source. So a diagram now arrives a chunk-fetch later than
+ * it used to, in a state the component already renders correctly, and
+ * `preloadMermaid` means that fetch has normally happened long before.
+ */
+let mermaidModule: Promise<typeof import('mermaid')> | null = null
+
+/** Warm the chunk off the critical path — see `lib/preloadHeavy.ts`. */
+export function preloadMermaid(): Promise<typeof import('mermaid')> {
+  mermaidModule ??= import('mermaid')
+  return mermaidModule
+}
+
+async function renderMermaid(id: string, code: string, dark: boolean): Promise<string> {
+  const { default: mermaid } = await preloadMermaid()
+  // Re-initialized per render, as it was when the import was static: the theme
+  // follows the app's appearance, and `initialize` is how mermaid is told.
   mermaid.initialize({
     startOnLoad: false,
     securityLevel: 'strict',
@@ -41,6 +69,8 @@ function initMermaid(dark: boolean): void {
     theme: dark ? 'dark' : 'default',
     fontFamily: 'inherit'
   })
+  const { svg } = await mermaid.render(`${id}-svg`, code)
+  return svg
 }
 
 const clampScale = (s: number): number => Math.min(6, Math.max(0.2, s))
@@ -192,10 +222,8 @@ function MermaidBlock({ code }: { code: string }): React.JSX.Element {
     let alive = true
     // Debounce so streaming re-renders don't thrash the (async) mermaid parse.
     const t = setTimeout(() => {
-      initMermaid(isDark)
-      mermaid
-        .render(`${id}-svg`, trimmed)
-        .then(({ svg }) => {
+      renderMermaid(id, trimmed, isDark)
+        .then((svg) => {
           if (alive) setSvg(svg)
         })
         .catch(() => {
@@ -551,8 +579,13 @@ const REMARK_PLUGINS_BREAKS: React.ComponentProps<typeof ReactMarkdown>['remarkP
   ...(REMARK_PLUGINS ?? []),
   remarkBreaks
 ]
+// `languages` is passed explicitly so the finished parse and the streaming
+// fence share one grammar set (see HLJS_LANGUAGES). Left to its default this
+// is lowlight's `common`, which is *almost* the same list — and "almost" is
+// the failure: `dockerfile` would highlight while streaming and go plain the
+// moment the turn ended.
 const REHYPE_PLUGINS: React.ComponentProps<typeof ReactMarkdown>['rehypePlugins'] = [
-  [rehypeHighlight, { ignoreMissing: true, detect: false }]
+  [rehypeHighlight, { ignoreMissing: true, detect: false, languages: HLJS_LANGUAGES }]
 ]
 
 /** One parsed markdown fragment, no wrapper — chunks share a single wrapper div. */

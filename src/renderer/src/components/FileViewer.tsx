@@ -1,11 +1,26 @@
 import * as React from 'react'
 import type { FileContent } from '@shared/types'
 import { Markdown } from '@/components/Markdown'
-import { CodeEditor } from '@/components/CodeEditor'
 import { ConflictBar } from '@/components/ConflictBar'
 import { ImageView } from '@/components/ImageView'
 import { cn } from '@/lib/utils'
 import { splitFrontmatter, type FrontmatterPair } from '@/lib/frontmatter'
+
+/**
+ * CodeMirror — the editor itself plus its language, lint, autocomplete, search
+ * and LSP packages — is ~750 KB, and none of it is reachable until a file is
+ * opened in a text tab. Statically imported it was evaluated before first paint
+ * for every session, including every one that never leaves the transcript.
+ *
+ * `preloadHeavy` fetches this chunk on the first idle frame after launch, so by
+ * the time anyone clicks a file it is already in memory and the Suspense
+ * fallback below never appears. Lazily loading a surface *without* preloading it
+ * trades a slow launch for a visible hitch on first open, which is the same
+ * cost moved somewhere more annoying.
+ */
+const CodeEditor = React.lazy(() =>
+  import('@/components/CodeEditor').then((m) => ({ default: m.CodeEditor }))
+)
 
 function Placeholder({ children }: { children: React.ReactNode }): React.JSX.Element {
   return (
@@ -101,7 +116,12 @@ export const FileViewer = React.memo(function FileViewer({
         <div className="flex h-full min-h-0 flex-col">
           <ConflictBar path={path} />
           <div className="min-h-0 flex-1">
-            <CodeEditor content={content} path={path} />
+            {/* No spinner: the chunk is preloaded and this resolves in a frame,
+                so a flash of "Loading…" would be the only thing anyone ever saw
+                of it. An empty pane for one frame reads as the file opening. */}
+            <React.Suspense fallback={null}>
+              <CodeEditor content={content} path={path} />
+            </React.Suspense>
           </div>
         </div>
       )

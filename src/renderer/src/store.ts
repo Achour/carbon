@@ -15,7 +15,7 @@ import {
 import type { ResolvedAppearance, ThemeMode } from '@/lib/themes'
 import { loadNotifyPrefs, notify, saveNotifyPrefs, type NotifyPrefs } from '@/lib/notify'
 import { playCue } from '@/lib/sounds'
-import { formatCost, formatDuration } from '@/lib/format'
+import { formatCost, formatDuration, sameDisplayedTime } from '@/lib/format'
 import { invalidateLocalImages } from '@/lib/imageCache'
 import { gitAction, gitActionPrompt, type GitActionId } from '@/lib/gitActions'
 import { changedPathsFromParts } from '@/lib/turnChanges'
@@ -32,7 +32,7 @@ import {
   renameBuffer,
   setDirtyListener
 } from '@/lib/editorBuffers'
-import { notifyWatchedChanges } from '@/lib/lspClient'
+import { notifyWatchedChanges } from '@/lib/lspBridge'
 import {
   availableProviders,
   hasCompleteModelCatalog,
@@ -3004,21 +3004,44 @@ export const useApp = create<AppState>((set, get) => ({
     }
     switch (ev.type) {
       case 'message': {
-        // Single state update per message: upsert the active chat's messages
-        // (when this event is for it) and refresh the row's timestamp, in one
-        // set() so each message causes one render pass instead of two.
+        // At most one state update per message: the active chat's messages and
+        // the row's timestamp go in a single set() so each message causes one
+        // render pass rather than two — and often neither, see below.
         //
         // `updatedAt` moves, the row does NOT. The array's own order is the
         // sidebar's order (see `hoistChat`) — re-sorting here is what made a
         // running turn shuffle the list under the cursor several times a
         // second, and with two chats streaming they simply traded places
         // forever.
-        set((st) => ({
-          ...(ev.chatId === st.activeId
-            ? { messages: upsertMessage(st.messages, ev.message) }
-            : {}),
-          chats: st.chats.map((c) => (c.id === ev.chatId ? { ...c, updatedAt: Date.now() } : c))
-        }))
+        //
+        // The bump itself is skipped when it would redraw nothing. `updatedAt`
+        // is display state here — main owns the persisted value and re-states
+        // it in a `meta` patch at the turn's end — and both surfaces that draw
+        // it are coarse: a minute, then a day. Remapping `chats` anyway mints a
+        // new array, which every Sidebar subscriber compares by identity, so on
+        // Claude (where each tool call is its own assistant message) that was a
+        // full sidebar re-render dozens of times a turn for a row whose text
+        // never changed. The row still ticks over on the message that genuinely
+        // crosses a boundary.
+        const now = Date.now()
+        const row = s.chats.find((c) => c.id === ev.chatId)
+        const redraws = !!row && !sameDisplayedTime(row.updatedAt, now)
+        const isActive = ev.chatId === s.activeId
+        // A background chat whose row would draw exactly as it already does has
+        // nothing to write, and `set({})` is not the way to say so: zustand
+        // assigns a fresh state object for it and runs every subscriber's
+        // selector against it. Same reason `context-usage` below bails before
+        // `set` rather than returning an empty patch.
+        if (isActive || redraws) {
+          set((st) => ({
+            ...(isActive ? { messages: upsertMessage(st.messages, ev.message) } : {}),
+            ...(redraws
+              ? {
+                  chats: st.chats.map((c) => (c.id === ev.chatId ? { ...c, updatedAt: now } : c))
+                }
+              : {})
+          }))
+        }
         // Turn finished: chime + background notification (already fired at
         // park time when this is a replay).
         if (!replayingHidden) notifyTurnDone(s, ev, (id) => get().openChat(id))

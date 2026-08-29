@@ -7,9 +7,7 @@ import App from './App'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { useApp } from './store'
 import { previewForCwd } from './lib/previewRegistry'
-import { bufferText, isDirty, viewForPath } from './lib/editorBuffers'
-import { jumpToDefinitionAt, jumpFailure, releaseAllServers } from './lib/lspClient'
-import { addSelectionToChat } from './components/CodeEditor'
+import { releaseAllServers } from './lib/lspBridge'
 import {
   applyCodeFontSize,
   applyTheme,
@@ -55,14 +53,25 @@ if (import.meta.env.DEV) {
   ;(window as unknown as Record<string, unknown>).__previewForCwd = previewForCwd
   // The editor's buffers and views live outside React and outside the store, so
   // the E2E hook needs its own handle on them to assert anything about editing.
-  ;(window as unknown as Record<string, unknown>).__editor = {
-    viewForPath,
-    isDirty,
-    bufferText,
-    jump: jumpToDefinitionAt,
-    jumpFailure,
-    addSel: addSelectionToChat
-  }
+  //
+  // Imported dynamically, and *only* here: statically, these three modules put
+  // the whole of CodeMirror in the entry chunk of every build, including the
+  // packaged one where this block is dead code. The hook lands a tick after
+  // load, which is well before an E2E script can reach it.
+  void Promise.all([
+    import('./lib/editorBuffers'),
+    import('./lib/lspClient'),
+    import('./components/CodeEditor')
+  ]).then(([buffers, lsp, editor]) => {
+    ;(window as unknown as Record<string, unknown>).__editor = {
+      viewForPath: buffers.viewForPath,
+      isDirty: buffers.isDirty,
+      bufferText: buffers.bufferText,
+      jump: lsp.jumpToDefinitionAt,
+      jumpFailure: lsp.jumpFailure,
+      addSel: editor.addSelectionToChat
+    }
+  })
   window.addEventListener('error', (e) => console.error('[window error]', e.message))
   window.addEventListener('unhandledrejection', (e) =>
     console.error('[unhandled rejection]', e.reason?.message ?? String(e.reason))

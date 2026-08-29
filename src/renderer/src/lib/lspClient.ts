@@ -1,5 +1,6 @@
 import { EditorView } from '@codemirror/view'
 import { ChangeSet, type Extension, type Text } from '@codemirror/state'
+import { registerLspHooks } from '@/lib/lspBridge'
 import {
   LSPClient,
   LSPPlugin,
@@ -377,3 +378,8 @@ export function releaseAllServers(): void {
   for (const pending of clients.values()) void pending.then((client) => client?.disconnect())
   clients.clear()
 }
+
+// The two callers on the path to first paint reach these through `lspBridge`,
+// which holds no CodeMirror import of its own — see that file for why the
+// dependency points this way round.
+registerLspHooks({ notifyWatchedChanges, releaseAllServers })
