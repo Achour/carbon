@@ -568,10 +568,20 @@ class ClaudeSession implements AgentSession {
         // task list last week silently stopped having one, with nothing in the
         // transcript to say why. Carbon's whole task card depends on those
         // calls existing, so it asks for them; `=0` is the user's opt-out.
+        // `Artifact` is the third of these, and its gate is the *entrypoint*:
+        // the CLI disables the tool outright when `CLAUDE_CODE_ENTRYPOINT` is
+        // `sdk-ts`/`sdk-py`/`sdk-cli`, `mcp` or the GitHub action, and a truthy
+        // `CLAUDE_CODE_ARTIFACT` is the one check that lifts that bail — so
+        // "make it an artifact" answered with a local .html file in Carbon and
+        // a claude.ai page in the same user's terminal. It only lifts *that*
+        // half: the account gate (`tengu_cobalt_plinth`, plus a Pro/Max-shaped
+        // plan) sits above the env var and cannot be forced from here, so a
+        // login without artifacts in the terminal has none here either.
         env: {
           ...process.env,
           CLAUDE_CODE_ENABLE_CFC: process.env.CLAUDE_CODE_ENABLE_CFC ?? '1',
-          CLAUDE_CODE_ENABLE_TODO_TOOLS: process.env.CLAUDE_CODE_ENABLE_TODO_TOOLS ?? '1'
+          CLAUDE_CODE_ENABLE_TODO_TOOLS: process.env.CLAUDE_CODE_ENABLE_TODO_TOOLS ?? '1',
+          CLAUDE_CODE_ARTIFACT: process.env.CLAUDE_CODE_ARTIFACT ?? '1'
         },
         mcpServers: { preview: buildPreviewServer(chat.cwd, preview) },
         canUseTool: async (toolName, input, opts) => {

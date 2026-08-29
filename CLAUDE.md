@@ -871,6 +871,30 @@ call fetching them. That card is not hidden: hiding a step the model actually
 took is the same mistake as the silent checklist. It says which tools came back
 (see `tool_reference` under Session flow) and groups with the other lookups.
 
+### Artifacts (`CLAUDE_CODE_ARTIFACT`)
+
+The third tool behind an env gate, and the first whose gate is the **entrypoint
+itself**. `Artifact` renders an HTML file to a claude.ai page and answers with
+its `…/code/artifact/<uuid>` link; the CLI's own `isEnabled` bails when
+`CLAUDE_CODE_ENTRYPOINT` is `sdk-ts` / `sdk-py` / `sdk-cli`, `mcp` or the GitHub
+action — every way the SDK spawns it — unless `CLAUDE_CODE_ARTIFACT` is truthy.
+So the same login that published an artifact from the terminal answered "I
+can't" in Carbon and wrote a local `.html` instead. Set unless the user already
+set it, `=0` their opt-out, landing at spawn like the other two.
+
+**The env var lifts one half of the gate and cannot lift the other.** Above the
+entrypoint bail sits an account check — a rollout flag (`tengu_cobalt_plinth`)
+over a Pro/Max-shaped plan and a claude.ai OAuth login, the Console API-key
+login explicitly not counting. Nothing in the environment overrides it (the
+CLI's own `Me(CLAUDE_CODE_ARTIFACT)&&!1` is dead code), which is the honest
+limit to state: Carbon can stop *disqualifying itself*, and can do nothing for
+an account the feature was never on for.
+
+`ToolCard` already draws the result — an artboard for the source page, and an
+Open button scraped for the `https://claude.ai/…` URL out of the publish output.
+That card was written before the tool could ever fire here, which is why the
+scrape is written to yield nothing rather than to trust a field.
+
 ### The alert cues (`lib/sounds.ts`)
 
 Three sounds — a turn finished, a turn failed, the agent needs an answer — and
