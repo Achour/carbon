@@ -9,8 +9,14 @@ import { Check, Code2, Copy, Maximize2, RotateCcw, X, ZoomIn, ZoomOut } from 'lu
 import { cn } from '@/lib/utils'
 import { useApp } from '@/store'
 import { getImageEpoch, readImageOnce, subscribeImageEpoch } from '@/lib/imageCache'
-import { remarkHighlightLang } from '@/lib/highlight'
-import { splitMarkdownStream } from '@/lib/markdownStream'
+import {
+  highlightCode,
+  isMermaidFence,
+  languageFromFenceInfo,
+  remarkHighlightLang
+} from '@/lib/highlight'
+import { splitHighlightedLines } from '@/lib/highlightLines'
+import { splitMarkdownStream, type OpenFence } from '@/lib/markdownStream'
 
 /** Project folder used to resolve relative file paths in inline code. */
 const MarkdownCwd = React.createContext<string | null>(null)
@@ -307,7 +313,7 @@ function CodeBlock({
     ? (children as React.ReactElement<{ className?: string }>)
     : null
   const lang = child?.props.className?.match(/language-(\w+)/)?.[1]
-  if (lang === 'mermaid') {
+  if (isMermaidFence(lang)) {
     return <MermaidBlock code={nodeText(children).replace(/\n+$/, '')} />
   }
   return <PreBlock {...props}>{children}</PreBlock>
@@ -657,7 +663,17 @@ export const StreamingMarkdown = React.memo(function StreamingMarkdown({
   className?: string
 }): React.JSX.Element {
   const shown = useStreamText(text, true)
-  const { chunks, tail } = React.useMemo(() => splitMarkdownStream(shown), [shown])
+  const { chunks, tail, code } = React.useMemo(() => {
+    const split = splitMarkdownStream(shown)
+    // A `mermaid` fence is a diagram, not code: `MermaidBlock` renders the last
+    // source that parsed and keeps it while the rest streams in, so it has to
+    // go on being the markdown parse's problem. Its sources are a few lines,
+    // which is why handing it back costs nothing.
+    if (split.code && isMermaidFence(split.code.info)) {
+      return { ...split, tail: split.tail + split.code.open + split.code.body, code: null }
+    }
+    return split
+  }, [shown])
   return (
     <div className={cn('markdown text-[14px] leading-[1.6]', className)}>
       <MarkdownCwd.Provider value={cwd}>
@@ -665,7 +681,56 @@ export const StreamingMarkdown = React.memo(function StreamingMarkdown({
           <MarkdownBody key={i} text={chunk} />
         ))}
         <MarkdownBody text={tail} />
+        {code && <StreamingCode fence={code} />}
       </MarkdownCwd.Provider>
     </div>
   )
 })
+
+/** One line of a streaming code block: a stable string, so React skips it. */
+const CodeLine = React.memo(function CodeLine({ html }: { html: string }): React.JSX.Element {
+  return <span dangerouslySetInnerHTML={{ __html: html }} />
+})
+
+/**
+ * The live, still-open fenced code block at the end of a streaming message.
+ *
+ * An open fence can never seal (nothing inside one is a block boundary), so
+ * left to the markdown path it is the whole tail: remark re-parses it,
+ * rehype-highlight re-tokenizes it and React rebuilds every token span on each
+ * commit — measured at 400 lines, that is the worst freeze in a streaming turn
+ * by a wide margin. Here the body skips the markdown parse entirely (a fence's
+ * content is opaque text by definition) and is drawn as one memoized row per
+ * line, so a commit touches the line being typed and the one above it rather
+ * than the whole block.
+ *
+ * It renders through `PreBlock`, the same wrapper the closed fence gets from
+ * rehype-highlight, so the handover when the closing fence finally arrives is
+ * invisible *structurally* rather than by two copies of the chrome being kept
+ * in step by hand. Both sides resolve the language through
+ * `languageFromFenceInfo`, for the same reason.
+ */
+function StreamingCode({ fence }: { fence: OpenFence }): React.JSX.Element {
+  const lang = languageFromFenceInfo(fence.info)
+  const rows = React.useMemo(() => {
+    const lines = splitHighlightedLines(highlightCode(fence.body, lang))
+    // The body's trailing newline leaves an empty last line — that is where the
+    // next characters will land, not a line of the file, and drawing it makes
+    // the block jump a row taller between every line and the next.
+    if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop()
+    // The break lives in the row's own text so a copy reproduces it; the last
+    // row has none, which is what keeps the block exactly as tall as the code.
+    for (let i = 0; i < lines.length - 1; i++) lines[i] += '\n'
+    return lines
+  }, [fence.body, lang])
+
+  return (
+    <PreBlock>
+      <code className={cn('hljs', lang && `language-${lang}`)}>
+        {rows.map((html, i) => (
+          <CodeLine key={i} html={html} />
+        ))}
+      </code>
+    </PreBlock>
+  )
+}

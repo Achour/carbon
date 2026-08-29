@@ -78,14 +78,38 @@ export function languageForPath(path: string): string | undefined {
 }
 
 /**
+ * The fence's tag — its first whitespace-delimited word.
+ *
+ * Two surfaces ask what a fence is, from two different strings: the markdown
+ * path sees mdast's `lang`, which is already just this word, while the
+ * streaming path sees the info string whole (` ```ts title=foo.ts `). Deciding
+ * it separately in each is how they come to disagree, so both go through here.
+ */
+export function fenceTag(info: string | null | undefined): string {
+  return info?.trim().split(/\s+/)[0] ?? ''
+}
+
+/** A fence that renders as a diagram rather than as code. */
+export function isMermaidFence(info: string | null | undefined): boolean {
+  return fenceTag(info) === 'mermaid'
+}
+
+/**
  * Language to highlight a fenced block with. A real language tag (`tsx`,
  * `bash`) is kept; a file citation is mapped through `languageForPath`.
  * `undefined` means leave the info string alone (`mermaid`, unknown tags).
+ *
+ * The whole string is tried before the tag alone, because a citation may carry
+ * spaces (`896:905:src/my file.ts`) and splitting first would lose the path —
+ * which is also why mdast's `lang`, split on whitespace before it ever gets
+ * here, is the lossier of the two inputs rather than the canonical one.
  */
 export function languageFromFenceInfo(info: string | null | undefined): string | undefined {
   const raw = info?.trim()
   if (!raw) return undefined
   if (hljs.getLanguage(raw)) return raw
+  const tag = fenceTag(raw)
+  if (tag !== raw && hljs.getLanguage(tag)) return tag
   const path = pathFromFenceInfo(raw)
   return path ? languageForPath(path) : undefined
 }
@@ -108,12 +132,29 @@ function visitCode(node: unknown, visit: (node: { lang?: string | null }) => voi
   for (const child of n.children) visitCode(child, visit)
 }
 
-/** Highlight one line to hljs HTML. Per-line, so multi-line constructs lose some
- *  context, but spans always close within the line (safe for a diff). */
-export function highlightLine(text: string, language: string): string {
-  try {
-    return hljs.highlight(text, { language }).value
-  } catch {
-    return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+function escapeHtml(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+/**
+ * Highlight text to hljs HTML, falling back to escaped text when the language
+ * is absent or unregistered — deliberately never to hljs's auto-detection,
+ * which on the *prefix* of a streaming block guesses a different language every
+ * few commits and repaints the whole thing.
+ *
+ * How much text to pass is the caller's decision and the only one that matters:
+ * hljs carries state across lines, so a whole block colors what follows a block
+ * comment or an unterminated string correctly, while a line on its own is
+ * independent of its neighbours — which is what lets the diff view treat a row
+ * as a row.
+ */
+export function highlightCode(text: string, language: string | undefined): string {
+  if (language) {
+    try {
+      return hljs.highlight(text, { language }).value
+    } catch {
+      // An unregistered language: fall through to plain escaped text.
+    }
   }
+  return escapeHtml(text)
 }

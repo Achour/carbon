@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { ChevronDown, ChevronUp } from 'lucide-react'
-import { highlightLine } from '@/lib/highlight'
+import { highlightCode } from '@/lib/highlight'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import {
@@ -91,7 +91,7 @@ export const DiffTable = React.memo(function DiffTable({
     () =>
       language
         ? items.map((it) =>
-            it.kind === 'row' && it.row.kind !== 'note' ? highlightLine(it.row.text, language) : ''
+            it.kind === 'row' && it.row.kind !== 'note' ? highlightCode(it.row.text, language) : ''
           )
         : null,
     [items, language]
