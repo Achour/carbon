@@ -408,6 +408,15 @@ message in the transcript.
   Failures are reported *on* the dialog rather than through `gitError`: the
   question is still up, and a locked file is something the user may be able to
   fix and retry.
+- **Prose soft-wraps, code does not** (`wrapsLines`, `editorLanguage.ts`) — Zed's
+  split, and the reason is that the two file kinds disagree about what a line
+  *is*. A Markdown paragraph is one line to the file, so a horizontal scrollbar
+  is the wrong way to read one; a wrapped line of code breaks mid-token, which
+  is the same objection that keeps `diffWrap` off by default in the review. The
+  list of prose extensions is explicit rather than "anything with no grammar",
+  which would also catch CSV and TSV, where a row *is* a line. It rides
+  `baseExtensions`, so it is fixed when the buffer is created, like read-only
+  ness and unlike the two things that need a compartment.
 - **Grammars are lazy.** `@codemirror/language-data` descriptors are `import()`s,
   so a user who only opens TypeScript never pays for Haskell; the mode lands a
   frame or two after first paint and is swapped into the live view through a

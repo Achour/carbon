@@ -39,7 +39,7 @@ import { SELECTION_MAX_CHARS, type Attachment, type FileContent } from '@shared/
 import { useApp } from '@/store'
 import { editorTheme } from '@/lib/editorTheme'
 import { diagnostics } from '@/lib/editorDiagnostics'
-import { loadLanguage, loadedLanguage } from '@/lib/editorLanguage'
+import { loadLanguage, loadedLanguage, wrapsLines } from '@/lib/editorLanguage'
 import { lineSelection, selectionLabel, trimTrailingNewlines } from '@/lib/codeSelection'
 import { basename } from '@/lib/format'
 import { cn, editorNotice } from '@/lib/utils'
@@ -113,6 +113,9 @@ function baseExtensions(path: string): Extension {
     crosshairCursor(),
     highlightActiveLine(),
     highlightSelectionMatches(),
+    // Prose wraps; code doesn't. Known from the name at creation, like
+    // read-only ness and unlike the two things that need a compartment.
+    wrapsLines(basename(path)) ? EditorView.lineWrapping : [],
     // Syntax errors come from the grammar, so they work with no language
     // server installed; type errors join them when one is connected.
     diagnostics,

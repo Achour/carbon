@@ -77,6 +77,27 @@ export async function loadLanguage(
 }
 
 /**
+ * Files whose lines are sentences rather than statements, and which therefore
+ * soft-wrap in the editor — Zed's rule, and for Zed's reason: a paragraph is
+ * one "line" to the file and a horizontal scrollbar is the wrong way to read
+ * one, while a wrapped line of code breaks mid-token and turns a column of
+ * identifiers into rubble (the same argument that keeps `diffWrap` off by
+ * default in the review).
+ *
+ * An explicit list rather than "anything with no grammar", which would also
+ * catch CSV and TSV, where a row *is* a line and wrapping it destroys the only
+ * structure the file has.
+ */
+const PROSE_EXT = new Set(['md', 'markdown', 'mdx', 'mdc', 'txt', 'text', 'rst', 'adoc', 'asciidoc'])
+
+/** Whether this file's lines soft-wrap. Takes a file name, not a path. */
+export function wrapsLines(filename: string): boolean {
+  const dot = filename.lastIndexOf('.')
+  // `dot > 0` keeps a dotfile (`.env`) from reading as an extension.
+  return dot > 0 && PROSE_EXT.has(filename.slice(dot + 1).toLowerCase())
+}
+
+/**
  * The language id an LSP server is keyed and started by — LSP's own
  * `languageId` vocabulary, which is neither hljs's nor language-data's.
  * Derived from the extension because that is what the servers themselves key on.
