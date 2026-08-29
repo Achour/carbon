@@ -286,6 +286,24 @@ on a theme change with **no** JS involvement. `editorTheme.ts` is installed once
 and never rebuilt; the alternative is reconfiguring every open view each time the
 appearance flips.
 
+**Frontmatter is split off before the preview parses anything**
+(`lib/frontmatter.ts`), and the reason is that CommonMark has an opinion about
+`---` that is right in general and catastrophic here: the opening fence is a
+thematic break, the keys under it are a paragraph, and the closing fence turns
+that paragraph into a **setext H2** — so every `.claude/agents/*.md` opened as a
+giant bold heading of run-together YAML. It is drawn as the key/value table Zed
+and GitHub draw. The split is a *display* split rather than a YAML parse: values
+keep their quotes and their colons (`description:` is full of both), indented
+lines continue the key above them (`metadata:` / `  type: user`), and anything
+that isn't a complete, non-empty mapping returns `null` so the `---` renders as
+the horizontal rule it then genuinely is. It lives in `FileViewer`, **not** in
+`Markdown` — a chat message may legitimately open with an hr, and frontmatter is
+a fact about files. Dependency-free (`test/frontmatter.test.ts`), where
+`remark-frontmatter` would have been a dependency whose default behaviour is to
+drop the block entirely. The table carries its own classes for the same reason
+the split does: `.markdown table` and the heading rules are shared with every
+message in the transcript.
+
 - **Dirtiness is cached, and compared as a rope.** `dispatchTransactions` fires
   for *every* transaction, and selection-only ones vastly outnumber edits —
   `MouseSelection` dispatches one per mousemove of a drag. So the early return
