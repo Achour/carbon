@@ -705,7 +705,7 @@ function registerIpc(): void {
   ipcMain.handle('providers:list', (_e, refresh?: boolean) => providerClis(refresh))
   ipcMain.handle(
     'providers:set',
-    (_e, provider: Provider, patch: ProviderCliConfig): ProviderCli[] => {
+    (_e, provider: Provider, patch: ProviderCliConfig): Promise<ProviderCli[]> => {
       store.setProviderCli(provider, patch)
       // Re-injecting the whole record clears the resolution cache, so the list
       // returned here already reflects a path the user just pinned.
@@ -861,15 +861,25 @@ function registerIpc(): void {
 
 app.whenReady().then(() => {
   app.setName('Carbon')
-  // Finder/Dock launches do not inherit the user's shell PATH. Hydrate it
-  // before constructing managers so Claude, Codex, previews, Git, and terminal
-  // sessions all see the same command-line tools as an interactive shell.
-  hydrateShellPath()
   // Pin userData to the original folder so existing chat history carries over
   // after the rename (dev and packaged builds share this location).
   // AIGUI_USERDATA overrides it — used to run an isolated dev instance without
   // colliding with an installed build's store.
+  //
+  // Ahead of the PATH hydration below, which now remembers its answer there.
+  // `setPath` only records a location — nothing reads userData in between.
   app.setPath('userData', process.env.AIGUI_USERDATA || join(app.getPath('appData'), 'ai-gui'))
+  // Finder/Dock launches do not inherit the user's shell PATH. Hydrate it
+  // before constructing managers so Claude, Codex, previews, Git, and terminal
+  // sessions all see the same command-line tools as an interactive shell.
+  //
+  // Answered from the previous launch's cache so the window is not held behind
+  // an interactive shell startup; the background re-read calls back here only
+  // when the PATH actually moved, and the one thing that caches against it is
+  // provider-binary resolution.
+  hydrateShellPath(app.getPath('userData'), () => {
+    configureProviderClis(store.getProviderClis())
+  })
   store = new Store(app.getPath('userData'), {
     // Surfaced rather than silently dropped: the user's turn is still in
     // memory and on screen, it just cannot be written while the other

@@ -1,4 +1,5 @@
-import { execFileSync } from 'node:child_process'
+import { execFile as execFileCb } from 'node:child_process'
+import { promisify } from 'node:util'
 import { accessSync, constants, existsSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { delimiter, join } from 'node:path'
@@ -7,6 +8,8 @@ import { delimiter, join } from 'node:path'
 // resolution tests against this file directly.
 import { PROVIDER_LABELS, PROVIDERS } from '../shared/types.ts'
 import type { Provider, ProviderCli, ProviderCliConfig } from '@shared/types'
+
+const execFile = promisify(execFileCb)
 
 /**
  * Carbon drives the providers' real CLIs, and it uses the ones the user
@@ -86,7 +89,7 @@ export const INSTALL_COMMAND: Record<Provider, string> = {
 /** User settings, injected at startup so this module never imports the store. */
 let config: Partial<Record<Provider, ProviderCliConfig>> = {}
 
-/** Resolution is a few `stat`s and one process per provider; cached per run. */
+/** Resolution is a few `stat`s per provider; cached per run. */
 let cache: Partial<Record<Provider, ProviderCli>> = {}
 
 export function configureProviderClis(next: Partial<Record<Provider, ProviderCliConfig>>): void {
@@ -159,15 +162,32 @@ export function compareVersions(a: string, b: string): number {
   return 0
 }
 
-function readVersion(path: string): string | null {
+/**
+ * Versions, keyed by the binary they were read from rather than by provider —
+ * two providers resolving to one path (or one provider re-resolving to the same
+ * path) is then a cache hit rather than a second spawn.
+ *
+ * Kept apart from `cache` because the two are answered at completely different
+ * costs: resolution is a handful of `stat`s, a version is a *process*. Folding
+ * them together is what made every `cliPath` call — which wants the path and
+ * nothing else — able to block the main process behind `claude --version`.
+ */
+const versions = new Map<string, string | null>()
+
+/**
+ * Ask a CLI its version. Asynchronous on purpose: this used to be
+ * `execFileSync`, and while it ran nothing else in main could run either —
+ * including the `chat:event` channel feeding the transcript. It is reached
+ * lazily (the first `cliPath`, the Settings page), so the stall did not land at
+ * launch; it landed at whatever moment the first turn started, which is worse.
+ */
+async function readVersion(path: string): Promise<string | null> {
   try {
-    return parseVersion(
-      execFileSync(path, ['--version'], {
-        encoding: 'utf8',
-        timeout: 8_000,
-        stdio: ['ignore', 'pipe', 'ignore']
-      })
-    )
+    const { stdout } = await execFile(path, ['--version'], {
+      encoding: 'utf8',
+      timeout: 8_000
+    })
+    return parseVersion(stdout)
   } catch {
     return null
   }
@@ -192,7 +212,10 @@ export function providerCli(provider: Provider, env: NodeJS.ProcessEnv = process
   const { path, source } = resolve(provider, env)
   const installed = !!path && isExecutable(path)
   const minVersion = MIN_CLI_VERSION[provider]
-  const version = installed && path ? readVersion(path) : null
+  // Whatever `providerClis` has read so far. `undefined` (never asked) and a
+  // failed read both mean null here: nothing user-facing distinguishes them,
+  // and the one surface that reports a version awaits it first.
+  const version = installed && path ? (versions.get(path) ?? null) : null
   const info: ProviderCli = {
     provider,
     enabled: config[provider]?.enabled !== false,
@@ -208,9 +231,31 @@ export function providerCli(provider: Provider, env: NodeJS.ProcessEnv = process
   return info
 }
 
-/** Every provider's status, for Settings → Providers. */
-export function providerClis(refresh = false): ProviderCli[] {
-  if (refresh) cache = {}
+/**
+ * Every provider's status, for Settings → Providers — the one caller that needs
+ * the version, and therefore the one that pays for it. The spawns run in
+ * parallel and the rows are then rebuilt so the freshly-read versions land on
+ * them; `refresh` (the Recheck button) is what drops a remembered version,
+ * since reinstalling a CLI is the whole reason to press it.
+ *
+ * A disabled provider is probed too: the row has to show what it found, or
+ * turning it back on is a leap of faith.
+ */
+export async function providerClis(refresh = false): Promise<ProviderCli[]> {
+  if (refresh) {
+    cache = {}
+    versions.clear()
+  }
+  await Promise.all(
+    PROVIDERS.map(async (provider) => {
+      const { path, installed } = providerCli(provider)
+      if (!installed || !path || versions.has(path)) return
+      versions.set(path, await readVersion(path))
+    })
+  )
+  // Cheap — a few `stat`s — and it is what carries the versions just read onto
+  // the cached rows, which were built before the spawns resolved.
+  cache = {}
   return PROVIDERS.map((provider) => providerCli(provider))
 }
 
