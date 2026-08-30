@@ -162,6 +162,11 @@ Three Electron layers with one shared contract:
 Adding an IPC method touches four files: the `Api` interface, a handler in
 `main/index.ts`, the bridge entry in `preload/index.ts`, and the renderer store.
 
+`demo/` is the screenshot profile every image in this README and on the landing
+page is shot against — three seeded repositories and a scripted app, so the
+pictures can be refreshed without a real project's names in them. See
+[demo/README.md](demo/README.md).
+
 `CLAUDE.md` / `AGENTS.md` carry the deeper notes — persistence invariants, session
 flow, the provider seam, worktree design — for both humans and agents working in
 this repo.

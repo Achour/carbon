@@ -36,6 +36,13 @@ Dev utilities (env vars for `npm run dev`, used for UI iteration without a human
   build ignores it.
 - Renderer console output is mirrored to the terminal in dev.
 
+`demo/` is the screenshot profile the README's and the landing page's images are
+shot against: `setup.sh` rebuilds three small repositories (and one worktree)
+from `demo/repos`, `seed.mjs` writes the chats straight into a throwaway
+`AIGUI_USERDATA`, and `shoot.sh` drives the app through one of `demo/e2e/*.js`
+and kills the whole process group afterwards — killing `npm run dev` alone
+leaves Electron running, reparented to launchd. See `demo/README.md`.
+
 ## Distribution and updates
 
 Auto-update is impossible while the app is unsigned, and not for the reason people

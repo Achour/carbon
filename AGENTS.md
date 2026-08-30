@@ -37,6 +37,12 @@ Dev utilities (env vars for `npm run dev`, used for UI iteration without a human
 - `CARBON_FAKE_HOMEBREW=1` — forces `installedViaHomebrew`, the only way to reach the cask variant of the update UI outside a real `brew install`. Dev-only.
 - Renderer console output is mirrored to the terminal in dev.
 
+`demo/` is the screenshot profile the README's and the landing page's images are shot
+against — `setup.sh` rebuilds three repositories and a worktree, `seed.mjs` writes chats
+into a throwaway `AIGUI_USERDATA`, `shoot.sh` drives one of `demo/e2e/*.js` and kills the
+whole process group (killing `npm run dev` alone leaves Electron reparented to launchd and
+running). See `demo/README.md`.
+
 Carbon ships unsigned, so it can't auto-update: the ad-hoc signature makes every build's
 designated requirement a `cdhash` of that one build, which Squirrel.Mac can never match
 against an update. The Homebrew cask in `Achour/homebrew-carbon` is the only in-place
