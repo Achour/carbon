@@ -83,7 +83,13 @@ const GROUP_MIN = 2
  *  cards with a "Thought" row between each pair. */
 function isGroupableMsg(m: ChatMessage): boolean {
   if (m.role !== 'assistant') return false
-  const parts = m.parts.filter((p) => !!p && !(p.type === 'thinking' && !p.text))
+  // Empty text is dropped alongside withheld thinking, because it draws exactly
+  // as much: nothing. `isBlankMsg` already treats the two the same, and the
+  // disagreement was load-bearing in the wrong direction — a `[text(''), tool]`
+  // message broke a run that a `[thinking(''), tool]` one joined.
+  const parts = m.parts.filter(
+    (p) => !!p && !((p.type === 'thinking' || p.type === 'text') && !p.text)
+  )
   return (
     parts.length > 0 && parts.every((p) => p.type === 'tool' && GROUPABLE_TOOLS.has(p.name))
   )
@@ -603,7 +609,17 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
   // its own assistant message on the Claude side, unlike Codex's single
   // accumulating message).
   const liveRun = React.useMemo(() => {
-    if (!liveAssistant || !isGroupableMsg(liveAssistant)) return null
+    // A blank live message keeps the run alive rather than ending it — the same
+    // rule the walk below already applies to previous messages, and the live
+    // check simply disagreed with it. The CLI ships each withheld thought as its
+    // own message, so one lands between *every* pair of tool calls; ending the
+    // run on it tore the group out of the live slot and remounted it from
+    // history, collapsed, once per call. Nothing was drawn in the gap, so the
+    // whole effect was a row folding and unfolding under the reader with no
+    // content to show for it.
+    if (!liveAssistant || !(isGroupableMsg(liveAssistant) || isBlankMsg(liveAssistant))) {
+      return null
+    }
     let start = historyEnd
     while (start > 0) {
       const prev = displayedMessages[start - 1]
@@ -800,7 +816,7 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
             ctx={historyCtx}
           />
           {liveRun ? (
-            <ToolGroup parts={liveRun.parts} cwd={chat.cwd} />
+            <ToolGroup parts={liveRun.parts} cwd={chat.cwd} live />
           ) : (
             liveAssistant && (
               <AssistantBlock

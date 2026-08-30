@@ -517,24 +517,61 @@
   border: none;
   padding: 0;
 }
-.markdown table {
-  width: 100%;
-  border-collapse: collapse;
-  margin: 0.8em 0;
-  font-size: 0.93em;
-  display: block;
+/* The scroller. A table wider than the chat column scrolls here rather than
+   compressing its columns — the column is a fixed measure chosen for prose, and
+   a table is the one block whose width is set by its content instead. */
+.markdown-table-scroll {
   overflow-x: auto;
+  margin: 0.8em 0;
 }
-.markdown th {
-  text-align: left;
-  font-weight: 600;
-  border-bottom: 1.5px solid var(--color-border);
-  padding: 0.4em 0.8em 0.4em 0;
+.markdown table {
+  /* Sized to content, but never narrower than the column: `max-content` is what
+     lets a column claim the width its longest cell needs, and `min-width` stops
+     a two-word table from shrinking into a stub against the left margin. */
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+  font-size: 0.93em;
 }
+.markdown th,
 .markdown td {
-  border-bottom: 1px solid var(--color-border);
-  padding: 0.4em 0.8em 0.4em 0;
+  text-align: left;
+  padding: 0.45em 0.9em;
   vertical-align: top;
+}
+/* Flush with the paragraphs above and below: the outer cells' padding would
+   otherwise indent the table from the text column it sits in. */
+.markdown th:first-child,
+.markdown td:first-child {
+  padding-left: 0;
+}
+.markdown th:last-child,
+.markdown td:last-child {
+  padding-right: 0;
+}
+.markdown thead th {
+  font-weight: 600;
+  border-bottom: 1px solid var(--color-border);
+}
+.markdown tbody td {
+  border-bottom: 1px solid var(--color-border);
+}
+/* No rule under the last row: the table ends where its content ends, and a
+   trailing line reads as an empty row. */
+.markdown tbody tr:last-child td {
+  border-bottom: 0;
+}
+/* A chip in a cell is an identifier — a path, a type, a flag — and breaking one
+   across two lines makes it unreadable in the place it is least expected to be:
+   `src/server/backend.ts` came out as `src/server/backend.t` + `s`, with the
+   chip's own background drawing a box around each half. Prose in the cell still
+   wraps; only the code stays whole, and the table scrolls if that makes it wide.
+   In running text the opposite is right, which is why `overflow-wrap: anywhere`
+   stays on the base rule — there the column is the constraint and there is no
+   scroller to fall back to. */
+.markdown th code:not(pre code),
+.markdown td code:not(pre code) {
+  white-space: pre;
 }
 
 /* Syntax highlighting — one palette, two renderers.

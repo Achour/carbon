@@ -91,7 +91,7 @@ Path aliases: `@` → `src/renderer/src`, `@shared` → `src/shared` (renderer a
 
 - Conversations resume across app restarts via `chat.sessionId` (`resume` option); the session id arrives on the SDK `init` message.
 - SDK stream events are normalized into `AssistantPart[]` (`text` / `thinking` / `tool`); when the final `assistant` message arrives, `reconcileAssistant` replaces the streamed parts wholesale. Tool results come back on `user` messages and are matched by `toolUseId` via the `toolLoc` map.
-- Streaming text deltas are coalesced ~40ms before IPC emission (per-token renders make the UI feel hung).
+- Streaming text deltas are coalesced ~80ms before IPC emission (`deltaCoalescer.ts`) — per-token IPC, and a persist per token, are genuinely too expensive. That window is about *cost*, not about pacing: the renderer spreads the text back out (see "Smooth streaming" below), so widening or narrowing it here does not change what the reading looks like.
 - Permissions: the SDK's `canUseTool` callback returns a Promise held in a `pending` map until the renderer answers via `chat:respond-permission`. "Always allow" uses the SDK's permission `suggestions`.
 - Changing **effort** has no live SDK setter — `setOptions` disposes the session and the next send resumes it in a fresh process. Model and permission mode change live.
 - Sub-agent traffic never becomes a top-level message, but it is no longer *dropped*: only a
@@ -281,6 +281,72 @@ turn, or on every message of every turn.
   two disagreeing about the same string is what made an info string like
   `ts title=foo.ts` stream plain and snap to colour at the fence's close (mdast
   hands remark only the first word, hence `languageFromFenceInfo`'s fallback).
+
+### Tables in a message (`.markdown table`)
+
+A table is the one block in a reply whose width is set by its content rather than
+by the column chosen for prose, and the old rule tried to deny that: `width: 100%`
+with `display: block; overflow-x: auto` **on the table itself**. A block box takes
+its container's width, so the table layout had no room to size a column to its
+longest cell and pushed the overflow down into the cells instead — which is where
+the damage showed. `src/server/backend.ts` came out as `src/server/backend.t` +
+`s` on the next line, each half wearing the inline-code chip's own background.
+
+The scroll therefore moved to a wrapper (`markdown-table-scroll`, a `table`
+component in `Markdown.tsx`) and the table went back to being a table:
+`width: max-content` so a column can claim what it needs, `min-width: 100%` so a
+two-word table doesn't shrink to a stub. **A chip inside a cell is `white-space:
+pre`** — it is an identifier, a path or a flag, and breaking one is worse than
+scrolling to it; prose in the same cell still wraps. In running text the opposite
+holds, which is why `overflow-wrap: anywhere` stays on the base `code` rule:
+there the column really is the constraint and there is no scroller to fall back
+on. Outer cells lose their side padding so the table sits flush in the text
+column, and the last row drops its rule, which otherwise reads as an empty row.
+
+This is `.markdown`, so it is every table in every message *and* the Markdown
+preview. `FileViewer`'s frontmatter table is deliberately not one of them — it is
+a sibling of `<Markdown>`, with its own classes, for exactly this reason.
+
+### Smooth streaming (`lib/streamReveal.ts`, `useStreamText`)
+
+A reply used to arrive in lumps — five or six words at once, eight times a
+second — and the cause was that **both buffers in the path were throttles and
+neither was a pacer.** Main coalesces deltas for ~80ms because per-token IPC and
+a persist per token are too expensive; the renderer committed at most every
+120ms because a markdown re-parse per token makes the window feel hung. Both are
+right about cost. But each commit *jumped* to the latest string, so the
+smoothness the model was already producing was quantized away on the last hop.
+
+The renderer's throttle is now a drain. The full text is held and the visible
+prefix walks toward it on animation frames, closing a share of the gap each
+time.
+
+- **A share of the backlog, not a fixed rate.** A constant characters-per-second
+  either crawls behind a fast model or races ahead of a slow one; closing a
+  fraction is self-tuning, and the resulting deceleration reads as natural rather
+  than mechanical. `DRAIN_MS` is a time constant, so the backlog decays
+  exponentially — most of it inside one constant, all of it within two or three.
+- **The step is word-atomic, and the still-arriving word is held back.** This is
+  the difference between a smooth reveal and a typewriter: character-by-character
+  puts `**bold**` on screen as `*`, then `**`, then `**b`, a flash of literal
+  asterisks that snaps into bold a frame later, on every emphasis in the reply. A
+  word is the smallest unit that keeps inline markdown intact, since none of its
+  delimiters contain a space. The cost is one word of latency — less than the
+  120ms commit already cost. Two escapes: a trailing run past `MAX_HELD_WORD` is
+  revealed rather than held (a data URI is one "word" thousands of characters
+  long), and the hold lifts once the text has been still for `IDLE_MS`, so a
+  reply ending in "." — which is most of them — is not left a word short waiting
+  for a delimiter that is never coming.
+- **The frame loop stops when it is caught up**, re-armed by the next `text`
+  change rather than spinning at 60fps over an empty backlog. Because a step that
+  advances runs on to a word boundary, re-renders land at roughly the rate words
+  arrive (~10–20/s), not at the frame rate.
+- **It starts fully revealed.** A block that mounts mid-turn — a reopened chat, a
+  remount — shows what is already there instead of replaying the whole reply as a
+  typewriter. Only growth from that point is paced.
+- The elapsed time per frame is clamped: a backgrounded window fires its first
+  frame minutes later, and an unclamped delta would reveal everything in one
+  jump, which is exactly the behaviour this replaced.
 
 ### Drafts (`lib/drafts.ts`, `DraftItem`)
 
@@ -848,6 +914,81 @@ counts **bytes**, a message can arrive split across several `data` events and
 several can arrive in one, and slicing the decoded string instead of the Buffer
 is off by one per non-ASCII character — which is every file with an emoji or a
 curly quote in it.
+
+### The transcript's activity rows (`ToolCard`, `ToolGroup`, `lib/toolSummary.ts`)
+
+What a turn *did* is narration between its paragraphs, and it used to be
+furniture: every call, and every group of calls, was a rounded bordered card
+with an icon, a chevron and a green tick. A turn that read six files drew six
+boxes through the middle of a conversation — the eye stops at each one, and what
+it stops for is a step nobody needed to check. They are now muted text rows,
+Cursor's shape, and the box is not lost so much as moved one click away, to
+where the output already lived.
+
+- **The label leads and the chevron trails it.** That ordering is the whole
+  reason the rows read as prose: a disclosure in front indents every row by its
+  own affordance, and a line that narrates has to start on the same column the
+  narration starts on. The chevron's space is *reserved* and only its opacity
+  moves — rendering it on hover reflows the text under the pointer, which reads
+  as the row flinching away from the cursor.
+- **Success draws nothing.** A green tick on every finished step is a column of
+  ticks confirming the unremarkable; the row is written in the past tense, which
+  already says it finished. Failure cannot be carried by wording, so an error or
+  a denial keeps an explicit glyph *and* turns the row's own text destructive —
+  a lone icon at the end of a muted line is easy to read past.
+- **A group's summary does not go red for a call inside it.** The row is a
+  description of several calls, not a call that failed, and "Ran 7 commands" in
+  destructive red says all seven did when six succeeded. The ✕ is kept, because
+  once the group is collapsed it is the only thing left saying so; the red text
+  is not, because one row below is already saying it exactly.
+- **A run is open while it works and folds itself when it lands.** A fixed
+  default cannot express this and both fixed defaults are wrong: collapsed hides
+  the only thing on screen still moving, open leaves a finished forty-call turn
+  unreadable. `useRunDisclosure` holds `boolean | null`, and `null` — "nobody has
+  said" — is deliberately not `false`: storing a boolean up front would make the
+  first auto-close look like a user decision and pin the row shut for the rest of
+  the chat. A click wins from then on. `AgentCard` takes the same rhythm while
+  keeping its own chrome, because a spawned agent is a nested conversation with a
+  model and a spend rather than a step.
+- **What opens it is `live`, not "a call is running"** — and the difference is
+  the whole feature working or visibly failing. Between any two calls in a run
+  there is a moment when the last has returned and the next has not started, so a
+  row keyed on call status collapsed and reopened *once per call*: a
+  seven-command run flickered seven times. `ChatView` owns the only correct
+  answer — its `liveRun` exists exactly while the chat is busy — and passes it
+  down. `running` is still OR-ed in so a group holding a backgrounded agent that
+  outlives its turn does not shut on it, and a **lone call never opens itself**:
+  it is in flight for a few hundred milliseconds and is not a block.
+- **`dense` now suppresses only the enter animation.** A call reads the same
+  wherever it sits, so the styling no longer forks; the rows arrive together when
+  a group opens, and a dozen of them each playing their own entrance is a stutter
+  rather than an arrival.
+- **The expanded calls are flush, not railed.** The calls a run made are the same
+  kind of line as the row summarizing them. An indent would say they are a
+  different kind of thing, and at three levels (group → call → its output) it
+  walks the transcript steadily rightwards.
+
+**`summarizeActivity` is the part that carries information rather than style.**
+A mixed run said `Workspace activity · 7 actions` — a count of the one thing the
+reader can already see, and a name for none of it. Every kind in the run now gets
+a clause and a count: `Edited 1 file, read 3 files, 2 searches`, in the same
+width. The clause order is fixed and is deliberately *not* call order — a turn's
+reads and searches are its method, what it changed is its result, so edits lead;
+chronological order puts a run's twelve reads ahead of the one write that
+mattered. Only the first clause is capitalized (the row is one sentence), a
+search is named by its own noun because "searched 2 searches" is phrasing that
+only reads as English to whoever wrote the template, and `running` swings the
+*whole* row into the present rather than only its last clause, since a row
+reading "Editing 1 file, read 3 files" describes two moments the reader then has
+to reconcile.
+
+It keys off `toolMeta`'s **label**, not the tool's name, and that is what makes
+it provider-neutral for free: Codex and Grok already normalize their calls onto
+the same canonical names (`codex.ts`, `grokAcp.ts`'s `toolName`), so all three
+arrive as the same handful of labels and one sentence serves them. A
+`Record<Provider, …>` here would have been three copies of it. Dependency-free
+and pinned by `test/toolSummary.test.ts`, because pluralization and clause
+joining regress silently.
 
 ### The agent roster (`shared/agentRuns.ts`, `AgentsPanel`, `AgentActivityBar`)
 

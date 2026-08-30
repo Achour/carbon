@@ -75,7 +75,7 @@ const TaskListCard = React.memo(function TaskListCard({
 /**
  * One button in a user message's hover row. Shared so the two actions cannot
  * drift apart in size, spacing or hit area — they sit side by side under the
- * bubble and any mismatch reads as a mistake at this scale.
+ * box and any mismatch reads as a mistake at this scale.
  */
 function MessageAction({
   label,
@@ -94,6 +94,22 @@ function MessageAction({
     </WithTooltip>
   )
 }
+
+/**
+ * The prompt box, shared by the sent message and the editor that replaces it.
+ *
+ * Full width rather than a right-aligned bubble: a prompt is the same document
+ * as the reply below it, and Cursor's shape says so. The negative margin is the
+ * part that makes it read that way — the box hangs its own padding out into the
+ * transcript's gutter, so the *text* inside it lands on the same left edge as
+ * every assistant paragraph and only the border steps out. Padding alone would
+ * indent the prompt, putting two text columns on one screen.
+ *
+ * One shape for both states, so clicking Edit changes what the box holds and
+ * never the box itself: a border, radius or padding that moved on the click
+ * would read as the message being replaced rather than opened.
+ */
+const PROMPT_BOX = '-mx-3.5 w-[calc(100%+1.75rem)] min-w-0 rounded-xl border border-border px-3.5'
 
 /**
  * Reword a sent message and run it again, dropping everything after it.
@@ -148,7 +164,10 @@ function MessageEditor({
   }
 
   return (
-    <div className="flex w-full max-w-[85%] flex-col gap-2 rounded-2xl border border-border bg-secondary/60 p-2.5">
+    <div className={cn(PROMPT_BOX, 'flex flex-col gap-2 bg-secondary/60 py-2.5')}>
+      {/* The attachments stay on screen while the text is reworded: they are
+          part of the message being edited, and the resend carries them. */}
+      <PromptAttachments message={message} />
       <textarea
         ref={ref}
         value={text}
@@ -165,15 +184,15 @@ function MessageEditor({
             void submit()
           }
         }}
-        className="max-h-[420px] w-full resize-none bg-transparent px-1.5 text-[13.5px] leading-relaxed outline-none placeholder:text-muted-foreground"
+        className="max-h-[420px] w-full resize-none bg-transparent text-[13.5px] leading-relaxed outline-none placeholder:text-muted-foreground"
       />
-      {error && <div className="px-1.5 text-[11px] text-destructive">{error}</div>}
+      {error && <div className="text-[11px] text-destructive">{error}</div>}
       {/* No "this removes N messages below" line: resending replaces the tail of
           a conversation, which is what the button says. And nothing here
           predicts whether the provider can rewind itself — that is only known
           once it has been asked, so main reports it afterwards as an event in
           the transcript rather than as a guess from the provider id here. */}
-      <div className="flex items-center justify-end gap-3 px-1.5">
+      <div className="flex items-center justify-end gap-3">
         <div className="flex shrink-0 items-center gap-2">
           <Button size="sm" variant="ghost" disabled={busy} onClick={onClose}>
             Cancel
@@ -190,6 +209,58 @@ function MessageEditor({
 /** Group a run of this many consecutive read/search tools into one row. */
 const GROUP_MIN = 2
 
+/**
+ * The chips and images a prompt was sent with, drawn inside the box above its
+ * text. They belong to the message, and the box is what says so — floated above
+ * it they read as a row of their own, with nothing tying them to the prompt they
+ * were attached to.
+ */
+function PromptAttachments({ message }: { message: UserMessage }): React.JSX.Element | null {
+  if (!message.attachments || message.attachments.length === 0) return null
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {message.attachments.map((att) =>
+        att.kind === 'image' || (att.kind === 'element' && att.data) ? (
+          <img
+            key={att.id}
+            src={`data:${att.mediaType};base64,${att.data}`}
+            alt={att.name}
+            title={att.name}
+            className="max-h-40 max-w-56 rounded-xl border border-border object-cover"
+          />
+        ) : att.kind === 'element' ? (
+          <div
+            key={att.id}
+            title={att.element?.selector}
+            className="flex h-8 max-w-56 items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/10 px-2.5"
+          >
+            <MousePointerClick className="size-3.5 shrink-0 text-primary" />
+            <span className="truncate font-mono text-[11px]">{att.name}</span>
+          </div>
+        ) : att.kind === 'selection' && att.selection ? (
+          <div
+            key={att.id}
+            title={`${att.selection.rel ?? att.selection.path}\n\n${att.selection.text}`}
+            className="flex h-8 max-w-56 items-center gap-1.5 rounded-lg border border-border bg-secondary/60 px-2.5"
+          >
+            <Code2 className="size-3.5 shrink-0 text-muted-foreground" />
+            <span className="truncate font-mono text-[11px]">{att.name}</span>
+          </div>
+        ) : (
+          <div
+            key={att.id}
+            title={att.path}
+            className="flex h-8 max-w-56 items-center gap-1.5 rounded-lg border border-border bg-secondary/60 px-2.5"
+          >
+            <FileText className="size-3.5 shrink-0 text-muted-foreground" />
+            <span className="truncate text-xs">{att.name}</span>
+          </div>
+        )
+      )}
+    </div>
+  )
+}
+
 export const UserBubble = React.memo(function UserBubble({
   message
 }: {
@@ -199,12 +270,15 @@ export const UserBubble = React.memo(function UserBubble({
   const [copied, setCopied] = React.useState(false)
   // App-initiated actions (e.g. a "Commit" from the source-control button) show
   // as a compact chip, Cursor-style — the verbose prompt behind it stays hidden.
-  // No actions: the text behind the chip is a prompt the app wrote, so editing
-  // it would leave the label describing something that never ran, and copying it
-  // would hand over words the user never typed.
+  // It keeps its own shape rather than joining the box below, because it is a
+  // record of a button that was pressed rather than something anyone wrote, and
+  // the two must not look alike. No actions either: the text behind the chip is
+  // a prompt the app wrote, so editing it would leave the label describing
+  // something that never ran, and copying it would hand over words the user
+  // never typed.
   if (message.label) {
     return (
-      <div className="flex animate-enter items-center justify-end">
+      <div className="flex animate-enter items-center">
         <div className="flex items-center gap-1.5 rounded-full border border-primary/25 bg-primary/10 py-1 pr-3 pl-2.5">
           <GitCommitHorizontal className="size-3.5 shrink-0 text-primary" />
           <span className="text-[12.5px] font-medium text-primary">{message.label}</span>
@@ -218,71 +292,38 @@ export const UserBubble = React.memo(function UserBubble({
     setCopied(true)
     setTimeout(() => setCopied(false), 1500)
   }
+  // Attachments alone are a message: a picked element or a dropped image sent
+  // with no words still has a box, where keying the whole body off `text` drew
+  // nothing at all for it.
+  const hasBody = !!message.text || (message.attachments?.length ?? 0) > 0
   return (
-    <div className="group flex animate-enter flex-col items-end gap-1.5">
-      {message.attachments && message.attachments.length > 0 && (
-        <div className="flex max-w-[85%] flex-wrap justify-end gap-1.5">
-          {message.attachments.map((att) =>
-            att.kind === 'image' || (att.kind === 'element' && att.data) ? (
-              <img
-                key={att.id}
-                src={`data:${att.mediaType};base64,${att.data}`}
-                alt={att.name}
-                title={att.name}
-                className="max-h-40 max-w-56 rounded-xl border border-border object-cover"
-              />
-            ) : att.kind === 'element' ? (
-              <div
-                key={att.id}
-                title={att.element?.selector}
-                className="flex h-8 max-w-56 items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/10 px-2.5"
-              >
-                <MousePointerClick className="size-3.5 shrink-0 text-primary" />
-                <span className="truncate font-mono text-[11px]">{att.name}</span>
-              </div>
-            ) : att.kind === 'selection' && att.selection ? (
-              <div
-                key={att.id}
-                title={`${att.selection.rel ?? att.selection.path}\n\n${att.selection.text}`}
-                className="flex h-8 max-w-56 items-center gap-1.5 rounded-lg border border-border bg-secondary/60 px-2.5"
-              >
-                <Code2 className="size-3.5 shrink-0 text-muted-foreground" />
-                <span className="truncate font-mono text-[11px]">{att.name}</span>
-              </div>
-            ) : (
-              <div
-                key={att.id}
-                title={att.path}
-                className="flex h-8 max-w-56 items-center gap-1.5 rounded-lg border border-border bg-secondary/60 px-2.5"
-              >
-                <FileText className="size-3.5 shrink-0 text-muted-foreground" />
-                <span className="truncate text-xs">{att.name}</span>
-              </div>
-            )
-          )}
-        </div>
-      )}
+    <div className="group flex animate-enter flex-col gap-1.5">
       {editing ? (
         <MessageEditor message={message} onClose={() => setEditing(false)} />
       ) : (
-        message.text && (
+        hasBody && (
           <>
-            {/* Prompts render as markdown, the same as replies — a pasted list or
-                a fenced snippet reads as one. `breaks` keeps the newlines the
-                user actually typed, which plain markdown would collapse and
-                which every prompt already in the transcript was written
-                expecting. */}
-            <div className="max-w-[85%] min-w-0 select-text rounded-2xl rounded-br-md bg-secondary px-4 py-2.5 break-words">
-              <Markdown text={message.text} breaks className="leading-relaxed" />
+            <div
+              className={cn(
+                PROMPT_BOX,
+                'flex select-text flex-col gap-2 bg-secondary/40 py-2.5 break-words'
+              )}
+            >
+              <PromptAttachments message={message} />
+              {/* Prompts render as markdown, the same as replies — a pasted list
+                  or a fenced snippet reads as one. `breaks` keeps the newlines
+                  the user actually typed, which plain markdown would collapse
+                  and which every prompt already in the transcript was written
+                  expecting. */}
+              {message.text && <Markdown text={message.text} breaks className="leading-relaxed" />}
             </div>
-            {/* Under the bubble rather than beside it: the message is
-                right-aligned and grows leftward, so a column of icons to its
-                left sits at a different x on every row and reads as debris in
-                the margin. Below, they line up with the bubble's own right edge
-                on every message. `-mt-0.5` pulls the row into the gap the flex
-                parent already leaves, so hovering does not shift the
-                transcript. */}
-            <div className="-mt-0.5 flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+            {/* Under the box and flush with its text, not with its border: the
+                box hangs its own padding into the gutter, and `-ml-1.5` cancels
+                the button's, so the icons sit on the same column as the prompt's
+                first character and as every assistant paragraph. `-mt-0.5` pulls
+                the row into the gap the flex parent already leaves, so hovering
+                does not shift the transcript. */}
+            <div className="-mt-0.5 -ml-1.5 flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
               <MessageAction label="Edit and resend" icon={Pencil} onClick={() => setEditing(true)} />
               <MessageAction
                 label={copied ? 'Copied' : 'Copy prompt'}

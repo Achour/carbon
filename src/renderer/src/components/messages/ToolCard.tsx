@@ -32,6 +32,7 @@ import {
 } from '@shared/agentRuns'
 import { cn } from '@/lib/utils'
 import { humanizeShellCommand } from '@/lib/toolLabels'
+import { summarizeActivity } from '@/lib/toolSummary'
 import { Markdown } from '@/components/Markdown'
 import { useApp } from '@/store'
 import { useAgents } from '@/agentsStore'
@@ -272,6 +273,97 @@ function openTarget(open: NonNullable<ToolMeta['open']>, cwd: string): void {
   }
 }
 
+/**
+ * The chrome every activity row shares — and it is deliberately almost none.
+ *
+ * These rows were bordered cards, and a turn that read six files drew six boxes
+ * through the middle of a conversation: the reader's eye stops at each one, and
+ * what it stops for is a step they did not need to check. Cursor's answer is a
+ * line of muted prose that scans like narration and expands when it is actually
+ * questioned, which is what this is. The box is not lost — it is one click away,
+ * where the output was already living.
+ *
+ * The label leads and the chevron trails it, which is the ordering that lets the
+ * row's **first word** sit on the same column as every paragraph around it. A
+ * disclosure in front would indent every row by its own affordance, and a row
+ * that reads as narration has to start where the narration starts. The negative
+ * margin is only the hover fill reaching into the gutter, so the highlight has
+ * an edge to stop at instead of clipping the text.
+ */
+const ACTIVITY_ROW =
+  'group -mx-1.5 flex w-[calc(100%+0.75rem)] items-center gap-1.5 rounded-md px-1.5 py-1 text-left outline-none transition-colors hover:bg-accent/40 focus-visible:bg-accent/40'
+
+/**
+ * Space is *reserved* for the chevron and only its opacity moves. Rendering it
+ * on hover instead reflows the row's text a few pixels to the right under the
+ * pointer, which reads as the row flinching away from the cursor.
+ */
+const ACTIVITY_CHEVRON =
+  'size-3 shrink-0 text-muted-foreground/50 opacity-0 transition-[opacity,transform] duration-200 group-hover:opacity-100 group-data-[panel-open]:rotate-90 group-data-[panel-open]:opacity-100'
+
+/**
+ * The expanded body. It is **not** indented or railed off: the calls a run made
+ * are the same kind of line as the row that summarizes them, and Cursor stacks
+ * them flush for that reason. An indent would say they are a different kind of
+ * thing, and at three levels (group → call → its output) it would walk the
+ * transcript steadily rightwards.
+ */
+const ACTIVITY_PANEL =
+  'h-[var(--collapsible-panel-height)] overflow-hidden transition-[height] duration-200 ease-out data-[ending-style]:h-0 data-[starting-style]:h-0'
+
+/**
+ * Open while the work is happening, closed once it is done — and an explicit
+ * click wins from then on.
+ *
+ * This is the rhythm Cursor has and a fixed default cannot: a run that is
+ * *still going* is the one thing in the transcript worth watching, so it shows
+ * its steps; the moment it lands it is history, and history belongs on one
+ * line. Collapsing on completion is what keeps a forty-call turn readable
+ * without ever having hidden the work while it mattered.
+ *
+ * **What it is passed matters more than what it does.** "Is a call in flight"
+ * is the wrong question and was the first answer here: between any two calls in
+ * a run there is a moment when the last one has returned and the next has not
+ * started, so a row driven by it collapsed and reopened *once per call* — a
+ * seven-command run flickering seven times. The right question is whether this
+ * is the turn's live block, which stays true across those gaps; `ToolGroup`
+ * takes it as `live` from the one place that knows, and a lone call — in flight
+ * for a few hundred milliseconds — is not a block and never opens itself.
+ *
+ * `null` is "nobody has said", which is deliberately not the same as `false`.
+ * Storing a boolean up front would make the first auto-close look like a user
+ * decision and pin the row shut for the rest of the chat.
+ */
+function useRunDisclosure(running: boolean): {
+  open: boolean
+  onOpenChange: (next: boolean) => void
+} {
+  const [chosen, setChosen] = React.useState<boolean | null>(null)
+  return { open: chosen ?? running, onOpenChange: setChosen }
+}
+
+/**
+ * Status on an activity row, where **success draws nothing at all.**
+ *
+ * A green tick on every finished step is a column of ticks confirming the
+ * unremarkable: the row is written in the past tense, which already says it
+ * finished. What cannot be carried by wording is failure, so an error and a
+ * denial keep an explicit glyph — and the row's own text goes destructive with
+ * it, since a lone icon at the end of a muted line is easy to read past.
+ */
+function ActivityStatus({ part }: { part: ToolPart }): React.JSX.Element | null {
+  if (part.denied) return <ShieldX className="size-3.5 shrink-0 text-destructive" />
+  switch (part.status) {
+    case 'pending':
+    case 'running':
+      return <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground/60" />
+    case 'error':
+      return <X className="size-3.5 shrink-0 text-destructive" />
+    case 'success':
+      return null
+  }
+}
+
 function StatusIcon({ part }: { part: ToolPart }): React.JSX.Element {
   if (part.denied) return <ShieldX className="size-3.5 text-destructive" />
   switch (part.status) {
@@ -386,7 +478,7 @@ function ToolDetails({ part }: { part: ToolPart }): React.JSX.Element {
   })()
 
   return (
-    <div className="space-y-2.5 border-t border-border px-3 py-2.5">
+    <div className="space-y-2.5 py-2">
       {inputView}
       {part.output != null && part.output !== '' && (
         <MonoBlock label={part.status === 'error' ? 'Error' : 'Output'}>
@@ -414,14 +506,21 @@ export const ToolCard = React.memo(function ToolCard({
   part: ToolPart
   cwd: string
   onOpenPlan?: (plan: string) => void
-  /** Row style used inside a ToolGroup: no card chrome, just a thin divider. */
+  /**
+   * This row is one call inside a ToolGroup. A call reads the same wherever it
+   * sits, so all this now suppresses is the enter animation: the rows arrive
+   * together when the group opens, and a dozen of them each playing their own
+   * entrance is a stutter rather than an arrival.
+   */
   dense?: boolean
 }): React.JSX.Element {
   const meta = toolMeta(part, cwd)
   const Icon = meta.icon
-  // Status is fully communicated by the header icon. Keep every tool compact
-  // by default—including failures—and reveal details only when the user asks.
-  const [open, setOpen] = React.useState(false)
+  // A single call never opens itself, and neither does one inside a group.
+  // Disclosure is a property of the live *block* (see `ToolGroup`'s `live`), not
+  // of one call's status: a call is in flight for a few hundred milliseconds, so
+  // keying on it opens and shuts the row once per call.
+  const [open, onOpenChange] = React.useState(false)
 
   // Task/Agent tools render their spawned sub-agent's live activity.
   if (part.name === 'Task' || part.name === 'Agent') {
@@ -450,27 +549,29 @@ export const ToolCard = React.memo(function ToolCard({
     )
   }
 
+  const failed = part.status === 'error' || !!part.denied
   return (
-    <Collapsible.Root open={open} onOpenChange={setOpen} className={cn(!dense && 'animate-enter')}>
-      <div
-        className={cn(
-          'overflow-hidden',
-          dense
-            ? 'border-b border-border/40 last:border-b-0'
-            : 'rounded-xl border border-border bg-card/60'
-        )}
-      >
-        <Collapsible.Trigger
-          className={cn(
-            'group flex w-full items-center gap-2.5 px-3 text-left outline-none transition-colors hover:bg-accent/50 focus-visible:bg-accent/50',
-            dense ? 'py-1.5' : 'py-2'
-          )}
-        >
-          <ChevronRight className="size-3.5 shrink-0 text-muted-foreground/60 transition-transform duration-200 group-data-[panel-open]:rotate-90" />
-          <Icon className="size-4 shrink-0 text-muted-foreground" />
-          <span className="shrink-0 text-[13px] font-medium">{meta.label}</span>
+    <Collapsible.Root
+      open={open}
+      onOpenChange={onOpenChange}
+      className={cn(!dense && 'animate-enter')}
+    >
+      <Collapsible.Trigger className={ACTIVITY_ROW}>
+        {/* The label and what it acted on are one phrase and shrink together,
+            so the chevron stays beside the words rather than being flung to the
+            far edge of a wide transcript, where it no longer reads as belonging
+            to this row. */}
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span
+            className={cn(
+              'shrink-0 text-[13px]',
+              failed ? 'text-destructive' : 'text-muted-foreground'
+            )}
+          >
+            {meta.label}
+          </span>
           {meta.summary && (
-            <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
+            <span className="min-w-0 truncate font-mono text-xs text-muted-foreground/60">
               {meta.open ? (
                 <RowAction
                   title={`${meta.open.kind === 'preview' ? 'Preview' : 'Open'} ${meta.open.target}`}
@@ -484,25 +585,24 @@ export const ToolCard = React.memo(function ToolCard({
               )}
             </span>
           )}
-          {!meta.summary && <span className="flex-1" />}
-          {meta.external && (
-            <RowAction
-              title={`Open ${meta.external}`}
-              ariaLabel="Open published artifact in browser"
-              className="shrink-0 cursor-pointer text-muted-foreground/60 hover:text-foreground"
-              onActivate={() => void window.api.openExternal(meta.external!)}
-            >
-              <ExternalLink className="size-3.5" />
-            </RowAction>
-          )}
-          <span className="shrink-0">
-            <StatusIcon part={part} />
-          </span>
-        </Collapsible.Trigger>
-        <Collapsible.Panel className="h-[var(--collapsible-panel-height)] overflow-hidden transition-[height] duration-200 ease-out data-[ending-style]:h-0 data-[starting-style]:h-0">
-          <ToolDetails part={part} />
-        </Collapsible.Panel>
-      </div>
+        </span>
+        <ChevronRight className={ACTIVITY_CHEVRON} />
+        <span className="flex-1" />
+        {meta.external && (
+          <RowAction
+            title={`Open ${meta.external}`}
+            ariaLabel="Open published artifact in browser"
+            className="shrink-0 cursor-pointer text-muted-foreground/60 hover:text-foreground"
+            onActivate={() => void window.api.openExternal(meta.external!)}
+          >
+            <ExternalLink className="size-3.5" />
+          </RowAction>
+        )}
+        <ActivityStatus part={part} />
+      </Collapsible.Trigger>
+      <Collapsible.Panel className={ACTIVITY_PANEL}>
+        <ToolDetails part={part} />
+      </Collapsible.Panel>
     </Collapsible.Root>
   )
 })
@@ -530,38 +630,6 @@ export const GROUPABLE_TOOLS = new Set([
   'Agent'
 ])
 
-/** The group header title for a uniform run (all the same tool). */
-function groupTitle(label: string | undefined, n: number): string {
-  const plural = (one: string, many: string): string => `${n} ${n === 1 ? one : many}`
-  switch (label) {
-    case 'Read':
-      return `Read ${plural('file', 'files')}`
-    case 'Grep':
-    case 'Glob':
-      return plural('search', 'searches')
-    case 'List':
-      return `Listed ${plural('folder', 'folders')}`
-    case 'Agent':
-      return plural('agent', 'agents')
-    case 'Fetch':
-      return `Fetched ${plural('page', 'pages')}`
-    case 'Search':
-      return `${n} web ${n === 1 ? 'search' : 'searches'}`
-    case 'Find tools':
-      return `Found ${plural('tool', 'tools')}`
-    case 'Terminal':
-    case 'Run':
-    case 'Git':
-      return `Ran ${plural('command', 'commands')}`
-    case 'Edit':
-      return `Edited ${plural('file', 'files')}`
-    case 'Write':
-      return `Wrote ${plural('file', 'files')}`
-    default:
-      return label ? `${label} ×${n}` : `${n} steps`
-  }
-}
-
 /** True while any call in the run — or, for agents, any of their children — is
  *  still working, so a mixed done/running group shows the spinner. */
 function groupRunning(parts: ToolPart[]): boolean {
@@ -584,20 +652,30 @@ function groupRunning(parts: ToolPart[]): boolean {
  */
 export const ToolGroup = React.memo(function ToolGroup({
   parts,
-  cwd
+  cwd,
+  live = false
 }: {
   parts: ToolPart[]
   cwd: string
+  /**
+   * This is the turn's in-flight block. Only `ChatView`'s `liveRun` sets it, and
+   * only while the chat is busy — which is exactly the span the run should stay
+   * open for, gaps between calls included.
+   */
+  live?: boolean
 }): React.JSX.Element {
   const metas = parts.map((p) => toolMeta(p, cwd))
-  const labels = new Set(metas.map((m) => m.label))
-  const uniform = labels.size === 1 ? metas[0] : null
   const running = groupRunning(parts)
   const errored = parts.some((p) => p.status === 'error')
-  const n = parts.length
 
-  const title = uniform ? groupTitle(uniform.label, n) : `Workspace activity · ${n} actions`
-  const Icon = uniform?.icon ?? Layers
+  // A mixed run used to read "Workspace activity · 7 actions" — a count of the
+  // one thing the reader can already see, and a name for none of it. Every kind
+  // in the run gets a clause and a count instead, which is the same width and
+  // actually answers what the turn spent its time on.
+  const title = summarizeActivity(
+    metas.map((m) => m.label),
+    running
+  )
   // A run of spawns is the one group whose collapsed row can say something
   // better than "what the last call touched": how many of them are still
   // working and what they have spent between them. Same numbers as the Agents
@@ -613,42 +691,41 @@ export const ToolGroup = React.memo(function ToolGroup({
     : ''
   // While running, surface the file/target of the last call for a sense of motion.
   const trailing = agentTrailing || (running ? metas[metas.length - 1]?.summary : undefined)
-  // Groups follow the same stable layout as individual tools: their status is
-  // visible in the header and details open only on explicit user interaction.
-  const [open, setOpen] = React.useState(false)
+  // Open for as long as this is the live block, folded to one line the moment
+  // the turn hands it to history. `running` still counts, so a group holding a
+  // backgrounded agent that outlives its turn does not shut on it.
+  const { open, onOpenChange } = useRunDisclosure(live || running)
 
   return (
-    <Collapsible.Root open={open} onOpenChange={setOpen} className="animate-enter">
-      <div className="overflow-hidden rounded-xl border border-border bg-card/60">
-        <Collapsible.Trigger className="group flex w-full items-center gap-2.5 px-3 py-2 text-left outline-none transition-colors hover:bg-accent/50 focus-visible:bg-accent/50">
-          <ChevronRight className="size-3.5 shrink-0 text-muted-foreground/60 transition-transform duration-200 group-data-[panel-open]:rotate-90" />
-          <Icon className="size-4 shrink-0 text-muted-foreground" />
-          <span className="shrink-0 text-[13px] font-medium">{title}</span>
-          {trailing ? (
-            <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
+    <Collapsible.Root open={open} onOpenChange={onOpenChange} className="animate-enter">
+      <Collapsible.Trigger className={ACTIVITY_ROW}>
+        <span className="flex min-w-0 items-center gap-1.5">
+          {/* The summary stays muted even when a call inside failed. A group is
+              a description of several calls, not a call that failed: colouring
+              "Ran 7 commands" red says all seven did, when six succeeded and the
+              one that didn't is already red a row below. The ✕ at the end is
+              what carries it — that one is kept, because it is the only signal
+              left once the group is collapsed over the row that failed. */}
+          <span className="shrink-0 text-[13px] text-muted-foreground">{title}</span>
+          {trailing && (
+            <span className="min-w-0 truncate font-mono text-xs text-muted-foreground/60">
               {trailing}
             </span>
-          ) : (
-            <span className="flex-1" />
           )}
-          <span className="shrink-0">
-            {running ? (
-              <Loader2 className="size-3.5 animate-spin text-warning" />
-            ) : errored ? (
-              <X className="size-3.5 text-destructive" />
-            ) : (
-              <Check className="size-3.5 text-success" />
-            )}
-          </span>
-        </Collapsible.Trigger>
-        <Collapsible.Panel className="h-[var(--collapsible-panel-height)] overflow-hidden transition-[height] duration-200 ease-out data-[ending-style]:h-0 data-[starting-style]:h-0">
-          <div className="border-t border-border">
-            {parts.map((p) => (
-              <ToolCard key={p.toolUseId} part={p} cwd={cwd} dense />
-            ))}
-          </div>
-        </Collapsible.Panel>
-      </div>
+        </span>
+        <ChevronRight className={ACTIVITY_CHEVRON} />
+        <span className="flex-1" />
+        {running ? (
+          <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground/60" />
+        ) : errored ? (
+          <X className="size-3.5 shrink-0 text-destructive" />
+        ) : null}
+      </Collapsible.Trigger>
+      <Collapsible.Panel className={ACTIVITY_PANEL}>
+        {parts.map((p) => (
+          <ToolCard key={p.toolUseId} part={p} cwd={cwd} dense />
+        ))}
+      </Collapsible.Panel>
     </Collapsible.Root>
   )
 })
@@ -725,13 +802,20 @@ function AgentCard({ part, cwd }: { part: ToolPart; cwd: string }): React.JSX.El
   )
   const running = part.status === 'pending' || part.status === 'running' || childRunning
 
-  // Collapsed by default — the header shows live status; expand to watch.
-  const [open, setOpen] = React.useState(false)
+  // Open while it works, folded once it lands — the rhythm every activity row
+  // now has. An agent keeps its own chrome, because it is a nested conversation
+  // with a model and a spend rather than a step, and the Agents panel scrolls
+  // to it; but there is no reason for it to sit shut while it is the one thing
+  // on screen still moving.
+  const { open, onOpenChange } = useRunDisclosure(running)
   // A click in the Agents panel opens this card as it scrolls it into view.
   // Selecting down to a number keeps every other agent card out of the update.
   const focusTick = useAgents((s) => (s.focusId === part.toolUseId ? s.focusTick : 0))
   React.useEffect(() => {
-    if (focusTick > 0) setOpen(true)
+    if (focusTick > 0) onOpenChange(true)
+    // Keyed on the tick alone: `onOpenChange` is a setState function and stable
+    // for the card's lifetime, and listing it would re-run this on every render
+    // that changes `running`.
   }, [focusTick])
   const elapsed = useAgentElapsed(part.agent, running)
   // What the agent has spent, when its provider says. The collapsed row is
@@ -754,7 +838,7 @@ function AgentCard({ part, cwd }: { part: ToolPart; cwd: string }): React.JSX.El
   ].filter(Boolean) as string[]
 
   return (
-    <Collapsible.Root open={open} onOpenChange={setOpen} className="animate-enter">
+    <Collapsible.Root open={open} onOpenChange={onOpenChange} className="animate-enter">
       <div
         // The Agents panel scrolls the transcript to this card, the way the
         // review's next/previous change walks `[data-diff-hunk]`.

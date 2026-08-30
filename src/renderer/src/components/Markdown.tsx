@@ -6,6 +6,7 @@ import remarkBreaks from 'remark-breaks'
 import rehypeHighlight from 'rehype-highlight'
 import { Check, Code2, Copy, Maximize2, RotateCcw, X, ZoomIn, ZoomOut } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { nextReveal, revealLimit } from '@/lib/streamReveal'
 import { useApp } from '@/store'
 import { getImageEpoch, readImageOnce, subscribeImageEpoch } from '@/lib/imageCache'
 import {
@@ -527,6 +528,18 @@ function LocalImage({
 const components = {
   pre: CodeBlock,
   code: InlineCode,
+  // The scroll lives on a wrapper, not on the table. `display: block` +
+  // `overflow-x: auto` on the <table> itself is the usual trick and it is what
+  // squeezed the columns: a block box takes the container's width, so the table
+  // layout had no room to size a column to its content and pushed the overflow
+  // down into the cells instead — which is where the mid-path breaks came from.
+  // Wrapped, the table stays a table, sizes to `max-content`, and the overflow
+  // is handled by the one element whose job it is.
+  table: ({ children }: React.HTMLAttributes<HTMLTableElement>) => (
+    <div className="markdown-table-scroll">
+      <table>{children}</table>
+    </div>
+  ),
   img: ({ src, alt }: React.ImgHTMLAttributes<HTMLImageElement>) => {
     const s = typeof src === 'string' ? src : ''
     const a = typeof alt === 'string' ? alt : ''
@@ -628,47 +641,85 @@ export const Markdown = React.memo(function Markdown({
   )
 })
 
-const STREAM_RENDER_MS = 120
+/**
+ * Once the text has been still for this long the stream is idle — a lull between
+ * deltas, or the turn ending — so the trailing word stops being held back.
+ */
+const IDLE_MS = 400
 
 /**
- * Commit-throttles a streaming string: re-renders at most every
- * STREAM_RENDER_MS while `streaming`, and passes the latest text straight
- * through (cancelling any pending commit) once it ends.
+ * Paces a streaming string onto the screen, revealing it a word at a time across
+ * animation frames rather than jumping to the latest value on a timer.
+ *
+ * The throttle this replaced committed at most every 120ms, and each commit
+ * showed everything that had arrived since — so at a normal generation rate the
+ * reader got five or six words at once, eight times a second, however smoothly
+ * the model was actually producing them. See `lib/streamReveal.ts` for the
+ * drain, the word-atomic step and why both are shaped that way.
+ *
+ * **The frame loop stops when it is caught up.** It is re-armed by the next
+ * `text` change rather than spinning at 60fps over an empty backlog, which is
+ * what a lull between deltas mostly is. Re-renders therefore land at roughly the
+ * rate words arrive, not the frame rate: the step runs forward to a word
+ * boundary, so a frame that advances is a frame with a word to show.
+ *
+ * It starts fully revealed, so a block that mounts mid-turn — a chat reopened,
+ * a remount — shows what is already there instead of replaying it as a
+ * typewriter. Only growth from that point on is paced.
  */
 export function useStreamText(text: string, streaming: boolean): string {
   const latestRef = React.useRef(text)
-  const lastCommitRef = React.useRef(performance.now())
-  const timerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+  const shownLenRef = React.useRef(text.length)
+  const grownAtRef = React.useRef(0)
+  const frameRef = React.useRef<number | null>(null)
+  const lastFrameRef = React.useRef(0)
   const [shown, setShown] = React.useState(text)
-  latestRef.current = text
+  if (text !== latestRef.current) {
+    latestRef.current = text
+    grownAtRef.current = performance.now()
+  }
+
+  const tick = React.useCallback((now: number) => {
+    frameRef.current = null
+    const latest = latestRef.current
+    // A part is not only appended to: `reconcileAssistant` replaces it wholesale
+    // when the final message lands, and a shorter replacement would otherwise
+    // leave the cursor past the end.
+    const shownLen = Math.min(shownLenRef.current, latest.length)
+    const hold = now - grownAtRef.current < IDLE_MS
+    const limit = revealLimit(latest, hold)
+    // Clamp the delta: a backgrounded window fires its first frame minutes
+    // later, and an unclamped elapsed would reveal the backlog in one jump —
+    // the exact behaviour this replaced.
+    const elapsed = Math.min(now - lastFrameRef.current, 64)
+    lastFrameRef.current = now
+    const next = nextReveal(latest, shownLen, limit, elapsed)
+    if (next !== shownLenRef.current) {
+      shownLenRef.current = next
+      setShown(latest.slice(0, next))
+    }
+    // Keep going only while there is something to show — including the case
+    // where `hold` is about to expire and free the trailing word.
+    if (next < latest.length) frameRef.current = requestAnimationFrame(tick)
+  }, [])
 
   React.useEffect(() => {
     if (!streaming) {
-      if (timerRef.current !== null) {
-        clearTimeout(timerRef.current)
-        timerRef.current = null
-      }
+      if (frameRef.current !== null) cancelAnimationFrame(frameRef.current)
+      frameRef.current = null
+      shownLenRef.current = text.length
       setShown(text)
       return
     }
-    const elapsed = performance.now() - lastCommitRef.current
-    if (elapsed >= STREAM_RENDER_MS) {
-      lastCommitRef.current = performance.now()
-      setShown(text)
-      return
+    if (frameRef.current === null && shownLenRef.current < text.length) {
+      lastFrameRef.current = performance.now()
+      frameRef.current = requestAnimationFrame(tick)
     }
-    if (timerRef.current === null) {
-      timerRef.current = setTimeout(() => {
-        timerRef.current = null
-        lastCommitRef.current = performance.now()
-        setShown(latestRef.current)
-      }, STREAM_RENDER_MS - elapsed)
-    }
-  }, [text, streaming])
+  }, [text, streaming, tick])
 
   React.useEffect(
     () => () => {
-      if (timerRef.current !== null) clearTimeout(timerRef.current)
+      if (frameRef.current !== null) cancelAnimationFrame(frameRef.current)
     },
     []
   )
