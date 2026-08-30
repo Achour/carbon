@@ -428,7 +428,12 @@ export function GitActionButton(): React.JSX.Element | null {
     // No `flex-1`: the bar already has one spacer, and a second one here pushed
     // this button to the right edge *away from* the controls beside it — two
     // clusters with a hole between them once the panel was wide.
-    <div className="flex min-w-0 shrink-0">
+    //
+    // It *shrinks*, though. The review bar clips, so the alternative to a
+    // truncated label here is this button sliced down the middle at the panel's
+    // default width — and the label is already `truncate`, which does nothing
+    // inside a wrapper that refuses to give up any width.
+    <div className="flex min-w-0 shrink">
       <WithTooltip label={tip}>
         <Button
           size="sm"

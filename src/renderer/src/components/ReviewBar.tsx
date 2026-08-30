@@ -129,7 +129,7 @@ export function ReviewBar({ cwd }: { cwd: string }): React.JSX.Element {
   const hasChanges = changes.length > 0;
 
   return (
-    <div className="flex h-8 shrink-0 items-center gap-1.5 overflow-hidden border-b border-border/60 pr-1.5 pl-2.5 text-[length:var(--ui-row)] text-muted-foreground">
+    <div className="@container flex h-8 shrink-0 items-center gap-1.5 overflow-hidden border-b border-border/60 pr-1.5 pl-2.5 text-[length:var(--ui-row)] text-muted-foreground">
       <DropdownMenu>
         <WithTooltip label={scopeMeta.hint}>
           <DropdownMenuTrigger
@@ -177,7 +177,11 @@ export function ReviewBar({ cwd }: { cwd: string }): React.JSX.Element {
       {/* The branch, inline — Cursor puts it right beside the scope rather than
           heading the column it belongs to. */}
       {git?.branch && (
-        <span className="flex min-w-0 shrink items-center gap-1 pl-1">
+        // Hidden in a narrow panel rather than truncated: at the default width
+        // it renders as "m…", which names nothing, and the ~55px it costs is
+        // what the primary action needs to say "Publish repository" instead of
+        // "Publish …". The chat's own context strip carries the branch anyway.
+        <span className="hidden min-w-0 shrink items-center gap-1 pl-1 @[36rem]:flex">
           <GitBranch className="size-3 shrink-0 text-muted-foreground/70" />
           <span className="truncate">{git.branch}</span>
           {git.ahead > 0 && (
@@ -197,7 +201,14 @@ export function ReviewBar({ cwd }: { cwd: string }): React.JSX.Element {
 
       <div className="min-w-1 flex-1" />
 
-      <div className="flex shrink-0 items-center gap-0.5">
+      {/* Shrinkable, not `shrink-0`. The bar clips (`overflow-hidden`), so a
+          right cluster that refuses to give ground doesn't overflow visibly —
+          it gets *sliced*, and the casualty is always the last thing in it:
+          the primary action, cut in half at the panel's default width. The
+          icons inside still hold their size; what yields is the one control
+          that can say the same thing smaller (a truncated pill, and its label
+          below `@[38rem]`). */}
+      <div className="flex min-w-0 shrink items-center gap-0.5">
         {hasChanges && (
           <div className="flex shrink-0 items-center">
             <WithTooltip label="Previous change">
@@ -258,7 +269,12 @@ export function ReviewBar({ cwd }: { cwd: string }): React.JSX.Element {
               onClick={toggleAll}
             >
               {allCollapsed ? <ChevronsUpDown /> : <ChevronsDownUp />}
-              {allCollapsed ? "Expand all" : "Collapse all"}
+              {/* Icon-only in a narrow panel: this is the one label in the
+                  cluster whose glyph already says it, and the tooltip carries
+                  the words. */}
+              <span className="hidden @[38rem]:inline">
+                {allCollapsed ? "Expand all" : "Collapse all"}
+              </span>
             </Button>
           </WithTooltip>
         )}
