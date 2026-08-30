@@ -297,7 +297,7 @@ export const UserBubble = React.memo(function UserBubble({
   // nothing at all for it.
   const hasBody = !!message.text || (message.attachments?.length ?? 0) > 0
   return (
-    <div className="group flex animate-enter flex-col gap-1.5">
+    <div className="group relative flex animate-enter flex-col">
       {editing ? (
         <MessageEditor message={message} onClose={() => setEditing(false)} />
       ) : (
@@ -317,13 +317,19 @@ export const UserBubble = React.memo(function UserBubble({
                   expecting. */}
               {message.text && <Markdown text={message.text} breaks className="leading-relaxed" />}
             </div>
-            {/* Under the box and flush with its text, not with its border: the
-                box hangs its own padding into the gutter, and `-ml-1.5` cancels
-                the button's, so the icons sit on the same column as the prompt's
-                first character and as every assistant paragraph. `-mt-0.5` pulls
-                the row into the gap the flex parent already leaves, so hovering
-                does not shift the transcript. */}
-            <div className="-mt-0.5 -ml-1.5 flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+            {/* Laid over the box, not stacked under it — and the reason is
+                layout, not taste. A hidden row is still a row: at `opacity-0` it
+                reserved its own height plus the flex gap under every prompt in
+                the transcript, so the space between a message and the reply to
+                it read as an empty box waiting for something that only appears
+                on hover. Absolute takes it out of flow entirely, which is the
+                only way the gap goes to zero while the buttons stay where the
+                pointer already is. It carries its own background because it now
+                sits *on* the prompt: over a line of text, two bare icons are
+                unreadable. `right-0` is the box's own text column, so the
+                cluster lines up with the last character of a wrapped line rather
+                than with the border floating 14px further out. */}
+            <div className="absolute top-1.5 right-0 flex items-center gap-0.5 rounded-lg border border-border bg-card/90 p-0.5 opacity-0 shadow-sm backdrop-blur-sm transition-opacity group-hover:opacity-100 focus-within:opacity-100">
               <MessageAction label="Edit and resend" icon={Pencil} onClick={() => setEditing(true)} />
               <MessageAction
                 label={copied ? 'Copied' : 'Copy prompt'}
