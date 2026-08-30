@@ -19,76 +19,11 @@ one contract, which is what lets a chat switch providers mid-conversation.
 
 ## Install
 
-**Requires:** macOS, Node 24+, and at least one provider CLI installed and
-logged in:
-
-```sh
-npm install -g @anthropic-ai/claude-code   # log in by running `claude`
-npm install -g @openai/codex               # log in with `codex login`
-npm install -g @xai-official/grok          # log in by running `grok`
-```
-
-(`@xai-official/grok` is xAI's own package. `@vibe-kit/grok-cli` is an unrelated
-third-party one whose name reads like the official.)
-
-A provider you haven't installed simply doesn't appear in the model picker.
-Settings → Providers shows what Carbon found and where, so a CLI installed
-through a version manager, Homebrew or a shell installer all work the same way.
-
-Then build the app:
-
-```sh
-git clone https://github.com/Achour/carbon
-cd carbon
-npm install
-npm run install-app
-```
-
-That builds Carbon and puts it in `/Applications`. Open it from Spotlight.
-
-Building locally is the recommended path because macOS never questions it.
-Carbon isn't signed with an Apple Developer certificate ($99/yr, and this is a
-free app), and Gatekeeper blocks *downloaded* apps that aren't — but an app you
-built on your own machine was never downloaded, so nothing prompts.
-
-To update:
-
-```sh
-git pull
-npm install
-npm run install-app
-```
-
-Carbon tells you when there's a new version — a banner in the sidebar, and
-Settings → About → Check for updates.
-
-<details>
-<summary>If <code>npm install</code> fails on <code>node-pty</code></summary>
-
-Carbon's terminal uses node-pty, which compiles through node-gyp, which still
-imports Python's `distutils` — removed from the standard library in Python 3.12.
-Give it the compatibility shim:
-
-```sh
-python3 -m pip install --break-system-packages setuptools
-npm run rebuild
-```
-</details>
-
-### Homebrew
-
 ```sh
 brew install --cask achour/carbon/carbon
 ```
 
-Homebrew won't load a cask from a third-party tap until you trust it. Installing
-one by name counts as trusting it, so the line above is all you need — but a
-read-only command like `brew info --cask carbon` will refuse until you've either
-installed it or run `brew trust achour/carbon`.
-
-The cask clears the quarantine flag after installing, so this route skips the
-Gatekeeper prompt the raw `.dmg` gets — and it's the only one that updates in
-place:
+Then update in place:
 
 ```sh
 brew update && brew upgrade --cask carbon
@@ -96,23 +31,47 @@ brew update && brew upgrade --cask carbon
 
 The `brew update` is load-bearing. Homebrew only re-pulls a tap once its last
 auto-update is a day old, so a bare `brew upgrade` can read a stale copy of the
-cask and tell you the latest version is already installed.
+cask and tell you the latest version is already installed. Carbon recognizes a
+Homebrew install and shows you that command in the sidebar when a release lands,
+instead of a download link.
 
-Carbon recognizes a Homebrew install and shows that command in place of a
-download link when a new version lands.
+Homebrew won't load a cask from a third-party tap until you trust it. Installing
+one by name counts as trusting it, so the line above is all you need — but a
+read-only command like `brew info --cask carbon` will refuse until you've either
+installed it or run `brew trust achour/carbon`.
 
-### Prebuilt download
+**You also need at least one provider CLI, installed and logged in:**
 
-There are `.dmg` builds on [Releases](https://github.com/Achour/carbon/releases/latest)
-if you'd rather not build — `-arm64` for Apple Silicon, `-x64` for Intel. Because
-these *are* downloaded, macOS will refuse the first launch with *"Carbon is
+| | Install | Log in |
+| --- | --- | --- |
+| Claude Code | `npm install -g @anthropic-ai/claude-code` | run `claude` |
+| Codex | `npm install -g @openai/codex` | `codex login` |
+| Grok | `npm install -g @xai-official/grok` | run `grok` |
+
+Any install route works — a version manager, Homebrew, a shell installer;
+Settings → Providers shows what Carbon found and where. A provider you haven't
+installed simply doesn't appear in the model picker. (`@xai-official/grok` is
+xAI's own package. `@vibe-kit/grok-cli` is an unrelated third-party one whose
+name reads like the official.)
+
+<details>
+<summary>Prefer a <code>.dmg</code>, or building from source?</summary>
+
+`.dmg` builds are on [Releases](https://github.com/Achour/carbon/releases/latest)
+— `-arm64` for Apple Silicon, `-x64` for Intel. They don't update in place, and
+because they *are* downloaded, macOS refuses the first launch with *"Carbon is
 damaged and can't be opened."* It isn't damaged; that's what Gatekeeper says
-about any unsigned app. Open it once via **System Settings → Privacy & Security →
-Open Anyway**, or clear the flag from a terminal:
+about any app without an Apple Developer certificate ($99/yr, and this is a free
+app). Open it once via **System Settings → Privacy & Security → Open Anyway**, or
+clear the flag:
 
 ```sh
 xattr -cr /Applications/Carbon.app
 ```
+
+Building it yourself avoids Gatekeeper entirely — an app you compiled was never
+downloaded, so nothing prompts. See [Development](#development).
+</details>
 
 ## What it does
 
@@ -151,12 +110,38 @@ light/dark themes with macOS vibrancy.
 
 ## Development
 
+**Requires Node 24+** (the app itself doesn't — that's what the cask is for).
+
+```sh
+git clone https://github.com/Achour/carbon
+cd carbon
+npm install
+npm run install-app   # builds and puts Carbon.app in /Applications
+```
+
+`git pull && npm install && npm run install-app` updates that build. An app you
+compiled yourself never meets Gatekeeper, so this route prompts for nothing —
+but it doesn't auto-update, and neither does the `.dmg`; only the cask does.
+
 ```sh
 npm run dev        # hot-reloading dev window
 npm run typecheck  # the primary verification gate
 npm test           # node --test over test/*.test.ts
 npm run package    # build Carbon.app into dist/ without installing it
 ```
+
+<details>
+<summary>If <code>npm install</code> fails on <code>node-pty</code></summary>
+
+Carbon's terminal uses node-pty, which compiles through node-gyp, which still
+imports Python's `distutils` — removed from the standard library in Python 3.12.
+Give it the compatibility shim:
+
+```sh
+python3 -m pip install --break-system-packages setuptools
+npm run rebuild
+```
+</details>
 
 Three Electron layers with one shared contract:
 
