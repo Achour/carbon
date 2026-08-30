@@ -15,11 +15,13 @@ npm run typecheck  # tsc over both projects: tsconfig.node.json (main+preload) a
 npm test           # node --test over test/*.test.ts (Node strips the TS types natively)
 ```
 
-`npm run typecheck` is the primary verification gate. There is no linter. Tests are
-minimal and cover only pure, tricky logic worth pinning (e.g. `test/imageScan.test.ts`
-for Codex generated-image discovery) — most code is verified by typecheck + running the app.
-When you extract such logic, keep it dependency-free (import only `node:*`) so `node --test`
-can run the `.ts` directly without a bundler.
+`npm run typecheck` is the primary verification gate. There is no linter. Tests cover
+only pure, tricky logic worth pinning (e.g. `test/imageScan.test.ts` for Codex
+generated-image discovery) — there are ~50 of them and none touches Electron or the DOM,
+which is what lets `node --test` run the `.ts` directly with no bundler and no harness;
+everything else is verified by typecheck + running the app. When you extract such logic,
+keep it dependency-free (import only `node:*`) so `node --test` can run the `.ts`
+directly without a bundler.
 
 Dev utilities (env vars for `npm run dev`, used for UI iteration without a human clicking):
 - `AIGUI_CAPTURE=/tmp/shot.png` — saves a window screenshot after load. `AIGUI_CAPTURE_DELAY=2000,8000` takes a comma list of delays and saves `shot-1.png`, `shot-2.png`, …
@@ -85,7 +87,10 @@ Path aliases: `@` → `src/renderer/src`, `@shared` → `src/shared` (renderer a
 - Streaming text deltas are coalesced ~40ms before IPC emission (per-token renders make the UI feel hung).
 - Permissions: the SDK's `canUseTool` callback returns a Promise held in a `pending` map until the renderer answers via `chat:respond-permission`. "Always allow" uses the SDK's permission `suggestions`.
 - Changing **effort** has no live SDK setter — `setOptions` disposes the session and the next send resumes it in a fresh process. Model and permission mode change live.
-- Sub-agent traffic is skipped in the UI: messages with `parent_tool_use_id` are ignored.
+- Sub-agent traffic never becomes a top-level message, but it is no longer *dropped*: only a
+  `stream_event` carrying a `parent_tool_use_id` breaks: its `assistant` and `user` messages
+  are routed onto the spawning tool card (`handleSubAgentAssistant` /
+  `handleSubAgentToolResults`), which is what fills `ToolPart.children` and the agent roster.
 - **Three things the model does are invisible unless they are decoded, and all three used to be.** Each is a shape the SDK grew that a text-only reader drops on the floor, and the symptom is identical every time: a step the user can see happen with nothing to show for it.
   - **A `tool_result` block is not always text.** `ToolSearch` — which Claude Code now calls ahead of every deferred tool — answers in `tool_reference` blocks carrying a tool *name* and no `text` at all, so a mapper reading `text` alone rendered the whole card empty. `toolResultText` is the one decoder, shared by the main-agent and sub-agent result paths so they cannot drift.
   - **`advisor` is a *server-side* tool.** The call arrives as a `server_tool_use` block and its answer as an `advisor_tool_result` block — never as a `tool_result` on a following user message, the only completion path `handleToolResults` knows. Unhandled, the card spun for the rest of the chat. Two paths have to settle it, and both are load-bearing: `handleStreamEvent` (mid-turn, so the card settles while the user is watching) and `reconcileAssistant` (a replay, or `includePartialMessages` off, reaches reconcile with the card still `running` and nothing else would ever settle it). The result is its own assistant message, *after* the one holding the call, which is why the reconcile branch falls back to `settleServerTool`'s `toolLoc` lookup rather than searching the parts it is building — and why the block is handled **above** `ensureCurrent`, which would otherwise open a message for a block that belongs to an earlier one. The content is normally `advisor_redacted_result`: encrypted for the model, with no text to show, so the honest line is the CLI's own — that it was consulted and the feedback is being applied. It goes on the *collapsed* row rather than one expand away, because the outcome is the only thing this call has to say. **An advisor call can also simply never be answered** — the turn ends with the consult still open and the CLI strips the pair out of the history it resends — so `terminalizeRunning` says that instead of leaving a green tick over an empty body.
@@ -174,6 +179,101 @@ The legacy `chats/<id>.json` files are imported once and then **never written, m
 ### Renderer state (`src/renderer/src/store.ts`)
 
 Only the active chat's messages are held in memory, and only the window main sent — `messages` is the loaded suffix and `hiddenBefore` counts what is still in the database. Switching chats refetches via `getChat`; the "Load earlier messages" control at the top of `ChatView` prepends the next window and restores the reading position by anchoring on distance from the *bottom* of the scroller, which is the part a prepend does not move. Events for non-active chats still update sidebar metadata and statuses. The right panel hosts file tabs, git diff tabs (tab ids prefixed `diff:`), and the plan panel; an `ExitPlanMode` permission request auto-opens the plan panel. When a chat's status returns to `idle`, open files, the file tree, and git status are refreshed so the agent's edits show up.
+
+### First paint, and the cost of every message (`lib/preloadHeavy.ts`, `lib/lspBridge.ts`, `main/shellEnv.ts`)
+
+None of these was a slow algorithm. Each was work happening at a moment nobody
+had chosen — between the click on the icon and a window, in front of the first
+turn, or on every message of every turn.
+
+- **The PATH is remembered, not re-derived.** `hydrateShellPath` is a synchronous
+  `zsh -ilc` inside `app.whenReady()`, ahead of `createWindow()` — so every
+  millisecond the user's shell spends sourcing nvm, oh-my-zsh and conda is a
+  millisecond with no window on screen: 0.12 s on a bare config, routinely
+  0.5–2 s on a real one, at every launch. **Reordering it behind
+  `createWindow()` is not the fix** — the managers built in between resolve
+  provider binaries through this PATH, and `registerIpc()` has to be in place
+  before the renderer can call anything. So userData holds the previous launch's
+  PATH and it is applied immediately while the shell is re-read in the
+  background, both to rewrite the cache and to pick up anything installed since.
+  Only a first-ever launch spawns a shell. Staleness is bounded by construction:
+  every launch refreshes, so the cache is never more than one launch behind, and
+  this launch heals itself a moment after opening rather than at the next one.
+  `app.setPath('userData')` moves above it, which only records a location.
+- **Resolving a binary is a few `stat`s; reading its version is a *process*.**
+  `readVersion` is `execFileSync` with an 8 s timeout, and it used to be reached
+  lazily through the first `cliPath` — which wants a path and nothing else — so
+  the stall landed not at launch but at whatever moment the first turn started,
+  with the `chat:event` channel feeding the transcript blocked behind
+  `claude --version`. The two are now separate: `providerCli` stays synchronous
+  and cheap, and versions are read asynchronously and in parallel by
+  `providerClis`, which is Settings → Providers — the one caller that needs them
+  and therefore the one that pays.
+- **The heavy renderer chunks are split out *and* warmed on idle**, which is the
+  half that keeps the split honest. The entry chunk was 6,720 kB, all parsed and
+  evaluated before anything appeared; it is 2,733 kB. `import hljs from
+  'highlight.js'` registered ~190 languages and bought nothing even in
+  principle: the *finished* markdown in a message is highlighted by
+  `rehype-highlight` over lowlight's 36-language `common` set, so the extra 150
+  could only ever appear on the two surfaces calling `highlightCode` directly —
+  a streaming fence and the diff view — and would lose their colour the moment
+  the turn ended and the full parse replaced them. `HLJS_LANGUAGES` is now one
+  definition fed to both, the way `--syn-*` is one palette rather than two that
+  agree by coincidence. mermaid, CodeMirror and xterm are dynamic imports
+  preloaded by `preloadHeavy.ts`: lazily loading a surface without warming it
+  does not remove its cost, it moves it to the first click on a file, the first
+  terminal tab and the first diagram, where it lands as a hitch in the middle of
+  a gesture — and at launch nobody is mid-action. They warm **one at a time**,
+  because fetching is off-thread but *evaluating* is not, and ~2 MB of it back
+  to back is exactly the long task that drops a frame if someone starts typing
+  halfway through.
+- **`lspBridge` inverts a dependency rather than deferring one.** `lspClient.ts`
+  pulls ~470 KB of `@codemirror/*` and was imported statically by `store.ts` and
+  `main.tsx` — the two modules on the path to first paint — so lazy-loading
+  `CodeEditor` alone would have moved none of it. Both callers want the same
+  thing: tell the servers something *if any are running*. If none are, no editor
+  was opened and there is nothing to say, which is precisely the case a dynamic
+  `import()` at the call site gets wrong, by fetching half a megabyte to
+  discover it had nothing to do. So the client registers itself when its chunk
+  lands and every call is a no-op until then — which is also the only shape that
+  works for `releaseAllServers`, running on `beforeunload`, where an
+  `await import()` could never finish.
+- **The sidebar redrew on every assistant message** — on Claude, every tool call
+  — because `applyEvent` remapped `chats` to bump `updatedAt`, minting a new
+  array that every subscriber compares by identity, and `Sidebar` had no memo
+  anywhere in its 1,816 lines. `updatedAt` is *display* state here (main owns
+  the persisted value and re-states it in a `meta` patch at the turn's end) and
+  both surfaces drawing it are coarse — a minute, then a day — so the bump is
+  skipped when it would redraw nothing, and a row still ticks over on the
+  message that genuinely crosses a boundary. **The skip must not return `{}`**:
+  zustand assigns a fresh state object for an empty patch and runs every
+  subscriber's selector against it. `ChatItem` is then memoized behind one
+  stable `RowActions` built per mount — each handler takes the chat it acts on
+  instead of closing over it, and anything volatile is read at click time
+  through a ref refreshed every render, so a stable identity never means a stale
+  menu. Its comparison is written out rather than left to the default, because
+  `chatActivity` and `chatDetail` return a fresh object per call that a shallow
+  compare reads as a change every time.
+- **An open code fence skips the markdown parse.** Nothing inside a fenced block
+  is a seal boundary — that is what keeps the chunk split correct — so an open
+  fence is the one block whose live tail grows without bound, and an agent
+  writing a file into chat is exactly that case: a 400-line block was ~16 KB of
+  markdown re-parsed, re-highlighted and rebuilt into thousands of token spans
+  ~8 times a second. `splitMarkdownStream` now reports the open fence separately
+  and its body skips the parse entirely (a fence's content is opaque text by
+  definition), drawn as one memoized row per line — 37 long tasks and 2,168 ms
+  of blocked main thread over a 14 s reply, both to zero. The body is
+  highlighted **whole and only then cut into lines**: per-line highlighting is
+  cheaper and wrong, since hljs carries state across lines (a block comment
+  colours everything below it) and v11 dropped the `continuation` parameter that
+  used to expose it. A mermaid fence declines the fast path — its block renders
+  a diagram, so it stays the markdown parse's problem — and only a column-0
+  fence is lifted, since an indented one is a list item's content.
+  `languageFromFenceInfo`, `isMermaidFence` and `highlightCode` are one
+  definition each, shared by the streaming and settled renderers, because the
+  two disagreeing about the same string is what made an info string like
+  `ts title=foo.ts` stream plain and snap to colour at the fence's close (mdast
+  hands remark only the first word, hence `languageFromFenceInfo`'s fallback).
 
 ### Drafts (`lib/drafts.ts`, `DraftItem`)
 
@@ -1062,7 +1162,7 @@ trade places with. The two things it does carry — "New chat here" and the
 project actions (rename/reveal/archive/hide/delete) — move onto the chat rows'
 right-click menu via `projectMenu`, which is the mechanism detailed mode already
 uses for having no project rows either; the chats then sit flush, since the
-indent was that row's hanging indent. `projectMenuItems` is the single
+indent was that row's hanging indent. `ProjectMenuItems` is the single
 definition all three sites render.
 
 **Starting a chat asks which project** (`NewChatDialog`, `startNewChat`) — the
@@ -1270,7 +1370,7 @@ The environment is chosen at chat start and only *displayed* afterwards (the rea
 
 Both exits relocate the chat, so main disposes the session and the next send respawns in the new cwd — the same reason an effort change disposes.
 
-`branchVsDefault` (git.ts) is the *single* implementation of "where does this branch stand vs main" — one `for-each-ref` + one `rev-list --left-right`. `gitStatus` puts its answer on `GitStatus.defaultBranch` / `behindDefault` / `aheadDefault` (started before the numstat reads so it overlaps them instead of adding a round trip); `worktreeStatus` derives `unmergedCommits` from the same call; the merge guards read it directly. Everything user-facing — the `↓n` staleness chip in `ContextStrip` (click runs "Update from main"), the ⋯ menu labels, the merge dialog's counts — reads the `GitStatus` copy, so the chip, the menu and the dialog can never disagree. Staleness has no other symptom until it surfaces as a conflicted merge, which is why the chip says it out loud while it's still cheap to fix. Note `behindDefault` is *not* `GitStatus.behind`, which is measured against the branch's own upstream. `listWorktrees` tags each ref `merged` from a single `branch --merged`, which is what lets the picker mark a finished worktree and offer to remove it instead of accumulating dead ones. It also **drops the refs git calls `prunable`**: a worktree deleted outside the app keeps being reported until something prunes it, and offering one starts a chat in a directory that isn't there. The stale metadata behind it is cleared only when *every* prunable entry is app-managed — `prune` takes no path filter, and while `~/.karbun/worktrees` sits under `$HOME` and is always mounted (so missing there means gone), someone else's worktree on an unplugged disk is merely *absent*, and pruning it would destroy the record they need to plug the disk back in. The filtering is what fixes the picker; the prune is only housekeeping, and `prunable` stays a main-local field (`ParsedWorktree`) rather than joining the shared `WorktreeRef`, since those refs are dropped before anything crosses IPC. The renderer-side half of the same blind spot is **`GitStatus.missing`**: git fails identically for a folder that isn't a repo and one that isn't *there*, so a vanished worktree read as "not a git repo" and sent you looking in the wrong place. The stat that separates them sits in `gitStatus`'s existing `catch` — the only path that can be missing, so the normal case pays nothing — rather than beside it in the renderer, which would have been a second field to keep in sync and a second round trip on all 21 `refreshGit` call sites. It rides `GitStatus` for the reason everything else user-facing does: one answer, so no two views can disagree. A fresh worktree with no setup script also says so in the chat (`setupMissingFor`); the silence used to read as "installed", and the agent would just start failing on missing dependencies.
+`branchVsDefault` (git.ts) is the *single* implementation of "where does this branch stand vs main" — one `for-each-ref` + one `rev-list --left-right`. `gitStatus` puts its answer on `GitStatus.defaultBranch` / `behindDefault` / `aheadDefault` (started before the numstat reads so it overlaps them instead of adding a round trip); `worktreeStatus` derives `unmergedCommits` from the same call; the merge guards read it directly. Everything user-facing — the `↓n` staleness chip in `ContextStrip` (click runs "Update from main"), the ⋯ menu labels, the merge dialog's counts — reads the `GitStatus` copy, so the chip, the menu and the dialog can never disagree. Staleness has no other symptom until it surfaces as a conflicted merge, which is why the chip says it out loud while it's still cheap to fix. Note `behindDefault` is *not* `GitStatus.behind`, which is measured against the branch's own upstream. `listWorktrees` tags each ref `merged` from a single `branch --merged`, which is what lets the picker mark a finished worktree and offer to remove it instead of accumulating dead ones. It also **drops the refs git calls `prunable`**: a worktree deleted outside the app keeps being reported until something prunes it, and offering one starts a chat in a directory that isn't there. The stale metadata behind it is cleared only when *every* prunable entry is app-managed — `prune` takes no path filter, and while `~/.karbun/worktrees` sits under `$HOME` and is always mounted (so missing there means gone), someone else's worktree on an unplugged disk is merely *absent*, and pruning it would destroy the record they need to plug the disk back in. The filtering is what fixes the picker; the prune is only housekeeping, and `prunable` stays a main-local field (`ParsedWorktree`) rather than joining the shared `WorktreeRef`, since those refs are dropped before anything crosses IPC. The renderer-side half of the same blind spot is **`GitStatus.missing`**: git fails identically for a folder that isn't a repo and one that isn't *there*, so a vanished worktree read as "not a git repo" and sent you looking in the wrong place. The stat that separates them sits in `gitStatus`'s existing `catch` — the only path that can be missing, so the normal case pays nothing — rather than beside it in the renderer, which would have been a second field to keep in sync and a second round trip on all 21 `refreshGit` call sites. It rides `GitStatus` for the reason everything else user-facing does: one answer, so no two views can disagree. A fresh worktree with no setup script also says so in the chat (`worktreeNotice`, kind `setup-missing`); the silence used to read as "installed", and the agent would just start failing on missing dependencies.
 
 ### Publishing a project (`src/main/github.ts`, `PublishDialog.tsx`)
 
@@ -1353,6 +1453,12 @@ version floor, and an honest "not installed" answer.
   `hydrateShellPath` found nothing. `CARBON_CLAUDE_PATH` / `CARBON_CODEX_PATH` /
   `CARBON_GROK_PATH` outrank both (the Grok one predates the other two and keeps
   its spelling).
+- **Resolution is synchronous and cheap; a version is not.** A path is a few
+  `stat`s, but `--version` is a subprocess with an 8 s timeout, and reading it
+  lazily from `cliPath` put that stall in front of the first turn. Only
+  `providerClis` (Settings → Providers) reads versions, asynchronously and in
+  parallel — see First paint above. A *disabled* provider is still probed: the
+  row has to show what it found, or turning it back on is a leap of faith.
 - **The binary is discovered, never configured.** There is no path setting, on
   purpose: it would be a second source of truth for a question resolution
   already answers, and one that goes stale the moment the CLI moves — the
