@@ -517,49 +517,61 @@
   border: none;
   padding: 0;
 }
-/* The scroller. A table wider than the chat column scrolls here rather than
-   compressing its columns — the column is a fixed measure chosen for prose, and
-   a table is the one block whose width is set by its content instead. */
+/* The frame. A table is a boxed block like `pre` is, and it takes that box's
+   chrome exactly — same border, same radius, same rhythm above and below — so
+   the two read as one kind of object rather than two that nearly agree.
+   The border also has to live out here rather than on the table: a wide table
+   scrolls *inside* its frame, and a frame drawn on the scrolling element would
+   slide away with the content it is supposed to contain. Rounding clips, since
+   a scroll container establishes its own clipping. */
 .markdown-table-scroll {
   overflow-x: auto;
-  margin: 0.8em 0;
+  overscroll-behavior-x: contain;
+  margin: 0.7em 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
 }
 .markdown table {
-  /* Sized to content, but never narrower than the column: `max-content` is what
-     lets a column claim the width its longest cell needs, and `min-width` stops
-     a two-word table from shrinking into a stub against the left margin. */
-  width: max-content;
-  min-width: 100%;
+  /* Fits the text column and wraps inside it. `max-content` was the rule here
+     and it was wrong for the table people actually write: a three-column
+     comparison of prose is far wider than any chat pane, so every one of them
+     opened clipped at the edge with the last column unreadable until you
+     scrolled. The rows of a comparison are meant to be *scanned*, and a reader
+     cannot scan what is off screen.
+
+     `table-layout` stays auto, which is the load-bearing half: auto layout can
+     never shrink a column below its min-content width, so a cell holding an
+     unbreakable chip pushes the table past 100% and the frame scrolls instead.
+     `fixed` would fit every table at the cost of breaking those chips apart
+     again, which is the bug this whole block exists to prevent. */
+  width: 100%;
   border-collapse: collapse;
   font-size: 0.93em;
 }
 .markdown th,
 .markdown td {
   text-align: left;
-  padding: 0.45em 0.9em;
+  padding: 0.5em 0.8em;
   vertical-align: top;
+  border-right: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
 }
-/* Flush with the paragraphs above and below: the outer cells' padding would
-   otherwise indent the table from the text column it sits in. */
-.markdown th:first-child,
-.markdown td:first-child {
-  padding-left: 0;
-}
+/* The frame already draws the outer two edges; a cell repeating them puts a
+   double line down the right side and under the last row. */
 .markdown th:last-child,
 .markdown td:last-child {
-  padding-right: 0;
+  border-right: 0;
 }
-.markdown thead th {
-  font-weight: 600;
-  border-bottom: 1px solid var(--color-border);
-}
-.markdown tbody td {
-  border-bottom: 1px solid var(--color-border);
-}
-/* No rule under the last row: the table ends where its content ends, and a
-   trailing line reads as an empty row. */
 .markdown tbody tr:last-child td {
   border-bottom: 0;
+}
+/* A band rather than bold alone: a header cell is one wrapped phrase among
+   others in a grid this dense, and weight on its own is easy to read past. It
+   takes `pre`'s recessed surface for the reason the frame takes `pre`'s
+   border. */
+.markdown thead th {
+  font-weight: 600;
+  background: var(--color-code);
 }
 /* A chip in a cell is an identifier — a path, a type, a flag — and breaking one
    across two lines makes it unreadable in the place it is least expected to be:

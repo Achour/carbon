@@ -284,24 +284,51 @@ turn, or on every message of every turn.
 
 ### Tables in a message (`.markdown table`)
 
-A table is the one block in a reply whose width is set by its content rather than
-by the column chosen for prose, and the old rule tried to deny that: `width: 100%`
-with `display: block; overflow-x: auto` **on the table itself**. A block box takes
-its container's width, so the table layout had no room to size a column to its
-longest cell and pushed the overflow down into the cells instead — which is where
-the damage showed. `src/server/backend.ts` came out as `src/server/backend.t` +
-`s` on the next line, each half wearing the inline-code chip's own background.
+A table is a **framed block**, like a code fence is, and both halves of that —
+the frame and the fitting — were arrived at by getting them wrong first.
 
-The scroll therefore moved to a wrapper (`markdown-table-scroll`, a `table`
-component in `Markdown.tsx`) and the table went back to being a table:
-`width: max-content` so a column can claim what it needs, `min-width: 100%` so a
-two-word table doesn't shrink to a stub. **A chip inside a cell is `white-space:
-pre`** — it is an identifier, a path or a flag, and breaking one is worse than
-scrolling to it; prose in the same cell still wraps. In running text the opposite
-holds, which is why `overflow-wrap: anywhere` stays on the base `code` rule:
-there the column really is the constraint and there is no scroller to fall back
-on. Outer cells lose their side padding so the table sits flush in the text
-column, and the last row drops its rule, which otherwise reads as an empty row.
+**Where the frame lives.** The original rule was `width: 100%` with
+`display: block; overflow-x: auto` **on the table itself**. A block box takes its
+container's width, so the table layout had no room to size a column and pushed
+the overflow down into the cells instead: `src/server/backend.ts` came out as
+`src/server/backend.t` + `s` on the next line, each half wearing the inline-code
+chip's own background. The scroll therefore moved to a wrapper
+(`markdown-table-scroll`, a `table` component in `Markdown.tsx`) and the table
+went back to being a table. That wrapper is now the **border** as well, and it
+has to be: a wide table scrolls *inside* its frame, and a border drawn on the
+scrolling element slides away with the content it is supposed to contain. It
+takes `pre`'s chrome exactly — same `--color-border`, same `--radius-lg`, same
+margins — because a table and a code block are the same kind of object in a
+reply, and two boxes that nearly agree read worse than one that does. Rounding
+clips for free, since a scroll container establishes its own clipping.
+
+**How wide it is.** `width: max-content; min-width: 100%` was the second wrong
+answer, on the reasoning that a table's width is set by its content rather than
+by the column chosen for prose. That is true of a table of paths and false of the
+table people actually write: a three-column comparison of *prose* is far wider
+than any chat pane, so every one of them opened clipped at the edge with the last
+column unreadable until you scrolled sideways. The rows of a comparison exist to
+be **scanned**, and a reader cannot scan what is off screen. So `width: 100%`,
+and prose wraps inside the pane.
+
+**`table-layout` stays auto, and that is the load-bearing half.** Auto layout can
+never shrink a column below its min-content width, so a cell holding a
+`white-space: pre` chip pushes the table past 100% and the frame scrolls
+instead — the fitted table and the unbroken chip are the same mechanism, not two
+rules in tension. `fixed` would fit every table at the cost of breaking those
+chips apart again, which is the bug the wrapper was introduced to fix.
+
+**A chip inside a cell is `white-space: pre`** — it is an identifier, a path or a
+flag, and breaking one is worse than scrolling to it; prose in the same cell
+still wraps. In running text the opposite holds, which is why `overflow-wrap:
+anywhere` stays on the base `code` rule: there the column really is the
+constraint and there is no scroller to fall back on.
+
+Cells carry both inner rules, and the frame draws the outer two — hence the
+`:last-child` and last-row exceptions, without which the right edge and the
+bottom are drawn twice. The header is a **band** (`--color-code`, `pre`'s
+recessed surface) rather than bold alone: in a grid this dense a header cell is
+one wrapped phrase among others, and weight on its own is easy to read past.
 
 This is `.markdown`, so it is every table in every message *and* the Markdown
 preview. `FileViewer`'s frontmatter table is deliberately not one of them — it is

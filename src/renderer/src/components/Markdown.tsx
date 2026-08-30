@@ -528,13 +528,14 @@ function LocalImage({
 const components = {
   pre: CodeBlock,
   code: InlineCode,
-  // The scroll lives on a wrapper, not on the table. `display: block` +
-  // `overflow-x: auto` on the <table> itself is the usual trick and it is what
-  // squeezed the columns: a block box takes the container's width, so the table
-  // layout had no room to size a column to its content and pushed the overflow
-  // down into the cells instead — which is where the mid-path breaks came from.
-  // Wrapped, the table stays a table, sizes to `max-content`, and the overflow
-  // is handled by the one element whose job it is.
+  // The wrapper is the table's frame *and* its scroller, and it has to be both.
+  // `display: block` + `overflow-x: auto` on the <table> itself is the usual
+  // trick and it is what squeezed the columns: a block box takes the
+  // container's width, so the table layout had no room to size a column to its
+  // content and pushed the overflow down into the cells instead — which is
+  // where the mid-path breaks came from. A border on that element would then
+  // scroll away with the content it is meant to contain. Wrapped, the table
+  // stays a table and the border stays put. See `.markdown table` in index.css.
   table: ({ children }: React.HTMLAttributes<HTMLTableElement>) => (
     <div className="markdown-table-scroll">
       <table>{children}</table>
