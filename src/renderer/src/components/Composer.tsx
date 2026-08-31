@@ -36,6 +36,7 @@ import {
   type ServiceTier,
   type SlashCommand
 } from '@shared/types'
+import { CHAT_BLEED_PAD } from '@/lib/chatColumn'
 import { cn } from '@/lib/utils'
 import { formatTokens } from '@/lib/format'
 import type { ComposerDraft } from '@/lib/drafts'
@@ -1122,7 +1123,7 @@ export function Composer({
         </div>
       )}
       {attachments.length > 0 && (
-        <div className="flex flex-wrap items-center gap-2 px-3 pt-3">
+        <div className={cn('flex flex-wrap items-center gap-2 pt-3', CHAT_BLEED_PAD)}>
           {attachments.map((att) => (
             <AttachmentChip
               key={att.id}
@@ -1133,7 +1134,7 @@ export function Composer({
         </div>
       )}
       {attachError && (
-        <div className="px-4 pt-2 text-[11px] text-warning">{attachError}</div>
+        <div className={cn('pt-2 text-[11px] text-warning', CHAT_BLEED_PAD)}>{attachError}</div>
       )}
       <textarea
         ref={ref}
@@ -1219,7 +1220,13 @@ export function Composer({
         }
         disabled={locked}
         rows={1}
-        className="no-drag block max-h-[220px] w-full resize-none bg-transparent px-4 pt-3.5 pb-1 text-[14px] leading-relaxed outline-none select-text placeholder:text-muted-foreground/60"
+        className={cn(
+          // The horizontal padding is the composer's bleed, so the placeholder
+          // and the prompt land on the same column as every assistant
+          // paragraph. Anything else here and the text misses it.
+          CHAT_BLEED_PAD,
+          'no-drag block max-h-[220px] w-full resize-none bg-transparent pt-3.5 pb-1 text-[14px] leading-relaxed outline-none select-text placeholder:text-muted-foreground/60'
+        )}
       />
       <div className="flex items-center gap-1 px-2.5 pb-2.5">
         <input

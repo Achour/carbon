@@ -7,6 +7,8 @@
 :root {
   /* User-adjustable in Settings → Appearance; JS overrides these inline. */
   --code-font-size: 12px;
+  /* Layout, not decoration — see the scrollbar rules near the foot of this file. */
+  --scrollbar-width: 12px;
   /*
    * One size for every label in a file list — the source-control tree, the file
    * tree and the review's stacked headers. A name, the directory beside it, the
@@ -383,10 +385,16 @@
   background-color: oklch(from var(--card) l c h / 0.62);
 }
 
-/* Scrollbars */
+/* Scrollbars.
+
+   The width is a variable because it is *layout*, not decoration: a styled
+   webkit scrollbar takes real space, so the transcript's scroller is this much
+   narrower than the composer sitting below it, and the two chat columns would
+   be centered 6px apart. `--scrollbar-width` is what lets the composer reserve
+   the same gutter (`ChatView`) instead of a magic 12 written twice. */
 ::-webkit-scrollbar {
-  width: 12px;
-  height: 12px;
+  width: var(--scrollbar-width);
+  height: var(--scrollbar-width);
 }
 ::-webkit-scrollbar-thumb {
   background: oklch(0.5 0.005 90 / 35%);

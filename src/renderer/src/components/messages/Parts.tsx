@@ -15,6 +15,7 @@ import {
   Pencil
 } from 'lucide-react'
 import type { AssistantMessage, EventMessage, ToolPart, UserMessage } from '@shared/types'
+import { CHAT_BLEED, CHAT_BLEED_PAD } from '@/lib/chatColumn'
 import { cn } from '@/lib/utils'
 import { formatCost, formatDuration } from '@/lib/format'
 import { Markdown, StreamingMarkdown, useStreamText } from '@/components/Markdown'
@@ -59,8 +60,11 @@ function MessageAction({
  * One shape for both states, so clicking Edit changes what the box holds and
  * never the box itself: a border, radius or padding that moved on the click
  * would read as the message being replaced rather than opened.
+ *
+ * The bleed itself is `lib/chatColumn` — the composer has to hang out by the
+ * same amount, and two frames that nearly agree read worse than either.
  */
-const PROMPT_BOX = '-mx-3.5 w-[calc(100%+1.75rem)] min-w-0 rounded-xl border border-border px-3.5'
+const PROMPT_BOX = `${CHAT_BLEED} ${CHAT_BLEED_PAD} min-w-0 rounded-xl border border-border`
 
 /**
  * Reword a sent message and run it again, dropping everything after it.

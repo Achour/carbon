@@ -282,6 +282,42 @@ turn, or on every message of every turn.
   `ts title=foo.ts` stream plain and snap to colour at the fence's close (mdast
   hands remark only the first word, hence `languageFromFenceInfo`'s fallback).
 
+### The chat column (`lib/chatColumn.ts`)
+
+A chat has **one** reading column, and two kinds of thing sit in it: **prose**
+starts on the column edge, and a **framed** object — the user's prompt, the
+composer, the pill rows above it — hangs `CHAT_BLEED` (14px) outside it and
+carries the same amount as padding, so its border steps out while its own text
+lands back on the column. That is Cursor's model, and it only reads as
+deliberate while *every* frame bleeds by the same amount.
+
+It was written out twice and the two copies disagreed, which put **three** left
+edges on one screen — measured at a 1512px window: composer border 504, prompt
+border 508, prose 522.
+
+- **`max-w-3xl` meant two different things.** The transcript spells it
+  `max-w-3xl px-6` (so the cap is the *box* and the column is 720px); the
+  composer spelled it `px-6` on the outer element and `max-w-3xl` on the inner
+  (so the cap is the *column* and the box is 768px). Wide enough for the cap to
+  bind, the composer ran 48px wider than the reply it answers; narrower, the two
+  agreed — which is why this survived so long, since a pane with the right panel
+  open never shows it.
+- **The scrollbar is layout.** `::-webkit-scrollbar` is styled with a width, so
+  it takes real space: the transcript's scroller is 12px narrower than the
+  composer's container and `mx-auto` therefore centers the two columns 6px
+  apart. `--scrollbar-width` is one value used by both — the scroller reserves
+  it with `scrollbar-gutter: stable` (without which the column also steps
+  sideways the moment a chat grows long enough to scroll) and the composer's
+  wrapper reserves the same amount as `pr`.
+- **The bleed wraps the whole composer stack**, not just the composer: the
+  activity bar, the context strip and the queued rows are framed objects too,
+  and they read as one column only while their borders share an edge. The
+  checklist needs nothing — `TaskDock` already rides inside the composer's box.
+- **The composer's own padding had to come down to 14px** (`px-4` → `px-3.5` on
+  the textarea, and the attachment and error rows with it). The bleed puts the
+  border 14px out; anything else inside and the placeholder misses the prose
+  column by the difference.
+
 ### Tables in a message (`.markdown table`)
 
 A table is a **framed block**, like a code fence is, and both halves of that —

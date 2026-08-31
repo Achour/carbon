@@ -19,6 +19,7 @@ import {
 } from 'lucide-react'
 import type { AssistantMessage, ChatMessage, ChatMeta, ToolPart } from '@shared/types'
 import { PROVIDER_SHORT_LABELS, projectRoot } from '@shared/types'
+import { CHAT_BLEED } from '@/lib/chatColumn'
 import { cn } from '@/lib/utils'
 import { basename } from '@/lib/format'
 import { useApp } from '@/store'
@@ -724,7 +725,14 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
       )}
 
       {/* Messages */}
-      <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto">
+      {/* `scrollbar-gutter: stable` so the column does not step sideways the
+          moment a chat grows long enough to scroll — and so the gutter the
+          composer reserves below (`--scrollbar-width`) is always the right one. */}
+      <div
+        ref={scrollRef}
+        onScroll={onScroll}
+        className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]"
+      >
         <div className="mx-auto flex max-w-3xl flex-col gap-4 px-6 py-6">
           {hiddenBefore > 0 && (
             <div className="flex justify-center">
@@ -807,92 +815,104 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
         </div>
       )}
 
-      {/* Composer */}
-      <div className="shrink-0 px-6 pb-5">
-        <div className="mx-auto max-w-3xl">
-          <AgentActivityBar />
-          <ContextStrip
-            cwd={chat.cwd}
-            project={projectRoot(chat)}
-            git={git}
-            onReviewChanges={() => void reviewChanges()}
-            onUpdateFromDefault={() => void runGitAction('update-from-main')}
-          />
-          {queued.length > 0 && (
-            <div className="mb-2 space-y-1.5">
-              {queued.map((q) => (
-                <div
-                  key={q.id}
-                  className="flex animate-enter items-center gap-2 rounded-lg border border-border bg-secondary/40 px-3 py-1.5 text-xs text-muted-foreground"
-                >
-                  <Clock className="size-3 shrink-0" />
-                  <span className="min-w-0 flex-1 truncate">
-                    {q.text || q.attachments?.map((a) => a.name).join(', ')}
-                  </span>
-                  <span className="shrink-0 text-[10px] tracking-wide text-muted-foreground/60 uppercase">
-                    queued
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => void sendQueuedNow(chat.id, q.id)}
-                    aria-label="Send now"
-                    title="Send now — interrupts the current turn"
-                    className="shrink-0 rounded p-0.5 transition-colors hover:bg-accent hover:text-foreground"
+      {/* Composer.
+
+          The padding sits *inside* `max-w-3xl`, exactly as it does on the
+          transcript above — spelled the other way round it made `max-w-3xl`
+          mean the box in one place and the text column in the other, so the
+          composer ran 48px wider than the reply it answers. `pr` is the
+          scrollbar the scroller reserves and this element does not, without
+          which the two columns are centered 6px apart. */}
+      <div className="shrink-0 pb-5 pr-[var(--scrollbar-width)]">
+        <div className="mx-auto max-w-3xl px-6">
+          {/* One bleed for the whole stack: the pill rows are framed objects
+              like the composer, and they read as one column only while their
+              borders share an edge. */}
+          <div className={CHAT_BLEED}>
+            <AgentActivityBar />
+            <ContextStrip
+              cwd={chat.cwd}
+              project={projectRoot(chat)}
+              git={git}
+              onReviewChanges={() => void reviewChanges()}
+              onUpdateFromDefault={() => void runGitAction('update-from-main')}
+            />
+            {queued.length > 0 && (
+              <div className="mb-2 space-y-1.5">
+                {queued.map((q) => (
+                  <div
+                    key={q.id}
+                    className="flex animate-enter items-center gap-2 rounded-lg border border-border bg-secondary/40 px-3 py-1.5 text-xs text-muted-foreground"
                   >
-                    <ArrowUp className="size-3" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => removeQueued(chat.id, q.id)}
-                    aria-label="Remove queued message"
-                    className="shrink-0 rounded p-0.5 transition-colors hover:bg-accent hover:text-foreground"
-                  >
-                    <X className="size-3" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-          <Composer
-            // The checklist rides the composer's own box rather than sitting
-            // above it, so the two read as one object however the border moves.
-            header={<TaskDock chatId={chat.id} />}
-            // Returned, not voided: the composer needs the promise so a failed
-            // send restores the draft instead of discarding it.
-            onSend={(text, attachments) => sendMessage(text, attachments)}
-            draft={initialDraft}
-            onDraftChange={(next) => saveChatDraft(chat.id, next)}
-            streaming={busy}
-            onStop={() => void interrupt()}
-            // A cross-provider pick is only armed until the next send; the
-            // composer previews it (chip, efforts, placeholder) while the chat
-            // itself stays on its current backend.
-            model={chat.pendingModel ?? chat.model ?? ''}
-            onModelChange={(model, modelProvider) =>
-              void setChatOptions({ model, modelProvider })
-            }
-            effort={chat.effort ?? ''}
-            onEffortChange={(effort, opts) => void setChatOptions({ effort, ...opts })}
-            modelEfforts={modelEfforts}
-            serviceTier={chat.serviceTier ?? 'standard'}
-            onServiceTierChange={(serviceTier, opts) =>
-              void setChatOptions({ serviceTier, ...opts })
-            }
-            permissionMode={chat.permissionMode}
-            onPermissionModeChange={(permissionMode) => void setChatOptions({ permissionMode })}
-            contextTokens={chat.contextTokens}
-            contextWindow={chat.contextWindow}
-            provider={composerProvider}
-            cwd={chat.cwd}
-            commands={commands}
-            // Busy-gated so a note left behind by a crash can never stick.
-            switchingNote={busy ? chat.switchingNote : undefined}
-            placeholder={
-              composerProvider === 'claude'
-                ? undefined
-                : `Ask ${PROVIDER_SHORT_LABELS[composerProvider]} anything…`
-            }
-          />
+                    <Clock className="size-3 shrink-0" />
+                    <span className="min-w-0 flex-1 truncate">
+                      {q.text || q.attachments?.map((a) => a.name).join(', ')}
+                    </span>
+                    <span className="shrink-0 text-[10px] tracking-wide text-muted-foreground/60 uppercase">
+                      queued
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => void sendQueuedNow(chat.id, q.id)}
+                      aria-label="Send now"
+                      title="Send now — interrupts the current turn"
+                      className="shrink-0 rounded p-0.5 transition-colors hover:bg-accent hover:text-foreground"
+                    >
+                      <ArrowUp className="size-3" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => removeQueued(chat.id, q.id)}
+                      aria-label="Remove queued message"
+                      className="shrink-0 rounded p-0.5 transition-colors hover:bg-accent hover:text-foreground"
+                    >
+                      <X className="size-3" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <Composer
+              // The checklist rides the composer's own box rather than sitting
+              // above it, so the two read as one object however the border moves.
+              header={<TaskDock chatId={chat.id} />}
+              // Returned, not voided: the composer needs the promise so a failed
+              // send restores the draft instead of discarding it.
+              onSend={(text, attachments) => sendMessage(text, attachments)}
+              draft={initialDraft}
+              onDraftChange={(next) => saveChatDraft(chat.id, next)}
+              streaming={busy}
+              onStop={() => void interrupt()}
+              // A cross-provider pick is only armed until the next send; the
+              // composer previews it (chip, efforts, placeholder) while the chat
+              // itself stays on its current backend.
+              model={chat.pendingModel ?? chat.model ?? ''}
+              onModelChange={(model, modelProvider) =>
+                void setChatOptions({ model, modelProvider })
+              }
+              effort={chat.effort ?? ''}
+              onEffortChange={(effort, opts) => void setChatOptions({ effort, ...opts })}
+              modelEfforts={modelEfforts}
+              serviceTier={chat.serviceTier ?? 'standard'}
+              onServiceTierChange={(serviceTier, opts) =>
+                void setChatOptions({ serviceTier, ...opts })
+              }
+              permissionMode={chat.permissionMode}
+              onPermissionModeChange={(permissionMode) => void setChatOptions({ permissionMode })}
+              contextTokens={chat.contextTokens}
+              contextWindow={chat.contextWindow}
+              provider={composerProvider}
+              cwd={chat.cwd}
+              commands={commands}
+              // Busy-gated so a note left behind by a crash can never stick.
+              switchingNote={busy ? chat.switchingNote : undefined}
+              placeholder={
+                composerProvider === 'claude'
+                  ? undefined
+                  : `Ask ${PROVIDER_SHORT_LABELS[composerProvider]} anything…`
+              }
+            />
+          </div>
         </div>
       </div>
 
