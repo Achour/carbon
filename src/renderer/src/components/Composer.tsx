@@ -673,7 +673,8 @@ export function Composer({
   autoFocus = true,
   draft,
   onDraftChange,
-  clearToken = 0
+  clearToken = 0,
+  header
 }: {
   /** May be async; if it rejects, the composer restores the draft. */
   onSend: (text: string, attachments: Attachment[]) => void | Promise<void>
@@ -722,6 +723,15 @@ export function Composer({
    * undone by the very next debounce — the text lives here.
    */
   clearToken?: number
+  /**
+   * A section rendered at the top of the composer's own box, above the input —
+   * the task dock. It goes *inside* the border rather than above it because the
+   * border is one outline: the composer's changes colour on focus and on a file
+   * drag, and a sibling box carrying its own would disagree with it at exactly
+   * those moments. It rounds its own top corners, since the root cannot clip
+   * (that would take the slash/@ popovers with it).
+   */
+  header?: React.ReactNode
 }): React.JSX.Element {
   const [text, setText] = React.useState(() => draft?.text ?? '')
   const [attachments, setAttachments] = React.useState<Attachment[]>(() => draft?.attachments ?? [])
@@ -1036,6 +1046,7 @@ export function Composer({
         locked && 'opacity-60'
       )}
     >
+      {header}
       {/* /-slash command picker */}
       {slashQuery !== null && slashResults.length > 0 && (
         <div

@@ -124,15 +124,26 @@ function toolMeta(part: ToolPart, cwd: string): ToolMeta {
       return { icon: Globe, label: 'Fetch', summary: str(input.url) }
     case 'WebSearch':
       return { icon: Globe, label: 'Search', summary: str(input.query) }
+    // The checklist itself is drawn above the composer, so these rows say what
+    // the call *did* rather than restating the list. One label for all four
+    // spellings, both providers': `summarizeActivity` keys off the label, so a
+    // second one would print two clauses for one activity.
     case 'TodoWrite':
-      return { icon: ListChecks, label: 'Todos', summary: 'Update task list' }
-    // Only reached when the fold produced no list for the call — it failed, or
-    // it moved a task created before the loaded window. The checklist card
-    // (see Parts.tsx) handles every other case.
+      return { icon: ListChecks, label: 'Tasks', summary: 'Update the task list' }
     case 'TaskCreate':
       return { icon: ListChecks, label: 'Tasks', summary: str(input.subject) ?? 'Add a task' }
     case 'TaskUpdate':
-      return { icon: ListChecks, label: 'Tasks', summary: 'Update a task' }
+      return {
+        icon: ListChecks,
+        label: 'Tasks',
+        summary:
+          str(input.subject) ??
+          (str(input.status) === 'completed'
+            ? 'Complete a task'
+            : str(input.status) === 'in_progress'
+              ? 'Start a task'
+              : 'Update a task')
+      }
     case 'TaskList':
       return { icon: ListChecks, label: 'Tasks', summary: 'List tasks' }
     case 'ExitPlanMode':
@@ -717,7 +728,16 @@ export const GROUPABLE_TOOLS = new Set([
   // close.
   'mcp__canvas__write',
   'mcp__canvas__list',
-  'mcp__canvas__read'
+  'mcp__canvas__read',
+  // The checklist is drawn once, above the composer (`TaskDock`) — these rows
+  // are all that's left of it in the transcript, and they are bookkeeping
+  // between steps rather than steps of their own. Grouping is what keeps them
+  // to a clause: Claude Code emits one call per assistant message, so a
+  // five-task plan is five messages that would otherwise be five rows.
+  'TaskCreate',
+  'TaskUpdate',
+  'TaskList',
+  'TodoWrite'
 ])
 
 /** True while any call in the run — or, for agents, any of their children — is

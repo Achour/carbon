@@ -25,8 +25,8 @@ import { useApp } from '@/store'
 import { useTaskList } from '@/taskListStore'
 import { useAgents } from '@/agentsStore'
 import { foldAgentRuns, reconcileAgentRuns, type AgentRunView } from '@shared/agentRuns'
-import { TASK_LIST_TOOLS, foldTaskParts, reconcileSnapshots } from '@/lib/taskList'
-import type { TaskSnapshots, TranscriptItem } from '@/lib/taskList'
+import { foldTasks, reconcileTasks } from '@/lib/taskList'
+import type { TaskItem } from '@/lib/taskList'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -46,6 +46,7 @@ import { WithTooltip } from '@/components/ui/tooltip'
 import { Composer } from '@/components/Composer'
 import { ContextStrip } from '@/components/ContextStrip'
 import { AgentActivityBar } from '@/components/AgentsPanel'
+import { TaskDock } from '@/components/TaskDock'
 import {
   MergeIntoMainDialog,
   WorktreeFinishDialog,
@@ -124,56 +125,18 @@ interface RenderCtx {
 }
 
 /**
- * Most-recent checklist call in `messages[from, to)`, scanning backward. Returns
- * its `toolUseId` and array index, or null. Pulled out so the id can be
- * recomputed incrementally (see the `latestTodoId` memo) instead of re-walking
- * the whole conversation on every stream token.
+ * Every tool call in the loaded window, in order, for the checklist fold.
  *
- * Either provider's spelling counts — Codex's `TodoWrite`, or one of Claude
- * Code's `Task*` calls. A `Task*` call only counts once the fold gave it a
- * snapshot: a failed one renders as an ordinary tool card, and letting it claim
- * "latest" would collapse the real list above it with nothing taking its place.
+ * Prose and user turns used to come through here too, because the fold once
+ * collapsed only checklist calls that were genuinely back to back and anything
+ * on screen between two of them ended that run. The checklist is one docked box
+ * now, so there is no run to break: only the calls matter.
  */
-function findLatestTodo(
-  messages: ChatMessage[],
-  from: number,
-  to: number,
-  snapshots: TaskSnapshots
-): { id: string; index: number } | null {
-  for (let i = to - 1; i >= from; i--) {
-    const m = messages[i]
-    if (m.role !== 'assistant') continue
-    for (let j = m.parts.length - 1; j >= 0; j--) {
-      // Streamed part arrays can be sparse — indexes may arrive out of order.
-      const p = m.parts[j]
-      if (p?.type !== 'tool') continue
-      if (p.name === 'TodoWrite') return { id: p.toolUseId, index: i }
-      if (TASK_LIST_TOOLS.has(p.name) && snapshots.has(p.toolUseId)) {
-        return { id: p.toolUseId, index: i }
-      }
-    }
-  }
-  return null
-}
-
-/**
- * Everything the loaded window renders, in order, for the task-list fold. Not
- * just the tool parts: prose and user turns have to come through too, because
- * the fold collapses only checklist calls that are genuinely back to back, and
- * anything on screen between two of them ends that run.
- */
-function* streamItems(messages: ChatMessage[]): Generator<TranscriptItem> {
+function* toolParts(messages: ChatMessage[]): Generator<ToolPart> {
   for (const m of messages) {
-    if (m.role !== 'assistant') {
-      yield { type: m.role }
-      continue
-    }
-    for (const p of m.parts) {
-      if (!p) continue
-      if (p.type === 'tool') yield p
-      // An empty text/thinking part renders nothing, so it breaks no run.
-      else if (p.text) yield { type: p.type }
-    }
+    if (m.role !== 'assistant') continue
+    // Streamed part arrays can be sparse — indexes may arrive out of order.
+    for (const p of m.parts) if (p?.type === 'tool') yield p
   }
 }
 
@@ -507,21 +470,19 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
     [chat.provider, messages, pendingPlan, pendingPlanRequest]
   )
 
-  // Claude Code's checklist arrives as incremental TaskCreate/TaskUpdate calls
-  // that carry no list of their own, so it is folded out of the whole loaded
-  // window here — the fold has to span messages, since a TaskUpdate's matching
-  // TaskCreate is never in the same one. Cheap in practice: the window is
-  // HYDRATE_TAIL-bounded, and a chat with no Task* calls costs one name check
-  // per part. `reconcileSnapshots` keeps unchanged arrays at their old identity
-  // so cards don't re-render on every token.
-  const snapshotsRef = React.useRef<TaskSnapshots>(new Map())
-  const taskFold = React.useMemo(() => {
-    const fold = foldTaskParts(streamItems(messages))
-    fold.snapshots = reconcileSnapshots(snapshotsRef.current, fold.snapshots)
-    snapshotsRef.current = fold.snapshots
-    return fold
+  // The chat's checklist, folded out of the whole loaded window: Claude Code's
+  // TaskCreate/TaskUpdate calls carry no list of their own, and a TaskUpdate's
+  // matching TaskCreate is never in the same message, so nothing smaller than
+  // the window can answer. Cheap in practice — the window is HYDRATE_TAIL
+  // -bounded, and a chat with no checklist costs one name check per tool part.
+  // `reconcileTasks` keeps an unmoved list at its old identity so the dock
+  // doesn't re-render on every token.
+  const tasksRef = React.useRef<TaskItem[]>([])
+  const tasks = React.useMemo(() => {
+    const next = reconcileTasks(tasksRef.current, foldTasks(toolParts(messages)))
+    tasksRef.current = next
+    return next
   }, [messages])
-  const taskSnapshots = taskFold.snapshots
 
   // Sub-agent runs are folded out of the same window, for the panel and the
   // activity bar rather than for the transcript — which is why the result goes
@@ -547,53 +508,14 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
   // so React runs this cleanup before the next chat's publish.
   React.useEffect(() => () => setAgentRuns([]), [setAgentRuns])
 
-  // The most recent checklist call is the live task list; earlier ones collapse.
-  // A full backward scan per stream token is wasteful — a chat with no todos
-  // would re-walk its whole history on every token. Streaming keeps earlier
-  // message objects by reference (only the live message mutates / new ones
-  // append — the same assumption MessageHistory's memo relies on), so we scan
-  // parts only in the suffix that changed since the last render and reuse the
-  // cached answer for the untouched prefix.
-  const todoScanCache = React.useRef<{
-    messages: ChatMessage[]
-    id: string | null
-    index: number
-  } | null>(null)
-  const latestTodoId = React.useMemo<string | null>(() => {
-    const cache = todoScanCache.current
-    // First index at which this render's messages diverge from the last scan.
-    let diverge = 0
-    if (cache) {
-      const min = Math.min(cache.messages.length, messages.length)
-      while (diverge < min && cache.messages[diverge] === messages[diverge]) diverge++
-    }
-    // A newer checklist call can only be in the changed/appended suffix.
-    let found = findLatestTodo(messages, diverge, messages.length, taskSnapshots)
-    if (!found && cache && cache.index >= 0 && cache.index < diverge) {
-      // Nothing newer, and the cached answer still lives in the untouched prefix.
-      found = { id: cache.id as string, index: cache.index }
-    } else if (!found) {
-      // The prefix changed under the cached answer (rewind / chat switch, or no
-      // cache yet) — scan it too. `diverge` is 0 on a chat switch, so the suffix
-      // scan above already covered everything and this range is empty.
-      found = findLatestTodo(messages, 0, diverge, taskSnapshots)
-    }
-    const next = found ?? { id: null, index: -1 }
-    todoScanCache.current = { messages, id: next.id, index: next.index }
-    return next.id
-  }, [messages, taskSnapshots])
-
-  // Publish the live id and the folded lists to their own store so only the
-  // affected cards re-render — see taskListStore. Kept out of the history
-  // render path.
-  const setLatestId = useTaskList((s) => s.setLatestId)
-  const setFold = useTaskList((s) => s.setFold)
+  // Published to its own store so the dock — and only the dock — re-renders
+  // when a task moves; see `taskListStore`. Kept out of the history render path,
+  // and stamped with the chat it belongs to, because one box now serves every
+  // chat and this effect runs a frame after the switch.
+  const setTasks = useTaskList((s) => s.setTasks)
   React.useEffect(() => {
-    setLatestId(latestTodoId)
-  }, [latestTodoId, setLatestId])
-  React.useEffect(() => {
-    setFold(taskFold.snapshots, taskFold.superseded)
-  }, [taskFold, setFold])
+    setTasks(chat.id, tasks)
+  }, [chat.id, tasks, setTasks])
 
   const openPlan = React.useCallback(
     (plan: string) => {
@@ -923,6 +845,9 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
             </div>
           )}
           <Composer
+            // The checklist rides the composer's own box rather than sitting
+            // above it, so the two read as one object however the border moves.
+            header={<TaskDock chatId={chat.id} />}
             // Returned, not voided: the composer needs the promise so a failed
             // send restores the draft instead of discarding it.
             onSend={(text, attachments) => sendMessage(text, attachments)}

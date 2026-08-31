@@ -1089,16 +1089,39 @@ cached input.
   with the task truncated away, so identity moved to the expanded body and to
   the roster.
 
-### The task checklist (`lib/taskList.ts`, `TodoCard`)
+### The task checklist (`lib/taskList.ts`, `TaskDock`)
 
-One card, two completely different provider shapes. Codex sends `TodoWrite`,
-where a single call carries the whole list and the card is just a render of
-`input.todos`. Claude Code replaced that tool with an incremental API —
-`TaskCreate` one task at a time, `TaskUpdate` to flip a status — so **no single
-call holds the list** and it has to be folded out of the transcript. `TodoCard`
-therefore takes the list, not the tool part.
+**The checklist is state, not an event, so there is one of it and it lives on
+top of the composer** — `AgentActivityBar`'s argument, applied to the other
+thing a turn keeps that a transcript cannot hold. It was a card in the message
+list first, drawn where each call was made, and that is wrong twice over: the
+list has exactly one current value but was drawn once per call, so a turn that
+flipped five tasks left five near-identical boxes through its prose; and the one
+copy worth reading scrolled away under the work it describes, so the plan was
+off screen at exactly the moment you were reading the work it was steering. The
+dock is Cursor's shape — collapsed to "Tasks · *what it's doing now* · 2/5", one
+click to the list, and always where you left it.
 
-Three things about the fold, each measured against the real corpus rather than
+It renders **inside the composer's own bordered box** (`Composer`'s `header`
+prop), not as a sibling above it. A separate box needs its own border, and the
+composer's border *moves* — ring on focus, primary on a file drag — so two
+outlines that agree at rest would visibly disagree at the moments the user is
+acting. Inside, there is one outline, and the dock only rounds its own top
+corners and draws the divider: the root cannot `overflow: hidden`, since that
+would clip the slash and @ popovers that hang above it.
+
+What is left in the transcript is the *calls*, as ordinary muted rows in the
+run-grouping — the checklist tools are in `GROUPABLE_TOOLS` for exactly that.
+Hiding them would be the same mistake as the silent checklist below; a run of
+them reads "Read 3 files, 8 task updates", verb-less and ranked last in
+`summarizeActivity` because bookkeeping is neither the turn's method nor its
+result. All four spellings share the one `Tasks` label, both providers', since
+the summary keys off the label and a second one would print two clauses for one
+activity.
+
+The fold is therefore one question — *what does the list look like now* — and
+`foldTasks` answers it by applying every successful checklist call in the loaded
+window. Three things about it, each measured against the real corpus rather than
 assumed:
 
 - **The id exists only in the output.** `TaskCreate`'s *input* has no id; it
@@ -1108,31 +1131,38 @@ assumed:
   calls, so a `TaskUpdate` is never in the same assistant message as its
   `TaskCreate` — across 366 real updates, not once. Folding per message would
   render an empty list every time; the fold spans the whole loaded window.
-- **A run collapses to one card.** A five-task plan arrives as five back-to-back
-  `TaskCreate`s, which would stutter "0/1, 0/2, 0/3…" — 566 real calls for 255
-  runs, i.e. over half the cards saying nothing. Only the last call of a run
-  draws, showing the list once it settled; any other rendered content between
-  two calls ends the run. Superseded calls are dropped in `AssistantBlock`
-  rather than rendered as null, because Claude Code puts one call in a message
-  and an empty block is still a flex item in the message list — the gap
-  `isBlankMsg` exists to prevent.
+- **Both providers land in one shape.** Codex's `TodoWrite` carries the whole
+  list in one call and replaces the state wholesale, exactly as `TaskList` does,
+  so the dock never learns which backend it is looking at. Its ids are
+  *positions*, hence the `todo:` prefix: a chat can switch provider
+  mid-conversation, and a bare `1` would merge into whatever Claude called #1.
 
-A call with no folded list falls back to an ordinary tool card: it either failed
-(the list didn't change, so claiming otherwise would be a lie) or it only moved
-a task created before the loaded window, which nothing on screen can name.
-`Task{Stop,Output,Get}` are a *different* feature — background agents, keyed by
-a snake_case `task_id` hash rather than the checklist's numeric `taskId` — and
-are deliberately not folded in.
+Runs, snapshots and superseded ids are all **gone**, and it is worth recording
+what they were for: a five-task plan arrives as five back-to-back `TaskCreate`s,
+which as a card each stuttered "0/1, 0/2, 0/3…" — 566 real calls for 255 runs,
+i.e. over half the cards saying nothing. Only the last call of a run drew, and
+the superseded ones had to be dropped in `AssistantBlock` rather than rendered
+as null, because Claude Code puts one call in a message and an empty block is
+still a flex item — the gap `isBlankMsg` exists to prevent. One docked list
+answers all of that by construction. A failed call still changes nothing (the
+list didn't move, so claiming otherwise would be a lie), and so does a *running*
+one, whose input is still partial JSON. `Task{Stop,Output,Get}` are a
+*different* feature — background agents, keyed by a snake_case `task_id` hash
+rather than the checklist's numeric `taskId` — and are not folded in.
 
-The fold and the live-card id live in `taskListStore`, outside the message
-history render path, for the reason that store already existed: both churn
-several times a second mid-turn, and threading them through props would
-re-render every transcript row on each flip. That only works because
-`reconcileSnapshots` carries unchanged lists forward *by identity* — a fresh
-array per fold would defeat the whole arrangement.
+The list lives in `taskListStore`, outside the message-history render path, for
+the reason that store already existed: it churns several times a second mid-turn
+and threading it through props would re-render every transcript row on each
+flip. That only works because `reconcileTasks` carries an unmoved list forward
+*by identity* — a fresh array per fold would defeat the whole arrangement. It
+carries a **`chatId`, and that is load-bearing rather than bookkeeping**: the
+publish runs in an effect, so on a chat switch the store holds the previous
+chat's tasks for one painted frame. A per-call card failed soft on that, looking
+itself up by id; one box shared by every chat would show the wrong chat's plan,
+so the dock draws nothing until the id is its own.
 
-**The tools themselves are behind a flag, and that is why the card once vanished
-outright.** Claude Code 2.1 registers `TaskCreate`/`TaskUpdate`/`TaskList`/
+**The tools themselves are behind a flag, and that is why the checklist once
+vanished outright.** Claude Code 2.1 registers `TaskCreate`/`TaskUpdate`/`TaskList`/
 `TaskGet` only when `CLAUDE_CODE_ENABLE_TODO_TOOLS` is set *or* an account-level
 rollout flag is on — so a chat that had a checklist last week silently stopped
 having one, with nothing in the transcript to say why and no fold to fix. Carbon
@@ -1142,9 +1172,10 @@ their opt-out. It lands at spawn, so a session already running keeps the old
 answer until it is disposed — the lifecycle an effort change already has.
 
 They are also **deferred**, so a checklist run now opens with a `ToolSearch`
-call fetching them. That card is not hidden: hiding a step the model actually
+call fetching them. That row is not hidden: hiding a step the model actually
 took is the same mistake as the silent checklist. It says which tools came back
-(see `tool_reference` under Session flow) and groups with the other lookups.
+(see `tool_reference` under Session flow) and groups with the other lookups —
+including, now, the checklist calls themselves.
 
 ### Canvas (`canvasTools.ts`, `canvasStore.ts`, `CanvasPanel`)
 
