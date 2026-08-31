@@ -2,11 +2,16 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   CHECKLIST_TOOLS,
+  foldTaskTimeline,
   foldTasks,
   parseTaskList,
-  reconcileTasks
+  reconcileTasks,
+  reconcileTimeline
 } from '../src/renderer/src/lib/taskList.ts'
-import type { TaskToolPart } from '../src/renderer/src/lib/taskList.ts'
+import type {
+  TaskToolPart,
+  TaskTranscriptMessage
+} from '../src/renderer/src/lib/taskList.ts'
 
 let n = 0
 const part = (p: Partial<TaskToolPart> & { name: string }): TaskToolPart => ({
@@ -187,4 +192,118 @@ test('parseTaskList ignores lines that are not rows', () => {
   assert.deepEqual(parseTaskList('noise\n#2 [pending] Real row\n\nmore noise'), [
     { id: '2', subject: 'Real row', status: 'pending' }
   ])
+})
+
+/* --- the timeline: where a finished list stops being the composer's business --- */
+
+let m = 0
+/** One assistant message carrying these calls. */
+const assistant = (...parts: TaskToolPart[]): TaskTranscriptMessage => ({
+  id: `a${++m}`,
+  role: 'assistant',
+  parts
+})
+const user = (): TaskTranscriptMessage => ({ id: `u${++m}`, role: 'user', parts: [] })
+const done = (id: string): TaskToolPart => update(id, 'completed')
+
+test('a finished list leaves the dock and lands on the turn that finished it', () => {
+  const last = assistant(done('1'))
+  const timeline = foldTaskTimeline([user(), assistant(create('1', 'One')), last])
+  assert.deepEqual(timeline.tasks, [])
+  assert.deepEqual(subjects(timeline.completions.get(last.id) ?? []), ['One'])
+})
+
+test('a running turn keeps its list on the composer, finished or not', () => {
+  // The move happens on the idle transition: an agent routinely finishes its
+  // list and keeps working, and yanking the box away mid-turn would only have
+  // to put it back on the next TaskCreate.
+  const messages = [user(), assistant(create('1', 'One')), assistant(done('1'))]
+  const busy = foldTaskTimeline(messages, true)
+  assert.deepEqual(subjects(busy.tasks), ['One'])
+  assert.equal(busy.completions.size, 0)
+  assert.equal(foldTaskTimeline(messages, false).completions.size, 1)
+})
+
+test('an unfinished list stays docked when the turn ends', () => {
+  const timeline = foldTaskTimeline([
+    user(),
+    assistant(create('1', 'One'), create('2', 'Two')),
+    assistant(done('1'))
+  ])
+  assert.deepEqual(subjects(timeline.tasks), ['One', 'Two'])
+  assert.equal(timeline.completions.size, 0)
+})
+
+test('the card does not migrate down the transcript as the chat goes on', () => {
+  // Every later turn is also idle with the list still complete, so without the
+  // "this turn touched the checklist" rule the card lands on whichever turn is
+  // last and moves each time the user says anything else.
+  const finished = assistant(done('1'))
+  const timeline = foldTaskTimeline([
+    user(),
+    assistant(create('1', 'One')),
+    finished,
+    user(),
+    assistant(other()),
+    user(),
+    assistant(other())
+  ])
+  assert.deepEqual([...timeline.completions.keys()], [finished.id])
+})
+
+test('an appended plan brings the dock back and commits a second card', () => {
+  // Claude appends rather than replacing, so a second plan is 6/6 → 6/12; the
+  // finished twelve are their own card and the first six keep theirs.
+  const first = assistant(done('1'))
+  const second = assistant(done('2'))
+  const messages = [
+    user(),
+    assistant(create('1', 'One')),
+    first,
+    user(),
+    assistant(create('2', 'Two'))
+  ]
+  const reopened = foldTaskTimeline(messages)
+  assert.deepEqual(subjects(reopened.tasks), ['One', 'Two'])
+  assert.deepEqual([...reopened.completions.keys()], [first.id])
+
+  const timeline = foldTaskTimeline([...messages, second])
+  assert.deepEqual(timeline.tasks, [])
+  assert.deepEqual([...timeline.completions.keys()], [first.id, second.id])
+  assert.deepEqual(subjects(timeline.completions.get(second.id) ?? []), ['One', 'Two'])
+})
+
+test('reopening a completed task puts the list back on the composer', () => {
+  const timeline = foldTaskTimeline([
+    user(),
+    assistant(create('1', 'One')),
+    assistant(done('1')),
+    user(),
+    assistant(update('1', 'in_progress'))
+  ])
+  assert.deepEqual(subjects(timeline.tasks), ['One'])
+})
+
+test('a chat with no checklist has nothing anywhere', () => {
+  const timeline = foldTaskTimeline([user(), assistant(other()), assistant(other())])
+  assert.deepEqual(timeline.tasks, [])
+  assert.equal(timeline.completions.size, 0)
+})
+
+test('reconcile keeps both halves when nothing moved', () => {
+  const messages = [user(), assistant(create('1', 'One')), assistant(done('1'))]
+  const first = foldTaskTimeline(messages)
+  assert.equal(reconcileTimeline(first, foldTaskTimeline(messages)), first)
+})
+
+test('reconcile hands back a moved list without minting a new completions map', () => {
+  // The map crosses into the transcript's render context, which is compared by
+  // identity: a fresh Map on every streamed token re-renders the whole chat.
+  const messages = [user(), assistant(create('1', 'One'))]
+  const first = foldTaskTimeline(messages, true)
+  const next = foldTaskTimeline([...messages, assistant(create('2', 'Two'))], true)
+  const second = reconcileTimeline(first, next)
+  assert.notEqual(second, first)
+  assert.equal(second.completions, first.completions)
+  assert.deepEqual(subjects(second.tasks), ['One', 'Two'])
 })

@@ -200,6 +200,9 @@ export function foldTasks(items: Iterable<TranscriptItem | null | undefined>): T
 const sameItem = (a: TaskItem, b: TaskItem): boolean =>
   a.id === b.id && a.subject === b.subject && a.status === b.status && a.activeForm === b.activeForm
 
+const sameList = (a: readonly TaskItem[] | null, b: readonly TaskItem[]): boolean =>
+  !!a && a.length === b.length && a.every((t, i) => sameItem(t, b[i]))
+
 /**
  * Hand back the previous list whenever nothing about it moved.
  *
@@ -209,6 +212,131 @@ const sameItem = (a: TaskItem, b: TaskItem): boolean =>
  * out of the message-history render path in the first place.
  */
 export function reconcileTasks(prev: TaskItem[], next: TaskItem[]): TaskItem[] {
-  if (prev.length === next.length && prev.every((t, i) => sameItem(t, next[i]))) return prev
-  return next
+  return sameList(prev, next) ? prev : next
+}
+
+/** The subset of a transcript message the timeline reads. Structural, like `TaskToolPart`. */
+export interface TaskTranscriptMessage {
+  id: string
+  role: string
+  parts?: readonly (TranscriptItem | null | undefined)[]
+}
+
+/** The list, and the turns that finished one. */
+export interface TaskTimeline {
+  /** What the dock draws — empty once a card in the transcript holds the list. */
+  tasks: TaskItem[]
+  /** Assistant message id → the finished list to draw after it. */
+  completions: ReadonlyMap<string, TaskItem[]>
+}
+
+export const NO_TASK_TIMELINE: TaskTimeline = { tasks: [], completions: new Map() }
+
+/**
+ * The list, plus the moment it was *finished* — which is where it stops being
+ * the composer's business and becomes history.
+ *
+ * A checklist is state while it is being worked and a record once it isn't, and
+ * the dock is only right about the first of those. Left docked, a finished list
+ * sits on top of the input for the rest of the chat saying "All done · 6/6" —
+ * a permanent row about a turn that ended, in the one place on screen reserved
+ * for what happens next. So a completed list is **committed**: it lands in the
+ * transcript as one card, at the end of the turn that finished it, and the dock
+ * clears. One fold answers both halves, which is the point — `tasks` is empty
+ * exactly when `completions` holds the list, so the box can never be in two
+ * places at once, or in neither.
+ *
+ * Three rules, each of which is a case that went wrong when it was missing:
+ *
+ * - **It commits on the idle transition, not on the last tick.** An agent
+ *   routinely finishes its list and keeps working; committing on the sixth
+ *   check would yank the box off the composer mid-turn and then have to put it
+ *   back the moment the next task was created.
+ * - **Only a turn that touched the checklist can commit one.** Otherwise every
+ *   later turn in a finished chat qualifies — the list is still complete and
+ *   the chat is still idle — and the card lands on whichever turn happens to be
+ *   last, migrating down the transcript as the conversation goes on.
+ * - **A snapshot commits once.** Claude *appends* to its list, so a second plan
+ *   turns 6/6 into 6/12 and finishing it commits a second card holding all
+ *   twelve. Comparing against what was already committed is what keeps that to
+ *   one card per finished plan rather than one per idle turn.
+ *
+ * The anchor is the turn's last assistant message, which is what
+ * `turnPresentations` anchors the changes card to — so both cards hang off the
+ * same message and the two render paths (a plain block, a collapsed run) each
+ * settle both at once. Feed it the messages the transcript will actually draw:
+ * an anchor filtered out downstream is a card nothing renders.
+ */
+export function foldTaskTimeline(
+  messages: Iterable<TaskTranscriptMessage>,
+  busy = false
+): TaskTimeline {
+  const state = new Map<string, TaskItem>()
+  const completions = new Map<string, TaskItem[]>()
+  /** The last list handed to a card; the dock stands down while it matches. */
+  let committed: TaskItem[] | null = null
+  let anchor: string | null = null
+  let touched = false
+
+  const endTurn = (finished: boolean): void => {
+    if (finished && touched && anchor) {
+      const list = [...state.values()]
+      const done = list.length > 0 && list.every((t) => t.status === 'completed')
+      if (done && !sameList(committed, list)) {
+        completions.set(anchor, list)
+        committed = list
+      }
+    }
+    anchor = null
+    touched = false
+  }
+
+  for (const message of messages) {
+    // A user message ends the turn before it; anything else that isn't an
+    // assistant message (a switch divider, an error row) is not part of one.
+    if (message.role === 'user') {
+      endTurn(true)
+      continue
+    }
+    if (message.role !== 'assistant') continue
+    anchor = message.id
+    for (const part of message.parts ?? []) {
+      if (!part || !isChecklistCall(part)) continue
+      apply(state, part)
+      touched = true
+    }
+  }
+  // The final turn is only over when the chat is: a running one is still
+  // creating tasks, and its list belongs on the composer until it stops.
+  endTurn(!busy)
+
+  const live = [...state.values()]
+  return { tasks: sameList(committed, live) ? [] : live, completions }
+}
+
+const sameCompletions = (
+  a: ReadonlyMap<string, TaskItem[]>,
+  b: ReadonlyMap<string, TaskItem[]>
+): boolean => {
+  if (a.size !== b.size) return false
+  for (const [id, list] of a) {
+    const other = b.get(id)
+    if (!other || !sameList(list, other)) return false
+  }
+  return true
+}
+
+/**
+ * `reconcileTasks` for the whole timeline, and the map half is the load-bearing
+ * one: `completions` crosses into the transcript's render context, which is
+ * compared by identity, so a fresh Map per fold would re-render every message
+ * in the chat on every streamed token. It is empty in most chats and unchanged
+ * in the rest, so carrying it forward costs a size check.
+ */
+export function reconcileTimeline(prev: TaskTimeline, next: TaskTimeline): TaskTimeline {
+  const tasks = reconcileTasks(prev.tasks, next.tasks)
+  const completions = sameCompletions(prev.completions, next.completions)
+    ? prev.completions
+    : next.completions
+  return tasks === prev.tasks && completions === prev.completions ? prev : { tasks, completions }
 }

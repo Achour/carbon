@@ -25,8 +25,8 @@ import { useApp } from '@/store'
 import { useTaskList } from '@/taskListStore'
 import { useAgents } from '@/agentsStore'
 import { foldAgentRuns, reconcileAgentRuns, type AgentRunView } from '@shared/agentRuns'
-import { foldTasks, reconcileTasks } from '@/lib/taskList'
-import type { TaskItem } from '@/lib/taskList'
+import { foldTaskTimeline, NO_TASK_TIMELINE, reconcileTimeline } from '@/lib/taskList'
+import type { TaskItem, TaskTimeline } from '@/lib/taskList'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -67,6 +67,7 @@ import {
 import { PermissionCard } from '@/components/messages/PermissionCard'
 import { QuestionCard } from '@/components/messages/QuestionCard'
 import { BackgroundJobs } from '@/components/BackgroundJobs'
+import { TasksCard } from '@/components/messages/TasksCard'
 import { TurnChangesCard } from '@/components/messages/TurnChangesCard'
 import { turnPresentations } from '@/lib/turnChanges'
 
@@ -120,24 +121,10 @@ interface RenderCtx {
   busy: boolean
   lastAssistantId?: string
   onOpenPlan?: (plan: string) => void
+  /** Assistant message id → the finished checklist to draw after it. */
+  taskCompletions?: ReadonlyMap<string, TaskItem[]>
   /** Switch divider currently mid-handoff (brief still generating), if any. */
   switchPendingId?: string
-}
-
-/**
- * Every tool call in the loaded window, in order, for the checklist fold.
- *
- * Prose and user turns used to come through here too, because the fold once
- * collapsed only checklist calls that were genuinely back to back and anything
- * on screen between two of them ended that run. The checklist is one docked box
- * now, so there is no run to break: only the calls matter.
- */
-function* toolParts(messages: ChatMessage[]): Generator<ToolPart> {
-  for (const m of messages) {
-    if (m.role !== 'assistant') continue
-    // Streamed part arrays can be sparse — indexes may arrive out of order.
-    for (const p of m.parts) if (p?.type === 'tool') yield p
-  }
 }
 
 /**
@@ -203,6 +190,7 @@ function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
   const renderAssistant = (m: AssistantMessage): React.ReactNode => {
     const turn = presentations.get(m.id)
     const showSummary = turn?.summary?.id === m.id
+    const finishedTasks = ctx.taskCompletions?.get(m.id)
     return (
       <React.Fragment key={m.id}>
         <AssistantBlock
@@ -212,6 +200,7 @@ function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
           onOpenPlan={ctx.onOpenPlan}
           summarizeEdits={turn?.hasChanges ?? false}
         />
+        {finishedTasks && <TasksCard tasks={finishedTasks} />}
         {showSummary && turn?.summary && (
           <TurnChangesCard
             message={turn.summary}
@@ -240,6 +229,10 @@ function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
         out.push(<ToolCard key={visibleParts[0].toolUseId} part={visibleParts[0]} cwd={ctx.cwd} />)
       }
       const last = run[run.length - 1]
+      const finishedTasks = ctx.taskCompletions?.get(last.id)
+      if (finishedTasks) {
+        out.push(<TasksCard key={`tasks-${last.id}`} tasks={finishedTasks} />)
+      }
       const lastTurn = presentations.get(last.id)
       if (lastTurn?.summary?.id === last.id) {
         out.push(
@@ -298,7 +291,8 @@ const MessageHistory = React.memo(
       prev.ctx.busy !== next.ctx.busy ||
       prev.ctx.lastAssistantId !== next.ctx.lastAssistantId ||
       prev.ctx.onOpenPlan !== next.ctx.onOpenPlan ||
-      prev.ctx.switchPendingId !== next.ctx.switchPendingId
+      prev.ctx.switchPendingId !== next.ctx.switchPendingId ||
+      prev.ctx.taskCompletions !== next.ctx.taskCompletions
     ) {
       return false
     }
@@ -475,14 +469,28 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
   // matching TaskCreate is never in the same message, so nothing smaller than
   // the window can answer. Cheap in practice — the window is HYDRATE_TAIL
   // -bounded, and a chat with no checklist costs one name check per tool part.
-  // `reconcileTasks` keeps an unmoved list at its old identity so the dock
-  // doesn't re-render on every token.
-  const tasksRef = React.useRef<TaskItem[]>([])
-  const tasks = React.useMemo(() => {
-    const next = reconcileTasks(tasksRef.current, foldTasks(toolParts(messages)))
-    tasksRef.current = next
+  //
+  // It answers two things at once, and has to: `tasks` is the live list the
+  // dock draws, `completions` is where a *finished* list lands in the
+  // transcript instead — one is empty exactly when the other holds it. The
+  // blank messages are filtered here rather than downstream because
+  // `renderMessages` drops them too, and an anchor on a message nothing draws
+  // is a card nothing draws. `reconcileTimeline` keeps both halves at their old
+  // identity when nothing moved, so a streamed token re-renders neither the
+  // dock nor the history.
+  const timelineRef = React.useRef<TaskTimeline>(NO_TASK_TIMELINE)
+  const timeline = React.useMemo(() => {
+    const next = reconcileTimeline(
+      timelineRef.current,
+      foldTaskTimeline(
+        messages.filter((m) => !isBlankMsg(m)),
+        busy
+      )
+    )
+    timelineRef.current = next
     return next
-  }, [messages])
+  }, [messages, busy])
+  const tasks = timeline.tasks
 
   // Sub-agent runs are folded out of the same window, for the panel and the
   // activity bar rather than for the transcript — which is why the result goes
@@ -571,9 +579,10 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
       cwd: chat.cwd,
       busy,
       onOpenPlan: openPlan,
-      switchPendingId
+      switchPendingId,
+      taskCompletions: timeline.completions
     }),
-    [chat.cwd, busy, openPlan, switchPendingId]
+    [chat.cwd, busy, openPlan, switchPendingId, timeline.completions]
   )
 
   return (

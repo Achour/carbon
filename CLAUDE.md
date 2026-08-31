@@ -1117,11 +1117,12 @@ cached input.
   with the task truncated away, so identity moved to the expanded body and to
   the roster.
 
-### The task checklist (`lib/taskList.ts`, `TaskDock`)
+### The task checklist (`lib/taskList.ts`, `TaskDock`, `TasksCard`)
 
-**The checklist is state, not an event, so there is one of it and it lives on
+**A live checklist is state, not an event, so there is one of it and it lives on
 top of the composer** — `AgentActivityBar`'s argument, applied to the other
-thing a turn keeps that a transcript cannot hold. It was a card in the message
+thing a turn keeps that a transcript cannot hold. (Only a *live* one: a finished
+list is a record rather than state, and moves into the transcript — below.) It was a card in the message
 list first, drawn where each call was made, and that is wrong twice over: the
 list has exactly one current value but was drawn once per call, so a turn that
 flipped five tasks left five near-identical boxes through its prose; and the one
@@ -1138,6 +1139,47 @@ acting. Inside, there is one outline, and the dock only rounds its own top
 corners and draws the divider: the root cannot `overflow: hidden`, since that
 would clip the slash and @ popovers that hang above it.
 
+**A finished list is not state any more, so it stops living there.** "All done ·
+6/6" on top of the composer is a permanent row about a turn that ended, sitting
+in the one place on screen reserved for what happens next — and it had no way
+out, because the dock drew whatever the fold returned and the fold has no notion
+of *over*. So a completed list is **committed**: `TasksCard` draws it in the
+transcript at the end of the turn that finished it, and the dock clears. The box
+is not dismissed, it **moves** — down to the work it describes, which is where a
+record of a plan belongs once there is nothing left to steer, and where reopening
+the chat a week later still finds it.
+
+`foldTaskTimeline` answers both halves in one pass, which is the point rather
+than an optimization: `tasks` is empty exactly when `completions` holds the list,
+so the checklist can never be in two places at once or in neither. Three rules
+decide when one commits, each of which is a case that went wrong without it:
+
+- **On the idle transition, not on the last tick.** An agent routinely finishes
+  its list and keeps working; committing on the sixth check would pull the box
+  off the composer mid-turn and put it straight back on the next `TaskCreate`.
+- **Only a turn that touched the checklist can commit one.** Every later turn in
+  a finished chat is *also* idle with the list *still* complete, so without this
+  the card lands on whichever turn happens to be last and migrates down the
+  transcript as the conversation goes on.
+- **A snapshot commits once.** Claude appends rather than replacing, so a second
+  plan turns 6/6 into 6/12 and finishing that commits a second card holding all
+  twelve — one card per finished plan, not one per idle turn. The first six are
+  then named in two cards, and that is the honest answer rather than a leak:
+  each says what the list was when that turn ended. Suppressing the repeat means
+  tracking which ids a card already holds, which is precisely the superseded-id
+  bookkeeping this section records deleting.
+
+The anchor is the turn's **last assistant message** — what `turnPresentations`
+already hangs the changes card on, so the two settle in the same two render
+paths (a plain block, and a collapsed run whose last message ends the turn) and
+cannot drift apart. It is fed the messages the transcript will actually draw:
+an anchor that `isBlankMsg` filters out downstream is a card nothing renders.
+`TasksCard` is the dock's own header row down to the `6/6`, because the box that
+lands should be recognizable as the box that left; what changes is the rows. The
+dock strikes completed tasks through to separate them from the ones still to
+come — here there are none, so the same rendering would cost the card's
+legibility to say nothing.
+
 What is left in the transcript is the *calls*, as ordinary muted rows in the
 run-grouping — the checklist tools are in `GROUPABLE_TOOLS` for exactly that.
 Hiding them would be the same mistake as the silent checklist below; a run of
@@ -1147,10 +1189,10 @@ result. All four spellings share the one `Tasks` label, both providers', since
 the summary keys off the label and a second one would print two clauses for one
 activity.
 
-The fold is therefore one question — *what does the list look like now* — and
-`foldTasks` answers it by applying every successful checklist call in the loaded
-window. Three things about it, each measured against the real corpus rather than
-assumed:
+Underneath both surfaces is one question — *what does the list look like now* —
+answered by applying every successful checklist call in the loaded window
+(`foldTasks`, and `foldTaskTimeline` around it). Three things about it, each
+measured against the real corpus rather than assumed:
 
 - **The id exists only in the output.** `TaskCreate`'s *input* has no id; it
   comes back in the result (`Task #3 created successfully: …`), and that string
@@ -1182,12 +1224,19 @@ The list lives in `taskListStore`, outside the message-history render path, for
 the reason that store already existed: it churns several times a second mid-turn
 and threading it through props would re-render every transcript row on each
 flip. That only works because `reconcileTasks` carries an unmoved list forward
-*by identity* — a fresh array per fold would defeat the whole arrangement. It
+*by identity* — a fresh array per fold would defeat the whole arrangement. The
+`completions` half needs the same treatment for a sharper reason:
+it rides the transcript's own render context, which `MessageHistory` compares by
+identity, so a fresh `Map` per fold would re-render every message in the chat on
+every streamed token — the exact cost the dock was moved out of that path to
+avoid. `reconcileTimeline` carries both. The live list also
 carries a **`chatId`, and that is load-bearing rather than bookkeeping**: the
 publish runs in an effect, so on a chat switch the store holds the previous
 chat's tasks for one painted frame. A per-call card failed soft on that, looking
 itself up by id; one box shared by every chat would show the wrong chat's plan,
-so the dock draws nothing until the id is its own.
+so the dock draws nothing until the id is its own. `completions` needs no such
+stamp — it is threaded through props into a transcript that is keyed by chat id
+and rebuilt with it.
 
 **The tools themselves are behind a flag, and that is why the checklist once
 vanished outright.** Claude Code 2.1 registers `TaskCreate`/`TaskUpdate`/`TaskList`/
