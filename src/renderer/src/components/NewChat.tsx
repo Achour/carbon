@@ -9,6 +9,7 @@ import {
   Loader2,
   PanelLeft,
   PanelRight,
+  Shapes,
   SquareTerminal
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -73,6 +74,7 @@ export function NewChat(): React.JSX.Element {
   const browseFiles = useApp((s) => s.browseFiles)
   const openTerminal = useApp((s) => s.openTerminal)
   const openPreview = useApp((s) => s.openPreview)
+  const openCanvas = useApp((s) => s.openCanvas)
   const panelOpen = useApp((s) => s.panelOpen)
   const sidebarOpen = useApp((s) => s.sidebarOpen)
   const toggleSidebar = useApp((s) => s.toggleSidebar)
@@ -419,6 +421,7 @@ export function NewChat(): React.JSX.Element {
               )}
             </RailAction>
             <RailAction icon={<FolderTree />} label="Files" onClick={browseFiles} />
+            <RailAction icon={<Shapes />} label="Canvas" onClick={() => void openCanvas(null)} />
             <RailAction icon={<SquareTerminal />} label="Terminal" onClick={() => openTerminal()} />
             <RailAction icon={<Globe />} label="Browser preview" onClick={() => openPreview()} />
           </aside>

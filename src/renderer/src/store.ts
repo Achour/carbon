@@ -1700,6 +1700,10 @@ export const useApp = create<AppState>((set, get) => ({
     if (cwd) {
       void get().refreshGit()
       void get().refreshGithub()
+      // Canvases are per *project*, so picking another folder on the home screen
+      // changes the answer exactly as git's does — without this the list stays
+      // the previous project's until a chat is opened.
+      void get().refreshCanvases()
       if (get().panelOpen && !get().filesByDir[cwd]) void get().loadDir(cwd)
     }
   },

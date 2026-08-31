@@ -187,6 +187,7 @@ function QuickOpen(): React.JSX.Element {
   const openTerminal = useApp((s) => s.openTerminal)
   const reviewChangesAction = useApp((s) => s.reviewChanges)
   const browseFiles = useApp((s) => s.browseFiles)
+  const openCanvas = useApp((s) => s.openCanvas)
 
   const [open, setOpen] = React.useState(false)
   const [query, setQuery] = React.useState('')
@@ -242,6 +243,16 @@ function QuickOpen(): React.JSX.Element {
       label: 'Browse files',
       run: () => {
         browseFiles()
+        setOpen(false)
+      }
+    },
+    {
+      // `Shapes` is the library's own mark (the tab, and its empty state);
+      // `PenLine` names a single document. This row opens the library.
+      icon: <Shapes className="size-4" />,
+      label: 'Canvas',
+      run: () => {
+        void openCanvas(null)
         setOpen(false)
       }
     },
