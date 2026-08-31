@@ -739,7 +739,7 @@ export function Settings(): React.JSX.Element {
   }, [closeSettings])
 
   return (
-    <div className="flex min-w-0 flex-1 flex-col">
+    <div className="flex min-w-0 flex-1 flex-col bg-background">
       <header className="drag flex h-[38px] shrink-0 items-center justify-between border-b border-border px-4">
         <span className="text-sm font-semibold">Settings</span>
         <WithTooltip label="Close settings  esc">
@@ -809,8 +809,8 @@ export function Settings(): React.JSX.Element {
                 {window.api.platform === 'darwin' && (
                   <div className="mt-7">
                     <Toggle
-                      label="Translucent sidebar"
-                      description="Frost the sidebar so the desktop blurs through behind it"
+                      label="Translucent chrome"
+                      description="Frost the sidebar and the chat so the desktop blurs through behind them"
                       checked={translucentSidebar}
                       onChange={setTranslucentSidebar}
                     />

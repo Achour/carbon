@@ -330,21 +330,57 @@
   -webkit-app-region: no-drag;
 }
 
-/* Translucent sidebar (macOS window vibrancy). When on, the window base is
-   transparent so the native blurred material shows through; the main content
-   and right panel stay opaque (App wraps them in a bg-background layer), and
-   only the sidebar is painted as a light theme tint over the frosted glass.
-   Light themes need a touch more opacity to stay legible over the material. */
-:root[data-translucent='true'] body {
+/* Translucent chrome (macOS window vibrancy). When on, the window base is
+   transparent so the native blurred material shows through, and the two
+   surfaces that read as *chrome* are painted as a theme tint over the frost:
+   the sidebar and the chat column. Everything that is a *document* stays
+   opaque — the right panel, Settings, Usage — which is what keeps code, diffs
+   and a wall of numbers off a wallpaper.
+
+   The chat column is the reason `[data-content]` has to be cleared rather than
+   left painting: `backdrop-filter` samples the page's own backdrop and never
+   the compositor behind the window, so the only way the frost reaches the
+   composer is an unbroken transparent stack from `body` down to it. The
+   opaque layer therefore moves onto the surfaces that want it (the right
+   panel's `<aside>`, the two pages) instead of covering everything.
+
+   One material, but not one alpha: the chat sits a step more opaque than the
+   sidebar because it is the surface that gets *read*. The sidebar carries
+   short labels a glance lands on; a reply is paragraphs, and prose is the
+   first thing a busy wallpaper costs you. Colour stays each surface's own, the
+   way sidebar and background already differ when opaque — which is also why
+   the same alpha looked thinner on the chat in light themes, where the
+   background is near-white and the sidebar is not. Light themes need a touch
+   more opacity throughout to stay legible over the material. */
+:root[data-translucent='true'] body,
+:root[data-translucent='true'] [data-content] {
   background: transparent;
 }
+/* Let the native material do the blurring. This is only a theme-coloured wash;
+   a heavier fill paints over the frost and makes the surface look opaque. */
 :root[data-translucent='true'] [data-sidebar] {
-  /* Let the native material do the blurring. This is only a theme-coloured wash;
-     a heavier fill paints over the frost and makes the sidebar look opaque. */
   background-color: oklch(from var(--sidebar) l c h / 0.72);
+}
+:root[data-translucent='true'] [data-chatview],
+:root[data-translucent='true'] [data-newchat] {
+  background-color: oklch(from var(--background) l c h / 0.8);
 }
 :root[data-translucent='true']:not(.dark) [data-sidebar] {
   background-color: oklch(from var(--sidebar) l c h / 0.58);
+}
+:root[data-translucent='true']:not(.dark) [data-chatview],
+:root[data-translucent='true']:not(.dark) [data-newchat] {
+  background-color: oklch(from var(--background) l c h / 0.68);
+}
+/* The composer is a card *on* the frosted column, so a solid fill is the one
+   thing on it that reads as a chip pasted over glass. Alpha'd, the desktop's
+   colour carries through it as well and it reads as part of the material —
+   still the lightest surface in the column, which is what keeps it findable. */
+:root[data-translucent='true'] [data-composer] {
+  background-color: oklch(from var(--card) l c h / 0.6);
+}
+:root[data-translucent='true']:not(.dark) [data-composer] {
+  background-color: oklch(from var(--card) l c h / 0.62);
 }
 
 /* Scrollbars */

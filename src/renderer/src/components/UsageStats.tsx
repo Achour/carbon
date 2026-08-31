@@ -587,7 +587,7 @@ export function UsageStats(): React.JSX.Element {
   const empty = report && report.total.responses === 0
 
   return (
-    <div className="flex min-w-0 flex-1 flex-col">
+    <div className="flex min-w-0 flex-1 flex-col bg-background">
       {/* The window strip carries the page's identity and nothing else — the
           range picker changes what the *content* says, so it belongs with the
           content, not with the traffic lights. */}

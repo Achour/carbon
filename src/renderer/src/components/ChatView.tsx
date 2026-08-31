@@ -655,7 +655,7 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
   )
 
   return (
-    <div className="relative flex h-full min-w-[420px] flex-1 flex-col">
+    <div data-chatview className="relative flex h-full min-w-[420px] flex-1 flex-col">
       {/* Header */}
       <header
         className={cn(

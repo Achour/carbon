@@ -22,7 +22,9 @@ export class ErrorBoundary extends React.Component<React.PropsWithChildren, Stat
     return (
       // `h-full` for the root boundary, whose parent is `#root` rather than a
       // stretched flex row; `flex-1` still does the work inside the content pane.
-      <div className="flex h-full flex-1 items-center justify-center p-8">
+      // Opaque: under translucency the root boundary is the only thing left on
+      // a transparent window, and a crash report over the desktop is unreadable.
+      <div className="flex h-full flex-1 items-center justify-center bg-background p-8">
         <div className="max-w-md text-center">
           <AlertTriangle className="mx-auto mb-3 size-8 text-destructive" />
           <div className="mb-1 text-sm font-semibold">Something broke in this view</div>
