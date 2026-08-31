@@ -1,5 +1,14 @@
 import { PREVIEW_TOOL_INFO, PREVIEW_TOOL_NAMES, previewPlanBlock } from './previewTools.ts'
-import { callPreviewBridge, type PreviewBridgeResponse } from './previewBridge.ts'
+import { CANVAS_TOOL_INFO, CANVAS_TOOL_NAMES } from './canvasTools.ts'
+import { callCanvasBridge, callPreviewBridge, type PreviewBridgeResponse } from './previewBridge.ts'
+
+/**
+ * One child script serves both of Carbon's MCP servers, chosen by
+ * `CARBON_MCP_SERVER`. A second script would mean a second entry in
+ * `electron.vite.config` and a second built artifact to resolve beside the
+ * compiled main — for a file that differs only in its tool table.
+ */
+export type McpServerName = 'preview' | 'canvas'
 
 interface JsonRpcRequest {
   jsonrpc?: string
@@ -16,6 +25,9 @@ interface JsonRpcResponse {
 }
 
 const PROTOCOL = '2024-11-05'
+
+/** The union of both tool tables' arguments — the child only forwards them. */
+export type ToolArgs = { url?: string; title?: string; html?: string; id?: string }
 
 export function previewToolList(): Array<{
   name: string
@@ -42,7 +54,52 @@ export function previewToolList(): Array<{
   })
 }
 
-export function handleMcpMessage(message: JsonRpcRequest): JsonRpcResponse | null {
+/**
+ * The canvas tools' wire schema. `html` is a plain string parameter — the whole
+ * document travels as one argument, which is why the bridge's canvas cap is
+ * megabytes rather than the preview path's kilobytes.
+ */
+export function canvasToolList(): Array<{
+  name: string
+  description: string
+  inputSchema: Record<string, unknown>
+}> {
+  return CANVAS_TOOL_NAMES.map((name) => {
+    const properties: Record<string, unknown> = {}
+    const required: string[] = []
+    if (name === 'write') {
+      properties.title = { type: 'string', description: 'Short title for the canvas.' }
+      properties.html = {
+        type: 'string',
+        description:
+          'A complete, self-contained HTML document. Inline any CSS and JS; do not reference project files.'
+      }
+      properties.id = {
+        type: 'string',
+        description: 'Id of an existing canvas to replace. Omit to create a new one.'
+      }
+      required.push('title', 'html')
+    }
+    if (name === 'read') {
+      properties.id = { type: 'string', description: 'The canvas id.' }
+      required.push('id')
+    }
+    return {
+      name,
+      description: CANVAS_TOOL_INFO[name].description,
+      inputSchema: {
+        type: 'object',
+        properties,
+        ...(required.length ? { required } : {})
+      }
+    }
+  })
+}
+
+export function handleMcpMessage(
+  message: JsonRpcRequest,
+  server: McpServerName = 'preview'
+): JsonRpcResponse | null {
   if (!message.method || message.id == null) return null
   const id = message.id
   if (message.method === 'initialize') {
@@ -53,13 +110,17 @@ export function handleMcpMessage(message: JsonRpcRequest): JsonRpcResponse | nul
       result: {
         protocolVersion: requested || PROTOCOL,
         capabilities: { tools: {} },
-        serverInfo: { name: 'preview', version: '1.0.0' }
+        serverInfo: { name: server, version: '1.0.0' }
       }
     }
   }
   if (message.method === 'ping') return { jsonrpc: '2.0', id, result: {} }
   if (message.method === 'tools/list') {
-    return { jsonrpc: '2.0', id, result: { tools: previewToolList() } }
+    return {
+      jsonrpc: '2.0',
+      id,
+      result: { tools: server === 'canvas' ? canvasToolList() : previewToolList() }
+    }
   }
   if (message.method === 'tools/call') return null
   return { jsonrpc: '2.0', id, error: { code: -32601, message: `Unknown method: ${message.method}` } }
@@ -67,10 +128,10 @@ export function handleMcpMessage(message: JsonRpcRequest): JsonRpcResponse | nul
 
 export async function handleMcpCall(
   message: JsonRpcRequest,
-  callTool: (name: string, input: { url?: string }) => Promise<PreviewBridgeResponse>
+  callTool: (name: string, input: ToolArgs) => Promise<PreviewBridgeResponse>
 ): Promise<JsonRpcResponse> {
   const id = message.id ?? null
-  const params = (message.params ?? {}) as { name?: string; arguments?: { url?: string } }
+  const params = (message.params ?? {}) as { name?: string; arguments?: ToolArgs }
   const name = typeof params.name === 'string' ? params.name : ''
   try {
     const result = await callTool(name, params.arguments ?? {})
@@ -147,6 +208,7 @@ export async function* readMcpMessages(
 }
 
 async function startStdio(): Promise<void> {
+  const server: McpServerName = process.env.CARBON_MCP_SERVER === 'canvas' ? 'canvas' : 'preview'
   const url = process.env.CARBON_PREVIEW_URL ?? ''
   const token = process.env.CARBON_PREVIEW_TOKEN ?? ''
   const cwd = process.env.CARBON_PREVIEW_CWD ?? ''
@@ -155,7 +217,14 @@ async function startStdio(): Promise<void> {
     process.exit(1)
   }
   const plan = process.env.CARBON_PREVIEW_PLAN === '1'
-  const callTool = async (name: string, input: { url?: string }): Promise<PreviewBridgeResponse> => {
+  // The canvas server is handed the *project* (repo root) and the chat, both
+  // fixed at spawn: re-deriving the repo root per call would mean git work on
+  // every write, and a model that could name its own project could write into
+  // another one's list.
+  const project = process.env.CARBON_CANVAS_PROJECT || cwd
+  const chatId = process.env.CARBON_CANVAS_CHAT || null
+  const callTool = async (name: string, input: ToolArgs): Promise<PreviewBridgeResponse> => {
+    if (server === 'canvas') return callCanvasBridge(url, token, { project, chatId }, name, input)
     const blocked = previewPlanBlock(name, plan)
     if (blocked) return { ok: false, error: blocked }
     return callPreviewBridge(url, token, cwd, name, input)
@@ -169,7 +238,7 @@ async function startStdio(): Promise<void> {
       writeMcpFrame(process.stdout, await handleMcpCall(message, callTool))
       continue
     }
-    const reply = handleMcpMessage(message)
+    const reply = handleMcpMessage(message, server)
     if (reply) writeMcpFrame(process.stdout, reply)
   }
 }

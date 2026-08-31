@@ -55,6 +55,7 @@ import {
   providerForRememberedModel
 } from '@shared/types'
 import type {
+  CanvasSummary,
   AppDefaults,
   AssistantMessage,
   Attachment,
@@ -298,6 +299,27 @@ interface AppState {
   /** Messages typed while a turn was running, sent when the chat goes idle. */
   queued: Record<string, QueuedMessage[]>
   planPanel: PlanPanelState | null
+  /**
+   * Canvases for the active chat's *project*, newest first. Summaries only —
+   * the body is fetched when one is opened, because a project's canvases are a
+   * list of titles far more often than they are a document being read.
+   */
+  canvases: CanvasSummary[]
+  /**
+   * Ids of the canvases open as their own tabs, in the order they were opened.
+   *
+   * A canvas gets a *tab*, not a mode of one shared tab: two of them are read
+   * side by side — that is most of the point of a document panel — and a single
+   * slot with a back button makes comparing two a round trip through a list.
+   * They are deliberately not `openFiles` entries, though: a canvas has no
+   * path, no dirty state, no preview slot and nothing to save, so it would have
+   * meant teaching every one of those rules a case that never applies.
+   */
+  canvasTabs: string[]
+  /** Canvas awaiting a delete confirmation, or null. */
+  pendingCanvasDelete: CanvasSummary | null
+  /** Body per open canvas; `null` while its read is in flight. */
+  canvasHtml: Record<string, string | null>
   defaults: AppDefaults | null
   loading: boolean
   sidebarOpen: boolean
@@ -545,6 +567,15 @@ interface AppState {
   /** Pins a preview tab so the next preview doesn't replace it. */
   promoteTab(path: string): void
   setActiveTab(tab: string): void
+  refreshCanvases(): Promise<void>
+  /** Open one canvas as its own tab, or `null` for the Recents list. */
+  openCanvas(id: string | null): Promise<void>
+  closeCanvas(id: string): void
+  /** Ask before deleting; `null` dismisses. `deleteCanvas` is the answer. */
+  confirmCanvasDelete(canvas: CanvasSummary | null): void
+  deleteCanvas(id: string): Promise<void>
+  /** An empty canvas with a name, for the agent to fill. Returns its id. */
+  createCanvas(title: string): Promise<string | null>
   refreshFiles(options?: { invalidateImages?: boolean }): Promise<void>
   /** Open the delete confirmation for a tree row. */
   confirmDelete(target: { path: string; kind: 'dir' | 'file' } | null): void
@@ -851,6 +882,32 @@ function homeCwd(chats: ChatMeta[], recentDirs: string[]): string | null {
  * that pick has to survive, so only rewrite while the selection is still the
  * outgoing chat's own cwd.
  */
+/**
+ * What a hand-made canvas holds until an agent writes it.
+ *
+ * `color-scheme: light dark` and no page background of its own, which is the
+ * same rule the session prompt asks the agents for — the panel is usually dark,
+ * and a placeholder that hardcoded white would be the exact defect it is
+ * standing in for.
+ */
+const EMPTY_CANVAS_HTML = `<!doctype html><meta charset="utf-8"><style>
+:root{color-scheme:light dark}
+body{margin:0;display:grid;place-items:center;height:100vh;font:13px -apple-system,system-ui,sans-serif;opacity:.6;text-align:center;padding:24px}
+</style><p>Empty canvas.<br>Ask the agent to fill it in — it can find this one by name.</p>`
+
+/**
+ * The project a canvas belongs to.
+ *
+ * The repo root, **not** the chat's cwd: a worktree chat runs in a directory
+ * `finishWorktree` deletes, and a canvas has to outlive the branch it was
+ * written on. Falls back to `selectedCwd` so the panel still answers on the
+ * home screen, where no chat is active.
+ */
+function canvasProject(s: Pick<AppState, 'activeId' | 'chats' | 'selectedCwd'>): string | null {
+  const chat = s.chats.find((c) => c.id === s.activeId)
+  return chat ? projectRoot(chat) : s.selectedCwd
+}
+
 function homeCwdLeaving(outgoing: ChatMeta | undefined, selectedCwd: string | null): string | null {
   if (!outgoing) return selectedCwd
   return selectedCwd === outgoing.cwd ? projectRoot(outgoing) : selectedCwd
@@ -1076,6 +1133,10 @@ export const useApp = create<AppState>((set, get) => ({
   permissions: {},
   queued: {},
   planPanel: null,
+  canvases: [],
+  canvasTabs: [],
+  canvasHtml: {},
+  pendingCanvasDelete: null,
   defaults: null,
   loading: true,
   sidebarOpen: localStorage.getItem('sidebarOpen') !== 'false',
@@ -1611,6 +1672,7 @@ export const useApp = create<AppState>((set, get) => ({
     if (cwd) {
       void get().refreshGit()
       void get().refreshGithub()
+      void get().refreshCanvases()
     }
     // No active chat yet on boot — derive the provider from the saved default
     // model so a Codex default never warms a Claude command session.
@@ -1819,6 +1881,86 @@ export const useApp = create<AppState>((set, get) => ({
 
   setActiveTab(tab) {
     set({ activeTab: tab })
+  },
+  async refreshCanvases() {
+    const project = canvasProject(get())
+    if (!project) {
+      set({ canvases: [] })
+      return
+    }
+    const rows = await window.api.canvasList(project)
+    // Guard against a chat switch that landed while the query was in flight —
+    // otherwise the previous project's list paints over the new one's.
+    set((s) => (canvasProject(s) === project ? { canvases: rows } : {}))
+  },
+  async openCanvas(id) {
+    if (!id) {
+      set((st) => ({ activeTab: 'canvas', ...panelPatch(st, true) }))
+      return
+    }
+    set((st) => ({
+      canvasTabs: st.canvasTabs.includes(id) ? st.canvasTabs : [...st.canvasTabs, id],
+      // `null` rather than leaving the previous body: a slow read must never
+      // show one canvas's document under another's title.
+      canvasHtml: id in st.canvasHtml ? st.canvasHtml : { ...st.canvasHtml, [id]: null },
+      activeTab: `canvas:${id}`,
+      ...panelPatch(st, true)
+    }))
+    const canvas = await window.api.canvasGet(id)
+    set((st) =>
+      st.canvasTabs.includes(id)
+        ? { canvasHtml: { ...st.canvasHtml, [id]: canvas?.html ?? '' } }
+        : {}
+    )
+  },
+
+  closeCanvas(id) {
+    set((st) => {
+      const canvasTabs = st.canvasTabs.filter((c) => c !== id)
+      const canvasHtml = { ...st.canvasHtml }
+      delete canvasHtml[id]
+      // Falling back to the neighbour rather than to nothing: closing the last
+      // of several documents should leave you in the panel, not staring at the
+      // launcher.
+      const activeTab =
+        st.activeTab === `canvas:${id}`
+          ? canvasTabs.length
+            ? `canvas:${canvasTabs[canvasTabs.length - 1]}`
+            : 'canvas'
+          : st.activeTab
+      return { canvasTabs, canvasHtml, activeTab }
+    })
+  },
+
+  confirmCanvasDelete(canvas) {
+    set({ pendingCanvasDelete: canvas })
+  },
+
+  async deleteCanvas(id) {
+    await window.api.canvasDelete(id)
+    get().closeCanvas(id)
+    set((st) => ({
+      canvases: st.canvases.filter((c) => c.id !== id),
+      pendingCanvasDelete: st.pendingCanvasDelete?.id === id ? null : st.pendingCanvasDelete
+    }))
+  },
+
+  async createCanvas(title) {
+    const project = canvasProject(get())
+    if (!project) return null
+    // An empty canvas is a *named target*, which is the only thing a user can
+    // usefully make without an HTML editor: the agent finds it by title through
+    // `canvas list` and fills it in. The placeholder says so, because a blank
+    // white pane reads as a canvas that failed to load.
+    const saved = await window.api.canvasSave({
+      project,
+      chatId: get().activeId,
+      title,
+      html: EMPTY_CANVAS_HTML
+    })
+    set((st) => ({ canvases: [saved, ...st.canvases.filter((c) => c.id !== saved.id)] }))
+    await get().openCanvas(saved.id)
+    return saved.id
   },
 
   beginRename(target) {
@@ -2464,6 +2606,13 @@ export const useApp = create<AppState>((set, get) => ({
       hiddenBefore: 0,
       loadingOlder: false,
       planPanel: null,
+      // The outgoing project's canvases are cleared synchronously for the
+      // reason `hiddenBefore` is: left standing, they would briefly list
+      // another project's documents under this chat's tab.
+      canvases: [],
+      canvasTabs: [],
+      canvasHtml: {},
+      pendingCanvasDelete: null,
       settingsOpen: false,
       usageOpen: false,
       panelMaximized: false,
@@ -2512,6 +2661,7 @@ export const useApp = create<AppState>((set, get) => ({
       get().loadCommands(chat.cwd, chat.provider)
       if (cwdChanged || !get().git) void get().refreshGit()
       if (cwdChanged || !get().github) void get().refreshGithub()
+      void get().refreshCanvases()
       if (cwdChanged && get().panelOpen && !get().filesByDir[chat.cwd]) {
         void get().loadDir(chat.cwd)
       }
@@ -3133,6 +3283,30 @@ export const useApp = create<AppState>((set, get) => ({
         break
       }
 
+      case 'canvas': {
+        // Splice the summary in rather than refetching: the list is live while
+        // a turn runs, and a round trip per write would be a query per token of
+        // the model's patience. The tab is deliberately NOT opened — the agents
+        // panel's rule holds here too, that something arriving mid-read must
+        // not take the document you are looking at off screen.
+        set((st) => {
+          if (canvasProject(st) !== ev.project) return {}
+          const rest = st.canvases.filter((c) => c.id !== ev.canvas.id)
+          return { canvases: [ev.canvas, ...rest] }
+        })
+        // A revision of a canvas that is open should redraw it in place —
+        // `openCanvas` re-reads the body and leaves the tab where it is.
+        if (get().canvasTabs.includes(ev.canvas.id)) {
+          void window.api.canvasGet(ev.canvas.id).then((fresh) => {
+            set((st) =>
+              st.canvasTabs.includes(ev.canvas.id)
+                ? { canvasHtml: { ...st.canvasHtml, [ev.canvas.id]: fresh?.html ?? '' } }
+                : {}
+            )
+          })
+        }
+        break
+      }
       case 'title-pending': {
         set((st) => ({ titling: { ...st.titling, [ev.chatId]: ev.pending } }))
         break

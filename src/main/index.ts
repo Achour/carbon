@@ -59,6 +59,7 @@ import * as gitOps from './git'
 import * as githubOps from './github'
 import { getPermissionRules, removePermissionRule } from './permissions'
 import { PreviewManager } from './preview'
+import { CanvasManager } from './canvas.ts'
 import { Store } from './store'
 import { TerminalManager } from './terminal'
 import { checkForUpdate, installedViaHomebrew } from './updates'
@@ -88,6 +89,7 @@ let store: Store
 let manager: ChatManager
 let terminals: TerminalManager
 let preview: PreviewManager
+let canvas: CanvasManager
 
 // Native macOS vibrancy is created once in a stable active state. The renderer's
 // localStorage preference controls whether the window backing reveals it.
@@ -428,6 +430,16 @@ function buildMenu(): void {
 
 function registerIpc(): void {
   ipcMain.handle('chats:list', () => store.listChats())
+  ipcMain.handle('canvas:list', (_e, project: string) => canvas.list(project))
+  ipcMain.handle('canvas:get', (_e, id: string) => canvas.get(id))
+  ipcMain.handle(
+    'canvas:save',
+    (
+      _e,
+      input: { id?: string; project: string; chatId?: string | null; title: string; html: string }
+    ) => canvas.save(input)
+  )
+  ipcMain.handle('canvas:delete', (_e, id: string) => canvas.delete(id))
 
   // viewChat, not getChat: the renderer gets the loaded suffix, while every
   // main-process caller keeps the full-length array whose index is the row's seq.
@@ -891,8 +903,13 @@ app.whenReady().then(() => {
   // resolution that ran against an empty config would cache the wrong answer
   // for a provider the user has switched off or pointed elsewhere.
   configureProviderClis(store.getProviderClis())
-  preview = new PreviewManager(emitPreview, sendPreviewCommand)
-  manager = new ChatManager(store, emit, preview)
+  // Constructed before the preview because the preview's loopback bridge serves
+  // both tool namespaces and takes this as its second host. The bridge thunk is
+  // what breaks the cycle: it is not called until an MCP config is built, long
+  // after both objects exist.
+  canvas = new CanvasManager(store.canvases, emit, () => preview.bridge())
+  preview = new PreviewManager(emitPreview, sendPreviewCommand, canvas)
+  manager = new ChatManager(store, emit, preview, canvas)
   terminals = new TerminalManager(emitTerminal)
   registerIpc()
   buildMenu()

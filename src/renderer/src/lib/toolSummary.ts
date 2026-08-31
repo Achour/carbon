@@ -47,6 +47,9 @@ const ACTIVITIES: Record<string, Activity> = {
   Run: { rank: 2, past: 'Ran', gerund: 'Running', one: 'command', many: 'commands' },
   Git: { rank: 2, past: 'Ran', gerund: 'Running', one: 'command', many: 'commands' },
   Terminal: { rank: 2, past: 'Ran', gerund: 'Running', one: 'command', many: 'commands' },
+  // Beside Write, and above the reads: a canvas is a *result* of the turn, the
+  // same kind of thing a written file is.
+  Canvas: { rank: 1, past: 'Wrote', gerund: 'Writing', one: 'canvas', many: 'canvases' },
   Read: { rank: 3, past: 'Read', gerund: 'Reading', one: 'file', many: 'files' },
   List: { rank: 4, past: 'Listed', gerund: 'Listing', one: 'folder', many: 'folders' },
   // Every way of asking "where is it" counts as one kind. Grep and Glob are one

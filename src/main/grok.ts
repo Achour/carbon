@@ -67,6 +67,9 @@ import { deriveTitle } from './titles.ts'
 import { USD_PER_TICK } from './usageScan.ts'
 import type { PreviewManager } from './preview.ts'
 import { PREVIEW_SESSION_RULES, PREVIEW_TOOL_INFO, PREVIEW_TOOL_NAMES } from './previewTools.ts'
+import { projectRoot } from '../shared/types.ts'
+import type { CanvasManager } from './canvas.ts'
+import { CANVAS_SESSION_RULES } from './canvasTools.ts'
 
 /**
  * Grok Build as an `AgentSession`, on top of the ACP client in `grokAcp.ts`.
@@ -197,7 +200,8 @@ export class GrokSession implements AgentSession {
     store: Store,
     onDead: () => void,
     onCommands: (commands: SlashCommand[]) => void = () => {},
-    private preview: PreviewManager | null = null
+    private preview: PreviewManager | null = null,
+    private canvas: CanvasManager | null = null
   ) {
     // Fail here rather than at the ACP spawn: `deliver` wraps session
     // construction, so a missing or switched-off CLI lands in the chat as an
@@ -267,8 +271,15 @@ export class GrokSession implements AgentSession {
 
   private async startClient(): Promise<GrokAcpClient> {
     const baseline = grokPermissionBaseline(this.chat.permissionMode)
-    const mcpServers = (await this.preview?.mcpServers(this.chat.cwd)) ?? []
-    this.previewAttached = mcpServers.length > 0
+    const previewServers = (await this.preview?.mcpServers(this.chat.cwd)) ?? []
+    const canvasServers =
+      (await this.canvas?.mcpServers({
+        cwd: this.chat.cwd,
+        project: projectRoot(this.chat),
+        chatId: this.chat.id
+      })) ?? []
+    const mcpServers = [...previewServers, ...canvasServers]
+    this.previewAttached = previewServers.length > 0
     const client = new GrokAcpClient({
       cwd: this.chat.cwd,
       model: this.launchModel(),
@@ -276,7 +287,10 @@ export class GrokSession implements AgentSession {
       alwaysApprove: baseline === 'yolo',
       autoMode: baseline === 'auto',
       mcpServers,
-      extraRules: mcpServers.length ? PREVIEW_SESSION_RULES : undefined,
+      extraRules:
+        [previewServers.length ? PREVIEW_SESSION_RULES : '', canvasServers.length ? CANVAS_SESSION_RULES : '']
+          .filter(Boolean)
+          .join('\n\n') || undefined,
       callbacks: {
         onUpdate: (update) => this.handleUpdate(update),
         onPermission: (request) => this.handlePermission(request),

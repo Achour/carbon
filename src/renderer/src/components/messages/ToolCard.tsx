@@ -15,6 +15,7 @@ import {
   Loader2,
   MessageCircleQuestion,
   PackageSearch,
+  PenLine,
   Search,
   Shapes,
   ShieldX,
@@ -35,6 +36,12 @@ import { humanizeShellCommand } from '@/lib/toolLabels'
 import { summarizeActivity } from '@/lib/toolSummary'
 import { Markdown } from '@/components/Markdown'
 import { useApp } from '@/store'
+import {
+  canvasInRun,
+  canvasWrite,
+  resolveCanvasId,
+  type CanvasRef
+} from '@/lib/canvasRef'
 import { useAgents } from '@/agentsStore'
 
 interface ToolMeta {
@@ -47,7 +54,7 @@ interface ToolMeta {
    * exclusive by construction, which parallel optional strings could only
    * express by convention.
    */
-  open?: { kind: 'file' | 'preview'; target: string }
+  open?: { kind: 'file' | 'preview' | 'canvas'; target: string }
   /** A published page, opened in the system browser rather than in the app. */
   external?: string
 }
@@ -56,7 +63,25 @@ function str(v: unknown): string | undefined {
   return typeof v === 'string' && v.length > 0 ? v : undefined
 }
 
+/** The row for a canvas write, whichever provider spelled the call. */
+function canvasMeta(part: ToolPart): ToolMeta {
+  const written = canvasWrite(part)
+  return {
+    icon: PenLine,
+    label: 'Canvas',
+    summary: written?.title,
+    // A row with no resolvable canvas still reads correctly; it just has
+    // nowhere to go, which is the honest outcome rather than a dead link.
+    open: written ? { kind: 'canvas', target: written.id ?? `title:${written.title ?? ''}` } : undefined
+  }
+}
+
 function toolMeta(part: ToolPart, cwd: string): ToolMeta {
+  // Ahead of the switch: Grok wraps every deferred MCP tool in `use_tool`, so a
+  // canvas write reaches here under a name the switch cannot match, and the card
+  // would read `use_tool` with no way into the document it just wrote.
+  if (canvasWrite(part) && part.name !== 'mcp__canvas__write') return canvasMeta(part)
+
   const input = (part.input ?? {}) as Record<string, unknown>
   const rel = (p?: string): string | undefined =>
     p?.startsWith(cwd + '/') ? p.slice(cwd.length + 1) : p
@@ -209,6 +234,16 @@ function toolMeta(part: ToolPart, cwd: string): ToolMeta {
       return { icon: Globe, label: 'Preview', summary: 'Screenshot' }
     case 'mcp__preview__console':
       return { icon: Globe, label: 'Preview', summary: 'Console' }
+    // The canvas tools take `Preview`'s shape: one label for the server, the
+    // call's own subject as the summary. `PenLine` rather than `Shapes`, which
+    // is `Artifact`'s — the two are different destinations and a shared glyph
+    // would say they are the same one.
+    case 'mcp__canvas__write':
+      return canvasMeta(part)
+    case 'mcp__canvas__list':
+      return { icon: PenLine, label: 'Canvas', summary: 'List canvases' }
+    case 'mcp__canvas__read':
+      return { icon: PenLine, label: 'Canvas', summary: 'Read canvas' }
     default: {
       const firstString = Object.values(input).find((v) => typeof v === 'string') as
         | string
@@ -265,7 +300,48 @@ function RowAction({
  * disk before it is published, needs no login, and `claude.ai` sends
  * `frame-ancestors 'self'` so the hosted copy cannot be embedded anyway.
  */
+/**
+ * Open a canvas named by a write call. `canvasRef.ts` owns the recognizing and
+ * the resolving — it is pure, and it encodes a Grok quirk worth a test.
+ */
+function openWrittenCanvas(written: CanvasRef): void {
+  const id = resolveCanvasId(written, useApp.getState().canvases)
+  if (id) void useApp.getState().openCanvas(id)
+}
+
+/**
+ * The way into a canvas — **one component, one slot, one appearance.**
+ *
+ * It was two, and the difference was an accident of grouping rather than a
+ * decision: a Codex write joins a run, so its link sat in the group row's
+ * trailing slot on the far right with an icon; a Grok write is not groupable,
+ * so its link was the standalone row's summary, inline and bare. Same feature,
+ * two looks, decided by which provider spelled the call — the provider-shaped
+ * divergence this codebase keeps ruling out. It now sits immediately after the
+ * row's own text in both, so every canvas row reads the same way: what
+ * happened, then the document.
+ */
+function CanvasLink({ canvas }: { canvas: CanvasRef }): React.JSX.Element {
+  return (
+    <RowAction
+      title="Open this canvas"
+      ariaLabel={`Open canvas ${canvas.title ?? ''}`}
+      className="flex min-w-0 shrink cursor-pointer items-center gap-1 text-[13px] text-foreground/80 underline decoration-foreground/25 underline-offset-2 hover:text-foreground hover:decoration-foreground"
+      onActivate={() => openWrittenCanvas(canvas)}
+    >
+      <PenLine className="size-3.5 shrink-0" />
+      <span className="truncate">{canvas.title ?? 'Open canvas'}</span>
+    </RowAction>
+  )
+}
+
 function openTarget(open: NonNullable<ToolMeta['open']>, cwd: string): void {
+  if (open.kind === 'canvas') {
+    openWrittenCanvas(
+      open.target.startsWith('title:') ? { title: open.target.slice(6) } : { id: open.target }
+    )
+    return
+  }
   if (open.kind === 'preview') {
     useApp.getState().openPreview(`file://${open.target}`, cwd || undefined)
   } else {
@@ -515,6 +591,9 @@ export const ToolCard = React.memo(function ToolCard({
   dense?: boolean
 }): React.JSX.Element {
   const meta = toolMeta(part, cwd)
+  // A canvas row's summary IS its way in, so it is drawn by `CanvasLink` rather
+  // than by the generic summary slot — the same component the group row uses.
+  const written = canvasWrite(part)
   const Icon = meta.icon
   // A single call never opens itself, and neither does one inside a group.
   // Disclosure is a property of the live *block* (see `ToolGroup`'s `live`), not
@@ -570,20 +649,24 @@ export const ToolCard = React.memo(function ToolCard({
           >
             {meta.label}
           </span>
-          {meta.summary && (
-            <span className="min-w-0 truncate font-mono text-xs text-muted-foreground/60">
-              {meta.open ? (
-                <RowAction
-                  title={`${meta.open.kind === 'preview' ? 'Preview' : 'Open'} ${meta.open.target}`}
-                  className="cursor-pointer underline-offset-2 hover:text-foreground hover:underline"
-                  onActivate={() => openTarget(meta.open!, cwd)}
-                >
-                  {meta.summary}
-                </RowAction>
-              ) : (
-                meta.summary
-              )}
-            </span>
+          {written ? (
+            <CanvasLink canvas={written} />
+          ) : (
+            meta.summary && (
+              <span className="min-w-0 truncate font-mono text-xs text-muted-foreground/60">
+                {meta.open ? (
+                  <RowAction
+                    title={`${meta.open.kind === 'preview' ? 'Preview' : 'Open'} ${meta.open.target}`}
+                    className="cursor-pointer underline-offset-2 hover:text-foreground hover:underline"
+                    onActivate={() => openTarget(meta.open!, cwd)}
+                  >
+                    {meta.summary}
+                  </RowAction>
+                ) : (
+                  meta.summary
+                )}
+              </span>
+            )
           )}
         </span>
         <ChevronRight className={ACTIVITY_CHEVRON} />
@@ -627,7 +710,14 @@ export const GROUPABLE_TOOLS = new Set([
   // reads nothing and changes nothing — so it collapses into the same run.
   'ToolSearch',
   'Task',
-  'Agent'
+  'Agent',
+  // A canvas is written the way a file is, and the run that produces one is
+  // usually `ToolSearch` + `write`. Left out, those two arrived as two separate
+  // blocks with a message-sized gap between them — the gap grouping exists to
+  // close.
+  'mcp__canvas__write',
+  'mcp__canvas__list',
+  'mcp__canvas__read'
 ])
 
 /** True while any call in the run — or, for agents, any of their children — is
@@ -695,6 +785,11 @@ export const ToolGroup = React.memo(function ToolGroup({
   // the turn hands it to history. `running` still counts, so a group holding a
   // backgrounded agent that outlives its turn does not shut on it.
   const { open, onOpenChange } = useRunDisclosure(live || running)
+  // A canvas is the one thing a run produces that lives somewhere else, and
+  // grouping had put its only link one expand away — a document the turn just
+  // wrote, with nothing on screen to open it. So the way in rides the collapsed
+  // row, beside the status, the way a published artifact's does on a ToolCard.
+  const canvas = canvasInRun(parts)
 
   return (
     <Collapsible.Root open={open} onOpenChange={onOpenChange} className="animate-enter">
@@ -707,6 +802,7 @@ export const ToolGroup = React.memo(function ToolGroup({
               what carries it — that one is kept, because it is the only signal
               left once the group is collapsed over the row that failed. */}
           <span className="shrink-0 text-[13px] text-muted-foreground">{title}</span>
+          {canvas && <CanvasLink canvas={canvas} />}
           {trailing && (
             <span className="min-w-0 truncate font-mono text-xs text-muted-foreground/60">
               {trailing}

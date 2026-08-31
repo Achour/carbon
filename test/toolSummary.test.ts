@@ -55,6 +55,14 @@ test('a mixed bag of unnamed tools falls back to counting steps', () => {
   assert.equal(summarizeActivity(['Read', 'Skill', 'Workflow']), 'Read 1 file, 2 steps')
 })
 
+test('a canvas is a result, so it leads the reads that produced it', () => {
+  assert.equal(summarizeActivity(['Canvas']), 'Wrote 1 canvas')
+  assert.equal(summarizeActivity(['Read', 'Read', 'Canvas']), 'Wrote 1 canvas, read 2 files')
+  // Its own noun rather than folding into Write's "files": a canvas is not one.
+  assert.equal(summarizeActivity(['Write', 'Canvas']), 'Wrote 1 file, wrote 1 canvas')
+  assert.equal(summarizeActivity(['Canvas'], true), 'Writing 1 canvas')
+})
+
 test('an empty run still says something', () => {
   assert.equal(summarizeActivity([]), 'No activity')
   assert.equal(summarizeActivity([], true), 'Working')

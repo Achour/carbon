@@ -3,7 +3,7 @@ import test from 'node:test'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { startPreviewBridge } from '../src/main/previewBridge.ts'
+import { callCanvasBridge, startPreviewBridge } from '../src/main/previewBridge.ts'
 import { carbonPreviewCodexMcp, carbonPreviewMcpServers } from '../src/main/previewMcpConfig.ts'
 import {
   handleMcpCall,
@@ -165,4 +165,91 @@ test('carbonPreviewCodexMcp is a keyed overlay, not a replacement table', () => 
   assert.equal(servers.preview.env.CARBON_PREVIEW_CWD, '/Users/me/app')
   assert.equal(servers.preview.env.CARBON_PREVIEW_PLAN, '1')
   assert.equal(servers.preview.env.ELECTRON_RUN_AS_NODE, '1')
+})
+
+
+test('the bridge routes canvas calls, and defaults to preview without a server field', async () => {
+  const saved: Array<Record<string, unknown>> = []
+  const canvas = {
+    list: () => [],
+    get: () => null,
+    save: (input: { project: string; title: string; html: string; chatId?: string | null }) => {
+      saved.push(input)
+      return {
+        id: 'canvas-1',
+        project: input.project,
+        chatId: input.chatId ?? null,
+        title: input.title,
+        createdAt: 1,
+        updatedAt: 1
+      }
+    }
+  }
+  const preview: PreviewToolHost = {
+    state: (cwd) => ({ cwd, status: 'stopped' }),
+    startAndWait: async (cwd) => ({ cwd, status: 'stopped' }),
+    stop: (cwd) => ({ cwd, status: 'stopped' }),
+    navigate: async () => ({ ok: true }),
+    screenshot: async () => null,
+    recentConsole: () => 'from preview'
+  }
+  const bridge = await startPreviewBridge(preview, canvas)
+  try {
+    const res = await callCanvasBridge(
+      bridge.url,
+      bridge.token,
+      { project: '/repo', chatId: 'chat-1' },
+      'write',
+      { title: 'Report', html: '<p>x</p>' }
+    )
+    assert.equal(res.ok, true)
+    assert.equal(saved.length, 1)
+    // The project rides the envelope, not the tool arguments — it is a fact
+    // about the session, fixed when the server was spawned.
+    assert.equal(saved[0].project, '/repo')
+    assert.equal(saved[0].chatId, 'chat-1')
+
+    // A canvas payload far past the preview cap still lands: capping both at
+    // 64 KB would have failed on Codex and Grok while working on Claude, whose
+    // in-process server never touches this bridge.
+    const big = await callCanvasBridge(
+      bridge.url,
+      bridge.token,
+      { project: '/repo' },
+      'write',
+      { title: 'Big', html: `<p>${'x'.repeat(300_000)}</p>` }
+    )
+    assert.equal(big.ok, true)
+
+    // An old-shaped body with no `server` field is still a preview call.
+    const legacy = await fetch(`${bridge.url}/tool`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${bridge.token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'console', cwd: '/repo' })
+    })
+    assert.deepEqual(await legacy.json(), { ok: true, kind: 'text', text: 'from preview' })
+  } finally {
+    bridge.close()
+  }
+})
+
+test('the bridge refuses a canvas call it has no host for, and an unknown tool', async () => {
+  const preview: PreviewToolHost = {
+    state: (cwd) => ({ cwd, status: 'stopped' }),
+    startAndWait: async (cwd) => ({ cwd, status: 'stopped' }),
+    stop: (cwd) => ({ cwd, status: 'stopped' }),
+    navigate: async () => ({ ok: true }),
+    screenshot: async () => null,
+    recentConsole: () => ''
+  }
+  const bridge = await startPreviewBridge(preview)
+  try {
+    const noHost = await callCanvasBridge(bridge.url, bridge.token, { project: '/r' }, 'write', {
+      title: 'T',
+      html: '<p>x</p>'
+    })
+    assert.deepEqual(noHost, { ok: false, error: 'Canvas is not available.' })
+  } finally {
+    bridge.close()
+  }
 })

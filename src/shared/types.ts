@@ -894,6 +894,43 @@ export type ChatEvent =
   // the renderer's loaded window, because that is the only index `seq` (and so
   // the store) agrees with — the renderer subtracts its own `hiddenBefore`.
   | { type: 'truncate'; chatId: string; keep: number }
+  // A canvas was written by the agent. Carries the summary, never the HTML: the
+  // Recents list is what goes live, and shipping the body would push a megabyte
+  // through the event channel on every save for a panel that may never open.
+  | { type: 'canvas'; chatId: string; project: string; canvas: CanvasSummary }
+
+// ---------- Canvas ----------
+
+/**
+ * A document the agent wrote to be *read*, rather than a file it wrote to be
+ * run: a comparison table, an architecture note, a report.
+ *
+ * It is deliberately **not a file in the project**. Two reasons, and the second
+ * is the one that decided it: a canvas in the repo is a canvas in `git status`
+ * and in the next release's diff, and — worse — it is one more thing for the
+ * agent's own `grep` and `glob` to wade through on every later turn. So a
+ * canvas never touches the working tree. The agent hands Carbon the HTML
+ * through an MCP tool and Carbon owns the storage, which is also what makes the
+ * Recents list one indexed query instead of a directory scan.
+ */
+export interface Canvas {
+  id: string
+  /**
+   * The repo root, **not** the chat's cwd. A worktree chat runs in a directory
+   * that `finishWorktree` deletes; a canvas has to outlive the branch it was
+   * written on, and it belongs to the project either way.
+   */
+  project: string
+  /** The chat it came from, for provenance. Nullable: a canvas outlives it. */
+  chatId: string | null
+  title: string
+  html: string
+  createdAt: number
+  updatedAt: number
+}
+
+/** A canvas without its body — what the Recents list and the event carry. */
+export type CanvasSummary = Omit<Canvas, 'html'>
 
 // ---------- Settings ----------
 
@@ -1845,6 +1882,19 @@ export interface Api {
     width: number
     height: number
   }): Promise<string | null>
+  /** Every canvas for a project, newest first. Summaries — no HTML. */
+  canvasList(project: string): Promise<CanvasSummary[]>
+  /** One canvas with its body, or null if it has been deleted. */
+  canvasGet(id: string): Promise<Canvas | null>
+  /** Create or replace a canvas from the UI (rename, or "Create New Canvas"). */
+  canvasSave(input: {
+    id?: string
+    project: string
+    chatId?: string | null
+    title: string
+    html: string
+  }): Promise<CanvasSummary>
+  canvasDelete(id: string): Promise<void>
   onChatEvent(cb: (ev: ChatEvent) => void): () => void
   onNewChat(cb: () => void): () => void
   /** A notification was clicked — bring this chat to the foreground. */

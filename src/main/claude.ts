@@ -63,6 +63,9 @@ import { AGENT_TOOLS } from '@shared/agentRuns'
 import type { Store } from './store'
 import type { PreviewManager } from './preview'
 import { runPreviewTool } from './previewTools.ts'
+import { projectRoot } from '../shared/types.ts'
+import type { CanvasManager } from './canvas.ts'
+import { CANVAS_SESSION_RULES, CANVAS_TOOL_INFO, runCanvasTool } from './canvasTools.ts'
 import { CodexSession, fetchCodexModels, generateCodexText } from './codex'
 import { CodexAppServerClient } from './codexAppServer'
 import { fetchGrokModels, forkGrokBefore, generateGrokText, GrokSession } from './grok'
@@ -94,7 +97,7 @@ import {
  * as diagrams (in chat replies and in plan documents), so we nudge the agent to
  * reach for Mermaid instead of ASCII art when a picture would help.
  */
-const GUI_SYSTEM_APPEND = `You are running inside a desktop GUI (not a terminal). The GUI renders any \`\`\`mermaid fenced code block as a real rendered diagram — this applies to your chat replies AND to plan documents you write for ExitPlanMode. When a diagram would make an explanation or a plan clearer (flows, sequences, architecture, state), draw it with a Mermaid fenced block (e.g. flowchart, sequenceDiagram) rather than ASCII art or box-drawing characters. Keep diagrams valid and reasonably small; label nodes clearly.`
+const GUI_SYSTEM_APPEND = `You are running inside a desktop GUI (not a terminal). The GUI renders any \`\`\`mermaid fenced code block as a real rendered diagram — this applies to your chat replies AND to plan documents you write for ExitPlanMode. When a diagram would make an explanation or a plan clearer (flows, sequences, architecture, state), draw it with a Mermaid fenced block (e.g. flowchart, sequenceDiagram) rather than ASCII art or box-drawing characters. Keep diagrams valid and reasonably small; label nodes clearly.\n\n${CANVAS_SESSION_RULES}`
 
 /**
  * An in-process MCP server giving the agent control of the live preview for the
@@ -152,6 +155,57 @@ function buildPreviewServer(
         'Read recent console output and errors from the running preview app (browser console + dev-server errors).',
         {},
         async () => previewToolResult(await runPreviewTool(preview, cwd, 'console'))
+      )
+    ]
+  })
+}
+
+/**
+ * An in-process MCP server letting the agent save a canvas — a self-contained
+ * HTML document the user reads beside the chat.
+ *
+ * `project` and `chatId` are closed over rather than taken as tool arguments,
+ * the way `cwd` is on the preview server: they are facts about the session, and
+ * a model able to name its own project could write into another one's list.
+ * `project` is the repo root, so a worktree chat's canvas survives the branch.
+ */
+function buildCanvasServer(
+  ctx: { project: string; chatId: string },
+  canvas: CanvasManager
+): ReturnType<typeof createSdkMcpServer> {
+  const text = (t: string): { content: Array<{ type: 'text'; text: string }> } => ({
+    content: [{ type: 'text', text: t }]
+  })
+  return createSdkMcpServer({
+    name: 'canvas',
+    version: '1.0.0',
+    tools: [
+      tool(
+        'write',
+        CANVAS_TOOL_INFO.write.description,
+        {
+          title: z.string().describe('Short title for the canvas.'),
+          html: z
+            .string()
+            .describe(
+              'A complete, self-contained HTML document. Inline any CSS and JS; do not reference project files.'
+            ),
+          id: z
+            .string()
+            .optional()
+            .describe('Id of an existing canvas to replace. Omit to create a new one.')
+        },
+        async ({ title, html, id }) =>
+          text(runCanvasTool(canvas, ctx, 'write', { title, html, id }).text)
+      ),
+      tool('list', CANVAS_TOOL_INFO.list.description, {}, async () =>
+        text(runCanvasTool(canvas, ctx, 'list').text)
+      ),
+      tool(
+        'read',
+        CANVAS_TOOL_INFO.read.description,
+        { id: z.string().describe('The canvas id.') },
+        async ({ id }) => text(runCanvasTool(canvas, ctx, 'read', { id }).text)
       )
     ]
   })
@@ -524,7 +578,8 @@ class ClaudeSession implements AgentSession {
     private store: Store,
     private onDead: () => void,
     private onCommands: (commands: SlashCommand[]) => void,
-    private preview: PreviewManager
+    private preview: PreviewManager,
+    private canvas: CanvasManager
   ) {
     this.titledResumed = !!chat.sessionId
     this.ready = new Promise<void>((resolve) => {
@@ -583,7 +638,13 @@ class ClaudeSession implements AgentSession {
           CLAUDE_CODE_ENABLE_TODO_TOOLS: process.env.CLAUDE_CODE_ENABLE_TODO_TOOLS ?? '1',
           CLAUDE_CODE_ARTIFACT: process.env.CLAUDE_CODE_ARTIFACT ?? '1'
         },
-        mcpServers: { preview: buildPreviewServer(chat.cwd, preview) },
+        mcpServers: {
+          preview: buildPreviewServer(chat.cwd, preview),
+          canvas: buildCanvasServer(
+            { project: projectRoot(chat), chatId: chat.id },
+            canvas
+          )
+        },
         canUseTool: async (toolName, input, opts) => {
           // The preview tools are safe, local, and app-mediated — never prompt.
           // Exception: starting/stopping the dev server is a side effect, so it's
@@ -598,6 +659,12 @@ class ClaudeSession implements AgentSession {
                   'Starting or stopping the dev server is a side effect and is not allowed in plan mode. Note it in the plan — it can run once the plan is approved.'
               }
             }
+            return { behavior: 'allow', updatedInput: input }
+          }
+          // A canvas tool writes only Carbon's own database — no file, no
+          // process, nothing outside the app — so there is nothing to gate, in
+          // plan mode included: a plan that produces a document is still a plan.
+          if (toolName.startsWith('mcp__canvas__')) {
             return { behavior: 'allow', updatedInput: input }
           }
           return this.requestPermission(toolName, input, opts)
@@ -2213,7 +2280,8 @@ export class ChatManager {
   constructor(
     private store: Store,
     private emit: Emit,
-    private preview: PreviewManager
+    private preview: PreviewManager,
+    private canvas: CanvasManager
   ) {}
 
   private sessionFor(chatId: string): AgentSession | null {
@@ -2386,7 +2454,8 @@ export class ChatManager {
             onDead,
             undefined,
             undefined,
-            this.preview
+            this.preview,
+            this.canvas
           )
         : chat.provider === 'grok'
           ? new GrokSession(
@@ -2395,7 +2464,8 @@ export class ChatManager {
               this.store,
               onDead,
               (commands) => this.commandsByCwd.set(commandsKey(chat.cwd, 'grok'), commands),
-              this.preview
+              this.preview,
+              this.canvas
             )
           : new ClaudeSession(
               chat,
@@ -2403,7 +2473,8 @@ export class ChatManager {
               this.store,
               onDead,
               (commands) => this.commandsByCwd.set(commandsKey(chat.cwd, 'claude'), commands),
-              this.preview
+              this.preview,
+              this.canvas
             )
     this.sessions.set(chat.id, session)
     this.pruneIdleSessions()

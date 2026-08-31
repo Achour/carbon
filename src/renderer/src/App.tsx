@@ -8,6 +8,7 @@ import { RightPanel } from '@/components/RightPanel'
 import { FileSearchDialog } from '@/components/FileSearchDialog'
 import { PublishDialog } from '@/components/PublishDialog'
 import { DeleteFileDialog } from '@/components/DeleteFileDialog'
+import { CanvasDeleteDialog } from '@/components/CanvasDeleteDialog'
 import { ImageLightbox } from '@/components/ImageView'
 import { FindBar } from '@/components/FindBar'
 import { openEditorSearch } from '@/lib/editorSearch'
@@ -189,16 +190,18 @@ export default function App(): React.JSX.Element {
       <div className="flex h-full">
         <Sidebar />
         <ErrorBoundary>
-          {/* Opaque layer: the translucent-sidebar effect makes the window base
-              transparent, so everything except the sidebar sits on its own
-              solid background and never shows the frosted-glass material. */}
-          <div className="flex min-w-0 flex-1 bg-background">
+          {/* Opaque layer: the translucency effect makes the window base
+              transparent, so this is what keeps a surface off the frosted
+              material unless it asks for it. The chat column asks (index.css
+              clears this layer and washes the column instead) — everything
+              else here paints its own solid background. */}
+          <div data-content className="flex min-w-0 flex-1 bg-background">
             {settingsOpen ? (
               <Settings />
             ) : usageOpen ? (
               <UsageStats />
             ) : panelFullscreen ? null : loading ? (
-              <div className="flex flex-1 items-center justify-center">
+              <div className="flex flex-1 items-center justify-center bg-background">
                 <span className="shimmer-text text-sm font-medium">Loading…</span>
               </div>
             ) : activeChat ? (
@@ -215,6 +218,7 @@ export default function App(): React.JSX.Element {
           the review dock, which can be closed by the time the dialog opens. */}
       <PublishDialog />
       <DeleteFileDialog />
+      <CanvasDeleteDialog />
       <ImageLightbox />
       <FindBar />
     </TooltipProvider>

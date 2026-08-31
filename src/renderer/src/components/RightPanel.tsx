@@ -14,13 +14,16 @@ import {
   Minimize2,
   PanelLeft,
   PanelRight,
+  PenLine,
   Plus,
   Search,
+  Shapes,
   SquareTerminal,
   X
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { FileIcon } from '@/lib/fileIcon'
+import { CanvasDoc, CanvasPanel } from '@/components/CanvasPanel'
 import { useApp, type OpenTab } from '@/store'
 import {
   Dialog,
@@ -428,12 +431,14 @@ function EmptyLauncher(): React.JSX.Element {
   const openPreview = useApp((s) => s.openPreview)
   const openTerminal = useApp((s) => s.openTerminal)
   const browseFiles = useApp((s) => s.browseFiles)
+  const openCanvas = useApp((s) => s.openCanvas)
 
   const items = [
     { icon: <GitBranch />, label: 'Changes', run: () => void reviewChanges() },
     { icon: <Globe />, label: 'Browser', run: () => openPreview() },
     { icon: <SquareTerminal />, label: 'Terminal', run: () => openTerminal() },
-    { icon: <FolderTree />, label: 'Files', run: () => browseFiles() }
+    { icon: <FolderTree />, label: 'Files', run: () => browseFiles() },
+    { icon: <Shapes />, label: 'Canvas', run: () => void openCanvas(null) }
   ]
   return (
     <div className="flex h-full items-center justify-center p-6">
@@ -706,6 +711,15 @@ export function RightPanel(): React.JSX.Element | null {
   // activity bar above the composer, or the tab itself.
   const showAgents = useAgents((s) => s.runs.length > 0)
   const agentsRunning = useAgents((s) => s.totals.running > 0)
+  // The Canvas tab is a property of the *project*, not the chat — every chat in
+  // a folder sees the same documents. `activeTab` is OR-ed in so the launcher
+  // can open an empty one: without it, a project with no canvas yet has no way
+  // in, and the tab it opened would vanish under it.
+  const canvasCount = useApp((s) => s.canvases.length)
+  const canvasTabs = useApp((s) => s.canvasTabs)
+  const canvasList = useApp((s) => s.canvases)
+  const closeCanvas = useApp((s) => s.closeCanvas)
+  const showCanvas = canvasCount > 0 || activeTab === 'canvas'
   const current =
     activeTab === 'files'
       ? 'files'
@@ -717,6 +731,10 @@ export function RightPanel(): React.JSX.Element | null {
           ? 'plan'
           : activeTab === 'agents' && showAgents
           ? 'agents'
+          : activeTab === 'canvas' && showCanvas
+          ? 'canvas'
+          : canvasTabs.some((id) => `canvas:${id}` === activeTab)
+          ? activeTab!
           : openFiles.some((f) => f.path === activeTab)
             ? activeTab!
             : showPlan
@@ -730,6 +748,11 @@ export function RightPanel(): React.JSX.Element | null {
   const currentIsChanges = typeof current === 'string' && current.startsWith('changes:')
   const currentIsPlan = current === 'plan'
   const currentIsAgents = current === 'agents'
+  const currentIsCanvas = current === 'canvas'
+  // `canvas:<id>` — one open document. Its own tab rather than a mode of the
+  // list, because two canvases are read side by side.
+  const currentCanvasId =
+    typeof current === 'string' && current.startsWith('canvas:') ? current.slice(7) : null
   const activeEntry = openFiles.find((f) => f.path === current)
   // A diff tab can open its own folds — same re-fetch the stacked review uses.
   const diffMeta = activeEntry?.diff
@@ -749,6 +772,8 @@ export function RightPanel(): React.JSX.Element | null {
   const showBreadcrumb =
     !currentIsPlan &&
     !currentIsAgents &&
+    !currentIsCanvas &&
+    !currentCanvasId &&
     !currentIsTerminal &&
     !currentIsPreview &&
     !currentIsChanges &&
@@ -771,7 +796,7 @@ export function RightPanel(): React.JSX.Element | null {
             }
       }
       className={cn(
-        'relative h-full overflow-hidden',
+        'relative h-full overflow-hidden bg-background',
         !dragging && 'transition-[width,min-width] duration-200 ease-out',
         !panelOpen && 'pointer-events-none',
         // Not shrink-0: when space runs out the panel yields before the chat
@@ -838,6 +863,24 @@ export function RightPanel(): React.JSX.Element | null {
               onSelect={() => setActiveTab('agents')}
             />
           )}
+          {showCanvas && (
+            <Tab
+              icon={<Shapes className="size-3.5" />}
+              label="Canvas"
+              active={current === 'canvas'}
+              onSelect={() => setActiveTab('canvas')}
+            />
+          )}
+          {canvasTabs.map((id) => (
+            <Tab
+              key={id}
+              icon={<PenLine className="size-3.5" />}
+              label={canvasList.find((c) => c.id === id)?.title ?? 'Canvas'}
+              active={current === `canvas:${id}`}
+              onSelect={() => setActiveTab(`canvas:${id}`)}
+              onClose={() => closeCanvas(id)}
+            />
+          ))}
           {openFiles.map((file) => (
             <Tab
               key={file.path}
@@ -965,6 +1008,10 @@ export function RightPanel(): React.JSX.Element | null {
               <PlanContent panel={planPanel} hasSuggestions={hasSuggestions} />
             ) : currentIsAgents ? (
               <AgentsPanel />
+            ) : currentIsCanvas ? (
+              <CanvasPanel />
+            ) : currentCanvasId ? (
+              <CanvasDoc id={currentCanvasId} />
             ) : currentIsChanges && selectedCwd ? (
               <MultiDiffView cwd={selectedCwd} />
             ) : activeEntry?.diff ? (
@@ -1022,6 +1069,8 @@ export function RightPanel(): React.JSX.Element | null {
           !isEmpty &&
           !currentIsPlan &&
           !currentIsAgents &&
+          !currentIsCanvas &&
+          !currentCanvasId &&
           !currentIsTerminal &&
           !currentIsPreview && (
         <div

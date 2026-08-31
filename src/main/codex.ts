@@ -76,6 +76,9 @@ import {
 } from './workspaceCheckpoint.ts'
 import { TITLE_SYSTEM, buildTitlePrompt, cleanTitle, deriveTitle, firstUserText } from './titles.ts'
 import { PREVIEW_SESSION_RULES } from './previewTools.ts'
+import { projectRoot } from '../shared/types.ts'
+import type { CanvasManager } from './canvas.ts'
+import { CANVAS_SESSION_RULES } from './canvasTools.ts'
 import { describeSelection } from './attachmentText.ts'
 
 const OUTPUT_CAP = 100_000
@@ -392,6 +395,7 @@ export class CodexSession implements AgentSession {
       opts?: { plan?: boolean }
     ): Promise<Record<string, unknown> | undefined>
   } | null
+  private canvas: CanvasManager | null
   private codex: CodexClientLike
   private thread: CodexThreadLike | null = null
   private threadOptionsKey: string | null = null
@@ -495,7 +499,8 @@ export class CodexSession implements AgentSession {
         cwd: string,
         opts?: { plan?: boolean }
       ): Promise<Record<string, unknown> | undefined>
-    } | null = null
+    } | null = null,
+    canvas: CanvasManager | null = null
   ) {
     // Checked here rather than left to the App Server spawn: `deliver` wraps
     // session construction, so a missing or switched-off CLI becomes an error
@@ -507,6 +512,7 @@ export class CodexSession implements AgentSession {
     this.store = store
     this.onDead = onDead
     this.preview = preview
+    this.canvas = canvas
     this.codex =
       codex ??
       new CodexAppServerClient({
@@ -735,12 +741,28 @@ export class CodexSession implements AgentSession {
 
   private async ensureThread(turn: PendingTurn): Promise<CodexThreadLike> {
     const opts = this.threadOptions(turn)
-    const extraConfig = await this.preview?.mcpCodexConfig(this.chat.cwd, {
+    const previewConfig = await this.preview?.mcpCodexConfig(this.chat.cwd, {
       plan: opts.collaborationMode === 'plan'
     })
-    if (extraConfig) {
-      opts.extraConfig = extraConfig
-      opts.developerInstructions = PREVIEW_SESSION_RULES
+    const canvasConfig = await this.canvas?.mcpCodexConfig({
+      cwd: this.chat.cwd,
+      project: projectRoot(this.chat),
+      chatId: this.chat.id
+    })
+    // Both overlays key into the same `mcp_servers` table, so they are merged
+    // rather than assigned — the second assignment would have dropped the
+    // first server entirely, which is the kind of failure that shows up as
+    // "the model just never uses the preview tools".
+    const servers = {
+      ...((previewConfig?.mcp_servers as Record<string, unknown> | undefined) ?? {}),
+      ...((canvasConfig?.mcp_servers as Record<string, unknown> | undefined) ?? {})
+    }
+    const rules = [previewConfig ? PREVIEW_SESSION_RULES : '', canvasConfig ? CANVAS_SESSION_RULES : '']
+      .filter(Boolean)
+      .join('\n\n')
+    if (Object.keys(servers).length) {
+      opts.extraConfig = { mcp_servers: servers }
+      opts.developerInstructions = rules
     }
     const optionsKey = JSON.stringify(opts)
     if (this.thread && !this.optionsDirty && this.threadOptionsKey === optionsKey) return this.thread

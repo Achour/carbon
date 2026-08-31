@@ -6,6 +6,7 @@ import type { IPty } from 'node-pty'
 import type { PreviewCommand, PreviewCommandResult, PreviewEvent, PreviewState } from '@shared/types'
 import { killTree } from './pty'
 import { startPreviewBridge, type PreviewBridgeHandle } from './previewBridge.ts'
+import type { CanvasToolHost } from './canvasTools.ts'
 import {
   carbonPreviewCodexMcp,
   carbonPreviewMcpServers,
@@ -64,12 +65,23 @@ export class PreviewManager {
 
   constructor(
     private emit: Emit,
-    private send: SendCommand
+    private send: SendCommand,
+    /**
+     * The canvas tools ride the same loopback bridge and the same stdio child.
+     * They are passed in rather than owned because the bridge is the shared
+     * thing — one port, one token, one built script — and it is started here.
+     */
+    canvas?: CanvasToolHost
   ) {
-    this.mcp = startPreviewBridge(this).catch((err) => {
+    this.mcp = startPreviewBridge(this, canvas).catch((err) => {
       console.warn('[preview] MCP bridge failed to start:', err)
       return null
     })
+  }
+
+  /** The loopback bridge, for the canvas server that shares it. */
+  bridge(): Promise<PreviewBridgeHandle | null> {
+    return this.mcp
   }
 
   /** ACP `mcpServers` entry that gives this project's preview to Grok. */

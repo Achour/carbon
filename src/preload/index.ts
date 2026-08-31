@@ -42,6 +42,16 @@ async function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
 
 const api: Api = {
   listChats: () => invoke('chats:list'),
+  canvasList: (project: string) => invoke('canvas:list', project),
+  canvasGet: (id: string) => invoke('canvas:get', id),
+  canvasSave: (input: {
+    id?: string
+    project: string
+    chatId?: string | null
+    title: string
+    html: string
+  }) => invoke('canvas:save', input),
+  canvasDelete: (id: string) => invoke('canvas:delete', id),
   getChat: (id: string) => invoke('chats:get', id),
   loadOlderMessages: (id: string, before: number) => invoke('chats:load-older', id, before),
   createChat: (opts: {

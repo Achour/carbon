@@ -6,8 +6,23 @@ import {
   type PreviewToolHost,
   type PreviewToolResult
 } from './previewTools.ts'
+import { isCanvasToolName, runCanvasTool, type CanvasToolHost } from './canvasTools.ts'
 
+/**
+ * Per-server body caps, not one global.
+ *
+ * A preview call carries a URL at most, so 64 KB is a generous bound on a
+ * request that has no business being large. A canvas call carries the whole
+ * document, and capping *that* at 64 KB would have failed on Codex and Grok
+ * while succeeding on Claude — whose in-process server never touches this
+ * bridge — which is exactly the silent provider asymmetry this codebase keeps
+ * ruling out. The read is bounded by the larger of the two and the smaller is
+ * enforced after the server is known, so a rogue preview payload is still
+ * refused at 64 KB.
+ */
 const BODY_CAP = 64 * 1024
+const CANVAS_BODY_CAP = 5 * 1024 * 1024
+const READ_CAP = Math.max(BODY_CAP, CANVAS_BODY_CAP)
 
 export interface PreviewBridgeHandle {
   url: string
@@ -20,11 +35,14 @@ export interface PreviewBridgeHandle {
  * adapter) cannot share Carbon's process, so the MCP child POSTs here.
  * Bound to 127.0.0.1 with a random bearer token — not a public server.
  */
-export function startPreviewBridge(preview: PreviewToolHost): Promise<PreviewBridgeHandle> {
+export function startPreviewBridge(
+  preview: PreviewToolHost,
+  canvas?: CanvasToolHost
+): Promise<PreviewBridgeHandle> {
   return new Promise((resolve, reject) => {
     const token = randomUUID()
     const server = createServer((req, res) => {
-      void handleRequest(req, res, token, preview)
+      void handleRequest(req, res, token, preview, canvas)
     })
     server.once('error', reject)
     server.listen(0, '127.0.0.1', () => {
@@ -51,7 +69,8 @@ async function handleRequest(
   req: IncomingMessage,
   res: ServerResponse,
   token: string,
-  preview: PreviewToolHost
+  preview: PreviewToolHost,
+  canvas?: CanvasToolHost
 ): Promise<void> {
   try {
     if (req.method !== 'POST' || req.url !== '/tool') {
@@ -64,8 +83,47 @@ async function handleRequest(
       return
     }
     const raw = await readBody(req)
-    const body = JSON.parse(raw) as { name?: unknown; cwd?: unknown; input?: { url?: unknown } }
+    const body = JSON.parse(raw) as {
+      server?: unknown
+      name?: unknown
+      cwd?: unknown
+      project?: unknown
+      chatId?: unknown
+      input?: { url?: unknown; title?: unknown; html?: unknown; id?: unknown }
+    }
     const name = typeof body.name === 'string' ? body.name : ''
+    // Defaulted, so an existing preview client that sends no `server` field
+    // still lands where it always did.
+    const which = body.server === 'canvas' ? 'canvas' : 'preview'
+    if (which === 'preview' && raw.length > BODY_CAP) {
+      json(res, 413, { ok: false, error: 'Request too large.' })
+      return
+    }
+
+    if (which === 'canvas') {
+      if (!canvas) {
+        json(res, 400, { ok: false, error: 'Canvas is not available.' })
+        return
+      }
+      if (!isCanvasToolName(name)) {
+        json(res, 400, { ok: false, error: `Unknown canvas tool: ${name || '(missing)'}` })
+        return
+      }
+      const project = typeof body.project === 'string' ? body.project : ''
+      if (!project) {
+        json(res, 400, { ok: false, error: 'project is required.' })
+        return
+      }
+      const chatId = typeof body.chatId === 'string' ? body.chatId : null
+      const input = {
+        title: typeof body.input?.title === 'string' ? body.input.title : undefined,
+        html: typeof body.input?.html === 'string' ? body.input.html : undefined,
+        id: typeof body.input?.id === 'string' ? body.input.id : undefined
+      }
+      json(res, 200, { ok: true, ...runCanvasTool(canvas, { project, chatId }, name, input) })
+      return
+    }
+
     const cwd = typeof body.cwd === 'string' ? body.cwd : ''
     if (!isPreviewToolName(name)) {
       json(res, 400, { ok: false, error: `Unknown preview tool: ${name || '(missing)'}` })
@@ -89,7 +147,7 @@ function readBody(req: IncomingMessage): Promise<string> {
     let size = 0
     req.on('data', (chunk: Buffer) => {
       size += chunk.length
-      if (size > BODY_CAP) {
+      if (size > READ_CAP) {
         req.destroy()
         reject(new Error('Request too large.'))
         return
@@ -132,4 +190,23 @@ export async function callPreviewBridge(
   })
   const parsed = (await res.json()) as PreviewBridgeResponse
   return parsed
+}
+
+/** Used by the stdio MCP child (and tests) to call the bridge's canvas tools. */
+export async function callCanvasBridge(
+  url: string,
+  token: string,
+  ctx: { project: string; chatId?: string | null },
+  name: string,
+  input: { title?: string; html?: string; id?: string } = {}
+): Promise<PreviewBridgeResponse> {
+  const res = await fetch(`${url.replace(/\/$/, '')}/tool`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${token}`,
+      'content-type': 'application/json'
+    },
+    body: JSON.stringify({ server: 'canvas', name, project: ctx.project, chatId: ctx.chatId ?? null, input })
+  })
+  return (await res.json()) as PreviewBridgeResponse
 }

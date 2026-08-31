@@ -13,6 +13,7 @@ import { DatabaseSync, backup, type StatementSync } from 'node:sqlite'
 // Relative and .ts-extensioned, like codex.ts: this is a *runtime* import, and
 // `node --test` runs this file directly with no bundler to resolve `@shared`.
 import { knownProvider } from '../shared/types.ts'
+import { CanvasStore } from './canvasStore.ts'
 import type {
   AppDefaults,
   ChatData,
@@ -369,6 +370,12 @@ export class Store {
   private settings: SettingsFile
   private db: DatabaseSync
   private closed = false
+  /**
+   * Canvases live in the same database — one WAL, one lock, and the rolling
+   * `chats.db.bak` covers them for free. Public because they are their own
+   * surface: nothing about a canvas goes through the chat read/write path.
+   */
+  readonly canvases: CanvasStore
 
   /** Strong residency set, in LRU order (Map preserves insertion order). */
   private resident = new Map<string, Resident>()
@@ -469,6 +476,7 @@ export class Store {
     this.backupPath = join(userDataDir, 'chats.db.bak')
     this.db = this.openDb(join(userDataDir, 'chats.db'))
     this.prepare()
+    this.canvases = new CanvasStore(this.db)
     this.migrate()
     // unref: a heartbeat must never be the reason the process stays alive.
     this.heartbeat = setInterval(() => this.beat(), HEARTBEAT_MS)
