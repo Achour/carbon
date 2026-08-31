@@ -609,6 +609,17 @@
   font-weight: 600;
   background: var(--color-code);
 }
+/* An all-empty header row is the author saying the table has no header. GFM
+   has no headerless-table syntax — the row above the delimiter *is* the
+   header — so `| | |` is the only way to write a key/value table, and every
+   agent writes them that way. Drawing the band for it puts an empty stripe
+   across the top of the one table shape that most wants to start at its first
+   row. A blank corner cell beside real headings (`| | Col A | Col B |`) is a
+   different thing and keeps its band, which is why the test is "no header cell
+   has content" rather than "some cell is empty". */
+.markdown thead:not(:has(th:not(:empty))) {
+  display: none;
+}
 /* A chip in a cell is an identifier — a path, a type, a flag — and breaking one
    across two lines makes it unreadable in the place it is least expected to be:
    `src/server/backend.ts` came out as `src/server/backend.t` + `s`, with the
