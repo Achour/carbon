@@ -63,6 +63,26 @@ test('a canvas is a result, so it leads the reads that produced it', () => {
   assert.equal(summarizeActivity(['Canvas'], true), 'Writing 1 canvas')
 })
 
+test('a browser run is counted as actions, not as pages', () => {
+  // Fourteen calls to drive one page: naming them "pages" would multiply the
+  // one page the turn actually looked at by the number of clicks it took.
+  assert.equal(summarizeActivity(Array(14).fill('Browser')), '14 browser actions')
+  assert.equal(summarizeActivity(['Browser']), '1 browser action')
+  // Verb-less, so the present tense is the same noun — the spinner carries the
+  // motion, exactly as it does for a search.
+  assert.equal(summarizeActivity(['Browser', 'Browser'], true), '2 browser actions')
+  // The two browser surfaces are different destinations and keep different
+  // nouns, the way Write and Canvas do.
+  assert.equal(summarizeActivity(['Browser', 'Preview']), '1 browser action, 1 preview action')
+})
+
+test('browsing is method, so what the turn changed still leads', () => {
+  assert.equal(
+    summarizeActivity(['Browser', 'Browser', 'Edit', 'Read', 'Browser']),
+    'Edited 1 file, read 1 file, 3 browser actions'
+  )
+})
+
 test('an empty run still says something', () => {
   assert.equal(summarizeActivity([]), 'No activity')
   assert.equal(summarizeActivity([], true), 'Working')

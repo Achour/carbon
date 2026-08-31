@@ -61,13 +61,19 @@ const ACTIVITIES: Record<string, Activity> = {
   'Find files': { rank: 5, past: '', gerund: '', one: 'search', many: 'searches' },
   'List files': { rank: 5, past: '', gerund: '', one: 'search', many: 'searches' },
   Fetch: { rank: 6, past: 'Fetched', gerund: 'Fetching', one: 'page', many: 'pages' },
-  'Find tools': { rank: 7, past: 'Found', gerund: 'Finding', one: 'tool', many: 'tools' },
-  Agent: { rank: 8, past: '', gerund: '', one: 'agent', many: 'agents' },
+  // Verb-less, because no verb covers the run: a browser sequence is clicks,
+  // key presses, screenshots and one navigation, and the honest name for the
+  // set of them is what they are. "Browsed 14 pages" would be flatly wrong —
+  // fourteen calls are usually one page being worked.
+  Browser: { rank: 7, past: '', gerund: '', one: 'browser action', many: 'browser actions' },
+  Preview: { rank: 8, past: '', gerund: '', one: 'preview action', many: 'preview actions' },
+  'Find tools': { rank: 9, past: 'Found', gerund: 'Finding', one: 'tool', many: 'tools' },
+  Agent: { rank: 10, past: '', gerund: '', one: 'agent', many: 'agents' },
   // Last, and verb-less. The checklist is neither the turn's method nor its
   // result — it is the agent keeping its own notes, and the list it wrote is on
   // screen above the composer either way. "Updated 3 tasks" would also read as
   // three tasks *finished*, which is a claim only the dock can make.
-  Tasks: { rank: 9, past: '', gerund: '', one: 'task update', many: 'task updates' }
+  Tasks: { rank: 11, past: '', gerund: '', one: 'task update', many: 'task updates' }
 }
 
 /** `3` + `file`/`files`. */

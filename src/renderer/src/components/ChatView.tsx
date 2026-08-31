@@ -60,7 +60,7 @@ import {
 } from '@/components/messages/Parts'
 import {
   FILE_MUTATION_TOOLS,
-  GROUPABLE_TOOLS,
+  isGroupableTool,
   ToolCard,
   ToolGroup
 } from '@/components/messages/ToolCard'
@@ -92,7 +92,7 @@ function isGroupableMsg(m: ChatMessage): boolean {
     (p) => !!p && !((p.type === 'thinking' || p.type === 'text') && !p.text)
   )
   return (
-    parts.length > 0 && parts.every((p) => p.type === 'tool' && GROUPABLE_TOOLS.has(p.name))
+    parts.length > 0 && parts.every((p) => p.type === 'tool' && isGroupableTool(p.name))
   )
 }
 

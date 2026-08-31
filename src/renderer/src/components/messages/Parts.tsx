@@ -21,7 +21,7 @@ import { Markdown, StreamingMarkdown, useStreamText } from '@/components/Markdow
 import { Button } from '@/components/ui/button'
 import { WithTooltip } from '@/components/ui/tooltip'
 import { useApp } from '@/store'
-import { FILE_MUTATION_TOOLS, GROUPABLE_TOOLS, ToolCard, ToolGroup } from './ToolCard'
+import { FILE_MUTATION_TOOLS, isGroupableTool, ToolCard, ToolGroup } from './ToolCard'
 
 /**
  * One button in a user message's hover row. Shared so the two actions cannot
@@ -382,7 +382,7 @@ export const AssistantBlock = React.memo(function AssistantBlock({
     ) {
       return
     }
-    if (part.type === 'tool' && GROUPABLE_TOOLS.has(part.name)) {
+    if (part.type === 'tool' && isGroupableTool(part.name)) {
       run.push({ part, index: i })
     } else {
       flushRun()

@@ -1017,6 +1017,34 @@ arrive as the same handful of labels and one sentence serves them. A
 and pinned by `test/toolSummary.test.ts`, because pluralization and clause
 joining regress silently.
 
+**A whole MCP server can be groupable, and the browser one had to be.** Grouping
+was a `Set` of tool *names*, which the Claude in Chrome server breaks in both
+directions: it has two dozen tools and driving a page spends twenty-odd calls —
+a navigate, then clicks, screenshots, key presses, a find — each arriving as its
+own assistant message and so as its own row, so a single browsing turn laid
+fifteen identical-looking lines through the transcript with nothing grouping
+them. Those are steps of a run in exactly the way a sequence of reads is.
+`GROUPABLE_SERVERS` matches them by **prefix**, and that is the half a longer
+list would not have fixed: the tools are deferred behind `ToolSearch` and the
+catalog grows, so an exact set stops grouping the day one is added — silently,
+since the only symptom is a longer transcript. `mcp__preview__*` joins it (the
+same shape at smaller scale) and the three `mcp__canvas__*` names move onto it,
+so there is one rule rather than a list and a rule. `isGroupableTool` is now the
+single exported checkable, because `ChatView`'s `isGroupableMsg` and `Parts`'
+run-builder disagreeing about what groups is a run split in half.
+
+**The label is what makes the folded row worth reading.** These calls landed in
+`toolMeta`'s `default` arm, so each one was named `claude-in-chrome__computer`
+and every tool was a *different* label — which `summarizeActivity` counts as a
+mixed bag of unknowns, i.e. "14 steps". They take `Preview`'s shape instead —
+one label for the server, the call's own subject as the summary — matched by the
+same prefix rather than by a case per tool. The clause is verb-less
+(`14 browser actions`) because no verb covers the set: "Browsed 14 pages" would
+multiply the one page the turn actually worked by the number of clicks it took.
+`MousePointerClick` rather than Preview's `Globe`, for the reason `PenLine`
+isn't `Shapes`: driving the user's own browser and watching this project's dev
+server are two destinations, and a shared glyph would claim they are one.
+
 ### The agent roster (`shared/agentRuns.ts`, `AgentsPanel`, `AgentActivityBar`)
 
 A fan-out is **state, not an event**, and the transcript can only show events.

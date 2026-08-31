@@ -14,6 +14,7 @@ import {
   ListChecks,
   Loader2,
   MessageCircleQuestion,
+  MousePointerClick,
   PackageSearch,
   PenLine,
   Search,
@@ -73,6 +74,54 @@ function canvasMeta(part: ToolPart): ToolMeta {
     // A row with no resolvable canvas still reads correctly; it just has
     // nowhere to go, which is the honest outcome rather than a dead link.
     open: written ? { kind: 'canvas', target: written.id ?? `title:${written.title ?? ''}` } : undefined
+  }
+}
+
+/** Claude in Chrome. One server, two dozen tools, all matched by prefix. */
+const CHROME_PREFIX = 'mcp__claude-in-chrome__'
+
+/**
+ * A call to the browser server, whichever of its tools made it.
+ *
+ * `Preview`'s shape — one label for the server, the call's own subject as the
+ * summary — but reached by *prefix* rather than by a case per tool, because the
+ * catalog is both large and open: the tools are deferred behind `ToolSearch`,
+ * and an exact list would silently drop back to `mcp__` naming the day the
+ * server grew one. `MousePointerClick` rather than Preview's `Globe`: driving
+ * someone's own browser and watching this project's dev server are two
+ * destinations, and a shared glyph would say they are one.
+ */
+function browserMeta(name: string, input: Record<string, unknown>): ToolMeta {
+  const tool = name.slice(CHROME_PREFIX.length)
+  const subject = ((): string | undefined => {
+    switch (tool) {
+      // `computer` is the whole mouse and keyboard behind one name, so the
+      // action it performed is the only thing that distinguishes one call from
+      // the next.
+      case 'computer':
+        return str(input.action)
+      case 'navigate':
+        return str(input.url)
+      case 'find':
+        return str(input.query)
+      case 'form_input':
+        return str(input.ref)
+      // Its own `action` is the constant `javascript_exec`, so the code is the
+      // only part of the call that says what it did.
+      case 'javascript_tool':
+        return str(input.text)
+      default:
+        return Object.values(input).find((v) => typeof v === 'string') as string | undefined
+    }
+  })()
+  // Two subjects stand alone: an action name and a URL each say what happened
+  // without their tool's name in front. Everything else is named by its tool,
+  // which is the verb — `find post title input field`, `read_page`.
+  const bare = tool === 'computer' || tool === 'navigate'
+  return {
+    icon: MousePointerClick,
+    label: 'Browser',
+    summary: subject ? (bare ? subject : `${tool} ${subject}`) : tool
   }
 }
 
@@ -256,6 +305,7 @@ function toolMeta(part: ToolPart, cwd: string): ToolMeta {
     case 'mcp__canvas__read':
       return { icon: PenLine, label: 'Canvas', summary: 'Read canvas' }
     default: {
+      if (part.name.startsWith(CHROME_PREFIX)) return browserMeta(part.name, input)
       const firstString = Object.values(input).find((v) => typeof v === 'string') as
         | string
         | undefined
@@ -705,7 +755,7 @@ export const ToolCard = React.memo(function ToolCard({
  *  calls (reads, searches, spawned agents) that otherwise flood the transcript. */
 export const FILE_MUTATION_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit'])
 
-export const GROUPABLE_TOOLS = new Set([
+const GROUPABLE_TOOLS = new Set([
   'Bash',
   'BashOutput',
   'Read',
@@ -722,13 +772,6 @@ export const GROUPABLE_TOOLS = new Set([
   'ToolSearch',
   'Task',
   'Agent',
-  // A canvas is written the way a file is, and the run that produces one is
-  // usually `ToolSearch` + `write`. Left out, those two arrived as two separate
-  // blocks with a message-sized gap between them — the gap grouping exists to
-  // close.
-  'mcp__canvas__write',
-  'mcp__canvas__list',
-  'mcp__canvas__read',
   // The checklist is drawn once, above the composer (`TaskDock`) — these rows
   // are all that's left of it in the transcript, and they are bookkeeping
   // between steps rather than steps of their own. Grouping is what keeps them
@@ -739,6 +782,31 @@ export const GROUPABLE_TOOLS = new Set([
   'TaskList',
   'TodoWrite'
 ])
+
+/**
+ * MCP servers whose *whole* catalog groups, matched by prefix.
+ *
+ * A list of names is what these were before, and the browser server is what it
+ * cannot survive: two dozen tools, deferred behind `ToolSearch` and growing, so
+ * an exact set stops grouping the day one is added — silently, since the
+ * symptom is only that the transcript gets longer. And it is the one server
+ * that genuinely floods it: driving a page is twenty clicks, screenshots and
+ * key presses to reach a single answer, every one of them its own assistant
+ * message and so its own row. They are steps of a run in exactly the way a
+ * sequence of reads is.
+ *
+ * The other two are here because their calls are the same kind of thing, not
+ * because they overflowed: a canvas is written the way a file is, and the run
+ * that produces one is usually `ToolSearch` + `write` — left out, those two
+ * arrived as separate blocks with a message-sized gap between them, which is
+ * the gap grouping exists to close.
+ */
+const GROUPABLE_SERVERS = [CHROME_PREFIX, 'mcp__preview__', 'mcp__canvas__']
+
+/** Whether this call is a step in a run rather than a block of its own. */
+export function isGroupableTool(name: string): boolean {
+  return GROUPABLE_TOOLS.has(name) || GROUPABLE_SERVERS.some((s) => name.startsWith(s))
+}
 
 /** True while any call in the run — or, for agents, any of their children — is
  *  still working, so a mixed done/running group shows the spinner. */
