@@ -129,7 +129,7 @@ export function ReviewBar({ cwd }: { cwd: string }): React.JSX.Element {
   const hasChanges = changes.length > 0;
 
   return (
-    <div className="@container flex h-8 shrink-0 items-center gap-1.5 overflow-hidden border-b border-border/60 pr-1.5 pl-2.5 text-[length:var(--ui-row)] text-muted-foreground">
+    <div className="@container flex h-9 shrink-0 items-center gap-2 overflow-hidden border-b border-border/60 bg-background/50 px-2.5 text-[length:var(--ui-row)] text-muted-foreground">
       <DropdownMenu>
         <WithTooltip label={scopeMeta.hint}>
           <DropdownMenuTrigger
@@ -137,7 +137,7 @@ export function ReviewBar({ cwd }: { cwd: string }): React.JSX.Element {
               <Button
                 variant="ghost"
                 size="sm"
-                className="-ml-1 h-6 shrink-0 gap-1 px-1.5 text-[length:var(--ui-row)] font-normal text-foreground/90"
+                className="h-7 shrink-0 gap-1.5 px-2 text-[length:var(--ui-row)] font-medium"
               >
                 {scopeMeta.label}
                 <ChevronDown className="size-3 text-muted-foreground" />
@@ -201,14 +201,10 @@ export function ReviewBar({ cwd }: { cwd: string }): React.JSX.Element {
 
       <div className="min-w-1 flex-1" />
 
-      {/* Shrinkable, not `shrink-0`. The bar clips (`overflow-hidden`), so a
-          right cluster that refuses to give ground doesn't overflow visibly —
-          it gets *sliced*, and the casualty is always the last thing in it:
-          the primary action, cut in half at the panel's default width. The
-          icons inside still hold their size; what yields is the one control
-          that can say the same thing smaller (a truncated pill, and its label
-          below `@[38rem]`). */}
-      <div className="flex min-w-0 shrink items-center gap-0.5">
+      {/* Shrinkable, not `shrink-0`. The bar clips (`overflow-hidden`), so the
+          action label yields before the primary control can be sliced at the
+          panel's default width. Icons and the split-button chevron stay fixed. */}
+      <div className="flex min-w-0 shrink items-center gap-1">
         {hasChanges && (
           <div className="flex shrink-0 items-center">
             <WithTooltip label="Previous change">
@@ -237,47 +233,52 @@ export function ReviewBar({ cwd }: { cwd: string }): React.JSX.Element {
         )}
 
         {hasChanges && (
-          <WithTooltip
-            label={diffWrap ? "Do not wrap long lines" : "Wrap long lines"}
-          >
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              className={cn(
-                "size-6 shrink-0",
-                diffWrap && "bg-accent text-foreground",
-              )}
-              aria-label={
-                diffWrap ? "Do not wrap long lines" : "Wrap long lines"
-              }
-              aria-pressed={diffWrap}
-              onClick={toggleDiffWrap}
+          <div className="flex shrink-0 items-center">
+            <WithTooltip
+              label={diffWrap ? "Do not wrap long lines" : "Wrap long lines"}
             >
-              <WrapText />
-            </Button>
-          </WithTooltip>
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                className={cn(
+                  "size-6",
+                  diffWrap && "bg-accent text-foreground",
+                )}
+                aria-label={
+                  diffWrap ? "Do not wrap long lines" : "Wrap long lines"
+                }
+                aria-pressed={diffWrap}
+                onClick={toggleDiffWrap}
+              >
+                <WrapText />
+              </Button>
+            </WithTooltip>
+
+            <WithTooltip
+              label={allCollapsed ? "Expand every file" : "Collapse every file"}
+            >
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-6 shrink-0 gap-1 px-1.5 text-[length:var(--ui-row)] font-normal"
+                aria-label={allCollapsed ? "Expand every file" : "Collapse every file"}
+                aria-pressed={!allCollapsed}
+                onClick={toggleAll}
+              >
+                {allCollapsed ? <ChevronsUpDown /> : <ChevronsDownUp />}
+                <span className="hidden @[40rem]:inline">
+                  {allCollapsed ? "Expand all" : "Collapse all"}
+                </span>
+              </Button>
+            </WithTooltip>
+          </div>
         )}
 
-        {hasChanges && (
-          <WithTooltip
-            label={allCollapsed ? "Expand every file" : "Collapse every file"}
-          >
-            <Button
-              size="sm"
-              variant="ghost"
-              className="h-6 shrink-0 gap-1 px-1.5 text-[length:var(--ui-row)] font-normal"
-              onClick={toggleAll}
-            >
-              {allCollapsed ? <ChevronsUpDown /> : <ChevronsDownUp />}
-              {/* Icon-only in a narrow panel: this is the one label in the
-                  cluster whose glyph already says it, and the tooltip carries
-                  the words. */}
-              <span className="hidden @[38rem]:inline">
-                {allCollapsed ? "Expand all" : "Collapse all"}
-              </span>
-            </Button>
-          </WithTooltip>
-        )}
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          className="mx-0.5 h-4 w-px shrink-0 bg-border/70"
+        />
 
         <WithTooltip label="Fetch & refresh">
           <Button
@@ -309,6 +310,12 @@ export function ReviewBar({ cwd }: { cwd: string }): React.JSX.Element {
             {explorerOpen ? <PanelRightClose /> : <PanelRightOpen />}
           </Button>
         </WithTooltip>
+
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          className="mx-0.5 h-4 w-px shrink-0 bg-border/70"
+        />
 
         <GitActionButton />
       </div>

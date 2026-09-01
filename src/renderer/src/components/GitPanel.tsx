@@ -385,7 +385,7 @@ const ACTION_ICON: Partial<Record<GitActionId, LucideIcon>> = {
 }
 
 /**
- * Cursor-style split button: the primary is the sensible next step for the
+ * Shadcn-style split button: the primary is the sensible next step for the
  * repo's current state (see `resolveGitActions`), and the chevron opens the
  * fuller ladder. Every rung but `push` is delegated to the chat's agent.
  */
@@ -433,17 +433,14 @@ export function GitActionButton(): React.JSX.Element | null {
     // truncated label here is this button sliced down the middle at the panel's
     // default width — and the label is already `truncate`, which does nothing
     // inside a wrapper that refuses to give up any width.
-    <div className="flex min-w-0 shrink">
+    <div className="isolate flex min-w-0 shrink shadow-sm">
       <WithTooltip label={tip}>
         <Button
           size="sm"
           variant="default"
           className={cn(
-            'h-6 min-w-0 rounded-full pr-2.5 pl-2.5 text-[length:var(--ui-row)] font-normal',
-            // The two halves share one pill: the split is where you click, not
-            // something to draw. A divider between them made it read as two
-            // controls stuck together.
-            others.length > 0 && 'rounded-r-none pr-1.5'
+            'h-7 min-w-0 px-2.5 text-[length:var(--ui-row)] font-medium',
+            others.length > 0 && 'rounded-r-none border-r border-primary-foreground/20 pr-2'
           )}
           disabled={gitBusy}
           onClick={() => void runGitAction(current.id)}
@@ -459,7 +456,7 @@ export function GitActionButton(): React.JSX.Element | null {
               <Button
                 size="sm"
                 variant="default"
-                className="h-6 shrink-0 rounded-full rounded-l-none pr-2 pl-0.5"
+                className="h-7 w-7 shrink-0 rounded-l-none px-0 shadow-none"
                 disabled={gitBusy}
                 aria-label="Choose the default source-control action"
               >
