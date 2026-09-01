@@ -7,7 +7,8 @@ import {
   CodexAppServerClient,
   isCodexCompactionItem,
   normalizeAppServerItem,
-  threadOverlayConfig
+  threadOverlayConfig,
+  type NativeTurnStream
 } from '../src/main/codexAppServer.ts'
 import { fetchCodexModels } from '../src/main/codex.ts'
 
@@ -159,6 +160,121 @@ test('App Server surfaces retry errors once and deduplicates fatal errors', asyn
   )
   assert.equal(events[0]?.type === 'item.completed' ? events[0].item.type : null, 'error')
   assert.equal(events[1]?.type === 'error' ? events[1].message : null, 'Authentication expired.')
+  client.dispose()
+})
+
+test('thread goal notifications bypass turn routing and stay live without a turn id', () => {
+  const updates: unknown[] = []
+  const client = new CodexAppServerClient({
+    onGoalUpdated: (threadId, goal) => updates.push({ threadId, goal })
+  })
+  const notify = client as unknown as {
+    handleNotification(method: string, params: unknown): void
+  }
+  const goal = {
+    threadId: 'thread-1',
+    objective: 'Ship the native goal bar',
+    status: 'active' as const,
+    tokenBudget: 40_000,
+    tokensUsed: 1_200,
+    timeUsedSeconds: 90,
+    createdAt: 1_700_000_000,
+    updatedAt: 1_700_000_090
+  }
+
+  notify.handleNotification('thread/goal/updated', {
+    threadId: 'thread-1',
+    turnId: null,
+    goal
+  })
+  notify.handleNotification('thread/goal/cleared', { threadId: 'thread-1' })
+
+  assert.deepEqual(updates, [
+    { threadId: 'thread-1', goal },
+    { threadId: 'thread-1', goal: null }
+  ])
+  client.dispose()
+})
+
+test('thread runtime status bypasses turn routing for autonomous goal work', () => {
+  const updates: unknown[] = []
+  const client = new CodexAppServerClient({
+    onThreadStatusChanged: (threadId, status) => updates.push({ threadId, status })
+  })
+  const notify = client as unknown as {
+    handleNotification(method: string, params: unknown): void
+  }
+
+  notify.handleNotification('thread/status/changed', {
+    threadId: 'thread-1',
+    status: { type: 'active', activeFlags: [] }
+  })
+  notify.handleNotification('thread/status/changed', {
+    threadId: 'thread-1',
+    status: { type: 'idle' }
+  })
+
+  assert.deepEqual(updates, [
+    { threadId: 'thread-1', status: { type: 'active', activeFlags: [] } },
+    { threadId: 'thread-1', status: { type: 'idle' } }
+  ])
+  client.dispose()
+})
+
+test('autonomous App Server turns expose the ordinary SDK-compatible event stream', async () => {
+  let streamed: NativeTurnStream | null = null
+  const client = new CodexAppServerClient({
+    onUnsolicitedTurn: (turn) => {
+      streamed = turn
+    }
+  })
+  const notify = client as unknown as {
+    handleNotification(method: string, params: unknown): void
+  }
+
+  notify.handleNotification('turn/started', {
+    threadId: 'thread-1',
+    turn: { id: 'goal-turn', status: 'inProgress' }
+  })
+  notify.handleNotification('item/completed', {
+    threadId: 'thread-1',
+    turnId: 'goal-turn',
+    item: { id: 'reply', type: 'agentMessage', text: 'Goal progress.' }
+  })
+  notify.handleNotification('turn/completed', {
+    threadId: 'thread-1',
+    turn: { id: 'goal-turn', status: 'completed' }
+  })
+
+  assert.ok(streamed)
+  const events = []
+  for await (const event of streamed.events) events.push(event)
+  assert.deepEqual(
+    events.map((event) => event.type),
+    ['turn.started', 'item.completed', 'turn.completed']
+  )
+  client.dispose()
+})
+
+test('a racing turn/started for a Carbon-requested turn is not treated as autonomous', () => {
+  const autonomous: NativeTurnStream[] = []
+  const client = new CodexAppServerClient({
+    onUnsolicitedTurn: (turn) => autonomous.push(turn)
+  })
+  const notify = client as unknown as {
+    handleNotification(method: string, params: unknown): void
+  }
+
+  client.expectTurnStart('thread-1')
+  notify.handleNotification('turn/started', {
+    threadId: 'thread-1',
+    turn: { id: 'requested-turn', status: 'inProgress' }
+  })
+
+  assert.equal(autonomous.length, 0)
+  const run = client.attachTurn('thread-1', 'requested-turn', 'gpt-test')
+  client.drainBuffered(run)
+  client.finishExpectedTurnStart('thread-1')
   client.dispose()
 })
 

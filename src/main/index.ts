@@ -33,6 +33,7 @@ import type {
   ProviderCli,
   ProviderCliConfig,
   ChatOptionsPatch,
+  CodexGoalStatus,
   CodexReviewTarget,
   ServiceTier,
   TerminalCreateOpts,
@@ -647,6 +648,21 @@ function registerIpc(): void {
   ipcMain.handle('chat:review', (_e, chatId: string, target: CodexReviewTarget) =>
     manager.startReview(chatId, target)
   )
+
+  ipcMain.handle('codex:goal:get', (_e, chatId: string) => manager.codexGoalGet(chatId))
+  ipcMain.handle(
+    'codex:goal:set',
+    (
+      _e,
+      chatId: string,
+      patch: {
+        objective?: string
+        status?: CodexGoalStatus
+        tokenBudget?: number | null
+      }
+    ) => manager.codexGoalSet(chatId, patch)
+  )
+  ipcMain.handle('codex:goal:clear', (_e, chatId: string) => manager.codexGoalClear(chatId))
 
   ipcMain.handle('chat:interrupt', (_e, chatId: string) => manager.interrupt(chatId))
 

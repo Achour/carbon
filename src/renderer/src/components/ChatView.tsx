@@ -49,6 +49,7 @@ import { CodexReviewMenu } from '@/components/CodexReviewDialog'
 import { ContextStrip } from '@/components/ContextStrip'
 import { AgentActivityBar } from '@/components/AgentsPanel'
 import { TaskDock } from '@/components/TaskDock'
+import { CodexGoalBar } from '@/components/CodexGoalBar'
 import {
   MergeIntoMainDialog,
   WorktreeFinishDialog,
@@ -178,6 +179,22 @@ function withCompactLegacyCodexPlan(
 }
 
 /**
+ * Early native-goal builds wrote a Markdown snapshot into the transcript after
+ * every `/goal` command. The composer dock now owns that live state, so drawing
+ * the persisted snapshot as well is both stale and duplicated. Keep the stored
+ * history untouched and suppress only that exact generated event shape.
+ */
+function isLegacyCodexGoalSummary(message: ChatMessage): boolean {
+  return (
+    message.role === 'event' &&
+    message.kind === 'info' &&
+    message.text.startsWith('**Codex goal**\n- Objective: ') &&
+    message.text.includes('\n- Status: ') &&
+    message.text.includes('\n- Used: ')
+  )
+}
+
+/**
  * Renders the message list, collapsing runs of consecutive read/search-only
  * assistant messages into a single ToolGroup ("Read 12 files"). Since every tool
  * call is its own assistant message, a task that reads many files would otherwise
@@ -186,7 +203,7 @@ function withCompactLegacyCodexPlan(
 function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
   const out: React.ReactNode[] = []
   let run: AssistantMessage[] = []
-  const messages = all.filter((m) => !isBlankMsg(m))
+  const messages = all.filter((m) => !isBlankMsg(m) && !isLegacyCodexGoalSummary(m))
   const presentations = turnPresentations(messages, ctx.cwd, ctx.busy)
 
   const renderAssistant = (m: AssistantMessage): React.ReactNode => {
@@ -887,7 +904,18 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
               <Composer
               // The checklist rides the composer's own box rather than sitting
               // above it, so the two read as one object however the border moves.
-              header={<TaskDock chatId={chat.id} />}
+              header={
+                <>
+                  {chat.provider === 'codex' && (
+                    <CodexGoalBar
+                      chatId={chat.id}
+                      threadId={chat.sessionId}
+                      working={busy}
+                    />
+                  )}
+                  <TaskDock chatId={chat.id} />
+                </>
+              }
               // Returned, not voided: the composer needs the promise so a failed
               // send restores the draft instead of discarding it.
               onSend={(text, attachments) => {

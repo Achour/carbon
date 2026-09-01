@@ -77,6 +77,9 @@ const api: Api = {
   send: (chatId: string, text: string, attachments?: Attachment[], label?: string) =>
     invoke('chat:send', chatId, text, attachments, label),
   startReview: (chatId, target) => invoke('chat:review', chatId, target),
+  codexGoalGet: (chatId) => invoke('codex:goal:get', chatId),
+  codexGoalSet: (chatId, patch) => invoke('codex:goal:set', chatId, patch),
+  codexGoalClear: (chatId) => invoke('codex:goal:clear', chatId),
   pathForFile: (file: File) => {
     try {
       return webUtils.getPathForFile(file)

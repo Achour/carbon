@@ -65,6 +65,8 @@ import type {
   ContextUsage,
   ChatMeta,
   ChatStatus,
+  CodexGoal,
+  CodexGoalStatus,
   CodexReviewTarget,
   BackgroundJob,
   EffortId,
@@ -270,6 +272,14 @@ interface AppState {
    * rather than "fine".
    */
   fastMode: Record<string, FastModeStatus>
+  /** Native persisted Codex goal per chat; absent until App Server has answered. */
+  codexGoals: Partial<Record<string, CodexGoal | null>>
+  loadCodexGoal(chatId: string): Promise<void>
+  setCodexGoal(
+    chatId: string,
+    patch: { objective?: string; status?: CodexGoalStatus; tokenBudget?: number | null }
+  ): Promise<CodexGoal>
+  clearCodexGoal(chatId: string): Promise<boolean>
   /** Models reported by both provider control APIs; empty until loaded. */
   models: ModelOption[]
   /** Fetches the session's model list once and caches it (feeds the composer picker). */
@@ -1132,6 +1142,7 @@ export const useApp = create<AppState>((set, get) => ({
   rateLimits: {},
   usage: null,
   fastMode: {},
+  codexGoals: {},
   models: [],
   codexConfigModel: undefined,
   providerClis: [],
@@ -2852,6 +2863,25 @@ export const useApp = create<AppState>((set, get) => ({
     await window.api.startReview(id, target)
   },
 
+  async loadCodexGoal(chatId) {
+    const goal = await window.api.codexGoalGet(chatId)
+    set((s) => ({ codexGoals: { ...s.codexGoals, [chatId]: goal } }))
+  },
+
+  async setCodexGoal(chatId, patch) {
+    const goal = await window.api.codexGoalSet(chatId, patch)
+    set((s) => ({ codexGoals: { ...s.codexGoals, [chatId]: goal } }))
+    return goal
+  },
+
+  async clearCodexGoal(chatId) {
+    const cleared = await window.api.codexGoalClear(chatId)
+    if (cleared) {
+      set((s) => ({ codexGoals: { ...s.codexGoals, [chatId]: null } }))
+    }
+    return cleared
+  },
+
   async sendQueuedNow(chatId, id) {
     const item = get().queued[chatId]?.find((q) => q.id === id)
     if (item == null) return
@@ -3017,6 +3047,7 @@ export const useApp = create<AppState>((set, get) => ({
         backgroundJobs: omit(s.backgroundJobs, [id]),
         rateLimits: omit(s.rateLimits, [id]),
         fastMode: omit(s.fastMode, [id]),
+        codexGoals: omit(s.codexGoals, [id]),
         panelOpenByChat: prunePanelState(s, [id]),
         tabsByChat: pruneTabsByChat(s, [id]),
         ...pruneTerminals(s, [id]),
@@ -3062,6 +3093,7 @@ export const useApp = create<AppState>((set, get) => ({
         backgroundJobs: omit(s.backgroundJobs, ids),
         rateLimits: omit(s.rateLimits, ids),
         fastMode: omit(s.fastMode, ids),
+        codexGoals: omit(s.codexGoals, ids),
         panelOpenByChat: prunePanelState(s, ids),
         tabsByChat: pruneTabsByChat(s, ids),
         ...pruneTerminals(s, ids),
@@ -3299,6 +3331,11 @@ export const useApp = create<AppState>((set, get) => ({
 
       case 'fast-mode': {
         set((st) => ({ fastMode: { ...st.fastMode, [ev.chatId]: ev.status } }))
+        break
+      }
+
+      case 'codex-goal': {
+        set((st) => ({ codexGoals: { ...st.codexGoals, [ev.chatId]: ev.goal } }))
         break
       }
 

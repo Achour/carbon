@@ -924,6 +924,9 @@ export type ChatEvent =
   // Transient (not persisted): whether the provider is honouring this chat's
   // Fast selection. Only Claude reports it; the Codex SDK exposes no equivalent.
   | { type: 'fast-mode'; chatId: string; status: FastModeStatus }
+  // Native Codex thread-goal state. `null` is an explicit clear; unlike a
+  // transcript result this stays live as App Server updates usage and status.
+  | { type: 'codex-goal'; chatId: string; goal: CodexGoal | null }
   // Transient (not persisted): the AI title is being generated for this chat, so
   // the sidebar can shimmer the placeholder until the real title arrives.
   | { type: 'title-pending'; chatId: string; pending: boolean }
@@ -1725,6 +1728,13 @@ export interface Api {
   send(chatId: string, text: string, attachments?: Attachment[], label?: string): Promise<void>
   /** Start Codex's native reviewer with a structured App Server target. */
   startReview(chatId: string, target: CodexReviewTarget): Promise<void>
+  /** Read and control the native goal persisted on a Codex App Server thread. */
+  codexGoalGet(chatId: string): Promise<CodexGoal | null>
+  codexGoalSet(
+    chatId: string,
+    patch: { objective?: string; status?: CodexGoalStatus; tokenBudget?: number | null }
+  ): Promise<CodexGoal>
+  codexGoalClear(chatId: string): Promise<boolean>
   /** Absolute path of a dragged/picked File (empty string for in-memory files). */
   pathForFile(file: File): string
   interrupt(chatId: string): Promise<void>

@@ -49,11 +49,7 @@ import { DeltaCoalescer } from './deltaCoalescer.ts'
 import { IMAGE_EXT, pickTurnImages } from './imageScan.ts'
 import { isMissingCodexThreadError } from './codexResume.ts'
 import { parseCodexPlan } from './codexMode.ts'
-import {
-  codexLimitDisplayName,
-  codexWindow,
-  type CodexWindow
-} from './usageWindows.ts'
+import { codexLimitDisplayName, codexWindow, type CodexWindow } from './usageWindows.ts'
 import {
   CodexAppServerClient,
   type AppServerThreadOptions,
@@ -65,6 +61,8 @@ import {
   type NativeApprovalRequest,
   type CodexThreadLike,
   type NativeMcpElicitationRequest,
+  type NativeThreadStatus,
+  type NativeTurnStream,
   type NativeUserInputRequest
 } from './codexAppServer.ts'
 import {
@@ -143,9 +141,7 @@ const CODEX_CONTEXT_WINDOW = 272_000
  * clears an inherited Fast preference and is omitted from model requests by the
  * CLI, yielding normal Standard processing.
  */
-export function codexOptionsForServiceTier(
-  serviceTier: ServiceTier = 'standard'
-): CodexOptions {
+export function codexOptionsForServiceTier(serviceTier: ServiceTier = 'standard'): CodexOptions {
   return {
     config: {
       service_tier: serviceTier === 'fast' ? 'fast' : 'default',
@@ -200,9 +196,7 @@ function codexModelOptions(raw: RawCodexModel[]): ModelOption[] {
       description: 'Model from your Codex config',
       provider: 'codex',
       ...(configured ? { resolvedModel: configured.model || configured.id } : {}),
-      ...(configuredOption?.contextWindow
-        ? { contextWindow: configuredOption.contextWindow }
-        : {}),
+      ...(configuredOption?.contextWindow ? { contextWindow: configuredOption.contextWindow } : {}),
       ...(configuredOption?.supportedEfforts
         ? { supportedEfforts: configuredOption.supportedEfforts }
         : {}),
@@ -241,6 +235,8 @@ interface PendingTurn {
   contextWindow: number
   /** Native review/start target. Ordinary turns leave this absent. */
   reviewTarget?: CodexReviewTarget
+  /** App Server started this turn autonomously for the thread's durable goal. */
+  nativeGoal?: boolean
 }
 
 interface PendingNativeQuestions {
@@ -329,7 +325,6 @@ function cap(text: string): string {
   return text.length > OUTPUT_CAP ? `${text.slice(0, OUTPUT_CAP)}\n… (truncated)` : text
 }
 
-
 const TEMP_PREFIX = 'karbun-codex-'
 
 /** Materializes a base64 image to a temp file (Codex takes images by path). */
@@ -371,7 +366,8 @@ function describeElement(el: ElementRef): string {
   const lines = [`Selected UI element from the running app (${el.url}):`]
   if (el.source?.file) {
     const col = el.source.column != null ? `:${el.source.column}` : ''
-    const loc = el.source.line != null ? `${el.source.file}:${el.source.line}${col}` : el.source.file
+    const loc =
+      el.source.line != null ? `${el.source.file}:${el.source.line}${col}` : el.source.file
     lines.push(`- Source: ${loc}`)
   }
   if (el.label) lines.push(`- Text: ${JSON.stringify(el.label)}`)
@@ -466,6 +462,12 @@ export class CodexSession implements AgentSession {
   private activeTurn: PendingTurn | null = null
   private interrupted = false
   private lastEmittedStatus: ChatStatus | null = null
+  /** App Server work that did not originate in `runTurn` — most notably a
+   * durable goal continuing on its own. */
+  private nativeThreadActive = false
+  /** Autonomous root-thread turns waiting to enter the ordinary event reducer. */
+  private nativeTurns: NativeTurnStream[] = []
+  private nativeInterrupt: (() => void) | null = null
   // ---- Streaming text coalescing (mirrors ClaudeSession) ----
   // reasoning/agent_message items arrive as the full accumulated text on every
   // SDK update. Emit the part once, then only the appended suffix as coalesced
@@ -496,7 +498,9 @@ export class CodexSession implements AgentSession {
   get idle(): boolean {
     return (
       !this.running &&
+      !this.nativeThreadActive &&
       this.pending.length === 0 &&
+      this.nativeTurns.length === 0 &&
       this.activeTurn === null &&
       !this.planReview
     )
@@ -540,7 +544,11 @@ export class CodexSession implements AgentSession {
         onApproval: (request) => this.handleNativeApproval(request),
         onApprovalResolved: (requestId) => this.resolveNativeApproval(requestId),
         onMcpElicitation: (request) => this.handleMcpElicitation(request),
-        onMcpElicitationResolved: (requestId) => this.resolveMcpElicitation(requestId)
+        onMcpElicitationResolved: (requestId) => this.resolveMcpElicitation(requestId),
+        onGoalUpdated: (threadId, goal) => this.handleNativeGoal(threadId, goal),
+        onThreadStatusChanged: (threadId, status) =>
+          this.handleNativeThreadStatus(threadId, status),
+        onUnsolicitedTurn: (turn) => this.handleNativeTurn(turn)
       })
     this.rolloutWatcher = rolloutWatcherFactory((event) => this.handleRolloutEvent(event))
     this.threadId = chat.sessionId ?? null
@@ -581,15 +589,30 @@ export class CodexSession implements AgentSession {
   }
 
   private pushError(text: string): void {
-    this.pushMessage({ id: randomUUID(), role: 'event', kind: 'error', text, ts: Date.now() })
+    this.pushMessage({
+      id: randomUUID(),
+      role: 'event',
+      kind: 'error',
+      text,
+      ts: Date.now()
+    })
   }
 
   private ensureCurrent(): AssistantMessage {
     if (!this.current) {
-      this.current = { id: randomUUID(), role: 'assistant', parts: [], ts: Date.now() }
+      this.current = {
+        id: randomUUID(),
+        role: 'assistant',
+        parts: [],
+        ts: Date.now()
+      }
       this.chat.messages.push(this.current)
       this.chat.updatedAt = Date.now()
-      this.emit({ type: 'message', chatId: this.chat.id, message: this.current })
+      this.emit({
+        type: 'message',
+        chatId: this.chat.id,
+        message: this.current
+      })
     }
     return this.current
   }
@@ -637,7 +660,11 @@ export class CodexSession implements AgentSession {
       // Instant placeholder from the first message; the AI title is generated in
       // parallel with the turn (see maybeGenerateTitle) and swaps it in.
       this.chat.title = deriveTitle(text, label, attachments)
-      this.emit({ type: 'meta', chatId: this.chat.id, patch: { title: this.chat.title } })
+      this.emit({
+        type: 'meta',
+        chatId: this.chat.id,
+        patch: { title: this.chat.title }
+      })
     }
     const messageId = randomUUID()
     this.pushMessage({
@@ -648,7 +675,11 @@ export class CodexSession implements AgentSession {
       ...(attachments.length ? { attachments } : {}),
       ...(label ? { label } : {})
     })
-    this.emit({ type: 'meta', chatId: this.chat.id, patch: { updatedAt: this.chat.updatedAt } })
+    this.emit({
+      type: 'meta',
+      chatId: this.chat.id,
+      patch: { updatedAt: this.chat.updatedAt }
+    })
     // Lock the composer right away — the turn may still be waiting on its
     // handoff context below, and drain() would otherwise not flip the status
     // until that resolves.
@@ -692,10 +723,7 @@ export class CodexSession implements AgentSession {
     }
   }
 
-  private buildInput(
-    text: string,
-    attachments: Attachment[]
-  ): { input: Input; temps: string[] } {
+  private buildInput(text: string, attachments: Attachment[]): { input: Input; temps: string[] } {
     const images: UserInput[] = []
     const temps: string[] = []
     const filePaths: string[] = []
@@ -731,9 +759,7 @@ export class CodexSession implements AgentSession {
   // ---------- Turn loop ----------
 
   private contextWindow(model = this.chat.model): number {
-    return (
-      MODEL_OPTIONS.find((m) => m.id === model)?.contextWindow ?? CODEX_CONTEXT_WINDOW
-    )
+    return MODEL_OPTIONS.find((m) => m.id === model)?.contextWindow ?? CODEX_CONTEXT_WINDOW
   }
 
   private threadOptions(
@@ -790,7 +816,8 @@ export class CodexSession implements AgentSession {
     }
     opts.developerInstructions = rules
     const optionsKey = JSON.stringify(opts)
-    if (this.thread && !this.optionsDirty && this.threadOptionsKey === optionsKey) return this.thread
+    if (this.thread && !this.optionsDirty && this.threadOptionsKey === optionsKey)
+      return this.thread
     this.thread = this.threadId
       ? this.codex.resumeThread(this.threadId, opts)
       : this.codex.startThread(opts)
@@ -805,7 +832,13 @@ export class CodexSession implements AgentSession {
    * or spend a model turn.
    */
   private async ensureControlThreadId(): Promise<string> {
-    if (!this.idle) throw new Error('Wait for the current Codex turn to finish first.')
+    // Goal pause/resume is specifically useful while a long-running turn is in
+    // progress. Once the turn has started its thread id is already stable, so
+    // control requests can address it without rebuilding thread state.
+    if (!this.idle) {
+      if (this.threadId) return this.threadId
+      throw new Error('Wait for the Codex thread to finish starting, then try again.')
+    }
     const thread = await this.ensureThread({
       model: this.chat.model,
       permissionMode: this.chat.permissionMode,
@@ -820,17 +853,28 @@ export class CodexSession implements AgentSession {
     this.threadId = threadId
     if (threadId !== this.chat.sessionId) {
       this.chat.sessionId = threadId
-      this.emit({ type: 'meta', chatId: this.chat.id, patch: { sessionId: threadId } })
+      this.emit({
+        type: 'meta',
+        chatId: this.chat.id,
+        patch: { sessionId: threadId }
+      })
       this.store.saveChat(this.chat.id)
     }
   }
 
   async codexGoalGet(): Promise<CodexGoal | null> {
-    const threadId = await this.ensureControlThreadId()
-    const response = await this.controlRequest<{ goal?: CodexGoal | null }>('thread/goal/get', {
-      threadId
-    })
-    return response.goal ?? null
+    this.beginGoalControl()
+    try {
+      const threadId = await this.ensureControlThreadId()
+      const response = await this.controlRequest<{ goal?: CodexGoal | null }>('thread/goal/get', {
+        threadId
+      })
+      const goal = response.goal ?? null
+      this.emit({ type: 'codex-goal', chatId: this.chat.id, goal })
+      return goal
+    } finally {
+      this.finishGoalControl()
+    }
   }
 
   async codexGoalSet(params: {
@@ -838,23 +882,116 @@ export class CodexSession implements AgentSession {
     status?: CodexGoalStatus
     tokenBudget?: number | null
   }): Promise<CodexGoal> {
-    const threadId = await this.ensureControlThreadId()
-    const response = await this.controlRequest<{ goal?: CodexGoal }>('thread/goal/set', {
-      threadId,
-      ...(params.objective !== undefined ? { objective: params.objective } : {}),
-      ...(params.status !== undefined ? { status: params.status } : {}),
-      ...(params.tokenBudget !== undefined ? { tokenBudget: params.tokenBudget } : {})
-    })
-    if (!response.goal) throw new Error('Codex did not return the updated goal.')
-    return response.goal
+    this.beginGoalControl()
+    try {
+      const threadId = await this.ensureControlThreadId()
+      const response = await this.controlRequest<{ goal?: CodexGoal }>('thread/goal/set', {
+        threadId,
+        ...(params.objective !== undefined ? { objective: params.objective } : {}),
+        ...(params.status !== undefined ? { status: params.status } : {}),
+        ...(params.tokenBudget !== undefined ? { tokenBudget: params.tokenBudget } : {})
+      })
+      if (!response.goal) throw new Error('Codex did not return the updated goal.')
+      this.emit({
+        type: 'codex-goal',
+        chatId: this.chat.id,
+        goal: response.goal
+      })
+      return response.goal
+    } finally {
+      this.finishGoalControl()
+    }
   }
 
   async codexGoalClear(): Promise<boolean> {
-    const threadId = await this.ensureControlThreadId()
-    const response = await this.controlRequest<{ cleared?: boolean }>('thread/goal/clear', {
-      threadId
-    })
-    return response.cleared === true
+    this.beginGoalControl()
+    try {
+      const threadId = await this.ensureControlThreadId()
+      const response = await this.controlRequest<{ cleared?: boolean }>('thread/goal/clear', {
+        threadId
+      })
+      if (response.cleared === true) {
+        this.emit({ type: 'codex-goal', chatId: this.chat.id, goal: null })
+      }
+      return response.cleared === true
+    } finally {
+      this.finishGoalControl()
+    }
+  }
+
+  private beginGoalControl(): void {
+    if (!this.nativeThreadActive && !this.running) {
+      this.setStatus(this.threadId ? 'streaming' : 'starting')
+    }
+  }
+
+  private finishGoalControl(): void {
+    if (!this.nativeThreadActive && !this.running && !this.planReview) this.setStatus('idle')
+  }
+
+  private handleNativeGoal(threadId: string, goal: CodexGoal | null): void {
+    if (threadId !== this.threadId && threadId !== this.chat.sessionId) return
+    this.emit({ type: 'codex-goal', chatId: this.chat.id, goal })
+  }
+
+  private handleNativeThreadStatus(threadId: string, status: NativeThreadStatus): void {
+    if (threadId !== this.threadId && threadId !== this.chat.sessionId) return
+    this.nativeThreadActive = status.type === 'active'
+    if (status.type === 'active') {
+      const waiting = status.activeFlags?.includes('waitingOnApproval') === true
+      this.setStatus(waiting ? 'waiting-permission' : 'streaming')
+      return
+    }
+    if (!this.running && this.pending.length === 0 && !this.planReview) this.setStatus('idle')
+  }
+
+  private handleNativeTurn(stream: NativeTurnStream): void {
+    if (stream.threadId !== this.threadId && stream.threadId !== this.chat.sessionId) {
+      // Sub-agent and title threads share the App Server process. Their parent
+      // cards/own callers consume the useful state; do not leak them into this
+      // chat, but still drain the queue so the transport can release it.
+      void (async () => {
+        for await (const _event of stream.events) {
+          if (this.disposed) break
+        }
+      })()
+      return
+    }
+    this.nativeTurns.push(stream)
+    this.setStatus('streaming')
+    void this.drainNativeTurns()
+  }
+
+  private latestGoalMessageId(turnId: string): string {
+    for (let index = this.chat.messages.length - 1; index >= 0; index--) {
+      const message = this.chat.messages[index]
+      if (message.role === 'user' && /^\s*\/goal(?:\s|$)/i.test(message.text)) return message.id
+    }
+    return `codex-goal-${turnId}`
+  }
+
+  private async drainNativeTurns(): Promise<void> {
+    if (this.running || this.disposed || this.nativeTurns.length === 0) return
+    this.running = true
+    try {
+      while (this.nativeTurns.length && !this.disposed) {
+        const stream = this.nativeTurns.shift()!
+        const turn = this.buildPendingTurn('', [], this.latestGoalMessageId(stream.turnId))
+        turn.nativeGoal = true
+        await this.runTurn(turn, stream)
+      }
+    } finally {
+      this.running = false
+    }
+    if (this.disposed) return
+    if (this.nativeTurns.length) {
+      void this.drainNativeTurns()
+    } else if (this.pending.length) {
+      void this.drain()
+    } else if (!this.nativeThreadActive && !this.planReview) {
+      this.setStatus('idle')
+      this.store.saveChat(this.chat.id)
+    }
   }
 
   codexReview(userMessageId: string, target: CodexReviewTarget): void {
@@ -916,17 +1053,20 @@ export class CodexSession implements AgentSession {
     if (this.disposed) return
     // A send() that arrived while the loop was tearing down couldn't start a new
     // drain (running was still true) — pick it up now so no turn is dropped.
-    if (this.pending.length) {
+    if (this.nativeTurns.length) {
+      void this.drainNativeTurns()
+    } else if (this.pending.length) {
       void this.drain()
-    } else if (!this.planReview) {
+    } else if (!this.nativeThreadActive && !this.planReview) {
       this.setStatus('idle')
       this.store.saveChat(this.chat.id)
     }
   }
 
-  private async runTurn(turn: PendingTurn): Promise<void> {
+  private async runTurn(turn: PendingTurn, nativeStream?: NativeTurnStream): Promise<void> {
     const abort = new AbortController()
     this.abort = abort
+    this.nativeInterrupt = nativeStream?.interrupt ?? null
     this.interrupted = false
     this.turnStart = Date.now()
     this.generatedBeforeTurn = this.threadGeneratedImages()
@@ -948,79 +1088,98 @@ export class CodexSession implements AgentSession {
     // option change during this potentially slow Git scan can still abort it.
     const before = await captureWorkspaceTree(this.chat.cwd)
     try {
-      let retriedMissingThread = false
-      let retriedTruncatedStream = false
-      while (!this.disposed) {
+      if (nativeStream) {
         this.sawItem = false
         this.sawTerminal = false
-        const resumedThreadId = this.threadId
-        const thread = await this.ensureThread(turn)
         try {
-          const streamed = turn.reviewTarget
-            ? await (async () => {
-                if (!this.codex.runReview) {
-                  throw new Error('This Codex transport does not expose native review turns.')
-                }
-                const threadId = await thread.ensureId()
-                this.rememberThreadId(threadId)
-                return this.codex.runReview(threadId, turn.reviewTarget!, {
-                  signal: abort.signal,
-                  model: turn.model ?? null
-                })
-              })()
-            : await thread.runStreamed(turn.input, {
-                signal: abort.signal,
-                // Stamps this turn with our own message id so `forkBefore` can find
-                // it again in `thread/turns/list` — across an app restart, and
-                // without persisting a second id beside every message.
-                clientUserMessageId: turn.userMessageId
-              })
-          const { events } = streamed
-          for await (const event of events) {
+          for await (const event of nativeStream.events) {
             if (this.disposed) break
             this.handleEvent(event, turn)
           }
-          const truncated =
-            !this.sawTerminal &&
-            !this.disposed &&
-            !this.interrupted &&
-            !abort.signal.aborted
-          if (truncated && !turn.reviewTarget && !this.sawItem && !retriedTruncatedStream) {
-            retriedTruncatedStream = true
-            // Give any contending cold-start process a moment to finish before
-            // resuming this same thread. Recheck cancellation after the wait.
-            await new Promise((resolve) => setTimeout(resolve, 350))
-            if (this.disposed || this.interrupted || abort.signal.aborted) break
-            continue
-          }
-          if (truncated) {
+          if (!this.sawTerminal && !this.disposed && !this.interrupted) {
             this.pushError(
               this.sawItem
-                ? 'Codex ended the turn unexpectedly; the output above may be incomplete.'
-                : 'Codex exited before reading your message. It was not processed — please send it again.'
+                ? 'The Codex goal turn ended unexpectedly; the output above may be incomplete.'
+                : 'The Codex goal turn ended before producing any output.'
             )
           }
-          break
         } catch (err) {
-          // Carbon persists the Codex thread id, while the corresponding rollout
-          // lives separately under ~/.codex/sessions. If that file was cleaned or
-          // moved, retry this same prompt once in a fresh thread rather than
-          // permanently poisoning the chat with an unusable resume id.
-          if (
-            !retriedMissingThread &&
-            resumedThreadId &&
-            !this.disposed &&
-            !this.interrupted &&
-            isMissingCodexThreadError(err)
-          ) {
-            retriedMissingThread = true
-            this.recoverFromMissingThread()
-            continue
-          }
           if (!this.disposed && !this.interrupted) {
             this.pushError(err instanceof Error ? err.message : String(err))
           }
-          break
+        }
+      } else {
+        let retriedMissingThread = false
+        let retriedTruncatedStream = false
+        while (!this.disposed) {
+          this.sawItem = false
+          this.sawTerminal = false
+          const resumedThreadId = this.threadId
+          const thread = await this.ensureThread(turn)
+          try {
+            const streamed = turn.reviewTarget
+              ? await (async () => {
+                  if (!this.codex.runReview) {
+                    throw new Error('This Codex transport does not expose native review turns.')
+                  }
+                  const threadId = await thread.ensureId()
+                  this.rememberThreadId(threadId)
+                  return this.codex.runReview(threadId, turn.reviewTarget!, {
+                    signal: abort.signal,
+                    model: turn.model ?? null
+                  })
+                })()
+              : await thread.runStreamed(turn.input, {
+                  signal: abort.signal,
+                  // Stamps this turn with our own message id so `forkBefore` can find
+                  // it again in `thread/turns/list` — across an app restart, and
+                  // without persisting a second id beside every message.
+                  clientUserMessageId: turn.userMessageId
+                })
+            const { events } = streamed
+            for await (const event of events) {
+              if (this.disposed) break
+              this.handleEvent(event, turn)
+            }
+            const truncated =
+              !this.sawTerminal && !this.disposed && !this.interrupted && !abort.signal.aborted
+            if (truncated && !turn.reviewTarget && !this.sawItem && !retriedTruncatedStream) {
+              retriedTruncatedStream = true
+              // Give any contending cold-start process a moment to finish before
+              // resuming this same thread. Recheck cancellation after the wait.
+              await new Promise((resolve) => setTimeout(resolve, 350))
+              if (this.disposed || this.interrupted || abort.signal.aborted) break
+              continue
+            }
+            if (truncated) {
+              this.pushError(
+                this.sawItem
+                  ? 'Codex ended the turn unexpectedly; the output above may be incomplete.'
+                  : 'Codex exited before reading your message. It was not processed — please send it again.'
+              )
+            }
+            break
+          } catch (err) {
+            // Carbon persists the Codex thread id, while the corresponding rollout
+            // lives separately under ~/.codex/sessions. If that file was cleaned or
+            // moved, retry this same prompt once in a fresh thread rather than
+            // permanently poisoning the chat with an unusable resume id.
+            if (
+              !retriedMissingThread &&
+              resumedThreadId &&
+              !this.disposed &&
+              !this.interrupted &&
+              isMissingCodexThreadError(err)
+            ) {
+              retriedMissingThread = true
+              this.recoverFromMissingThread()
+              continue
+            }
+            if (!this.disposed && !this.interrupted) {
+              this.pushError(err instanceof Error ? err.message : String(err))
+            }
+            break
+          }
         }
       }
     } finally {
@@ -1047,6 +1206,7 @@ export class CodexSession implements AgentSession {
       this.itemLoc.clear()
       this.lastText.clear()
       this.abort = null
+      this.nativeInterrupt = null
       // The SDK consumed any temp attachment copies at turn start — drop them now
       // rather than holding them for the session's lifetime.
       for (const f of turn.temps) {
@@ -1064,7 +1224,11 @@ export class CodexSession implements AgentSession {
           if (completedMessage) {
             const fileChanges = await summarizeWorkspaceCheckpoint(checkpoint)
             completedMessage.fileChanges = fileChanges
-            this.emit({ type: 'message', chatId: this.chat.id, message: completedMessage })
+            this.emit({
+              type: 'message',
+              chatId: this.chat.id,
+              message: completedMessage
+            })
             // terminalizeRunning() above already drove every part of this message
             // terminal, and a later turn can push past it — so the store's
             // incremental write pass has no way to see this assignment. Flag it.
@@ -1082,7 +1246,7 @@ export class CodexSession implements AgentSession {
    * proving the prompt made it past cold-start initialization; it still overlaps
    * the rest of the turn. Best-effort and fire-once: skips manually-renamed and
    * resumed chats.
-  */
+   */
   private async maybeGenerateTitle(): Promise<void> {
     if (this.disposed || this.titledOnce || this.titledResumed || this.chat.titleManual) return
     // See ClaudeSession: a windowed chat's opening message may not be hydrated.
@@ -1155,7 +1319,11 @@ export class CodexSession implements AgentSession {
         this.generatedBeforeTurn = this.threadGeneratedImages()
         if (event.thread_id && event.thread_id !== this.chat.sessionId) {
           this.chat.sessionId = event.thread_id
-          this.emit({ type: 'meta', chatId: this.chat.id, patch: { sessionId: event.thread_id } })
+          this.emit({
+            type: 'meta',
+            chatId: this.chat.id,
+            patch: { sessionId: event.thread_id }
+          })
           this.store.saveChatSoon(this.chat.id)
         }
         break
@@ -1240,7 +1408,11 @@ export class CodexSession implements AgentSession {
           try {
             const st = statSync(abs)
             if (!st.isFile()) return null
-            return { isFile: true, mtimeMs: st.mtimeMs, real: realpathSync(abs) }
+            return {
+              isFile: true,
+              mtimeMs: st.mtimeMs,
+              real: realpathSync(abs)
+            }
           } catch {
             return null
           }
@@ -1288,7 +1460,14 @@ export class CodexSession implements AgentSession {
       inputTokens: usage?.input_tokens,
       outputTokens: usage?.output_tokens
     }
-    this.pushMessage({ id: randomUUID(), role: 'event', kind: 'turn', text: '', ts: Date.now(), stats })
+    this.pushMessage({
+      id: randomUUID(),
+      role: 'event',
+      kind: 'turn',
+      text: '',
+      ts: Date.now(),
+      stats
+    })
     this.chat.updatedAt = Date.now()
     this.store.saveChat(this.chat.id)
     this.offerPlanForReview(turn)
@@ -1297,6 +1476,7 @@ export class CodexSession implements AgentSession {
   /** Turn a completed Codex planning response into the same review event Claude uses. */
   private offerPlanForReview(turn: PendingTurn): void {
     if (
+      turn.nativeGoal ||
       turn.permissionMode !== 'plan' ||
       this.chat.permissionMode !== 'plan' ||
       this.planReview ||
@@ -1406,9 +1586,10 @@ export class CodexSession implements AgentSession {
         input: { questions },
         title: 'Answer questions',
         displayName: 'Codex questions',
-        description: request.isBlocking === false
-          ? 'Codex requested input; the turn can continue while you answer.'
-          : 'Codex needs your input to continue.',
+        description:
+          request.isBlocking === false
+            ? 'Codex requested input; the turn can continue while you answer.'
+            : 'Codex needs your input to continue.',
         hasSuggestions: false
       }
     })
@@ -1536,8 +1717,7 @@ export class CodexSession implements AgentSession {
         return {
           id,
           header: typeof schema.title === 'string' ? schema.title : id,
-          question:
-            typeof schema.description === 'string' ? schema.description : `Enter ${id}`,
+          question: typeof schema.description === 'string' ? schema.description : `Enter ${id}`,
           options: enumValues.map((entry) => ({ label: String(entry) })),
           required: required.has(id),
           allowOther: enumValues.length === 0,
@@ -1803,13 +1983,7 @@ export class CodexSession implements AgentSession {
     // it here rather than at each site is what keeps a Codex agent from being
     // drawn finished with no duration at all.
     const status = patch.status
-    if (
-      loc.part.agent &&
-      !patch.agent &&
-      status &&
-      status !== 'running' &&
-      status !== 'pending'
-    ) {
+    if (loc.part.agent && !patch.agent && status && status !== 'running' && status !== 'pending') {
       patch = { ...patch, agent: { ...loc.part.agent, endedAt: Date.now() } }
     }
     Object.assign(loc.part, patch)
@@ -1823,9 +1997,11 @@ export class CodexSession implements AgentSession {
     this.store.saveChatSoon(this.chat.id)
   }
 
-  private emitCodexChildren(
-    loc: { message: AssistantMessage; index: number; part: ToolPart }
-  ): void {
+  private emitCodexChildren(loc: {
+    message: AssistantMessage
+    index: number
+    part: ToolPart
+  }): void {
     this.updateCodexAgent(loc, { children: [...(loc.part.children ?? [])] })
   }
 
@@ -1872,7 +2048,9 @@ export class CodexSession implements AgentSession {
     const key = `${threadId}:${toolUseId}`
     let child = this.codexChildTools.get(key)
     if (!child) {
-      this.startCodexAgentTool(threadId, toolUseId, 'Tool', { description: 'Agent action' })
+      this.startCodexAgentTool(threadId, toolUseId, 'Tool', {
+        description: 'Agent action'
+      })
       child = this.codexChildTools.get(key)
     }
     const loc = this.codexAgents.get(threadId)
@@ -1918,11 +2096,7 @@ export class CodexSession implements AgentSession {
     this.updateCodexAgent(loc, { agent: next })
   }
 
-  private completeCodexAgent(
-    threadId: string,
-    failed: boolean,
-    result?: string
-  ): void {
+  private completeCodexAgent(threadId: string, failed: boolean, result?: string): void {
     const loc = this.ensureCodexAgent(threadId)
     if (loc.part.children) {
       loc.part.children = loc.part.children.map((child) =>
@@ -1962,20 +2136,10 @@ export class CodexSession implements AgentSession {
         this.appendCodexAgentText(event.threadId, event.text)
         break
       case 'agent-tool-start':
-        this.startCodexAgentTool(
-          event.threadId,
-          event.toolUseId,
-          event.name,
-          event.input
-        )
+        this.startCodexAgentTool(event.threadId, event.toolUseId, event.name, event.input)
         break
       case 'agent-tool-complete':
-        this.completeCodexAgentTool(
-          event.threadId,
-          event.toolUseId,
-          event.output,
-          event.failed
-        )
+        this.completeCodexAgentTool(event.threadId, event.toolUseId, event.output, event.failed)
         break
       case 'agent-complete':
         this.completeCodexAgent(event.threadId, event.failed, event.result)
@@ -1998,7 +2162,9 @@ export class CodexSession implements AgentSession {
       const description = item.prompt?.trim().slice(0, 500) || state?.message || 'Codex sub-agent'
       const loc = this.ensureCodexAgent(threadId, description)
       const status = state ? agentStatus(state.status) : agentStatus(item.status)
-      const patch: Partial<Omit<ToolPart, 'type' | 'toolUseId' | 'name'>> = { status }
+      const patch: Partial<Omit<ToolPart, 'type' | 'toolUseId' | 'name'>> = {
+        status
+      }
       if (state?.message) patch.output = state.message
       this.updateCodexAgent(loc, patch)
       if (status === 'running' || status === 'pending') {
@@ -2096,9 +2262,9 @@ export class CodexSession implements AgentSession {
   }
 
   /** Pulls image blocks out of an MCP tool result (MCP shape: {data, mimeType}). */
-  private mcpImages(item: { result?: { content?: unknown } }):
-    | { mediaType: string; data: string }[]
-    | undefined {
+  private mcpImages(item: {
+    result?: { content?: unknown }
+  }): { mediaType: string; data: string }[] | undefined {
     const content = item.result?.content
     if (!Array.isArray(content)) return undefined
     const images: { mediaType: string; data: string }[] = []
@@ -2162,6 +2328,7 @@ export class CodexSession implements AgentSession {
     this.interrupted = true
     this.cleanupPendingTurns()
     this.abort?.abort()
+    this.nativeInterrupt?.()
     this.clearPlanReview()
     this.clearUserQuestions(true)
     this.clearNativeApprovals(true)
@@ -2183,6 +2350,7 @@ export class CodexSession implements AgentSession {
     if (this.activeTurn && this.activeTurn.permissionMode !== mode) {
       this.interrupted = true
       this.abort?.abort()
+      this.nativeInterrupt?.()
     }
     if (mode !== 'plan') this.clearPlanReview()
     this.chat.permissionMode = mode
@@ -2236,7 +2404,10 @@ export class CodexSession implements AgentSession {
       this.chat.modeBeforePlan = undefined
       this.chat.permissionMode = restore
       this.optionsDirty = true
-      const patch: Partial<ChatMeta> = { permissionMode: restore, modeBeforePlan: undefined }
+      const patch: Partial<ChatMeta> = {
+        permissionMode: restore,
+        modeBeforePlan: undefined
+      }
       // A plan approval may carry the model to implement with ("Build with" in
       // the plan review). Apply it before the implementation turn is built —
       // the turn snapshots chat.model, so this is what makes it take effect.
@@ -2285,7 +2456,12 @@ export class CodexSession implements AgentSession {
     } else {
       const feedback = decision.message?.trim() || 'Revise the plan and propose it again.'
       const feedbackId = randomUUID()
-      this.pushMessage({ id: feedbackId, role: 'user', text: feedback, ts: Date.now() })
+      this.pushMessage({
+        id: feedbackId,
+        role: 'user',
+        text: feedback,
+        ts: Date.now()
+      })
       this.pending.push(
         this.buildPendingTurn(
           `The user requested changes to the proposed plan. Stay in Plan mode and produce a revised proposal.\n\n<previous_plan>\n${review.plan}\n</previous_plan>\n\n<plan_feedback>\n${feedback}\n</plan_feedback>`,
@@ -2337,7 +2513,11 @@ export class CodexSession implements AgentSession {
   private clearNativeApprovals(declineProvider = false): void {
     for (const requestId of [...this.nativeApprovals.keys()]) {
       this.nativeApprovals.delete(requestId)
-      this.emit({ type: 'permission-resolved', chatId: this.chat.id, requestId })
+      this.emit({
+        type: 'permission-resolved',
+        chatId: this.chat.id,
+        requestId
+      })
       if (declineProvider) this.codex.respondToApproval?.(requestId, false)
     }
   }
@@ -2345,7 +2525,11 @@ export class CodexSession implements AgentSession {
   private clearMcpElicitations(declineProvider = false): void {
     for (const requestId of [...this.mcpElicitations.keys()]) {
       this.mcpElicitations.delete(requestId)
-      this.emit({ type: 'permission-resolved', chatId: this.chat.id, requestId })
+      this.emit({
+        type: 'permission-resolved',
+        chatId: this.chat.id,
+        requestId
+      })
       if (declineProvider) this.codex.respondToMcpElicitation?.(requestId, false)
     }
   }
@@ -2376,13 +2560,17 @@ export class CodexSession implements AgentSession {
       }
     }
     this.pending.length = 0
+    this.nativeTurns.length = 0
     this.chainQueued.clear()
   }
 
   async rewindFiles(userMessageId: string, dryRun: boolean): Promise<RewindResult> {
     const checkpoint = this.checkpoints.get(userMessageId)
     if (!checkpoint) {
-      return { canRewind: false, error: 'No Codex workspace checkpoint is available for this turn.' }
+      return {
+        canRewind: false,
+        error: 'No Codex workspace checkpoint is available for this turn.'
+      }
     }
     return rewindWorkspaceCheckpoint(this.chat.cwd, checkpoint, dryRun)
   }
@@ -2458,7 +2646,8 @@ export class CodexSession implements AgentSession {
   }
 
   private async controlRequest<T>(method: string, params: unknown): Promise<T> {
-    if (!this.codex.request) throw new Error('This Codex transport does not support control requests.')
+    if (!this.codex.request)
+      throw new Error('This Codex transport does not support control requests.')
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
       return await Promise.race([
@@ -2497,16 +2686,15 @@ export class CodexSession implements AgentSession {
     let cursor: string | null = null
     try {
       do {
-        const page: { data?: RawServer[]; nextCursor?: string | null } =
-          await this.controlRequest<{
-            data?: RawServer[]
-            nextCursor?: string | null
-          }>('mcpServerStatus/list', {
-            cursor,
-            limit: 100,
-            detail: 'toolsAndAuthOnly',
-            threadId: this.threadId
-          })
+        const page: { data?: RawServer[]; nextCursor?: string | null } = await this.controlRequest<{
+          data?: RawServer[]
+          nextCursor?: string | null
+        }>('mcpServerStatus/list', {
+          cursor,
+          limit: 100,
+          detail: 'toolsAndAuthOnly',
+          threadId: this.threadId
+        })
         servers.push(...(page.data ?? []))
         cursor = page.nextCursor ?? null
       } while (cursor)
@@ -2543,12 +2731,12 @@ export class CodexSession implements AgentSession {
         status: disabled
           ? ('disabled' as const)
           : needsAuth
-          ? ('needs-auth' as const)
-          : failed
-            ? ('failed' as const)
-            : connected
-              ? ('connected' as const)
-              : ('pending' as const),
+            ? ('needs-auth' as const)
+            : failed
+              ? ('failed' as const)
+              : connected
+                ? ('connected' as const)
+                : ('pending' as const),
         ...(failed
           ? {
               error:
@@ -2574,7 +2762,10 @@ export class CodexSession implements AgentSession {
       await this.controlRequest('config/mcpServer/reload', undefined)
       return { ok: true }
     } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : String(error)
+      }
     }
   }
 

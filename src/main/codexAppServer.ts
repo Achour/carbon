@@ -10,7 +10,7 @@ import type {
   Usage,
   UserInput
 } from '@openai/codex-sdk'
-import type { CodexReviewTarget } from '@shared/types'
+import type { CodexGoal, CodexReviewTarget } from '@shared/types'
 
 type JsonRpcId = string | number
 
@@ -85,6 +85,20 @@ export interface NativeMcpStartupStatus {
   error: string | null
   failureReason: 'reauthenticationRequired' | null
 }
+
+/** A turn started by App Server itself, such as autonomous work for a durable
+ * goal. Its events use the same SDK-compatible stream as an ordinary turn. */
+export interface NativeTurnStream {
+  threadId: string
+  turnId: string
+  events: AsyncGenerator<ThreadEvent>
+  interrupt(): void
+}
+
+/** Runtime state for a loaded App Server thread. Distinct from goal status: an
+ * active goal can persist while its thread is momentarily idle. */
+export type NativeThreadStatus =
+  { type: 'notLoaded' | 'idle' | 'systemError' } | { type: 'active'; activeFlags?: string[] }
 
 /** App Server's native plan item, kept distinct from an assistant message. */
 export interface CodexPlanItem {
@@ -163,16 +177,17 @@ export interface CodexThreadLike {
   run(
     input: Input,
     options?: TurnOptions
-  ): Promise<{ items: ThreadItem[]; finalResponse: string; usage: Usage | null }>
+  ): Promise<{
+    items: ThreadItem[]
+    finalResponse: string
+    usage: Usage | null
+  }>
 }
 
 export interface CodexClientLike {
   startThread(options?: AppServerThreadOptions): CodexThreadLike
   resumeThread(id: string, options?: AppServerThreadOptions): CodexThreadLike
-  respondToUserInput?(
-    requestId: string,
-    answers: Record<string, { answers: string[] }>
-  ): void
+  respondToUserInput?(requestId: string, answers: Record<string, { answers: string[] }>): void
   dismissUserInput?(requestId: string): void
   respondToApproval?(requestId: string, allow: boolean, always?: boolean): void
   respondToMcpElicitation?(
@@ -197,6 +212,12 @@ export interface CodexAppServerCallbacks {
   onApprovalResolved?: (requestId: string) => void
   onMcpElicitation?: (request: NativeMcpElicitationRequest) => void
   onMcpElicitationResolved?: (requestId: string) => void
+  /** Persisted thread-goal state changes, including usage/status updates mid-run. */
+  onGoalUpdated?: (threadId: string, goal: CodexGoal | null) => void
+  /** Loaded-thread runtime changes, including autonomous goal work. */
+  onThreadStatusChanged?: (threadId: string, status: NativeThreadStatus) => void
+  /** Turns App Server starts without a matching Carbon turn/start request. */
+  onUnsolicitedTurn?: (turn: NativeTurnStream) => void
   onError?: (error: Error) => void
 }
 
@@ -323,7 +344,9 @@ function inputForAppServer(input: Input): Array<Record<string, unknown>> {
   )
 }
 
-function serviceTierConfig(serviceTier: AppServerThreadOptions['serviceTier']): Record<string, unknown> {
+function serviceTierConfig(
+  serviceTier: AppServerThreadOptions['serviceTier']
+): Record<string, unknown> {
   return {
     service_tier: serviceTier === 'fast' ? 'fast' : 'default',
     features: { fast_mode: true }
@@ -373,7 +396,11 @@ function stringify(value: unknown): string {
 export function normalizeAppServerItem(item: NativeItem): ThreadItem | null {
   switch (item.type) {
     case 'agentMessage':
-      return { id: item.id, type: 'agent_message', text: String(item.text ?? '') }
+      return {
+        id: item.id,
+        type: 'agent_message',
+        text: String(item.text ?? '')
+      }
     case 'plan':
       return {
         id: item.id,
@@ -383,7 +410,11 @@ export function normalizeAppServerItem(item: NativeItem): ThreadItem | null {
     case 'reasoning': {
       const summary = Array.isArray(item.summary) ? item.summary.map(String) : []
       const content = Array.isArray(item.content) ? item.content.map(String) : []
-      return { id: item.id, type: 'reasoning', text: [...summary, ...content].join('\n\n') }
+      return {
+        id: item.id,
+        type: 'reasoning',
+        text: [...summary, ...content].join('\n\n')
+      }
     }
     case 'commandExecution':
       return {
@@ -403,8 +434,7 @@ export function normalizeAppServerItem(item: NativeItem): ThreadItem | null {
               const raw = change as Record<string, unknown>
               return {
                 path: String(raw.path ?? ''),
-                kind:
-                  raw.kind === 'add' || raw.kind === 'delete' ? raw.kind : ('update' as const)
+                kind: raw.kind === 'add' || raw.kind === 'delete' ? raw.kind : ('update' as const)
               }
             })
           : [],
@@ -432,9 +462,13 @@ export function normalizeAppServerItem(item: NativeItem): ThreadItem | null {
             }
           : progress
             ? { result: { content: [{ type: 'text', text: progress }] } }
-          : {}),
+            : {}),
         ...(item.error != null
-          ? { error: { message: stringify((item.error as Record<string, unknown>).message ?? item.error) } }
+          ? {
+              error: {
+                message: stringify((item.error as Record<string, unknown>).message ?? item.error)
+              }
+            }
           : {}),
         status: statusForSdk(item.status)
       } as ThreadItem
@@ -492,10 +526,18 @@ export function normalizeAppServerItem(item: NativeItem): ThreadItem | null {
       } as unknown as ThreadItem
     }
     case 'webSearch':
-      return { id: item.id, type: 'web_search', query: String(item.query ?? '') }
+      return {
+        id: item.id,
+        type: 'web_search',
+        query: String(item.query ?? '')
+      }
     case 'imageGeneration':
       return typeof item.savedPath === 'string' && item.savedPath
-        ? { id: item.id, type: 'agent_message', text: `![generated image](${item.savedPath})` }
+        ? {
+            id: item.id,
+            type: 'agent_message',
+            text: `![generated image](${item.savedPath})`
+          }
         : null
     case 'imageView':
       return {
@@ -566,7 +608,9 @@ export function appServerApprovalResponse(
       scope: always ? 'session' : 'turn'
     }
   }
-  return { decision: allow ? (always ? 'acceptForSession' : 'accept') : 'decline' }
+  return {
+    decision: allow ? (always ? 'acceptForSession' : 'accept') : 'decline'
+  }
 }
 
 /**
@@ -588,7 +632,11 @@ export function appServerImmediateResponse(
   return null
 }
 
-function updateItemFromDelta(item: NativeItem, method: string, params: Record<string, unknown>): void {
+function updateItemFromDelta(
+  item: NativeItem,
+  method: string,
+  params: Record<string, unknown>
+): void {
   const delta = typeof params.delta === 'string' ? params.delta : ''
   if (!delta) return
   if (method === 'item/agentMessage/delta' || method === 'item/plan/delta') {
@@ -622,11 +670,7 @@ class CodexAppServerThread implements CodexThreadLike {
   private initialized = false
   private boundGeneration = 0
 
-  constructor(
-    client: CodexAppServerClient,
-    id: string | null,
-    options: AppServerThreadOptions
-  ) {
+  constructor(client: CodexAppServerClient, id: string | null, options: AppServerThreadOptions) {
     this.client = client
     this.nativeId = id
     this.options = options
@@ -686,25 +730,32 @@ class CodexAppServerThread implements CodexThreadLike {
     turnOptions: AppServerTurnOptions = {}
   ): Promise<{ events: AsyncGenerator<ThreadEvent> }> {
     const threadId = await this.ensureThread()
-    const response = (await this.client.request('turn/start', {
-      threadId,
-      clientUserMessageId: turnOptions.clientUserMessageId ?? null,
-      input: inputForAppServer(input),
-      cwd: this.options.workingDirectory ?? null,
-      approvalPolicy: this.options.approvalPolicy ?? 'never',
-      approvalsReviewer: this.options.approvalsReviewer ?? 'user',
-      model: this.options.model ?? null,
-      serviceTier: this.options.serviceTier === 'fast' ? 'fast' : 'default',
-      effort: this.options.modelReasoningEffort ?? null,
-      collaborationMode: {
-        mode: this.options.collaborationMode ?? 'default',
-        settings: {
-          model: this.resolvedModel ?? this.options.model ?? '',
-          reasoning_effort: this.options.modelReasoningEffort ?? null,
-          developer_instructions: this.options.developerInstructions ?? null
+    this.client.expectTurnStart(threadId)
+    let response: { turn: NativeTurn }
+    try {
+      response = (await this.client.request('turn/start', {
+        threadId,
+        clientUserMessageId: turnOptions.clientUserMessageId ?? null,
+        input: inputForAppServer(input),
+        cwd: this.options.workingDirectory ?? null,
+        approvalPolicy: this.options.approvalPolicy ?? 'never',
+        approvalsReviewer: this.options.approvalsReviewer ?? 'user',
+        model: this.options.model ?? null,
+        serviceTier: this.options.serviceTier === 'fast' ? 'fast' : 'default',
+        effort: this.options.modelReasoningEffort ?? null,
+        collaborationMode: {
+          mode: this.options.collaborationMode ?? 'default',
+          settings: {
+            model: this.resolvedModel ?? this.options.model ?? '',
+            reasoning_effort: this.options.modelReasoningEffort ?? null,
+            developer_instructions: this.options.developerInstructions ?? null
+          }
         }
-      }
-    })) as { turn: NativeTurn }
+      })) as { turn: NativeTurn }
+    } catch (error) {
+      this.client.finishExpectedTurnStart(threadId)
+      throw error
+    }
     const run = this.client.attachTurn(
       threadId,
       response.turn.id,
@@ -713,6 +764,7 @@ class CodexAppServerThread implements CodexThreadLike {
     run.queue.push({ type: 'thread.started', thread_id: threadId })
     run.queue.push({ type: 'turn.started' })
     this.client.drainBuffered(run)
+    this.client.finishExpectedTurnStart(threadId)
 
     const onAbort = (): void => {
       void this.client
@@ -736,7 +788,11 @@ class CodexAppServerThread implements CodexThreadLike {
   async run(
     input: Input,
     options?: TurnOptions
-  ): Promise<{ items: ThreadItem[]; finalResponse: string; usage: Usage | null }> {
+  ): Promise<{
+    items: ThreadItem[]
+    finalResponse: string
+    usage: Usage | null
+  }> {
     const { events } = await this.runStreamed(input, options)
     const items = new Map<string, ThreadItem>()
     let usage: Usage | null = null
@@ -780,6 +836,9 @@ export class CodexAppServerClient implements CodexClientLike {
   >()
   private readonly turns = new Map<string, AppServerTurn>()
   private readonly buffered = new Map<string, BufferedNotification[]>()
+  /** A turn/started notification can beat its turn/start response. Keep those
+   * notifications buffered so they are not mistaken for autonomous work. */
+  private readonly expectedTurnStarts = new Map<string, number>()
   private readonly serverRequests = new Map<
     string,
     {
@@ -833,6 +892,16 @@ export class CodexAppServerClient implements CodexClientLike {
     return run
   }
 
+  expectTurnStart(threadId: string): void {
+    this.expectedTurnStarts.set(threadId, (this.expectedTurnStarts.get(threadId) ?? 0) + 1)
+  }
+
+  finishExpectedTurnStart(threadId: string): void {
+    const remaining = (this.expectedTurnStarts.get(threadId) ?? 1) - 1
+    if (remaining > 0) this.expectedTurnStarts.set(threadId, remaining)
+    else this.expectedTurnStarts.delete(threadId)
+  }
+
   drainBuffered(run: AppServerTurn): void {
     const key = this.turnKey(run.threadId, run.turnId)
     const values = this.buffered.get(key) ?? []
@@ -845,16 +914,27 @@ export class CodexAppServerClient implements CodexClientLike {
     target: CodexReviewTarget,
     options: TurnOptions & { model?: string | null } = {}
   ): Promise<{ events: AsyncGenerator<ThreadEvent> }> {
-    const response = (await this.request('review/start', {
-      threadId,
-      target,
-      delivery: 'inline'
-    })) as { reviewThreadId?: string; turn?: NativeTurn }
-    if (!response.turn?.id) throw new Error('Codex did not return a review turn.')
+    this.expectTurnStart(threadId)
+    let response: { reviewThreadId?: string; turn?: NativeTurn }
+    try {
+      response = (await this.request('review/start', {
+        threadId,
+        target,
+        delivery: 'inline'
+      })) as { reviewThreadId?: string; turn?: NativeTurn }
+    } catch (error) {
+      this.finishExpectedTurnStart(threadId)
+      throw error
+    }
+    if (!response.turn?.id) {
+      this.finishExpectedTurnStart(threadId)
+      throw new Error('Codex did not return a review turn.')
+    }
     const reviewThreadId = response.reviewThreadId || threadId
     const run = this.attachTurn(reviewThreadId, response.turn.id, options.model ?? null)
     run.queue.push({ type: 'turn.started' })
     this.drainBuffered(run)
+    this.finishExpectedTurnStart(threadId)
 
     const onAbort = (): void => {
       void this.request('turn/interrupt', {
@@ -982,7 +1062,10 @@ export class CodexAppServerClient implements CodexClientLike {
       this.pending.delete(message.id)
       if (message.error) {
         const error = new Error(message.error.message)
-        Object.assign(error, { code: message.error.code, data: message.error.data })
+        Object.assign(error, {
+          code: message.error.code,
+          data: message.error.data
+        })
         pending.reject(error)
       } else {
         pending.resolve(message.result)
@@ -1014,7 +1097,10 @@ export class CodexAppServerClient implements CodexClientLike {
     if (!supported.has(method)) {
       this.write({
         id,
-        error: { code: -32601, message: `Carbon does not support App Server request ${method}.` }
+        error: {
+          code: -32601,
+          message: `Carbon does not support App Server request ${method}.`
+        }
       })
       return
     }
@@ -1042,8 +1128,7 @@ export class CodexAppServerClient implements CodexClientLike {
       return
     }
     if (method === 'mcpServer/elicitation/request') {
-      const mode =
-        params.mode === 'url' || params.mode === 'openai/form' ? params.mode : 'form'
+      const mode = params.mode === 'url' || params.mode === 'openai/form' ? params.mode : 'form'
       this.callbacks.onMcpElicitation?.({
         requestId,
         threadId: String(params.threadId ?? ''),
@@ -1053,7 +1138,9 @@ export class CodexAppServerClient implements CodexClientLike {
         message: String(params.message ?? 'This MCP server needs input.'),
         ...(typeof params.url === 'string' ? { url: params.url } : {}),
         ...(params.requestedSchema && typeof params.requestedSchema === 'object'
-          ? { requestedSchema: params.requestedSchema as Record<string, unknown> }
+          ? {
+              requestedSchema: params.requestedSchema as Record<string, unknown>
+            }
           : {})
       })
       return
@@ -1078,10 +1165,7 @@ export class CodexAppServerClient implements CodexClientLike {
     })
   }
 
-  respondToUserInput(
-    requestId: string,
-    answers: Record<string, { answers: string[] }>
-  ): void {
+  respondToUserInput(requestId: string, answers: Record<string, { answers: string[] }>): void {
     const pending = this.serverRequests.get(requestId)
     if (!pending) return
     if (pending.timer) clearTimeout(pending.timer)
@@ -1118,13 +1202,38 @@ export class CodexAppServerClient implements CodexClientLike {
     this.serverRequests.delete(requestId)
     this.write({
       id: pending.id,
-      result: { action: allow ? 'accept' : 'decline', content: allow ? content : null, _meta: null }
+      result: {
+        action: allow ? 'accept' : 'decline',
+        content: allow ? content : null,
+        _meta: null
+      }
     })
     this.callbacks.onMcpElicitationResolved?.(requestId)
   }
 
   private handleNotification(method: string, raw: unknown): void {
     const params = (raw ?? {}) as Record<string, unknown>
+    if (method === 'thread/status/changed') {
+      const threadId = typeof params.threadId === 'string' ? params.threadId : ''
+      const status = params.status
+      if (threadId && status && typeof status === 'object') {
+        this.callbacks.onThreadStatusChanged?.(threadId, status as NativeThreadStatus)
+      }
+      return
+    }
+    if (method === 'thread/goal/updated') {
+      const threadId = typeof params.threadId === 'string' ? params.threadId : ''
+      const goal = params.goal
+      if (threadId && goal && typeof goal === 'object') {
+        this.callbacks.onGoalUpdated?.(threadId, goal as CodexGoal)
+      }
+      return
+    }
+    if (method === 'thread/goal/cleared') {
+      const threadId = typeof params.threadId === 'string' ? params.threadId : ''
+      if (threadId) this.callbacks.onGoalUpdated?.(threadId, null)
+      return
+    }
     if (method === 'mcpServer/startupStatus/updated') {
       const name = typeof params.name === 'string' ? params.name : ''
       const status = params.status
@@ -1141,9 +1250,7 @@ export class CodexAppServerClient implements CodexClientLike {
           status,
           error: typeof params.error === 'string' ? params.error : null,
           failureReason:
-            params.failureReason === 'reauthenticationRequired'
-              ? 'reauthenticationRequired'
-              : null
+            params.failureReason === 'reauthenticationRequired' ? 'reauthenticationRequired' : null
         }
         this.mcpStartupStatuses.set(this.mcpStatusKey(name, value.threadId), value)
       }
@@ -1166,8 +1273,7 @@ export class CodexAppServerClient implements CodexClientLike {
       return
     }
     const threadId = typeof params.threadId === 'string' ? params.threadId : null
-    const turn =
-      params.turn && typeof params.turn === 'object' ? (params.turn as NativeTurn) : null
+    const turn = params.turn && typeof params.turn === 'object' ? (params.turn as NativeTurn) : null
     const turnId =
       typeof params.turnId === 'string'
         ? params.turnId
@@ -1176,7 +1282,26 @@ export class CodexAppServerClient implements CodexClientLike {
           : null
     if (!threadId || !turnId) return
     const key = this.turnKey(threadId, turnId)
-    const run = this.turns.get(key)
+    let run = this.turns.get(key)
+    if (
+      !run &&
+      method === 'turn/started' &&
+      !this.expectedTurnStarts.has(threadId) &&
+      this.callbacks.onUnsolicitedTurn
+    ) {
+      run = this.attachTurn(threadId, turnId, null)
+      run.queue.push({ type: 'turn.started' })
+      this.drainBuffered(run)
+      this.callbacks.onUnsolicitedTurn({
+        threadId,
+        turnId,
+        events: run.queue.iterate(),
+        interrupt: () => {
+          void this.request('turn/interrupt', { threadId, turnId }).catch(() => {})
+        }
+      })
+      return
+    }
     if (run) this.handleTurnNotification(run, method, params)
     else {
       const buffered = this.buffered.get(key) ?? []
@@ -1284,7 +1409,10 @@ export class CodexAppServerClient implements CodexClientLike {
           completed: step.status === 'completed'
         }))
       } as unknown as ThreadItem
-      run.queue.push({ type: run.planSeen ? 'item.updated' : 'item.started', item })
+      run.queue.push({
+        type: run.planSeen ? 'item.updated' : 'item.started',
+        item
+      })
       run.planSeen = true
       return
     }
@@ -1300,7 +1428,10 @@ export class CodexAppServerClient implements CodexClientLike {
           })
         }
       } else if (turn.status === 'interrupted') {
-        run.queue.push({ type: 'error', message: 'The Codex turn was interrupted.' })
+        run.queue.push({
+          type: 'error',
+          message: 'The Codex turn was interrupted.'
+        })
       } else {
         run.queue.push({
           type: 'turn.completed',
@@ -1320,6 +1451,7 @@ export class CodexAppServerClient implements CodexClientLike {
     for (const run of this.turns.values()) run.queue.fail(error)
     this.turns.clear()
     this.buffered.clear()
+    this.expectedTurnStarts.clear()
     this.mcpStartupStatuses.clear()
     for (const [requestId, pending] of this.serverRequests) {
       if (pending.timer) clearTimeout(pending.timer)
@@ -1345,6 +1477,7 @@ export class CodexAppServerClient implements CodexClientLike {
     for (const run of this.turns.values()) run.queue.end()
     this.turns.clear()
     this.buffered.clear()
+    this.expectedTurnStarts.clear()
     this.mcpStartupStatuses.clear()
     for (const pending of this.pending.values()) {
       pending.reject(new Error('Codex App Server was disposed.'))

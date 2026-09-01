@@ -23,6 +23,7 @@ import type {
   BackgroundJob,
   ChatData,
   CodexGoal,
+  CodexGoalStatus,
   CodexReviewTarget,
   ChatMeta,
   ChatOptionsPatch,
@@ -2588,6 +2589,44 @@ export class ChatManager {
     session.codexReview(userMessageId, target)
   }
 
+  private codexGoalSession(chatId: string): AgentSession {
+    const chat = this.store.getChat(chatId)
+    if (!chat) throw new Error('Chat not found.')
+    if (chat.provider !== 'codex') {
+      throw new Error('Goals are available only in Codex chats.')
+    }
+    const session = this.sessionFor(chatId) ?? this.createSession(chat)
+    if (!session.codexGoalGet || !session.codexGoalSet || !session.codexGoalClear) {
+      throw new Error('This Codex transport does not expose native goal controls.')
+    }
+    return session
+  }
+
+  async codexGoalGet(chatId: string): Promise<CodexGoal | null> {
+    return this.codexGoalSession(chatId).codexGoalGet!()
+  }
+
+  async codexGoalSet(
+    chatId: string,
+    patch: { objective?: string; status?: CodexGoalStatus; tokenBudget?: number | null }
+  ): Promise<CodexGoal> {
+    const objective = patch.objective?.trim()
+    if (patch.objective !== undefined && !objective) {
+      throw new Error('The goal cannot be empty.')
+    }
+    if (objective && objective.length > 4_000) {
+      throw new Error('The goal must be 4,000 characters or fewer.')
+    }
+    return this.codexGoalSession(chatId).codexGoalSet!({
+      ...patch,
+      ...(objective !== undefined ? { objective } : {})
+    })
+  }
+
+  async codexGoalClear(chatId: string): Promise<boolean> {
+    return this.codexGoalSession(chatId).codexGoalClear!()
+  }
+
   /**
    * Forget a model the chat's provider cannot run. Provider and model are
    * persisted side by side, so a chat written by an older build — or by any
@@ -2867,28 +2906,6 @@ export class ChatManager {
     return user.id
   }
 
-  private formatCodexGoal(goal: CodexGoal | null): string {
-    if (!goal) return 'No Codex goal is set for this chat.'
-    const used = `${goal.tokensUsed.toLocaleString()} tokens · ${this.formatElapsed(goal.timeUsedSeconds)}`
-    return [
-      '**Codex goal**',
-      `- Objective: ${goal.objective}`,
-      `- Status: ${goal.status}`,
-      `- Used: ${used}`,
-      ...(goal.tokenBudget != null
-        ? [`- Token budget: ${goal.tokenBudget.toLocaleString()}`]
-        : [])
-    ].join('\n')
-  }
-
-  private formatElapsed(totalSeconds: number): string {
-    const seconds = Math.max(0, Math.floor(totalSeconds))
-    const hours = Math.floor(seconds / 3600)
-    const minutes = Math.floor((seconds % 3600) / 60)
-    const rest = seconds % 60
-    return hours ? `${hours}h ${minutes}m` : minutes ? `${minutes}m ${rest}s` : `${rest}s`
-  }
-
   /**
    * `handoff` carries a provider switch this same send applied. Prompt-running
    * commands thread it into their turn; commands that don't start a turn drop
@@ -2900,6 +2917,7 @@ export class ChatManager {
     attachments?: Attachment[],
     handoff?: HandoffSnapshot | null
   ): Promise<void> {
+    let commandRecorded = false
     try {
       switch (command.name) {
         case 'plan': {
@@ -2922,31 +2940,27 @@ export class ChatManager {
             throw new Error('This Codex transport does not expose native goal controls.')
           }
           const goalCommand = parseCodexGoalCommand(command.argument)
+          if (goalCommand.action === 'error') throw new Error(goalCommand.message)
+          this.pushCommandInvocation(chat, command.original)
+          commandRecorded = true
           if (goalCommand.action === 'view') {
             const goal = await session.codexGoalGet()
-            this.pushCommandResult(chat, command.original, this.formatCodexGoal(goal))
+            if (!goal) this.pushEvent(chat, 'No Codex goal is set for this chat.')
             return
           }
-          if (goalCommand.action === 'error') throw new Error(goalCommand.message)
           if (goalCommand.action === 'clear') {
             const cleared = await session.codexGoalClear()
-            this.pushCommandResult(
-              chat,
-              command.original,
-              cleared ? 'Codex goal cleared.' : 'No Codex goal was set.'
-            )
+            if (!cleared) this.pushEvent(chat, 'No Codex goal was set.')
             return
           }
           if (goalCommand.action === 'status') {
-            const goal = await session.codexGoalSet({ status: goalCommand.status })
-            this.pushCommandResult(chat, command.original, this.formatCodexGoal(goal))
+            await session.codexGoalSet({ status: goalCommand.status })
             return
           }
-          const goal = await session.codexGoalSet({
+          await session.codexGoalSet({
             objective: goalCommand.objective,
             status: 'active'
           })
-          this.pushCommandResult(chat, command.original, this.formatCodexGoal(goal))
           return
         }
 
@@ -3180,12 +3194,9 @@ export class ChatManager {
 
       }
     } catch (error) {
-      this.pushCommandResult(
-        chat,
-        command.original,
-        error instanceof Error ? error.message : String(error),
-        'error'
-      )
+      const message = error instanceof Error ? error.message : String(error)
+      if (commandRecorded) this.pushEvent(chat, message, 'error')
+      else this.pushCommandResult(chat, command.original, message, 'error')
     }
   }
 

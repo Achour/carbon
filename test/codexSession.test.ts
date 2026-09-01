@@ -289,6 +289,18 @@ test('Codex goals use the native App Server lifecycle', async () => {
     assert.equal(await h.session.codexGoalClear(), true)
     assert.equal(await h.session.codexGoalGet(), null)
     assert.equal(h.codex.runStreamedCalls, 0, 'goal controls must not synthesize a model turn')
+    assert.ok(
+      h.events.some(
+        (event) =>
+          event.type === 'codex-goal' &&
+          event.goal?.objective === 'Finish the migration and keep tests green'
+      )
+    )
+    assert.deepEqual(h.events.filter((event) => event.type === 'codex-goal').at(-1), {
+      type: 'codex-goal',
+      chatId: 'chat-1',
+      goal: null
+    })
   } finally {
     cleanup(h)
   }
@@ -309,6 +321,47 @@ test('setting a goal starts native thread state without a model turn', async () 
           event.patch.sessionId === 'thread-new'
       )
     )
+  } finally {
+    cleanup(h)
+  }
+})
+
+test('native thread runtime drives Carbon status during autonomous goal work', () => {
+  const h = harness([])
+  const status = h.session as unknown as {
+    handleNativeThreadStatus(
+      threadId: string,
+      value:
+        | { type: 'active'; activeFlags?: string[] }
+        | { type: 'idle' | 'notLoaded' | 'systemError' }
+    ): void
+  }
+  try {
+    status.handleNativeThreadStatus('thread-1', { type: 'active', activeFlags: [] })
+    assert.equal(h.session.idle, false)
+    assert.deepEqual(h.events.at(-1), {
+      type: 'status',
+      chatId: 'chat-1',
+      status: 'streaming'
+    })
+
+    status.handleNativeThreadStatus('thread-1', {
+      type: 'active',
+      activeFlags: ['waitingOnApproval']
+    })
+    assert.deepEqual(h.events.at(-1), {
+      type: 'status',
+      chatId: 'chat-1',
+      status: 'waiting-permission'
+    })
+
+    status.handleNativeThreadStatus('thread-1', { type: 'idle' })
+    assert.equal(h.session.idle, true)
+    assert.deepEqual(h.events.at(-1), {
+      type: 'status',
+      chatId: 'chat-1',
+      status: 'idle'
+    })
   } finally {
     cleanup(h)
   }
