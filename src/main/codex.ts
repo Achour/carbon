@@ -1519,6 +1519,13 @@ export class CodexSession implements AgentSession {
     if (isCodexCompactionItem(item as unknown)) {
       if (!terminal || this.compactedItems.has(item.id)) return
       this.compactedItems.add(item.id)
+      // Compaction is a real transcript boundary. App Server keeps the turn
+      // alive afterwards, so leave the assistant accumulated before it in
+      // place and make the next new item start a message below the divider.
+      // Otherwise `ensureCurrent()` keeps appending into the message above the
+      // divider, leaving "Codex compacted…" stuck at the bottom for the rest of
+      // the turn (and violating the renderer's last-message-is-live invariant).
+      this.current = null
       this.pushMessage({
         id: randomUUID(),
         role: 'event',

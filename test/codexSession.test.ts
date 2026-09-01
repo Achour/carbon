@@ -280,6 +280,42 @@ test('App Server context usage and rerouted model reach chat metadata and turn s
   cleanup(h)
 })
 
+test('context compaction starts a fresh assistant message below its divider', async () => {
+  const h = harness([
+    async function* () {
+      yield { type: 'thread.started', thread_id: 'thread-1' }
+      yield {
+        type: 'item.completed',
+        item: { id: 'before', type: 'agent_message', text: 'Before compaction.' }
+      }
+      yield {
+        type: 'item.completed',
+        item: { id: 'compact-1', type: 'codex_compaction' }
+      } as unknown as ThreadEvent
+      yield {
+        type: 'item.completed',
+        item: { id: 'after', type: 'agent_message', text: 'After compaction.' }
+      }
+      yield { type: 'turn.completed', usage }
+    }
+  ])
+
+  h.session.send('Keep going after compaction')
+  await waitFor(() => h.events.some((event) => event.type === 'status' && event.status === 'idle'))
+
+  assert.deepEqual(
+    h.chat.messages.map((message) =>
+      message.role === 'assistant'
+        ? message.parts.find((part) => part?.type === 'text')?.text
+        : message.role === 'event'
+          ? message.kind
+          : message.role
+    ),
+    ['user', 'Before compaction.', 'compact', 'After compaction.', 'turn']
+  )
+  cleanup(h)
+})
+
 test('legacy cumulative Codex context usage is cleared before it reaches the meter', () => {
   const h = harness([], { contextTokens: 450_000, contextWindow: 200_000 })
 

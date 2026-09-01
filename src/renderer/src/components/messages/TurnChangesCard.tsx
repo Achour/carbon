@@ -10,6 +10,11 @@ import { LineDeltas } from '@/components/GitPanel'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 
+/** Keep a large edit turn useful as a summary instead of recreating the full
+ * review inside the transcript. The remaining files are one click away in the
+ * stacked diff view. */
+const MAX_PREVIEW_FILES = 8
+
 function summarize(paths: string[], changes: GitFileChange[]): ChangedFile[] {
   return paths.map((path) => {
     const rows = changes.filter((change) => change.path === path)
@@ -72,7 +77,8 @@ export const TurnChangesCard = React.memo(function TurnChangesCard({
     () => message.fileChanges ?? summarize(paths, git?.changes ?? []),
     [message.fileChanges, paths, git?.changes]
   )
-  const entries = React.useMemo(() => groupChanges(files), [files])
+  const previewFiles = React.useMemo(() => files.slice(0, MAX_PREVIEW_FILES), [files])
+  const entries = React.useMemo(() => groupChanges(previewFiles), [previewFiles])
   const [open, setOpen] = React.useState(true)
   const [closedDirs, setClosedDirs] = React.useState<Record<string, boolean>>({})
   const [undoOpen, setUndoOpen] = React.useState(false)
@@ -132,10 +138,10 @@ export const TurnChangesCard = React.memo(function TurnChangesCard({
       onOpenChange={setOpen}
       className="animate-enter overflow-hidden rounded-xl border border-border bg-card/60"
     >
-      <div className="flex items-center gap-1.5 px-2.5 py-1.5">
+      <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 px-2.5 py-1.5">
         <Collapsible.Trigger
           disabled={undone}
-          className="group flex min-w-0 flex-1 items-center gap-2 rounded-md py-1 pr-1 text-left outline-none disabled:cursor-default"
+          className="group flex min-w-48 flex-1 items-center gap-2 rounded-md py-1 pr-1 text-left outline-none disabled:cursor-default"
         >
           {!undone && (
             <ChevronRight className="size-3.5 shrink-0 text-muted-foreground/60 transition-transform duration-200 group-data-[panel-open]:rotate-90" />
@@ -148,7 +154,7 @@ export const TurnChangesCard = React.memo(function TurnChangesCard({
           {!undone && <LineDeltas additions={additions} deletions={deletions} className="text-xs" />}
         </Collapsible.Trigger>
         {!undone && (
-          <>
+          <div className="ml-auto flex shrink-0 items-center gap-1.5">
             <Popover open={undoOpen} onOpenChange={setUndoOpen}>
               <PopoverTrigger
                 render={
@@ -188,7 +194,7 @@ export const TurnChangesCard = React.memo(function TurnChangesCard({
             <Button size="sm" variant="secondary" onClick={() => void reviewChanges()}>
               <FileDiff /> Open diff
             </Button>
-          </>
+          </div>
         )}
       </div>
 
@@ -238,6 +244,16 @@ export const TurnChangesCard = React.memo(function TurnChangesCard({
               </div>
             )
           })}
+          {files.length > MAX_PREVIEW_FILES && (
+            <button
+              type="button"
+              onClick={() => void reviewChanges()}
+              className="mt-1 flex w-full items-center justify-center gap-1.5 rounded-md border-t border-border/60 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+            >
+              <FileDiff className="size-3.5" />
+              Show {files.length - MAX_PREVIEW_FILES} more in diff
+            </button>
+          )}
         </div>
       </Collapsible.Panel>
     </Collapsible.Root>
