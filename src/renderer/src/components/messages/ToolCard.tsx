@@ -77,8 +77,24 @@ function canvasMeta(part: ToolPart): ToolMeta {
   }
 }
 
-/** Claude in Chrome. One server, two dozen tools, all matched by prefix. */
-const CHROME_PREFIX = 'mcp__claude-in-chrome__'
+/**
+ * Browser/computer backends used by the providers.
+ *
+ * Claude in Chrome exposes one purpose-built server. Codex's Chrome and
+ * computer-use skills currently route through node_repl (with optional native
+ * CUA servers), so matching only Claude's prefix made the same browser work
+ * render as raw `node_repl__js` plumbing and prevented its steps from grouping.
+ */
+const BROWSER_PREFIXES = [
+  'mcp__claude-in-chrome__',
+  'mcp__node_repl__',
+  'mcp__computer-use__',
+  'mcp__cua_repl__'
+] as const
+
+function browserPrefix(name: string): string | undefined {
+  return BROWSER_PREFIXES.find((prefix) => name.startsWith(prefix))
+}
 
 /**
  * A call to the browser server, whichever of its tools made it.
@@ -92,7 +108,8 @@ const CHROME_PREFIX = 'mcp__claude-in-chrome__'
  * destinations, and a shared glyph would say they are one.
  */
 function browserMeta(name: string, input: Record<string, unknown>): ToolMeta {
-  const tool = name.slice(CHROME_PREFIX.length)
+  const prefix = browserPrefix(name) ?? ''
+  const tool = name.slice(prefix.length)
   const subject = ((): string | undefined => {
     switch (tool) {
       // `computer` is the whole mouse and keyboard behind one name, so the
@@ -110,6 +127,17 @@ function browserMeta(name: string, input: Record<string, unknown>): ToolMeta {
       // only part of the call that says what it did.
       case 'javascript_tool':
         return str(input.text)
+      // Codex's browser/computer skills execute against the trusted node_repl
+      // service. Keep the useful first line as the subject while the expanded
+      // body retains the complete script.
+      case 'js':
+        return (str(input.code) ?? str(input.javascript) ?? str(input.text))
+          ?.trim()
+          .split('\n')[0]
+      case 'js_reset':
+        return 'Reset session'
+      case 'js_add_node_module_dir':
+        return str(input.path) ?? str(input.directory)
       default:
         return Object.values(input).find((v) => typeof v === 'string') as string | undefined
     }
@@ -117,11 +145,15 @@ function browserMeta(name: string, input: Record<string, unknown>): ToolMeta {
   // Two subjects stand alone: an action name and a URL each say what happened
   // without their tool's name in front. Everything else is named by its tool,
   // which is the verb — `find post title input field`, `read_page`.
-  const bare = tool === 'computer' || tool === 'navigate'
+  const bare =
+    tool === 'computer' ||
+    tool === 'navigate' ||
+    tool === 'js_reset' ||
+    tool === 'js_add_node_module_dir'
   return {
     icon: MousePointerClick,
     label: 'Browser',
-    summary: subject ? (bare ? subject : `${tool} ${subject}`) : tool
+    summary: subject ? (bare ? subject : tool === 'js' ? subject : `${tool} ${subject}`) : tool
   }
 }
 
@@ -305,7 +337,7 @@ function toolMeta(part: ToolPart, cwd: string): ToolMeta {
     case 'mcp__canvas__read':
       return { icon: PenLine, label: 'Canvas', summary: 'Read canvas' }
     default: {
-      if (part.name.startsWith(CHROME_PREFIX)) return browserMeta(part.name, input)
+      if (browserPrefix(part.name)) return browserMeta(part.name, input)
       const firstString = Object.values(input).find((v) => typeof v === 'string') as
         | string
         | undefined
@@ -801,7 +833,7 @@ const GROUPABLE_TOOLS = new Set([
  * arrived as separate blocks with a message-sized gap between them, which is
  * the gap grouping exists to close.
  */
-const GROUPABLE_SERVERS = [CHROME_PREFIX, 'mcp__preview__', 'mcp__canvas__']
+const GROUPABLE_SERVERS = [...BROWSER_PREFIXES, 'mcp__preview__', 'mcp__canvas__']
 
 /** Whether this call is a step in a run rather than a block of its own. */
 export function isGroupableTool(name: string): boolean {

@@ -37,6 +37,14 @@ Dev utilities (env vars for `npm run dev`, used for UI iteration without a human
 - `CARBON_FAKE_HOMEBREW=1` — forces `installedViaHomebrew`, the only way to reach the cask variant of the update UI outside a real `brew install`. Dev-only.
 - Renderer console output is mirrored to the terminal in dev.
 
+**A screenshot requested “here” or “in chat” must appear in the final assistant
+message.** Capturing it or emitting it only inside a tool result/card does not
+satisfy the request: put the readable local file path in Markdown image syntax
+(`![description](/absolute/path.png)`) so Carbon's `LocalImage` renderer loads it
+over IPC and draws it inline. When both builds are running, the development
+window is the `com.github.Electron` app; `com.achour.carbon` is the installed
+Carbon window hosting the conversation.
+
 `demo/` is the screenshot profile the README's and the landing page's images are shot
 against — `setup.sh` rebuilds three repositories and a worktree, `seed.mjs` writes chats
 into a throwaway `AIGUI_USERDATA`, `shoot.sh` drives one of `demo/e2e/*.js` and kills the

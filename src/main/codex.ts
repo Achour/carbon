@@ -46,7 +46,11 @@ import { DeltaCoalescer } from './deltaCoalescer.ts'
 import { IMAGE_EXT, pickTurnImages } from './imageScan.ts'
 import { isMissingCodexThreadError } from './codexResume.ts'
 import { parseCodexPlan } from './codexMode.ts'
-import { codexWindow, type CodexWindow } from './usageWindows.ts'
+import {
+  codexLimitDisplayName,
+  codexWindow,
+  type CodexWindow
+} from './usageWindows.ts'
 import {
   CodexAppServerClient,
   type AppServerThreadOptions,
@@ -82,6 +86,16 @@ import { CANVAS_SESSION_RULES } from './canvasTools.ts'
 import { describeSelection } from './attachmentText.ts'
 
 const OUTPUT_CAP = 100_000
+
+/**
+ * Carbon has two browser surfaces and Codex can drive both: `preview` is the
+ * isolated project webview, while the user's configured Chrome/computer skill
+ * owns their real signed-in browser. Naming the distinction in the turn rules
+ * stops project verification from leaking into personal Chrome and stops an
+ * explicit "use my Chrome" request from being answered with the preview.
+ */
+const CODEX_BROWSER_SESSION_RULES =
+  "Carbon has two different browser surfaces. Use the `preview` MCP server for this project's local dev-server UI and its screenshots/console. When the user explicitly asks for their Chrome browser, an existing signed-in browser session, or a browser extension, use an enabled Chrome/browser-control skill and its configured tools instead. Do not substitute one surface for the other."
 
 /**
  * One-shot Codex text turn on a throwaway read-only thread — backs the chat
@@ -757,13 +771,17 @@ export class CodexSession implements AgentSession {
       ...((previewConfig?.mcp_servers as Record<string, unknown> | undefined) ?? {}),
       ...((canvasConfig?.mcp_servers as Record<string, unknown> | undefined) ?? {})
     }
-    const rules = [previewConfig ? PREVIEW_SESSION_RULES : '', canvasConfig ? CANVAS_SESSION_RULES : '']
+    const rules = [
+      CODEX_BROWSER_SESSION_RULES,
+      previewConfig ? PREVIEW_SESSION_RULES : '',
+      canvasConfig ? CANVAS_SESSION_RULES : ''
+    ]
       .filter(Boolean)
       .join('\n\n')
     if (Object.keys(servers).length) {
       opts.extraConfig = { mcp_servers: servers }
-      opts.developerInstructions = rules
     }
+    opts.developerInstructions = rules
     const optionsKey = JSON.stringify(opts)
     if (this.thread && !this.optionsDirty && this.threadOptionsKey === optionsKey) return this.thread
     this.thread = this.threadId
@@ -2369,6 +2387,15 @@ export class CodexSession implements AgentSession {
       name?: string
       serverInfo?: unknown
       authStatus?: string
+      runtimeStatus?:
+        | 'notStarted'
+        | 'starting'
+        | 'connected'
+        | 'authenticationRequired'
+        | 'failed'
+        | 'cancelled'
+        | 'disabled'
+        | null
       tools?: Record<string, RawTool>
     }
     const servers: RawServer[] = []
@@ -2403,13 +2430,24 @@ export class CodexSession implements AgentSession {
       const startup = this.codex.mcpStartupStatus?.(name, this.threadId)
       const needsAuth =
         server.authStatus === 'notLoggedIn' ||
+        server.runtimeStatus === 'authenticationRequired' ||
         startup?.failureReason === 'reauthenticationRequired'
-      const failed = startup?.status === 'failed' || startup?.status === 'cancelled'
+      const failed =
+        server.runtimeStatus === 'failed' ||
+        server.runtimeStatus === 'cancelled' ||
+        startup?.status === 'failed' ||
+        startup?.status === 'cancelled'
+      const disabled = server.runtimeStatus === 'disabled'
       const connected =
-        startup?.status === 'ready' || server.serverInfo != null || tools.length > 0
+        server.runtimeStatus === 'connected' ||
+        startup?.status === 'ready' ||
+        server.serverInfo != null ||
+        tools.length > 0
       return {
         name,
-        status: needsAuth
+        status: disabled
+          ? ('disabled' as const)
+          : needsAuth
           ? ('needs-auth' as const)
           : failed
             ? ('failed' as const)
@@ -2517,7 +2555,10 @@ export class CodexSession implements AgentSession {
           .filter((value): value is NonNullable<typeof value> => value != null)
           .map((value) => ({
             ...value,
-            label: prefix && key ? `${key} · ${value.label}` : value.label
+            label:
+              prefix && key
+                ? `${codexLimitDisplayName(key, snapshot.limitName, snapshot.limitId)} · ${value.label}`
+                : value.label
           }))
       )
       return {

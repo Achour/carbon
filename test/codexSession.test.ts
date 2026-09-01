@@ -739,6 +739,21 @@ test('Codex session introspection uses App Server control requests', async () =>
           planType: 'plus',
           primary: { usedPercent: 25, windowDurationMins: 300, resetsAt: 2_000_000_000 },
           secondary: null
+        },
+        rateLimitsByLimitId: {
+          codex_bengalfox: {
+            limitId: 'codex_bengalfox',
+            limitName: 'GPT-5.3-Codex-Spark',
+            planType: 'plus',
+            primary: { usedPercent: 25, windowDurationMins: 300, resetsAt: 2_000_000_000 },
+            secondary: null
+          },
+          codex: {
+            limitId: 'codex',
+            planType: 'plus',
+            primary: { usedPercent: 10, windowDurationMins: 10_080, resetsAt: 2_000_000_000 },
+            secondary: null
+          }
         }
       }
     }
@@ -760,8 +775,16 @@ test('Codex session introspection uses App Server control requests', async () =>
           {
             name: 'computer-use',
             serverInfo: null,
+            runtimeStatus: 'connected',
             authStatus: 'unsupported',
             tools: { use: { name: 'use' } }
+          },
+          {
+            name: 'cua_repl',
+            serverInfo: null,
+            runtimeStatus: 'disabled',
+            authStatus: 'unsupported',
+            tools: {}
           },
           {
             name: 'broken',
@@ -826,11 +849,15 @@ test('Codex session introspection uses App Server control requests', async () =>
     subscriptionType: 'plus',
     apiProvider: 'chatgpt'
   })
-  assert.equal(info?.windows[0]?.label, '5-hour')
+  assert.deepEqual(
+    info?.windows.map((window) => window.label),
+    ['5.3 Codex Spark · 5-hour', 'Codex · Weekly']
+  )
   assert.deepEqual(servers[0]?.tools, [
     { name: 'search', description: 'Search docs', readOnly: true }
   ])
   assert.equal(servers.find((server) => server.name === 'computer-use')?.status, 'connected')
+  assert.equal(servers.find((server) => server.name === 'cua_repl')?.status, 'disabled')
   assert.deepEqual(servers.find((server) => server.name === 'broken'), {
     name: 'broken',
     status: 'failed',

@@ -3,6 +3,7 @@ import test from 'node:test'
 import {
   accumulateAppServerUsage,
   appServerApprovalResponse,
+  appServerImmediateResponse,
   CodexAppServerClient,
   isCodexCompactionItem,
   normalizeAppServerItem,
@@ -89,6 +90,76 @@ test('native approval decisions use the exact App Server response shapes', () =>
     ),
     { permissions: requested, scope: 'turn' }
   )
+})
+
+test('App Server host clock requests use whole Unix seconds', () => {
+  assert.deepEqual(appServerImmediateResponse('currentTime/read', 1_788_263_328_987), {
+    currentTimeAt: 1_788_263_328
+  })
+  assert.equal(appServerImmediateResponse('attestation/generate', 1_788_263_328_987), null)
+})
+
+test('MCP progress becomes live tool output and final results replace it', () => {
+  const progress = normalizeAppServerItem({
+    id: 'mcp-1',
+    type: 'mcpToolCall',
+    server: 'node_repl',
+    tool: 'js',
+    arguments: { code: 'browser.tabs.list()' },
+    status: 'inProgress',
+    carbonProgress: 'Reading Chrome tabs…'
+  })
+  const completed = normalizeAppServerItem({
+    id: 'mcp-1',
+    type: 'mcpToolCall',
+    server: 'node_repl',
+    tool: 'js',
+    arguments: { code: 'browser.tabs.list()' },
+    status: 'completed',
+    carbonProgress: 'stale progress',
+    result: { content: [{ type: 'text', text: 'Two tabs' }] }
+  })
+
+  if (progress?.type !== 'mcp_tool_call' || completed?.type !== 'mcp_tool_call') {
+    assert.fail('Expected normalized MCP calls')
+  }
+  assert.deepEqual(progress.result?.content, [{ type: 'text', text: 'Reading Chrome tabs…' }])
+  assert.deepEqual(completed.result?.content, [{ type: 'text', text: 'Two tabs' }])
+})
+
+test('App Server surfaces retry errors once and deduplicates fatal errors', async () => {
+  const client = new CodexAppServerClient()
+  const notify = client as unknown as {
+    handleNotification(method: string, params: unknown): void
+  }
+  const run = client.attachTurn('thread-1', 'turn-1', 'gpt-test')
+
+  notify.handleNotification('error', {
+    threadId: 'thread-1',
+    turnId: 'turn-1',
+    error: { message: 'Temporary network failure.' },
+    willRetry: true
+  })
+  notify.handleNotification('error', {
+    threadId: 'thread-1',
+    turnId: 'turn-1',
+    error: { message: 'Authentication expired.' },
+    willRetry: false
+  })
+  notify.handleNotification('turn/completed', {
+    threadId: 'thread-1',
+    turn: { id: 'turn-1', status: 'failed', error: { message: 'Authentication expired.' } }
+  })
+
+  const events = []
+  for await (const event of run.queue.iterate()) events.push(event)
+  assert.deepEqual(
+    events.map((event) => event.type),
+    ['item.completed', 'error']
+  )
+  assert.equal(events[0]?.type === 'item.completed' ? events[0].item.type : null, 'error')
+  assert.equal(events[1]?.type === 'error' ? events[1].message : null, 'Authentication expired.')
+  client.dispose()
 })
 
 test('token notifications accumulate per-call usage while preserving live context', () => {

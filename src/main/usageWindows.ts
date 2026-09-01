@@ -17,6 +17,40 @@ export interface CodexWindow {
 }
 
 /**
+ * User-facing name for one App Server rate-limit bucket.
+ *
+ * The map is keyed by an internal id (`codex_bengalfox` for Spark), but newer
+ * servers also send the public model name in `limitName`. Prefer that name and
+ * normalize model slugs to the same compact vocabulary as Carbon's picker.
+ * The one explicit alias keeps older CLIs from exposing the codename, while an
+ * unknown future `codex_*` id degrades to a neutral label instead of leaking a
+ * new internal project name into the UI.
+ */
+export function codexLimitDisplayName(
+  key: string,
+  limitName?: string | null,
+  limitId?: string | null
+): string {
+  const raw = limitName?.trim() || limitId?.trim() || key.trim()
+  const normalized = raw.toLowerCase()
+  if (normalized === 'codex_bengalfox') return '5.3 Codex Spark'
+  if (normalized === 'codex') return 'Codex'
+
+  const model = /^gpt-(\d+(?:\.\d+)?)-(.+)$/i.exec(raw)
+  if (model) {
+    const family = model[2]
+      .split(/[-_]+/)
+      .filter(Boolean)
+      .map((word) => word[0].toUpperCase() + word.slice(1).toLowerCase())
+      .join(' ')
+    return `${model[1]} ${family}`
+  }
+
+  if (/^codex[-_]/i.test(raw)) return 'Codex model'
+  return raw || 'Codex'
+}
+
+/**
  * Codex describes a window only as a duration in minutes, so the label is ours
  * to derive. Claude names its own ("5-hour", "7-day"), and the popover stacks
  * the two providers together — so these have to read like they came from the

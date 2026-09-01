@@ -3,7 +3,7 @@ import type { ProviderUsage, RateLimitWindow, UsageOverview } from '@shared/type
 import { CodexAppServerClient } from './codexAppServer'
 import { cliPath } from './providerCli.ts'
 import { withTimeout } from './session'
-import { codexWindow, type CodexWindow } from './usageWindows'
+import { codexLimitDisplayName, codexWindow, type CodexWindow } from './usageWindows'
 
 /**
  * Account-level plan limits for both providers, for the sidebar Usage popover.
@@ -149,7 +149,10 @@ async function readCodex(): Promise<ProviderUsage> {
         .filter((w): w is RateLimitWindow => w !== null)
         .map((window) => ({
           ...window,
-          label: prefix && key ? `${key} · ${window.label}` : window.label
+          label:
+            prefix && key
+              ? `${codexLimitDisplayName(key, snapshot.limitName, snapshot.limitId)} · ${window.label}`
+              : window.label
         }))
     )
 

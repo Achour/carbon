@@ -283,6 +283,8 @@ class AppServerTurn {
   usage: CodexTurnUsage | null = null
   model: string | null
   planSeen = false
+  fatalErrorEmitted = false
+  retryErrorCount = 0
 
   constructor(threadId: string, turnId: string, model: string | null) {
     this.threadId = threadId
@@ -405,6 +407,7 @@ export function normalizeAppServerItem(item: NativeItem): ThreadItem | null {
         item.result && typeof item.result === 'object'
           ? (item.result as Record<string, unknown>)
           : null
+      const progress = typeof item.carbonProgress === 'string' ? item.carbonProgress : ''
       return {
         id: item.id,
         type: 'mcp_tool_call',
@@ -419,6 +422,8 @@ export function normalizeAppServerItem(item: NativeItem): ThreadItem | null {
                 _meta: result._meta ?? null
               }
             }
+          : progress
+            ? { result: { content: [{ type: 'text', text: progress }] } }
           : {}),
         ...(item.error != null
           ? { error: { message: stringify((item.error as Record<string, unknown>).message ?? item.error) } }
@@ -554,6 +559,25 @@ export function appServerApprovalResponse(
     }
   }
   return { decision: allow ? (always ? 'acceptForSession' : 'accept') : 'decline' }
+}
+
+/**
+ * Server requests that Carbon can answer immediately without involving a
+ * session or the renderer.
+ *
+ * `currentTime/read` is part of the App Server host contract. Returning
+ * method-not-found made Codex lose its reliable clock whenever it asked the
+ * host instead of inferring from the prompt. Keep this pure so protocol-shape
+ * drift is pinned by the node tests.
+ */
+export function appServerImmediateResponse(
+  method: string,
+  now = Date.now()
+): Record<string, unknown> | null {
+  if (method === 'currentTime/read') {
+    return { currentTimeAt: Math.floor(now / 1000) }
+  }
+  return null
 }
 
 function updateItemFromDelta(item: NativeItem, method: string, params: Record<string, unknown>): void {
@@ -925,6 +949,11 @@ export class CodexAppServerClient implements CodexClientLike {
   }
 
   private handleServerRequest(id: JsonRpcId, method: string, raw: unknown): void {
+    const immediate = appServerImmediateResponse(method)
+    if (immediate) {
+      this.write({ id, result: immediate })
+      return
+    }
     const supported = new Set([
       'item/tool/requestUserInput',
       'item/commandExecution/requestApproval',
@@ -1141,6 +1170,44 @@ export class CodexAppServerClient implements CodexClientLike {
       if (normalized) run.queue.push({ type: 'item.updated', item: normalized })
       return
     }
+    if (method === 'item/mcpToolCall/progress') {
+      const itemId = String(params.itemId ?? '')
+      const item = run.items.get(itemId)
+      const message = typeof params.message === 'string' ? params.message : ''
+      if (!item || !message) return
+      // Progress is not part of the final MCP item. Park it on the process-local
+      // native object so normalizeAppServerItem can expose useful live output;
+      // item/completed replaces the object and therefore clears it naturally.
+      item.carbonProgress = message
+      const normalized = normalizeAppServerItem(item)
+      if (normalized) run.queue.push({ type: 'item.updated', item: normalized })
+      return
+    }
+    if (method === 'error') {
+      const error =
+        params.error && typeof params.error === 'object'
+          ? (params.error as Record<string, unknown>)
+          : null
+      const message = String(error?.message ?? 'Codex reported an error.')
+      if (params.willRetry === true) {
+        // The public SDK has an ErrorItem specifically for non-fatal errors.
+        // Showing it explains an otherwise mysterious pause while App Server
+        // retries, without marking the turn itself terminal.
+        run.retryErrorCount += 1
+        run.queue.push({
+          type: 'item.completed',
+          item: {
+            id: `codex-retry-${run.turnId}-${run.retryErrorCount}`,
+            type: 'error',
+            message
+          }
+        })
+      } else {
+        run.fatalErrorEmitted = true
+        run.queue.push({ type: 'error', message })
+      }
+      return
+    }
     if (method === 'thread/tokenUsage/updated') {
       run.usage = accumulateAppServerUsage(
         run.usage,
@@ -1176,10 +1243,14 @@ export class CodexAppServerClient implements CodexClientLike {
     if (method === 'turn/completed') {
       const turn = params.turn as NativeTurn
       if (turn.status === 'failed') {
-        run.queue.push({
-          type: 'turn.failed',
-          error: { message: turn.error?.message ?? 'The Codex turn failed.' }
-        })
+        // A non-retryable `error` notification is emitted before this terminal
+        // event. Do not surface the same failure twice in the transcript.
+        if (!run.fatalErrorEmitted) {
+          run.queue.push({
+            type: 'turn.failed',
+            error: { message: turn.error?.message ?? 'The Codex turn failed.' }
+          })
+        }
       } else if (turn.status === 'interrupted') {
         run.queue.push({ type: 'error', message: 'The Codex turn was interrupted.' })
       } else {

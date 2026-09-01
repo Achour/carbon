@@ -1,6 +1,28 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { codexWindow, codexWindowLabel } from '../src/main/usageWindows.ts'
+import {
+  codexLimitDisplayName,
+  codexWindow,
+  codexWindowLabel
+} from '../src/main/usageWindows.ts'
+
+test('Codex limit buckets use public model names instead of internal codenames', () => {
+  assert.equal(
+    codexLimitDisplayName(
+      'codex_bengalfox',
+      'GPT-5.3-Codex-Spark',
+      'codex_bengalfox'
+    ),
+    '5.3 Codex Spark'
+  )
+  // Older App Servers did not always include limitName.
+  assert.equal(codexLimitDisplayName('codex_bengalfox'), '5.3 Codex Spark')
+  assert.equal(codexLimitDisplayName('codex'), 'Codex')
+  // Current and future public GPT model slugs get the picker's compact style.
+  assert.equal(codexLimitDisplayName('unused', 'GPT-5.6-Sol'), '5.6 Sol')
+  // Never expose an unknown internal project name to the user.
+  assert.equal(codexLimitDisplayName('codex_futurefox'), 'Codex model')
+})
 
 test('a Codex window duration is labelled in the same vocabulary Claude uses', () => {
   // The two real ones: Codex's plan windows come back as these.
