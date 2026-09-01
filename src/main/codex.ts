@@ -24,6 +24,9 @@ import type {
   ChatData,
   ChatMeta,
   ChatStatus,
+  CodexGoal,
+  CodexGoalStatus,
+  CodexReviewTarget,
   EffortId,
   ElementRef,
   McpServerInfo,
@@ -236,6 +239,8 @@ interface PendingTurn {
   model?: string
   effort?: EffortId
   contextWindow: number
+  /** Native review/start target. Ordinary turns leave this absent. */
+  reviewTarget?: CodexReviewTarget
 }
 
 interface PendingNativeQuestions {
@@ -753,7 +758,9 @@ export class CodexSession implements AgentSession {
     }
   }
 
-  private async ensureThread(turn: PendingTurn): Promise<CodexThreadLike> {
+  private async ensureThread(
+    turn: Pick<PendingTurn, 'model' | 'permissionMode' | 'effort'>
+  ): Promise<CodexThreadLike> {
     const opts = this.threadOptions(turn)
     const previewConfig = await this.preview?.mcpCodexConfig(this.chat.cwd, {
       plan: opts.collaborationMode === 'plan'
@@ -790,6 +797,73 @@ export class CodexSession implements AgentSession {
     this.threadOptionsKey = optionsKey
     this.optionsDirty = false
     return this.thread
+  }
+
+  /**
+   * Resolve the native thread id for control-plane operations such as goals.
+   * This starts/resumes App Server state only; it does not synthesize a prompt
+   * or spend a model turn.
+   */
+  private async ensureControlThreadId(): Promise<string> {
+    if (!this.idle) throw new Error('Wait for the current Codex turn to finish first.')
+    const thread = await this.ensureThread({
+      model: this.chat.model,
+      permissionMode: this.chat.permissionMode,
+      effort: this.chat.effort
+    })
+    const threadId = await thread.ensureId()
+    this.rememberThreadId(threadId)
+    return threadId
+  }
+
+  private rememberThreadId(threadId: string): void {
+    this.threadId = threadId
+    if (threadId !== this.chat.sessionId) {
+      this.chat.sessionId = threadId
+      this.emit({ type: 'meta', chatId: this.chat.id, patch: { sessionId: threadId } })
+      this.store.saveChat(this.chat.id)
+    }
+  }
+
+  async codexGoalGet(): Promise<CodexGoal | null> {
+    const threadId = await this.ensureControlThreadId()
+    const response = await this.controlRequest<{ goal?: CodexGoal | null }>('thread/goal/get', {
+      threadId
+    })
+    return response.goal ?? null
+  }
+
+  async codexGoalSet(params: {
+    objective?: string
+    status?: CodexGoalStatus
+    tokenBudget?: number | null
+  }): Promise<CodexGoal> {
+    const threadId = await this.ensureControlThreadId()
+    const response = await this.controlRequest<{ goal?: CodexGoal }>('thread/goal/set', {
+      threadId,
+      ...(params.objective !== undefined ? { objective: params.objective } : {}),
+      ...(params.status !== undefined ? { status: params.status } : {}),
+      ...(params.tokenBudget !== undefined ? { tokenBudget: params.tokenBudget } : {})
+    })
+    if (!response.goal) throw new Error('Codex did not return the updated goal.')
+    return response.goal
+  }
+
+  async codexGoalClear(): Promise<boolean> {
+    const threadId = await this.ensureControlThreadId()
+    const response = await this.controlRequest<{ cleared?: boolean }>('thread/goal/clear', {
+      threadId
+    })
+    return response.cleared === true
+  }
+
+  codexReview(userMessageId: string, target: CodexReviewTarget): void {
+    if (this.disposed) return
+    const turn = this.buildPendingTurn('', [], userMessageId)
+    turn.reviewTarget = target
+    this.pending.push(turn)
+    this.setStatus(this.threadId ? 'streaming' : 'starting')
+    void this.drain()
   }
 
   private generatedImagesRoot(): string {
@@ -851,7 +925,8 @@ export class CodexSession implements AgentSession {
   }
 
   private async runTurn(turn: PendingTurn): Promise<void> {
-    this.abort = new AbortController()
+    const abort = new AbortController()
+    this.abort = abort
     this.interrupted = false
     this.turnStart = Date.now()
     this.generatedBeforeTurn = this.threadGeneratedImages()
@@ -881,13 +956,26 @@ export class CodexSession implements AgentSession {
         const resumedThreadId = this.threadId
         const thread = await this.ensureThread(turn)
         try {
-          const { events } = await thread.runStreamed(turn.input, {
-            signal: this.abort.signal,
-            // Stamps this turn with our own message id so `forkBefore` can find
-            // it again in `thread/turns/list` — across an app restart, and
-            // without persisting a second id beside every message.
-            clientUserMessageId: turn.userMessageId
-          })
+          const streamed = turn.reviewTarget
+            ? await (async () => {
+                if (!this.codex.runReview) {
+                  throw new Error('This Codex transport does not expose native review turns.')
+                }
+                const threadId = await thread.ensureId()
+                this.rememberThreadId(threadId)
+                return this.codex.runReview(threadId, turn.reviewTarget!, {
+                  signal: abort.signal,
+                  model: turn.model ?? null
+                })
+              })()
+            : await thread.runStreamed(turn.input, {
+                signal: abort.signal,
+                // Stamps this turn with our own message id so `forkBefore` can find
+                // it again in `thread/turns/list` — across an app restart, and
+                // without persisting a second id beside every message.
+                clientUserMessageId: turn.userMessageId
+              })
+          const { events } = streamed
           for await (const event of events) {
             if (this.disposed) break
             this.handleEvent(event, turn)
@@ -896,13 +984,13 @@ export class CodexSession implements AgentSession {
             !this.sawTerminal &&
             !this.disposed &&
             !this.interrupted &&
-            !this.abort.signal.aborted
-          if (truncated && !this.sawItem && !retriedTruncatedStream) {
+            !abort.signal.aborted
+          if (truncated && !turn.reviewTarget && !this.sawItem && !retriedTruncatedStream) {
             retriedTruncatedStream = true
             // Give any contending cold-start process a moment to finish before
             // resuming this same thread. Recheck cancellation after the wait.
             await new Promise((resolve) => setTimeout(resolve, 350))
-            if (this.disposed || this.interrupted || this.abort.signal.aborted) break
+            if (this.disposed || this.interrupted || abort.signal.aborted) break
             continue
           }
           if (truncated) {

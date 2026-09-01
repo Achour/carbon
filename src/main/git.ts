@@ -8,7 +8,8 @@ import type {
   GitDiffTarget,
   GitFileChange,
   GitResult,
-  GitStatus
+  GitStatus,
+  ReviewCommit
 } from '@shared/types'
 
 const execFileP = promisify(execFile)
@@ -245,6 +246,35 @@ export async function localBranches(cwd: string): Promise<BranchRef[]> {
     if (name) refs.push({ name, checkedOut: !!path })
   }
   return refs
+}
+
+/**
+ * Recent commits for Codex's native `commit` review target, newest first.
+ * The subject is single-line by definition and NUL separators keep names and
+ * titles from being confused with columns. Outside a repo the picker is empty.
+ */
+export async function reviewCommits(cwd: string, limit = 50): Promise<ReviewCommit[]> {
+  const count = Math.max(1, Math.min(200, Math.floor(limit)))
+  const out = await git(cwd, [
+    'log',
+    `-${count}`,
+    '--format=%H%x00%h%x00%s%x00%an%x00%aI'
+  ]).catch(() => '')
+  const commits: ReviewCommit[] = []
+  for (const line of out.split('\n')) {
+    if (!line) continue
+    const [sha, shortSha, subject, author, authoredAt] = line.split('\0')
+    if (sha && shortSha) {
+      commits.push({
+        sha,
+        shortSha,
+        subject: subject ?? '',
+        author: author ?? '',
+        authoredAt: authoredAt ?? ''
+      })
+    }
+  }
+  return commits
 }
 
 /** `branchAt` for a whole set of folders — one map, unknown folders included as null. */

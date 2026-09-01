@@ -65,6 +65,7 @@ import type {
   ContextUsage,
   ChatMeta,
   ChatStatus,
+  CodexReviewTarget,
   BackgroundJob,
   EffortId,
   FastModeStatus,
@@ -696,6 +697,8 @@ interface AppState {
       serviceTier?: ServiceTier
       permissionMode?: ChatMeta['permissionMode']
       attachments?: Attachment[]
+      /** Start a native Codex review instead of sending a first prompt. */
+      reviewTarget?: CodexReviewTarget
       /** Display label for an app-initiated first message (e.g. "Commit"). */
       label?: string
       /** Where the chat runs; omitted or `local` means `cwd` itself. */
@@ -703,6 +706,8 @@ interface AppState {
     }
   ): Promise<void>
   sendMessage(text: string, attachments?: Attachment[], label?: string): Promise<void>
+  /** Start Codex's native App Server reviewer; unlike messages, reviews are never queued. */
+  startCodexReview(target: CodexReviewTarget): Promise<void>
   /** Force a queued message through now: interrupt the running turn and send it. */
   sendQueuedNow(chatId: string, id: string): Promise<void>
   removeQueued(chatId: string, id: string): void
@@ -1388,7 +1393,7 @@ export const useApp = create<AppState>((set, get) => ({
 
   loadCommands(cwd, provider) {
     // Commands are provider-specific. Claude discovers its SDK command list;
-    // Codex gets the subset Carbon can execute through the non-interactive SDK.
+    // Codex gets only commands backed by native Codex APIs (never prompt shims).
     const s = get()
     const prov =
       provider ??
@@ -2695,7 +2700,7 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   async newChat(cwd, firstMessage, opts) {
-    const { attachments, label, ...createOpts } = opts ?? {}
+    const { attachments, label, reviewTarget, ...createOpts } = opts ?? {}
     const meta = await window.api.createChat({ cwd, ...createOpts })
     // A worktree chat's cwd is the worktree, not the picked project folder —
     // the panel, git status and file tree all follow it.
@@ -2749,7 +2754,8 @@ export const useApp = create<AppState>((set, get) => ({
     // run the project's setup script in a visible terminal tab. Deliberately not
     // awaited: the agent starts now and the install races alongside it.
     if (meta.worktree) void get().runWorktreeSetup(meta.id)
-    await window.api.send(meta.id, firstMessage, attachments, label)
+    if (reviewTarget) await window.api.startReview(meta.id, reviewTarget)
+    else await window.api.send(meta.id, firstMessage, attachments, label)
   },
 
   pendingTarget: null,
@@ -2835,6 +2841,15 @@ export const useApp = create<AppState>((set, get) => ({
       return
     }
     await window.api.send(id, text, attachments, label)
+  },
+
+  async startCodexReview(target) {
+    const id = get().activeId
+    if (!id) return
+    if ((get().statuses[id] ?? 'idle') !== 'idle') {
+      throw new Error('Wait for the current turn to finish before starting a review.')
+    }
+    await window.api.startReview(id, target)
   },
 
   async sendQueuedNow(chatId, id) {

@@ -22,6 +22,8 @@ import type {
   Attachment,
   BackgroundJob,
   ChatData,
+  CodexGoal,
+  CodexReviewTarget,
   ChatMeta,
   ChatOptionsPatch,
   ChatStatus,
@@ -58,7 +60,11 @@ import {
   modelLabel,
   providerForModel
 } from '@shared/types'
-import { CODEX_SLASH_COMMANDS, parseCodexSlashCommand } from '@shared/codexCommands'
+import {
+  CODEX_SLASH_COMMANDS,
+  parseCodexGoalCommand,
+  parseCodexSlashCommand
+} from '@shared/codexCommands'
 import { AGENT_TOOLS } from '@shared/agentRuns'
 import type { Store } from './store'
 import type { PreviewManager } from './preview'
@@ -2261,6 +2267,53 @@ function commandsKey(cwd: string, provider: Provider): string {
   return `${cwd}::${provider}`
 }
 
+/** Validate the renderer's structured target before it reaches the CLI process. */
+function normalizeCodexReviewTarget(target: CodexReviewTarget): CodexReviewTarget {
+  if (!target || typeof target !== 'object') throw new Error('Choose a valid Codex review target.')
+  switch (target.type) {
+    case 'uncommittedChanges':
+      return { type: 'uncommittedChanges' }
+    case 'baseBranch': {
+      const branch = target.branch.trim()
+      if (!branch || branch.length > 1_024 || branch.includes('\0')) {
+        throw new Error('Choose a valid base branch to review against.')
+      }
+      return { type: 'baseBranch', branch }
+    }
+    case 'commit': {
+      const sha = target.sha.trim()
+      if (!/^[0-9a-f]{4,64}$/i.test(sha)) {
+        throw new Error('Choose a valid Git commit SHA to review.')
+      }
+      const title = target.title?.trim().slice(0, 500) || null
+      return { type: 'commit', sha, title }
+    }
+    case 'custom': {
+      const instructions = target.instructions.trim()
+      if (!instructions) throw new Error('Enter review instructions before starting.')
+      if (instructions.length > 4_000) {
+        throw new Error('Custom review instructions must be at most 4,000 characters.')
+      }
+      return { type: 'custom', instructions }
+    }
+    default:
+      throw new Error('Choose a valid Codex review target.')
+  }
+}
+
+function codexReviewLabel(target: CodexReviewTarget): string {
+  switch (target.type) {
+    case 'uncommittedChanges':
+      return 'Uncommitted changes'
+    case 'baseBranch':
+      return `Against ${target.branch}`
+    case 'commit':
+      return `Commit ${target.sha.slice(0, 12)}${target.title ? ` · ${target.title}` : ''}`
+    case 'custom':
+      return 'Custom review'
+  }
+}
+
 export class ChatManager {
   private sessions = new Map<string, AgentSession>()
   private static readonly MAX_IDLE_SESSIONS = 2
@@ -2493,7 +2546,46 @@ export class ChatManager {
       void this.runCodexCommand(chat, command, attachments, handoff)
       return
     }
+    if (chat.provider === 'codex' && /^\s*\/[\w-]+(?:\s|$)/.test(text)) {
+      this.pushCommandResult(
+        chat,
+        text.trim(),
+        'This command is not exposed by a native Codex API in Carbon. It was not sent to the model.',
+        'error'
+      )
+      return
+    }
     this.sendPrompt(chat, text, attachments, label, handoff)
+  }
+
+  /** Start Codex review mode through App Server's structured `review/start`. */
+  startReview(chatId: string, requestedTarget: CodexReviewTarget): void {
+    const chat = this.store.getChat(chatId)
+    if (!chat) throw new Error('Chat not found.')
+    // Honor a Codex model selected in the composer before `/review`, just as a
+    // normal send would. A native review needs no cross-provider handoff prompt.
+    this.applyPendingSwitch(chat)
+    this.dropForeignModel(chat)
+    if (chat.provider !== 'codex') {
+      throw new Error('Native review is available only in Codex chats.')
+    }
+    const target = normalizeCodexReviewTarget(requestedTarget)
+    const existing = this.sessionFor(chat.id)
+    if (existing && !existing.idle) {
+      throw new Error('Wait for the current Codex turn to finish before starting a review.')
+    }
+    const session = existing ?? this.createSession(chat)
+    if (!session.codexReview) {
+      throw new Error('This Codex transport does not expose native review turns.')
+    }
+    const commandText =
+      target.type === 'custom' ? `/review ${target.instructions}` : '/review'
+    const userMessageId = this.pushCommandInvocation(
+      chat,
+      commandText,
+      codexReviewLabel(target)
+    )
+    session.codexReview(userMessageId, target)
   }
 
   /**
@@ -2753,6 +2845,50 @@ export class ChatManager {
     this.store.saveChat(chat.id)
   }
 
+  /** Persist a command whose result will arrive as a native streamed turn. */
+  private pushCommandInvocation(chat: ChatData, commandText: string, label?: string): string {
+    const user = {
+      id: randomUUID(),
+      role: 'user' as const,
+      text: commandText,
+      ts: Date.now(),
+      ...(label ? { label } : {})
+    }
+    chat.messages.push(user)
+    chat.updatedAt = user.ts
+    const patch: Partial<ChatMeta> = { updatedAt: chat.updatedAt }
+    if (!chat.title) {
+      chat.title = deriveTitle(commandText)
+      patch.title = chat.title
+    }
+    this.emit({ type: 'message', chatId: chat.id, message: user })
+    this.emit({ type: 'meta', chatId: chat.id, patch })
+    this.store.saveChatSoon(chat.id)
+    return user.id
+  }
+
+  private formatCodexGoal(goal: CodexGoal | null): string {
+    if (!goal) return 'No Codex goal is set for this chat.'
+    const used = `${goal.tokensUsed.toLocaleString()} tokens · ${this.formatElapsed(goal.timeUsedSeconds)}`
+    return [
+      '**Codex goal**',
+      `- Objective: ${goal.objective}`,
+      `- Status: ${goal.status}`,
+      `- Used: ${used}`,
+      ...(goal.tokenBudget != null
+        ? [`- Token budget: ${goal.tokenBudget.toLocaleString()}`]
+        : [])
+    ].join('\n')
+  }
+
+  private formatElapsed(totalSeconds: number): string {
+    const seconds = Math.max(0, Math.floor(totalSeconds))
+    const hours = Math.floor(seconds / 3600)
+    const minutes = Math.floor((seconds % 3600) / 60)
+    const rest = seconds % 60
+    return hours ? `${hours}h ${minutes}m` : minutes ? `${minutes}m ${rest}s` : `${rest}s`
+  }
+
   /**
    * `handoff` carries a provider switch this same send applied. Prompt-running
    * commands thread it into their turn; commands that don't start a turn drop
@@ -2777,6 +2913,40 @@ export class ChatManager {
               'Plan mode enabled. Send a request and Codex will prepare a reviewable plan before making changes.'
             )
           }
+          return
+        }
+
+        case 'goal': {
+          const session = this.sessionFor(chat.id) ?? this.createSession(chat)
+          if (!session.codexGoalGet || !session.codexGoalSet || !session.codexGoalClear) {
+            throw new Error('This Codex transport does not expose native goal controls.')
+          }
+          const goalCommand = parseCodexGoalCommand(command.argument)
+          if (goalCommand.action === 'view') {
+            const goal = await session.codexGoalGet()
+            this.pushCommandResult(chat, command.original, this.formatCodexGoal(goal))
+            return
+          }
+          if (goalCommand.action === 'error') throw new Error(goalCommand.message)
+          if (goalCommand.action === 'clear') {
+            const cleared = await session.codexGoalClear()
+            this.pushCommandResult(
+              chat,
+              command.original,
+              cleared ? 'Codex goal cleared.' : 'No Codex goal was set.'
+            )
+            return
+          }
+          if (goalCommand.action === 'status') {
+            const goal = await session.codexGoalSet({ status: goalCommand.status })
+            this.pushCommandResult(chat, command.original, this.formatCodexGoal(goal))
+            return
+          }
+          const goal = await session.codexGoalSet({
+            objective: goalCommand.objective,
+            status: 'active'
+          })
+          this.pushCommandResult(chat, command.original, this.formatCodexGoal(goal))
           return
         }
 
@@ -2853,7 +3023,7 @@ export class ChatManager {
 
         case 'fast': {
           const requested = command.argument.toLowerCase()
-          if (!requested || requested === 'status') {
+          if (requested === 'status') {
             this.pushCommandResult(
               chat,
               command.original,
@@ -2862,7 +3032,11 @@ export class ChatManager {
             return
           }
           const serviceTier =
-            requested === 'on' || requested === 'fast'
+            !requested
+              ? chat.serviceTier === 'fast'
+                ? 'standard'
+                : 'fast'
+              : requested === 'on' || requested === 'fast'
               ? 'fast'
               : requested === 'off' || requested === 'standard'
                 ? 'standard'
@@ -2922,6 +3096,42 @@ export class ChatManager {
           return
         }
 
+        case 'mcp': {
+          const session = this.sessionFor(chat.id) ?? this.createSession(chat)
+          const servers = await session.mcpStatus()
+          if (!servers.length) {
+            this.pushCommandResult(chat, command.original, 'No Codex MCP servers are configured.')
+            return
+          }
+          const verbose = command.argument.toLowerCase() === 'verbose'
+          const lines = ['**Codex MCP servers**']
+          for (const server of servers) {
+            lines.push(`- ${server.name}: ${server.status}${server.error ? ` — ${server.error}` : ''}`)
+            if (verbose) {
+              for (const tool of server.tools ?? []) {
+                lines.push(`  - \`${tool.name}\`${tool.readOnly ? ' (read only)' : ''}`)
+              }
+            }
+          }
+          this.pushCommandResult(chat, command.original, lines.join('\n'))
+          return
+        }
+
+        case 'review': {
+          const session = this.sessionFor(chat.id) ?? this.createSession(chat)
+          if (!session.codexReview) {
+            throw new Error('This Codex transport does not expose native review turns.')
+          }
+          const userMessageId = this.pushCommandInvocation(chat, command.original)
+          session.codexReview(
+            userMessageId,
+            command.argument
+              ? { type: 'custom', instructions: command.argument }
+              : { type: 'uncommittedChanges' }
+          )
+          return
+        }
+
         case 'status': {
           const context =
             chat.contextTokens != null && chat.contextWindow
@@ -2944,26 +3154,30 @@ export class ChatManager {
           return
         }
 
-        case 'init':
-          this.sendPrompt(
-            chat,
-            'Create an AGENTS.md file for this project. Inspect the repository first, then write concise, practical guidance for coding agents: architecture, important commands, conventions, verification steps, and project-specific pitfalls. Do not overwrite useful existing instructions; improve them in place if AGENTS.md already exists.',
-            attachments,
-            undefined,
-            handoff
-          )
+        case 'usage': {
+          const session = this.sessionFor(chat.id) ?? this.createSession(chat)
+          const usage = await session.usageInfo()
+          if (!usage?.rateLimitsAvailable || !usage.windows.length) {
+            this.pushCommandResult(
+              chat,
+              command.original,
+              'Codex account usage limits are not available for this login.'
+            )
+            return
+          }
+          const lines = ['**Codex usage**']
+          if (usage.subscriptionType) lines.push(`- Plan: ${usage.subscriptionType}`)
+          for (const window of usage.windows) {
+            const used = window.utilization == null ? 'Unknown' : `${window.utilization}% used`
+            const reset = window.resetsAt
+              ? ` · resets ${new Date(window.resetsAt).toLocaleString()}`
+              : ''
+            lines.push(`- ${window.label}: ${used}${reset}`)
+          }
+          this.pushCommandResult(chat, command.original, lines.join('\n'))
           return
-
-        case 'review': {
-          const focus = command.argument ? ` Focus especially on: ${command.argument}` : ''
-          this.sendPrompt(
-            chat,
-            `Review the current working tree for defects, regressions, security issues, and missing tests. Do not modify any files. Report actionable findings first, ordered by severity, with file and line references.${focus}`,
-            attachments,
-            undefined,
-            handoff
-          )
         }
+
       }
     } catch (error) {
       this.pushCommandResult(

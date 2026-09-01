@@ -33,6 +33,7 @@ import type {
   ProviderCli,
   ProviderCliConfig,
   ChatOptionsPatch,
+  CodexReviewTarget,
   ServiceTier,
   TerminalCreateOpts,
   TerminalEvent,
@@ -643,6 +644,10 @@ function registerIpc(): void {
     }
   )
 
+  ipcMain.handle('chat:review', (_e, chatId: string, target: CodexReviewTarget) =>
+    manager.startReview(chatId, target)
+  )
+
   ipcMain.handle('chat:interrupt', (_e, chatId: string) => manager.interrupt(chatId))
 
   ipcMain.handle('chat:stop-background-job', (_e, chatId: string, taskId: string) =>
@@ -859,6 +864,7 @@ function registerIpc(): void {
   ipcMain.handle('git:fetch', (_e, cwd: string) => gitOps.gitFetch(cwd))
   ipcMain.handle('git:branches', (_e, cwds: string[]) => gitOps.branchesAt(cwds))
   ipcMain.handle('git:local-branches', (_e, cwd: string) => gitOps.localBranches(cwd))
+  ipcMain.handle('git:review-commits', (_e, cwd: string) => gitOps.reviewCommits(cwd))
   ipcMain.handle('git:branch-changes', (_e, cwd: string, baseBranch?: string) =>
     gitOps.gitBranchChanges(cwd, baseBranch)
   )

@@ -76,6 +76,7 @@ const api: Api = {
   setChatPinned: (id: string, pinned: boolean) => invoke('chats:set-pinned', id, pinned),
   send: (chatId: string, text: string, attachments?: Attachment[], label?: string) =>
     invoke('chat:send', chatId, text, attachments, label),
+  startReview: (chatId, target) => invoke('chat:review', chatId, target),
   pathForFile: (file: File) => {
     try {
       return webUtils.getPathForFile(file)
@@ -144,6 +145,7 @@ const api: Api = {
     invoke('git:branch-changes', cwd, baseBranch),
   gitBranches: (cwds: string[]) => invoke('git:branches', cwds),
   gitLocalBranches: (cwd: string) => invoke('git:local-branches', cwd),
+  gitReviewCommits: (cwd: string) => invoke('git:review-commits', cwd),
   gitInit: (cwd: string) => invoke('git:init', cwd),
   githubState: (cwd: string) => invoke('github:state', cwd),
   githubOpenPr: (cwd: string) => invoke('github:open-pr', cwd),

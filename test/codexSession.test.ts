@@ -11,7 +11,12 @@ import type {
   ThreadOptions,
   TurnOptions
 } from '@openai/codex-sdk'
-import type { ChatData, ChatEvent } from '../src/shared/types.ts'
+import type {
+  ChatData,
+  ChatEvent,
+  CodexGoal,
+  CodexReviewTarget
+} from '../src/shared/types.ts'
 import { CodexSession } from '../src/main/codex.ts'
 import type { AppServerThreadOptions } from '../src/main/codexAppServer.ts'
 import type {
@@ -63,6 +68,9 @@ class FakeCodex {
     allow: boolean
     content: Record<string, unknown> | null
   }[] = []
+  readonly requests: { method: string; params: unknown }[] = []
+  readonly reviewCalls: { threadId: string; target: CodexReviewTarget }[] = []
+  goal: CodexGoal | null = null
   runStreamedCalls = 0
   private readonly turns: TurnFactory[]
 
@@ -70,8 +78,9 @@ class FakeCodex {
     this.turns = turns
   }
 
-  private thread(options?: AppServerThreadOptions): Thread {
+  private thread(options?: AppServerThreadOptions, threadId = 'thread-new'): Thread {
     return {
+      ensureId: async () => threadId,
       runStreamed: async (input: Input, options?: TurnOptions) => {
         this.runStreamedCalls += 1
         const turn = this.turns.shift()
@@ -91,12 +100,54 @@ class FakeCodex {
 
   resumeThread(id: string, options?: AppServerThreadOptions): Thread {
     this.resumeCalls.push({ id, options })
-    return this.thread(options)
+    return this.thread(options, id)
   }
 
   startThread(options?: AppServerThreadOptions): Thread {
     this.startCalls.push({ options })
     return this.thread(options)
+  }
+
+  async request(method: string, params: unknown): Promise<unknown> {
+    this.requests.push({ method, params })
+    if (method === 'thread/goal/get') return { goal: this.goal }
+    if (method === 'thread/goal/clear') {
+      const cleared = this.goal != null
+      this.goal = null
+      return { cleared }
+    }
+    if (method === 'thread/goal/set') {
+      const update = params as {
+        threadId: string
+        objective?: string
+        status?: CodexGoal['status']
+        tokenBudget?: number | null
+      }
+      const now = 1_700_000_000
+      this.goal = {
+        threadId: update.threadId,
+        objective: update.objective ?? this.goal?.objective ?? '',
+        status: update.status ?? this.goal?.status ?? 'active',
+        createdAt: this.goal?.createdAt ?? now,
+        updatedAt: now,
+        tokensUsed: update.objective ? 0 : (this.goal?.tokensUsed ?? 0),
+        timeUsedSeconds: update.objective ? 0 : (this.goal?.timeUsedSeconds ?? 0),
+        tokenBudget: update.tokenBudget ?? this.goal?.tokenBudget ?? null
+      }
+      return { goal: this.goal }
+    }
+    throw new Error(`Unexpected request: ${method}`)
+  }
+
+  async runReview(
+    threadId: string,
+    target: CodexReviewTarget,
+    options?: TurnOptions & { model?: string | null }
+  ): Promise<{ events: AsyncGenerator<ThreadEvent> }> {
+    this.reviewCalls.push({ threadId, target })
+    const turn = this.turns.shift()
+    assert.ok(turn, 'Unexpected Codex review turn')
+    return { events: turn([], options) }
   }
 
   respondToUserInput(
@@ -214,6 +265,125 @@ function cleanup(h: { session: CodexSession; cwd: string }): void {
   h.session.dispose()
   rmSync(h.cwd, { recursive: true, force: true })
 }
+
+test('Codex goals use the native App Server lifecycle', async () => {
+  const h = harness([])
+  try {
+    const created = await h.session.codexGoalSet({
+      objective: 'Finish the migration and keep tests green',
+      status: 'active'
+    })
+    assert.equal(created.objective, 'Finish the migration and keep tests green')
+    assert.deepEqual(h.codex.requests[0], {
+      method: 'thread/goal/set',
+      params: {
+        threadId: 'thread-1',
+        objective: 'Finish the migration and keep tests green',
+        status: 'active'
+      }
+    })
+
+    const paused = await h.session.codexGoalSet({ status: 'paused' })
+    assert.equal(paused.status, 'paused')
+    assert.equal((await h.session.codexGoalGet())?.status, 'paused')
+    assert.equal(await h.session.codexGoalClear(), true)
+    assert.equal(await h.session.codexGoalGet(), null)
+    assert.equal(h.codex.runStreamedCalls, 0, 'goal controls must not synthesize a model turn')
+  } finally {
+    cleanup(h)
+  }
+})
+
+test('setting a goal starts native thread state without a model turn', async () => {
+  const h = harness([], { sessionId: undefined })
+  try {
+    await h.session.codexGoalSet({ objective: 'Ship the app', status: 'active' })
+    assert.equal(h.codex.startCalls.length, 1)
+    assert.equal(h.chat.sessionId, 'thread-new')
+    assert.equal(h.codex.runStreamedCalls, 0)
+    assert.ok(
+      h.events.some(
+        (event) =>
+          event.type === 'meta' &&
+          event.chatId === h.chat.id &&
+          event.patch.sessionId === 'thread-new'
+      )
+    )
+  } finally {
+    cleanup(h)
+  }
+})
+
+test('native Codex review streams findings without a prompt turn', async () => {
+  const h = harness([
+    async function* () {
+      yield { type: 'turn.started' }
+      yield {
+        type: 'item.completed',
+        item: { id: 'review-result', type: 'agent_message', text: 'No findings.' }
+      }
+      yield { type: 'turn.completed', usage }
+    }
+  ])
+  try {
+    h.session.codexReview('review-message', { type: 'uncommittedChanges' })
+    await waitFor(() => h.session.idle)
+    assert.deepEqual(h.codex.reviewCalls, [
+      { threadId: 'thread-1', target: { type: 'uncommittedChanges' } }
+    ])
+    assert.equal(h.codex.runStreamedCalls, 0, 'review/start must replace a normal prompt turn')
+    assert.ok(
+      h.chat.messages.some(
+        (message) =>
+          message.role === 'assistant' &&
+          message.parts.some((part) => part?.type === 'text' && part.text === 'No findings.')
+      )
+    )
+  } finally {
+    cleanup(h)
+  }
+})
+
+test('review focus uses App Server custom review target', async () => {
+  const h = harness([
+    async function* () {
+      yield { type: 'turn.started' }
+      yield { type: 'turn.completed', usage }
+    }
+  ])
+  try {
+    h.session.codexReview('review-message', {
+      type: 'custom',
+      instructions: 'Focus on authentication regressions'
+    })
+    await waitFor(() => h.session.idle)
+    assert.deepEqual(h.codex.reviewCalls[0]?.target, {
+      type: 'custom',
+      instructions: 'Focus on authentication regressions'
+    })
+  } finally {
+    cleanup(h)
+  }
+})
+
+test('base-branch review stays a structured App Server target', async () => {
+  const h = harness([
+    async function* () {
+      yield { type: 'turn.started' }
+      yield { type: 'turn.completed', usage }
+    }
+  ])
+  try {
+    h.session.codexReview('review-message', { type: 'baseBranch', branch: 'main' })
+    await waitFor(() => h.session.idle)
+    assert.deepEqual(h.codex.reviewCalls[0]?.target, {
+      type: 'baseBranch',
+      branch: 'main'
+    })
+  } finally {
+    cleanup(h)
+  }
+})
 
 test('a running turn keeps its original model attribution and thread options', async () => {
   const gate = deferred()

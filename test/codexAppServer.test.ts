@@ -162,6 +162,58 @@ test('App Server surfaces retry errors once and deduplicates fatal errors', asyn
   client.dispose()
 })
 
+test('native review/start attaches and streams the returned review turn', async () => {
+  const client = new CodexAppServerClient()
+  const calls: { method: string; params: unknown }[] = []
+  ;(client as unknown as { request(method: string, params: unknown): Promise<unknown> }).request =
+    async (method, params) => {
+      calls.push({ method, params })
+      return {
+        reviewThreadId: 'thread-1',
+        turn: { id: 'review-turn', status: 'inProgress' }
+      }
+    }
+  const streamed = await client.runReview('thread-1', {
+    type: 'commit',
+    sha: '1234567deadbeef',
+    title: 'Polish review picker'
+  })
+  const notify = client as unknown as {
+    handleNotification(method: string, params: unknown): void
+  }
+  notify.handleNotification('item/completed', {
+    threadId: 'thread-1',
+    turnId: 'review-turn',
+    item: { id: 'finding', type: 'agentMessage', text: 'No findings.' }
+  })
+  notify.handleNotification('turn/completed', {
+    threadId: 'thread-1',
+    turn: { id: 'review-turn', status: 'completed' }
+  })
+
+  const events = []
+  for await (const event of streamed.events) events.push(event)
+  assert.deepEqual(calls, [
+    {
+      method: 'review/start',
+      params: {
+        threadId: 'thread-1',
+        target: {
+          type: 'commit',
+          sha: '1234567deadbeef',
+          title: 'Polish review picker'
+        },
+        delivery: 'inline'
+      }
+    }
+  ])
+  assert.deepEqual(
+    events.map((event) => event.type),
+    ['turn.started', 'item.completed', 'turn.completed']
+  )
+  client.dispose()
+})
+
 test('token notifications accumulate per-call usage while preserving live context', () => {
   const first = accumulateAppServerUsage(
     null,

@@ -45,6 +45,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { WithTooltip } from '@/components/ui/tooltip'
 import { Composer } from '@/components/Composer'
+import { CodexReviewMenu } from '@/components/CodexReviewDialog'
 import { ContextStrip } from '@/components/ContextStrip'
 import { AgentActivityBar } from '@/components/AgentsPanel'
 import { TaskDock } from '@/components/TaskDock'
@@ -335,6 +336,7 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
   const sidebarOpen = useApp((s) => s.sidebarOpen)
   const toggleSidebar = useApp((s) => s.toggleSidebar)
   const sendMessage = useApp((s) => s.sendMessage)
+  const startCodexReview = useApp((s) => s.startCodexReview)
   const interrupt = useApp((s) => s.interrupt)
   const setChatOptions = useApp((s) => s.setChatOptions)
   const saveChatDraft = useApp((s) => s.saveChatDraft)
@@ -369,6 +371,7 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
   const [handoffOpen, setHandoffOpen] = React.useState(false)
   const [mergeOpen, setMergeOpen] = React.useState(false)
   const [finishOpen, setFinishOpen] = React.useState(false)
+  const [reviewOpen, setReviewOpen] = React.useState(false)
 
   const busy = status !== 'idle'
 
@@ -872,13 +875,32 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
                 ))}
               </div>
             )}
-            <Composer
+            <div className="relative">
+              <CodexReviewMenu
+                open={reviewOpen}
+                onOpenChange={setReviewOpen}
+                cwd={chat.cwd}
+                currentBranch={git?.branch}
+                defaultBranch={git?.defaultBranch}
+                onStart={startCodexReview}
+              />
+              <Composer
               // The checklist rides the composer's own box rather than sitting
               // above it, so the two read as one object however the border moves.
               header={<TaskDock chatId={chat.id} />}
               // Returned, not voided: the composer needs the promise so a failed
               // send restores the draft instead of discarding it.
-              onSend={(text, attachments) => sendMessage(text, attachments)}
+              onSend={(text, attachments) => {
+                if (
+                  composerProvider === 'codex' &&
+                  text.trim().toLowerCase() === '/review' &&
+                  attachments.length === 0
+                ) {
+                  setReviewOpen(true)
+                  return Promise.resolve()
+                }
+                return sendMessage(text, attachments)
+              }}
               draft={initialDraft}
               onDraftChange={(next) => saveChatDraft(chat.id, next)}
               streaming={busy}
@@ -911,7 +933,8 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
                   ? undefined
                   : `Ask ${PROVIDER_SHORT_LABELS[composerProvider]} anything…`
               }
-            />
+              />
+            </div>
           </div>
         </div>
       </div>

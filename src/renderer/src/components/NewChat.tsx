@@ -16,6 +16,7 @@ import { cn } from '@/lib/utils'
 import { createsWorktree, providerForRememberedModel } from '@shared/types'
 import type {
   Attachment,
+  CodexReviewTarget,
   EffortId,
   PermissionModeId,
   Provider,
@@ -28,6 +29,7 @@ import { useApp } from '@/store'
 import { Button } from '@/components/ui/button'
 import { WithTooltip } from '@/components/ui/tooltip'
 import { Composer } from '@/components/Composer'
+import { CodexReviewMenu } from '@/components/CodexReviewDialog'
 import { ContextStrip } from '@/components/ContextStrip'
 import { WorktreePicker } from '@/components/WorktreePicker'
 
@@ -162,6 +164,7 @@ export function NewChat(): React.JSX.Element {
   // and it can fail. Both need to be visible or sending looks like a no-op.
   const [starting, setStarting] = React.useState(false)
   const [startError, setStartError] = React.useState<string | null>(null)
+  const [reviewOpen, setReviewOpen] = React.useState(false)
   const pendingTarget = useApp((s) => s.pendingTarget)
   const clearPendingTarget = useApp((s) => s.clearPendingTarget)
 
@@ -241,7 +244,11 @@ export function NewChat(): React.JSX.Element {
     if (dir) setSelectedCwd(dir)
   }
 
-  const start = async (text: string, attachments: Attachment[]): Promise<void> => {
+  const start = async (
+    text: string,
+    attachments: Attachment[],
+    reviewTarget?: CodexReviewTarget
+  ): Promise<void> => {
     if (!cwd) return
     // The picker's target decides the chat's directory; an unnamed new worktree
     // has its branch generated main-side. Creation is scoped to the project the
@@ -259,6 +266,7 @@ export function NewChat(): React.JSX.Element {
         serviceTier: tierCorrected.current ? undefined : serviceTier,
         permissionMode,
         attachments: attachments.length ? attachments : undefined,
+        reviewTarget,
         worktree: target.kind === 'local' ? undefined : target
       })
     } catch (err) {
@@ -339,10 +347,29 @@ export function NewChat(): React.JSX.Element {
                     />
                   )}
                 </ContextStrip>
-                <Composer
+                <div className="relative">
+                  <CodexReviewMenu
+                    open={reviewOpen}
+                    onOpenChange={setReviewOpen}
+                    cwd={cwd}
+                    currentBranch={git?.branch}
+                    defaultBranch={git?.defaultBranch}
+                    onStart={(reviewTarget) => start('', [], reviewTarget)}
+                  />
+                  <Composer
                   // Returned, not voided: the composer needs the promise so it
                   // can put the draft back if starting the chat fails.
-                  onSend={(text, attachments) => start(text, attachments)}
+                  onSend={(text, attachments) => {
+                    if (
+                      modelProvider === 'codex' &&
+                      text.trim().toLowerCase() === '/review' &&
+                      attachments.length === 0
+                    ) {
+                      setReviewOpen(true)
+                      return Promise.resolve()
+                    }
+                    return start(text, attachments)
+                  }}
                   draft={draft}
                   onDraftChange={handleDraftChange}
                   clearToken={clearToken}
@@ -360,7 +387,8 @@ export function NewChat(): React.JSX.Element {
                   commands={commands}
                   placeholder={`Start working in ${basename(cwd)}…`}
                   disabled={starting}
-                />
+                  />
+                </div>
                 {starting && creatingWorktree && (
                   <p className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
                     <Loader2 className="size-3 animate-spin" />
@@ -427,6 +455,7 @@ export function NewChat(): React.JSX.Element {
           </aside>
         )}
       </div>
+
     </div>
   )
 }

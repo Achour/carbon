@@ -10,6 +10,7 @@ import type {
   Usage,
   UserInput
 } from '@openai/codex-sdk'
+import type { CodexReviewTarget } from '@shared/types'
 
 type JsonRpcId = string | number
 
@@ -153,6 +154,8 @@ export interface AppServerTurnOptions extends TurnOptions {
 
 export interface CodexThreadLike {
   readonly id?: string | null
+  /** Start or resume the native App Server thread without creating a model turn. */
+  ensureId(): Promise<string>
   runStreamed(
     input: Input,
     options?: AppServerTurnOptions
@@ -178,6 +181,11 @@ export interface CodexClientLike {
     content?: Record<string, unknown> | null
   ): void
   mcpStartupStatus?(name: string, threadId?: string | null): NativeMcpStartupStatus | undefined
+  runReview?(
+    threadId: string,
+    target: CodexReviewTarget,
+    options?: TurnOptions & { model?: string | null }
+  ): Promise<{ events: AsyncGenerator<ThreadEvent> }>
   request?(method: string, params: unknown): Promise<unknown>
   dispose?(): void
 }
@@ -628,6 +636,10 @@ class CodexAppServerThread implements CodexThreadLike {
     return this.nativeId
   }
 
+  ensureId(): Promise<string> {
+    return this.ensureThread()
+  }
+
   private async ensureThread(): Promise<string> {
     await this.client.ensureReady()
     if (
@@ -826,6 +838,42 @@ export class CodexAppServerClient implements CodexClientLike {
     const values = this.buffered.get(key) ?? []
     this.buffered.delete(key)
     for (const value of values) this.handleTurnNotification(run, value.method, value.params)
+  }
+
+  async runReview(
+    threadId: string,
+    target: CodexReviewTarget,
+    options: TurnOptions & { model?: string | null } = {}
+  ): Promise<{ events: AsyncGenerator<ThreadEvent> }> {
+    const response = (await this.request('review/start', {
+      threadId,
+      target,
+      delivery: 'inline'
+    })) as { reviewThreadId?: string; turn?: NativeTurn }
+    if (!response.turn?.id) throw new Error('Codex did not return a review turn.')
+    const reviewThreadId = response.reviewThreadId || threadId
+    const run = this.attachTurn(reviewThreadId, response.turn.id, options.model ?? null)
+    run.queue.push({ type: 'turn.started' })
+    this.drainBuffered(run)
+
+    const onAbort = (): void => {
+      void this.request('turn/interrupt', {
+        threadId: reviewThreadId,
+        turnId: response.turn!.id
+      }).catch(() => {})
+    }
+    if (options.signal?.aborted) onAbort()
+    else options.signal?.addEventListener('abort', onAbort, { once: true })
+    const events = run.queue.iterate()
+    return {
+      events: (async function* () {
+        try {
+          yield* events
+        } finally {
+          options.signal?.removeEventListener('abort', onAbort)
+        }
+      })()
+    }
   }
 
   async request(method: string, params: unknown): Promise<unknown> {

@@ -1,6 +1,9 @@
 import type {
   AccountInfo,
   ChatData,
+  CodexGoal,
+  CodexGoalStatus,
+  CodexReviewTarget,
   AgentInfo,
   Attachment,
   ChatEvent,
@@ -83,6 +86,16 @@ export interface AgentSession {
   listAgents(): Promise<AgentInfo[]>
   accountInfo(): Promise<AccountInfo | null>
   usageInfo(): Promise<UsageInfo | null>
+  /** Native Codex App Server goal controls; absent on other providers. */
+  codexGoalGet?(): Promise<CodexGoal | null>
+  codexGoalSet?(params: {
+    objective?: string
+    status?: CodexGoalStatus
+    tokenBudget?: number | null
+  }): Promise<CodexGoal>
+  codexGoalClear?(): Promise<boolean>
+  /** Queue a native App Server review turn for the already-persisted command message. */
+  codexReview?(userMessageId: string, target: CodexReviewTarget): void
   /**
    * Fork this provider's conversation so it ends immediately before the user
    * message at `index`, returning the id the chat should resume from.

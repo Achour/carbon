@@ -54,7 +54,9 @@ export function CompactSelect({
   icon,
   side = 'top',
   className,
-  disabled
+  disabled,
+  open,
+  onOpenChange
 }: {
   value: string
   onValueChange: (value: string) => void
@@ -63,6 +65,9 @@ export function CompactSelect({
   side?: 'top' | 'bottom'
   className?: string
   disabled?: boolean
+  /** Controlled popup state, used when a keyboard command opens this picker. */
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
 }): React.JSX.Element {
   const selected = options.find((o) => o.value === value)
 
@@ -80,6 +85,8 @@ export function CompactSelect({
       value={value}
       onValueChange={(v) => onValueChange(v as string)}
       disabled={disabled}
+      open={open}
+      onOpenChange={onOpenChange}
     >
       <Select.Trigger
         className={cn(

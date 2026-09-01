@@ -22,7 +22,7 @@ import {
   worktreeStatus
 } from '../src/main/worktree.ts'
 import { defaultBranchName, sanitizeBranch } from '../src/shared/branchName.ts'
-import { localBranches } from '../src/main/git.ts'
+import { localBranches, reviewCommits } from '../src/main/git.ts'
 import { branchOf, git, initRepo } from './gitRepo.ts'
 
 const execFileP = promisify(execFile)
@@ -610,6 +610,27 @@ test('localBranches reports every local branch and who has it checked out', asyn
     assert.deepEqual(await localBranches(tmpdir()), [])
   } finally {
     if (created) await removeWorktree(repo, created.path, created.branch, true)
+    await rm(repo, { recursive: true, force: true })
+  }
+})
+
+test('reviewCommits returns native-review commit targets newest first', async () => {
+  const repo = await initRepo('karbun-review-commits-')
+  try {
+    await writeFile(join(repo, 'b.txt'), 'second\n')
+    await git(repo, ['add', 'b.txt'])
+    await git(repo, ['commit', '-qm', 'second change'])
+
+    const commits = await reviewCommits(repo)
+    assert.equal(commits.length, 2)
+    assert.equal(commits[0].subject, 'second change')
+    assert.equal(commits[0].author, 'Carbon Test')
+    assert.match(commits[0].sha, /^[0-9a-f]{40}$/)
+    assert.equal(commits[0].shortSha, commits[0].sha.slice(0, commits[0].shortSha.length))
+    assert.ok(commits[0].authoredAt)
+    assert.equal(commits[1].subject, 'init')
+    assert.deepEqual(await reviewCommits(tmpdir()), [])
+  } finally {
     await rm(repo, { recursive: true, force: true })
   }
 })

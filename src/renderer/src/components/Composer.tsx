@@ -42,6 +42,7 @@ import { formatTokens } from '@/lib/format'
 import type { ComposerDraft } from '@/lib/drafts'
 import { FileIcon } from '@/lib/fileIcon'
 import { availableProviders } from '@/lib/modelCatalog'
+import { codexComposerControl } from '@shared/codexCommands'
 import {
   assembleModelOptions,
   canonicalModelId,
@@ -418,7 +419,9 @@ function ModelSettingsPicker({
   onServiceTierChange,
   serviceTiers,
   fastNote,
-  disabled
+  disabled,
+  open: controlledOpen,
+  onOpenChange
 }: {
   model: string
   onModelChange: (model: string, provider: Provider) => void
@@ -432,10 +435,21 @@ function ModelSettingsPicker({
   /** Why the provider isn't serving Fast, when it says so; null when it is. */
   fastNote?: string | null
   disabled?: boolean
+  /** Controlled by Composer so `/model` can open the existing native picker. */
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
 }): React.JSX.Element {
-  const [open, setOpen] = React.useState(false)
+  const [uncontrolledOpen, setUncontrolledOpen] = React.useState(false)
   const [effortOpen, setEffortOpen] = React.useState(false)
   const [speedOpen, setSpeedOpen] = React.useState(false)
+  const open = controlledOpen ?? uncontrolledOpen
+  const setOpen = React.useCallback(
+    (nextOpen: boolean) => {
+      if (controlledOpen === undefined) setUncontrolledOpen(nextOpen)
+      onOpenChange?.(nextOpen)
+    },
+    [controlledOpen, onOpenChange]
+  )
   const selected = models.find((option) => option.id === model)
   // The chip has room for one name, so show the model actually in use rather
   // than the provider's "Default" wrapper — the menu is where that row's
@@ -737,6 +751,9 @@ export function Composer({
   const [text, setText] = React.useState(() => draft?.text ?? '')
   const [attachments, setAttachments] = React.useState<Attachment[]>(() => draft?.attachments ?? [])
   const [attachError, setAttachError] = React.useState<string | null>(null)
+  const [modelSettingsOpen, setModelSettingsOpen] = React.useState(false)
+  const [permissionOpen, setPermissionOpen] = React.useState(false)
+  const locked = disabled || switchingNote !== undefined
 
   // ---- Draft persistence ----
   // Text stays in local state: typing has to be instant, and routing every
@@ -970,7 +987,19 @@ export function Composer({
     if (!c) return
     const el = ref.current
     const caret = el?.selectionStart ?? text.length
-    const next = `/${c.name} ${text.slice(caret)}`
+    const commandText = `/${c.name}`
+    const tail = text.slice(caret)
+    // A command with no argument shape is complete when selected. Codex's TUI
+    // executes `/review` on that Enter; requiring another Enter made the exact
+    // command look inert, especially on the new-chat screen.
+    if (!c.argumentHint && !tail.trim() && attachments.length === 0 && !locked) {
+      setText('')
+      setAttachError(null)
+      setSlashQuery(null)
+      void Promise.resolve(onSend(commandText, [])).catch(() => setText(commandText))
+      return
+    }
+    const next = `${commandText} ${tail}`
     setText(next)
     setSlashQuery(null)
     requestAnimationFrame(() => {
@@ -997,12 +1026,20 @@ export function Composer({
     setAttachError(skipped.length ? `Skipped: ${skipped.join(', ')}` : null)
   }
 
-  const locked = disabled || switchingNote !== undefined
   const canSend = (text.trim().length > 0 || attachments.length > 0) && !locked
 
   const submit = (): void => {
     if (!canSend) return
     const sentText = text.trim()
+    const composerControl = isCodex ? codexComposerControl(sentText) : null
+    if (composerControl) {
+      setText('')
+      setAttachError(null)
+      setSlashQuery(null)
+      if (composerControl === 'model') setModelSettingsOpen(true)
+      else setPermissionOpen(true)
+      return
+    }
     const sentAttachments = attachments
     setText('')
     setAttachments([])
@@ -1266,6 +1303,8 @@ export function Composer({
             serviceTiers={serviceTierOptions}
             fastNote={fastNote}
             disabled={locked}
+            open={modelSettingsOpen}
+            onOpenChange={setModelSettingsOpen}
           />
           <CompactSelect
             value={permissionValue}
@@ -1281,6 +1320,8 @@ export function Composer({
             })}
             icon={<selectedPermissionAppearance.Icon className="size-3.5" />}
             className={cn('min-w-0', selectedPermissionAppearance.triggerClassName)}
+            open={permissionOpen}
+            onOpenChange={setPermissionOpen}
           />
         </div>
         <SessionPanel />

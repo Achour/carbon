@@ -189,6 +189,15 @@ export interface BranchRef {
   checkedOut: boolean
 }
 
+/** One recent commit offered by the native Codex review picker. */
+export interface ReviewCommit {
+  sha: string
+  shortSha: string
+  subject: string
+  author: string
+  authoredAt: string
+}
+
 
 export interface ChatMeta {
   id: string
@@ -697,6 +706,35 @@ export interface UsageInfo {
   rateLimitsAvailable: boolean
   windows: RateLimitWindow[]
 }
+
+// ---------- Codex goals ----------
+
+/** Native goal state persisted by Codex App Server for a thread. */
+export type CodexGoalStatus =
+  | 'active'
+  | 'paused'
+  | 'blocked'
+  | 'usageLimited'
+  | 'budgetLimited'
+  | 'complete'
+
+export interface CodexGoal {
+  threadId: string
+  objective: string
+  status: CodexGoalStatus
+  createdAt: number
+  updatedAt: number
+  tokensUsed: number
+  timeUsedSeconds: number
+  tokenBudget?: number | null
+}
+
+/** Native `review/start` targets exposed by Codex App Server. */
+export type CodexReviewTarget =
+  | { type: 'uncommittedChanges' }
+  | { type: 'baseBranch'; branch: string }
+  | { type: 'commit'; sha: string; title: string | null }
+  | { type: 'custom'; instructions: string }
 
 /**
  * One provider's *account-level* plan limits, for the sidebar Usage popover.
@@ -1685,6 +1723,8 @@ export interface Api {
   /** Pin/unpin a chat to the sidebar's Pinned section. */
   setChatPinned(id: string, pinned: boolean): Promise<void>
   send(chatId: string, text: string, attachments?: Attachment[], label?: string): Promise<void>
+  /** Start Codex's native reviewer with a structured App Server target. */
+  startReview(chatId: string, target: CodexReviewTarget): Promise<void>
   /** Absolute path of a dragged/picked File (empty string for in-memory files). */
   pathForFile(file: File): string
   interrupt(chatId: string): Promise<void>
@@ -1793,6 +1833,8 @@ export interface Api {
    * first — the new-chat branch picker's list. Empty outside a repo.
    */
   gitLocalBranches(cwd: string): Promise<BranchRef[]>
+  /** Recent commits for the native Codex review target picker. */
+  gitReviewCommits(cwd: string): Promise<ReviewCommit[]>
   gitInit(cwd: string): Promise<GitResult>
   /** GitHub state (PR + checks) for the cwd's current branch; best-effort. */
   githubState(cwd: string): Promise<GitHubState>
