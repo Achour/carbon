@@ -183,16 +183,25 @@ export function MultiDiffView({ cwd }: { cwd: string }): React.JSX.Element {
   const handledScroll = React.useRef(0)
 
   // `changes` is a fresh array on every refreshGit() (many of them unrelated to
-  // the diffs), so key the fetch on a stable signature: refetch only when the
-  // set of files or their line counts actually shift, not on every refresh.
+  // the diffs), so the *expanders* below key on a stable signature of the set
+  // of files. The texts deliberately do not: a signature of status and line
+  // counts cannot see an edit that keeps the counts — an agent rewriting a line
+  // in place is +1/−1 before and after — and the review then showed the old
+  // line for as long as the file stayed +1/−1. The fetch instead follows the
+  // status object itself, which main replaces on every refresh (a turn's end
+  // included), and only entries whose text actually changed are re-set, so an
+  // unchanged file keeps its string and `DiffTable`'s memo holds.
   const sig = React.useMemo(
     () =>
       `${branchBase ?? ''}|` +
       changes.map((c) => `${keyOf(c)}:${c.status}:${c.additions}:${c.deletions}`).join('|'),
     [changes, branchBase]
   )
+  // The scope's own source of truth — the object a refresh replaces.
+  const source = isBranch ? branchChanges : git
 
-  // Fetch every file's diff (in parallel) whenever the change set shifts.
+  // Fetch every file's diff (in parallel) whenever the working tree may have
+  // moved. `changes` is derived from `source`, so it is current here.
   React.useEffect(() => {
     let alive = true
     Promise.all(
@@ -208,14 +217,20 @@ export function MultiDiffView({ cwd }: { cwd: string }): React.JSX.Element {
         return [keyOf(c), text] as const
       })
     ).then((entries) => {
-      if (alive) setTexts(Object.fromEntries(entries))
+      if (!alive) return
+      setTexts((prev) => {
+        const keys = Object.keys(prev)
+        const same =
+          keys.length === entries.length && entries.every(([k, t]) => prev[k] === t)
+        return same ? prev : Object.fromEntries(entries)
+      })
     })
     return () => {
       alive = false
     }
-    // `changes` is intentionally read through the stable `sig` signature.
+    // `changes` is read through `source` (and `sig`, for the file set).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cwd, sig])
+  }, [cwd, sig, source])
 
   // One stable expander per file. Identity matters: `DiffTable` is memoized, and
   // a fresh callback each render would re-render (and re-highlight) every open

@@ -117,6 +117,16 @@ export const DiffTable = React.memo(function DiffTable({
     [full, expand, parsed]
   )
 
+  // `gitDiff` reports failure as its return value. It parses to no rows, and
+  // a file whose diff could not be read must not look like a file with nothing
+  // in it — the two call for opposite actions.
+  if (text.startsWith('error: ')) {
+    return (
+      <div className="px-3 py-2.5 font-mono text-xs break-words whitespace-pre-wrap text-destructive">
+        {text.slice('error: '.length)}
+      </div>
+    )
+  }
   if (items.length === 0) {
     return <div className="px-3 py-2.5 text-xs text-muted-foreground/70">No textual changes.</div>
   }

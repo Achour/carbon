@@ -229,9 +229,22 @@ async function addWorktree(
   return { path, branch, repoRoot: root }
 }
 
-/** `rev-parse --show-toplevel`, plus the base commit a worktree needs to exist. */
+/**
+ * The main checkout's root, plus the base commit a worktree needs to exist.
+ *
+ * Read off the *common* git dir rather than `--show-toplevel`: inside a linked
+ * worktree the toplevel is that worktree, and a worktree made from there was
+ * rooted in it — nested under a directory named after the worktree, recorded
+ * in recents as a project of its own, and stranded the moment its "root" was
+ * handed off or removed, since every exit then ran git in a directory that no
+ * longer existed. The common dir is the one place that is the same from every
+ * worktree of a repo, which is exactly what `resolveWorktree` already relies on.
+ */
 async function worktreeBase(repoRoot: string): Promise<string> {
-  const root = (await git(repoRoot, ['rev-parse', '--show-toplevel'], TIMEOUT)).trim()
+  const common = (
+    await git(repoRoot, ['rev-parse', '--path-format=absolute', '--git-common-dir'], TIMEOUT)
+  ).trim()
+  const root = dirname(common)
   try {
     await ensureRootCommit(root)
   } catch (err) {
@@ -458,6 +471,10 @@ export async function mergeWorktree(
   }
   if (vs.ahead === 0) {
     return { ok: false, error: `Nothing to merge — ${branch} is already in ${def}.` }
+  }
+  if (vs.ahead === null) {
+    // rev-list failed, so nothing is known about what the merge would bring in.
+    return { ok: false, error: `Couldn't compare ${branch} with ${def}. Is ${branch} still a branch?` }
   }
   if (onBranch !== def) {
     return {

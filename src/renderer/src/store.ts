@@ -2948,9 +2948,13 @@ export const useApp = create<AppState>((set, get) => ({
   async startInWorktree(path, { repoRoot, branch }) {
     set({ pendingTarget: { kind: 'existing', path, branch, repoRoot } })
     // The composer works against the worktree itself (@-mentions, file tree),
-    // not the project root it branched from.
-    get().setSelectedCwd(path)
+    // not the project root it branched from. Set *after* leaving the chat:
+    // `openChat(null)` maps a folder equal to the outgoing chat's cwd back to
+    // its project root, so with the worktree's own chat open the folder landed
+    // on the repo instead — the same sidebar action arriving in two places
+    // depending on which chat happened to be active.
     await get().openChat(null)
+    get().setSelectedCwd(path)
   },
 
   async exitWorktree(chatId, op) {

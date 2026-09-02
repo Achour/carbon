@@ -634,3 +634,30 @@ test('reviewCommits returns native-review commit targets newest first', async ()
     await rm(repo, { recursive: true, force: true })
   }
 })
+
+test('createWorktree from inside a linked worktree still roots at the main checkout', async () => {
+  // `--show-toplevel` inside a worktree is that worktree, so a chat started
+  // from one ("New chat in this worktree" → New worktree) used to nest its
+  // worktree under the first and record the first as the project — and was
+  // stranded once that "root" was handed off or removed.
+  const repo = await initRepo('karbun-worktree-nested-')
+  let outer: Awaited<ReturnType<typeof createWorktree>> | null = null
+  let inner: Awaited<ReturnType<typeof createWorktree>> | null = null
+  try {
+    outer = await createWorktree(repo, 'outer')
+    inner = await createWorktree(outer.path, 'inner')
+    assert.equal(inner.repoRoot, outer.repoRoot, 'the repo root, not the outer worktree')
+    assert.ok(!inner.path.startsWith(outer.path), 'not nested inside the outer worktree')
+    // Both sit under the same per-repo directory, as siblings.
+    assert.equal(join(inner.path, '..'), join(outer.path, '..'))
+    // And the outer one can go while the inner keeps a root that exists.
+    const gone = await handOffWorktree(outer.path, outer)
+    assert.equal(gone.ok, true)
+    outer = null
+    assert.ok(existsSync(inner.repoRoot))
+  } finally {
+    if (inner) await removeWorktree(repo, inner.path, inner.branch, true)
+    if (outer) await removeWorktree(repo, outer.path, outer.branch, true)
+    await rm(repo, { recursive: true, force: true })
+  }
+})
