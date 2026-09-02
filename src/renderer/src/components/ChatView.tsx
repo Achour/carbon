@@ -1,4 +1,4 @@
-import * as React from "react";
+import * as React from 'react'
 import {
   ArrowDown,
   ArrowLeftRight,
@@ -15,84 +15,71 @@ import {
   RefreshCw,
   Trash,
   Trash2,
-  X,
-} from "lucide-react";
-import type {
-  AssistantMessage,
-  ChatMessage,
-  ChatMeta,
-  ToolPart,
-} from "@shared/types";
-import { PROVIDER_SHORT_LABELS, projectRoot } from "@shared/types";
-import { CHAT_BLEED } from "@/lib/chatColumn";
-import { cn } from "@/lib/utils";
-import { basename } from "@/lib/format";
-import { useApp } from "@/store";
-import { useTaskList } from "@/taskListStore";
-import { useAgents } from "@/agentsStore";
-import {
-  foldAgentRuns,
-  reconcileAgentRuns,
-  type AgentRunView,
-} from "@shared/agentRuns";
-import {
-  foldTaskTimeline,
-  NO_TASK_TIMELINE,
-  reconcileTimeline,
-} from "@/lib/taskList";
-import type { TaskItem, TaskTimeline } from "@/lib/taskList";
-import { Button } from "@/components/ui/button";
+  X
+} from 'lucide-react'
+import type { AssistantMessage, ChatMessage, ChatMeta, ToolPart } from '@shared/types'
+import { PROVIDER_SHORT_LABELS, projectRoot } from '@shared/types'
+import { CHAT_BLEED } from '@/lib/chatColumn'
+import { cn } from '@/lib/utils'
+import { basename } from '@/lib/format'
+import { useApp } from '@/store'
+import { useTaskList } from '@/taskListStore'
+import { useAgents } from '@/agentsStore'
+import { foldAgentRuns, reconcileAgentRuns, type AgentRunView } from '@shared/agentRuns'
+import { foldTaskTimeline, NO_TASK_TIMELINE, reconcileTimeline } from '@/lib/taskList'
+import type { TaskItem, TaskTimeline } from '@/lib/taskList'
+import { Button } from '@/components/ui/button'
 import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  DialogTitle
+} from '@/components/ui/dialog'
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
-import { WithTooltip } from "@/components/ui/tooltip";
-import { Composer } from "@/components/Composer";
-import { CodexReviewMenu } from "@/components/CodexReviewDialog";
-import { ContextStrip } from "@/components/ContextStrip";
-import { AgentActivityBar } from "@/components/AgentsPanel";
-import { TaskDock } from "@/components/TaskDock";
-import { CodexGoalBar } from "@/components/CodexGoalBar";
+  DropdownMenuTrigger
+} from '@/components/ui/dropdown-menu'
+import { Input } from '@/components/ui/input'
+import { WithTooltip } from '@/components/ui/tooltip'
+import { Composer } from '@/components/Composer'
+import { CodexReviewMenu } from '@/components/CodexReviewDialog'
+import { ContextStrip } from '@/components/ContextStrip'
+import { AgentActivityBar } from '@/components/AgentsPanel'
+import { TaskDock } from '@/components/TaskDock'
+import { CodexGoalBar } from '@/components/CodexGoalBar'
 import {
   MergeIntoMainDialog,
   WorktreeFinishDialog,
-  WorktreeHandoffDialog,
-} from "@/components/BranchActions";
+  WorktreeHandoffDialog
+} from '@/components/BranchActions'
 import {
   AssistantBlock,
   EventRow,
   StreamingIndicator,
-  UserBubble,
-} from "@/components/messages/Parts";
+  UserBubble
+} from '@/components/messages/Parts'
 import {
   FILE_MUTATION_TOOLS,
   groupRunning,
   isGroupableTool,
   ToolCard,
-  ToolGroup,
-} from "@/components/messages/ToolCard";
-import { PermissionCard } from "@/components/messages/PermissionCard";
-import { QuestionCard } from "@/components/messages/QuestionCard";
-import { BackgroundJobs } from "@/components/BackgroundJobs";
-import { TasksCard } from "@/components/messages/TasksCard";
-import { TurnChangesCard } from "@/components/messages/TurnChangesCard";
-import { turnPresentations } from "@/lib/turnChanges";
+  ToolGroup
+} from '@/components/messages/ToolCard'
+import { PermissionCard } from '@/components/messages/PermissionCard'
+import { QuestionCard } from '@/components/messages/QuestionCard'
+import { BackgroundJobs } from '@/components/BackgroundJobs'
+import { TasksCard } from '@/components/messages/TasksCard'
+import { TurnChangesCard } from '@/components/messages/TurnChangesCard'
+import { turnPresentations } from '@/lib/turnChanges'
 
-const NO_PERMISSIONS: never[] = [];
-const NO_QUEUED: never[] = [];
+const NO_PERMISSIONS: never[] = []
+const NO_QUEUED: never[] = []
 
 /** Coalesce a run of this many consecutive read/search-only messages into one row. */
-const GROUP_MIN = 2;
+const GROUP_MIN = 2
 
 /**
  * How long the transcript's tail has to be still before the foot says
@@ -101,7 +88,7 @@ const GROUP_MIN = 2;
  * being revealed; shorter than the pause between a result and the next call
  * on a slow step, which is the silence it exists to explain.
  */
-const QUIET_MS = 700;
+const QUIET_MS = 700
 
 /** True when a message is nothing but read/search tool calls — each such call
  *  arrives as its own assistant message, so these are what pile up. A withheld
@@ -110,18 +97,17 @@ const QUIET_MS = 700;
  *  a message-level test that counted it split a ten-call sequence into ten
  *  cards with a "Thought" row between each pair. */
 function isGroupableMsg(m: ChatMessage): boolean {
-  if (m.role !== "assistant") return false;
+  if (m.role !== 'assistant') return false
   // Empty text is dropped alongside withheld thinking, because it draws exactly
   // as much: nothing. `isBlankMsg` already treats the two the same, and the
   // disagreement was load-bearing in the wrong direction — a `[text(''), tool]`
   // message broke a run that a `[thinking(''), tool]` one joined.
   const parts = m.parts.filter(
-    (p) => !!p && !((p.type === "thinking" || p.type === "text") && !p.text),
-  );
+    (p) => !!p && !((p.type === 'thinking' || p.type === 'text') && !p.text)
+  )
   return (
-    parts.length > 0 &&
-    parts.every((p) => p.type === "tool" && isGroupableTool(p.name))
-  );
+    parts.length > 0 && parts.every((p) => p.type === 'tool' && isGroupableTool(p.name))
+  )
 }
 
 /** An assistant message that renders nothing — the CLI ships thinking blocks
@@ -138,21 +124,19 @@ function isGroupableMsg(m: ChatMessage): boolean {
  *  no trace in history, because it has nothing to say there. */
 function isBlankMsg(m: ChatMessage): boolean {
   return (
-    m.role === "assistant" &&
-    m.parts.every(
-      (p) => !p || ((p.type === "text" || p.type === "thinking") && !p.text),
-    )
-  );
+    m.role === 'assistant' &&
+    m.parts.every((p) => !p || ((p.type === 'text' || p.type === 'thinking') && !p.text))
+  )
 }
 
 interface RenderCtx {
-  cwd: string;
-  busy: boolean;
-  onOpenPlan?: (plan: string) => void;
+  cwd: string
+  busy: boolean
+  onOpenPlan?: (plan: string) => void
   /** Assistant message id → the finished checklist to draw after it. */
-  taskCompletions?: ReadonlyMap<string, TaskItem[]>;
+  taskCompletions?: ReadonlyMap<string, TaskItem[]>
   /** Switch divider currently mid-handoff (brief still generating), if any. */
-  switchPendingId?: string;
+  switchPendingId?: string
 }
 
 /**
@@ -164,52 +148,43 @@ interface RenderCtx {
 function withCompactLegacyCodexPlan(
   messages: ChatMessage[],
   plan: string,
-  requestId: string,
+  requestId: string
 ): ChatMessage[] {
-  const expected = plan.trim();
-  if (!expected) return messages;
-  for (
-    let messageIndex = messages.length - 1;
-    messageIndex >= 0;
-    messageIndex--
-  ) {
-    const message = messages[messageIndex];
-    if (message.role !== "assistant") continue;
-    for (
-      let partIndex = message.parts.length - 1;
-      partIndex >= 0;
-      partIndex--
-    ) {
-      const part = message.parts[partIndex];
-      if (!part || part.type !== "text") continue;
-      const planIndex = part.text.lastIndexOf(expected);
-      if (planIndex < 0 || part.text.slice(planIndex + expected.length).trim())
-        continue;
-      const prefix = part.text.slice(0, planIndex).trim();
-      const replacement: AssistantMessage["parts"] = [
-        ...(prefix ? [{ type: "text" as const, text: prefix }] : []),
+  const expected = plan.trim()
+  if (!expected) return messages
+  for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex--) {
+    const message = messages[messageIndex]
+    if (message.role !== 'assistant') continue
+    for (let partIndex = message.parts.length - 1; partIndex >= 0; partIndex--) {
+      const part = message.parts[partIndex]
+      if (!part || part.type !== 'text') continue
+      const planIndex = part.text.lastIndexOf(expected)
+      if (planIndex < 0 || part.text.slice(planIndex + expected.length).trim()) continue
+      const prefix = part.text.slice(0, planIndex).trim()
+      const replacement: AssistantMessage['parts'] = [
+        ...(prefix ? [{ type: 'text' as const, text: prefix }] : []),
         {
-          type: "tool",
+          type: 'tool',
           toolUseId: `legacy-codex-plan-${requestId}`,
-          name: "ExitPlanMode",
+          name: 'ExitPlanMode',
           input: { plan: expected },
-          status: "success",
-        },
-      ];
+          status: 'success'
+        }
+      ]
       const nextMessage: AssistantMessage = {
         ...message,
         parts: [
           ...message.parts.slice(0, partIndex),
           ...replacement,
-          ...message.parts.slice(partIndex + 1),
-        ],
-      };
-      const next = [...messages];
-      next[messageIndex] = nextMessage;
-      return next;
+          ...message.parts.slice(partIndex + 1)
+        ]
+      }
+      const next = [...messages]
+      next[messageIndex] = nextMessage
+      return next
     }
   }
-  return messages;
+  return messages
 }
 
 /**
@@ -220,16 +195,16 @@ function withCompactLegacyCodexPlan(
  */
 function isLegacyCodexGoalSummary(message: ChatMessage): boolean {
   return (
-    message.role === "event" &&
-    message.kind === "info" &&
-    message.text.startsWith("**Codex goal**\n- Objective: ") &&
-    message.text.includes("\n- Status: ") &&
-    message.text.includes("\n- Used: ")
-  );
+    message.role === 'event' &&
+    message.kind === 'info' &&
+    message.text.startsWith('**Codex goal**\n- Objective: ') &&
+    message.text.includes('\n- Status: ') &&
+    message.text.includes('\n- Used: ')
+  )
 }
 
 /** The key a run of groupable messages renders under, live or settled. */
-const groupKey = (firstId: string): string => `grp-${firstId}`;
+const groupKey = (firstId: string): string => `grp-${firstId}`
 
 /**
  * Renders the message list, collapsing runs of consecutive read/search-only
@@ -243,17 +218,15 @@ const groupKey = (firstId: string): string => `grp-${firstId}`;
  * is what lets it cross over without React rebuilding it.
  */
 function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
-  const out: React.ReactNode[] = [];
-  let run: AssistantMessage[] = [];
-  const messages = all.filter(
-    (m) => !isBlankMsg(m) && !isLegacyCodexGoalSummary(m),
-  );
-  const presentations = turnPresentations(messages, ctx.cwd, ctx.busy);
+  const out: React.ReactNode[] = []
+  let run: AssistantMessage[] = []
+  const messages = all.filter((m) => !isBlankMsg(m) && !isLegacyCodexGoalSummary(m))
+  const presentations = turnPresentations(messages, ctx.cwd, ctx.busy)
 
   const renderAssistant = (m: AssistantMessage): React.ReactNode => {
-    const turn = presentations.get(m.id);
-    const showSummary = turn?.summary?.id === m.id;
-    const finishedTasks = ctx.taskCompletions?.get(m.id);
+    const turn = presentations.get(m.id)
+    const showSummary = turn?.summary?.id === m.id
+    const finishedTasks = ctx.taskCompletions?.get(m.id)
     return (
       <React.Fragment key={m.id}>
         <AssistantBlock
@@ -272,46 +245,31 @@ function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
           />
         )}
       </React.Fragment>
-    );
-  };
+    )
+  }
 
   const flush = (): void => {
     if (run.length >= GROUP_MIN) {
-      const turn = presentations.get(run[0].id);
+      const turn = presentations.get(run[0].id)
       const parts = run.flatMap((m) =>
-        m.parts.filter((p): p is ToolPart => !!p && p.type === "tool"),
-      );
+        m.parts.filter((p): p is ToolPart => !!p && p.type === 'tool')
+      )
       const visibleParts = turn?.hasChanges
         ? parts.filter(
-            (part) =>
-              !(
-                part.status === "success" && FILE_MUTATION_TOOLS.has(part.name)
-              ),
+            (part) => !(part.status === 'success' && FILE_MUTATION_TOOLS.has(part.name))
           )
-        : parts;
+        : parts
       if (visibleParts.length >= GROUP_MIN) {
-        out.push(
-          <ToolGroup
-            key={groupKey(run[0].id)}
-            parts={visibleParts}
-            cwd={ctx.cwd}
-          />,
-        );
+        out.push(<ToolGroup key={groupKey(run[0].id)} parts={visibleParts} cwd={ctx.cwd} />)
       } else if (visibleParts.length === 1) {
-        out.push(
-          <ToolCard
-            key={visibleParts[0].toolUseId}
-            part={visibleParts[0]}
-            cwd={ctx.cwd}
-          />,
-        );
+        out.push(<ToolCard key={visibleParts[0].toolUseId} part={visibleParts[0]} cwd={ctx.cwd} />)
       }
-      const last = run[run.length - 1];
-      const finishedTasks = ctx.taskCompletions?.get(last.id);
+      const last = run[run.length - 1]
+      const finishedTasks = ctx.taskCompletions?.get(last.id)
       if (finishedTasks) {
-        out.push(<TasksCard key={`tasks-${last.id}`} tasks={finishedTasks} />);
+        out.push(<TasksCard key={`tasks-${last.id}`} tasks={finishedTasks} />)
       }
-      const lastTurn = presentations.get(last.id);
+      const lastTurn = presentations.get(last.id)
       if (lastTurn?.summary?.id === last.id) {
         out.push(
           <TurnChangesCard
@@ -319,42 +277,36 @@ function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
             message={lastTurn.summary}
             cwd={ctx.cwd}
             userMessageId={lastTurn.userMessageId}
-          />,
-        );
+          />
+        )
       }
     } else {
-      for (const m of run) out.push(renderAssistant(m));
+      for (const m of run) out.push(renderAssistant(m))
     }
-    run = [];
-  };
+    run = []
+  }
 
   for (const m of messages) {
-    if (m.role === "assistant" && isGroupableMsg(m)) {
-      run.push(m);
-      continue;
+    if (m.role === 'assistant' && isGroupableMsg(m)) {
+      run.push(m)
+      continue
     }
-    flush();
-    if (m.role === "user") {
-      out.push(<UserBubble key={m.id} message={m} />);
-    } else if (m.role === "assistant") out.push(renderAssistant(m));
-    else
-      out.push(
-        <EventRow
-          key={m.id}
-          message={m}
-          pending={m.id === ctx.switchPendingId}
-        />,
-      );
+    flush()
+    if (m.role === 'user') {
+      out.push(<UserBubble key={m.id} message={m} />)
+    }
+    else if (m.role === 'assistant') out.push(renderAssistant(m))
+    else out.push(<EventRow key={m.id} message={m} pending={m.id === ctx.switchPendingId} />)
   }
-  flush();
-  return out;
+  flush()
+  return out
 }
 
 interface HistoryRender {
-  messages: ChatMessage[];
-  end: number;
-  ctx: RenderCtx;
-  nodes: React.ReactNode[];
+  messages: ChatMessage[]
+  end: number
+  ctx: RenderCtx
+  nodes: React.ReactNode[]
 }
 
 /**
@@ -381,26 +333,22 @@ interface HistoryRender {
  * node, where a message that stops being live is the same key in the same
  * parent, and crossing over is a prop change.
  */
-function useHistoryNodes(
-  messages: ChatMessage[],
-  end: number,
-  ctx: RenderCtx,
-): React.ReactNode[] {
-  const cache = React.useRef<HistoryRender | null>(null);
+function useHistoryNodes(messages: ChatMessage[], end: number, ctx: RenderCtx): React.ReactNode[] {
+  const cache = React.useRef<HistoryRender | null>(null)
   return React.useMemo(() => {
-    const prev = cache.current;
-    if (prev && sameHistory(prev, messages, end, ctx)) return prev.nodes;
-    const nodes = renderMessages(messages.slice(0, end), ctx);
-    cache.current = { messages, end, ctx, nodes };
-    return nodes;
-  }, [messages, end, ctx]);
+    const prev = cache.current
+    if (prev && sameHistory(prev, messages, end, ctx)) return prev.nodes
+    const nodes = renderMessages(messages.slice(0, end), ctx)
+    cache.current = { messages, end, ctx, nodes }
+    return nodes
+  }, [messages, end, ctx])
 }
 
 function sameHistory(
   prev: HistoryRender,
   messages: ChatMessage[],
   end: number,
-  ctx: RenderCtx,
+  ctx: RenderCtx
 ): boolean {
   if (
     prev.end !== end ||
@@ -410,116 +358,109 @@ function sameHistory(
     prev.ctx.switchPendingId !== ctx.switchPendingId ||
     prev.ctx.taskCompletions !== ctx.taskCompletions
   ) {
-    return false;
+    return false
   }
   for (let i = 0; i < end; i++) {
-    if (prev.messages[i] !== messages[i]) return false;
+    if (prev.messages[i] !== messages[i]) return false
   }
-  return true;
+  return true
 }
 
 export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
-  const messages = useApp((s) => s.messages);
-  const hiddenBefore = useApp((s) => s.hiddenBefore);
-  const loadingOlder = useApp((s) => s.loadingOlder);
-  const loadOlderMessages = useApp((s) => s.loadOlderMessages);
-  const status = useApp((s) => s.statuses[chat.id] ?? "idle");
+  const messages = useApp((s) => s.messages)
+  const hiddenBefore = useApp((s) => s.hiddenBefore)
+  const loadingOlder = useApp((s) => s.loadingOlder)
+  const loadOlderMessages = useApp((s) => s.loadOlderMessages)
+  const status = useApp((s) => s.statuses[chat.id] ?? 'idle')
   // Fall back to a stable constant — a fresh `[]` per render makes zustand's
   // snapshot comparison always fail and loops React into a crash.
-  const lockedElsewhere = useApp((s) => !!s.lockedChats[chat.id]);
-  const permissions = useApp((s) => s.permissions[chat.id] ?? NO_PERMISSIONS);
-  const queued = useApp((s) => s.queued[chat.id] ?? NO_QUEUED);
-  const removeQueued = useApp((s) => s.removeQueued);
-  const sendQueuedNow = useApp((s) => s.sendQueuedNow);
-  const git = useApp((s) => s.git);
-  const commands = useApp((s) => s.commands);
-  const openPlanPanel = useApp((s) => s.openPlanPanel);
-  const togglePanel = useApp((s) => s.togglePanel);
-  const reviewChanges = useApp((s) => s.reviewChanges);
-  const runGitAction = useApp((s) => s.runGitAction);
+  const lockedElsewhere = useApp((s) => !!s.lockedChats[chat.id])
+  const permissions = useApp((s) => s.permissions[chat.id] ?? NO_PERMISSIONS)
+  const queued = useApp((s) => s.queued[chat.id] ?? NO_QUEUED)
+  const removeQueued = useApp((s) => s.removeQueued)
+  const sendQueuedNow = useApp((s) => s.sendQueuedNow)
+  const git = useApp((s) => s.git)
+  const commands = useApp((s) => s.commands)
+  const openPlanPanel = useApp((s) => s.openPlanPanel)
+  const togglePanel = useApp((s) => s.togglePanel)
+  const reviewChanges = useApp((s) => s.reviewChanges)
+  const runGitAction = useApp((s) => s.runGitAction)
   const worktreeNotice = useApp((s) =>
-    s.worktreeNotice?.chatId === chat.id ? s.worktreeNotice.kind : null,
-  );
-  const dismissWorktreeNotice = useApp((s) => s.dismissWorktreeNotice);
-  const panelOpen = useApp((s) => s.panelOpen);
-  const terminalBusy = useApp((s) => s.terminalBusy);
-  const busyTerminals = Object.values(terminalBusy);
+    s.worktreeNotice?.chatId === chat.id ? s.worktreeNotice.kind : null
+  )
+  const dismissWorktreeNotice = useApp((s) => s.dismissWorktreeNotice)
+  const panelOpen = useApp((s) => s.panelOpen)
+  const terminalBusy = useApp((s) => s.terminalBusy)
+  const busyTerminals = Object.values(terminalBusy)
   const busyLabel =
-    busyTerminals.length === 1
-      ? busyTerminals[0]
-      : `${busyTerminals.length} processes`;
-  const sidebarOpen = useApp((s) => s.sidebarOpen);
-  const toggleSidebar = useApp((s) => s.toggleSidebar);
-  const sendMessage = useApp((s) => s.sendMessage);
-  const startCodexReview = useApp((s) => s.startCodexReview);
-  const interrupt = useApp((s) => s.interrupt);
-  const setChatOptions = useApp((s) => s.setChatOptions);
-  const saveChatDraft = useApp((s) => s.saveChatDraft);
+    busyTerminals.length === 1 ? busyTerminals[0] : `${busyTerminals.length} processes`
+  const sidebarOpen = useApp((s) => s.sidebarOpen)
+  const toggleSidebar = useApp((s) => s.toggleSidebar)
+  const sendMessage = useApp((s) => s.sendMessage)
+  const startCodexReview = useApp((s) => s.startCodexReview)
+  const interrupt = useApp((s) => s.interrupt)
+  const setChatOptions = useApp((s) => s.setChatOptions)
+  const saveChatDraft = useApp((s) => s.saveChatDraft)
   // Read imperatively, not subscribed: the composer writes a debounced copy back
   // a couple of times a second while you type, and a subscription here would
   // re-render the whole transcript on every one of them. `App` keys this
   // component by chat id, so a mount *is* a chat switch — which is the only
   // moment the draft needs reading.
-  const initialDraft = React.useMemo(
-    () => useApp.getState().chatDrafts[chat.id],
-    [chat.id],
-  );
-  const modelEfforts = useApp((s) => s.defaults?.modelEfforts);
+  const initialDraft = React.useMemo(() => useApp.getState().chatDrafts[chat.id], [chat.id])
+  const modelEfforts = useApp((s) => s.defaults?.modelEfforts)
   // A cross-provider pick is only armed until the next send; the composer
   // previews its provider (efforts, placeholder, labels) while the chat itself
   // stays on the current backend.
   const composerProvider =
-    chat.pendingModel !== undefined
-      ? (chat.pendingProvider ?? chat.provider)
-      : chat.provider;
-  const renameChat = useApp((s) => s.renameChat);
-  const deleteChat = useApp((s) => s.deleteChat);
+    chat.pendingModel !== undefined ? (chat.pendingProvider ?? chat.provider) : chat.provider
+  const renameChat = useApp((s) => s.renameChat)
+  const deleteChat = useApp((s) => s.deleteChat)
 
-  const scrollRef = React.useRef<HTMLDivElement>(null);
+  const scrollRef = React.useRef<HTMLDivElement>(null)
   /** The reading column inside the scroller — what the follow observer measures. */
-  const columnRef = React.useRef<HTMLDivElement>(null);
-  const pinnedRef = React.useRef(true);
+  const columnRef = React.useRef<HTMLDivElement>(null)
+  const pinnedRef = React.useRef(true)
   /**
    * Distance from the BOTTOM of the scroller, captured just before older
    * messages are prepended. Anchoring on the bottom rather than on scrollTop is
    * what keeps the message under the cursor still: prepending changes
    * scrollHeight, and the gap below the viewport is the part that doesn't move.
    */
-  const bottomAnchor = React.useRef<number | null>(null);
-  const [showJump, setShowJump] = React.useState(false);
-  const [renameOpen, setRenameOpen] = React.useState(false);
-  const [deleteOpen, setDeleteOpen] = React.useState(false);
-  const [renameValue, setRenameValue] = React.useState("");
-  const [handoffOpen, setHandoffOpen] = React.useState(false);
-  const [mergeOpen, setMergeOpen] = React.useState(false);
-  const [finishOpen, setFinishOpen] = React.useState(false);
-  const [reviewOpen, setReviewOpen] = React.useState(false);
+  const bottomAnchor = React.useRef<number | null>(null)
+  const [showJump, setShowJump] = React.useState(false)
+  const [renameOpen, setRenameOpen] = React.useState(false)
+  const [deleteOpen, setDeleteOpen] = React.useState(false)
+  const [renameValue, setRenameValue] = React.useState('')
+  const [handoffOpen, setHandoffOpen] = React.useState(false)
+  const [mergeOpen, setMergeOpen] = React.useState(false)
+  const [finishOpen, setFinishOpen] = React.useState(false)
+  const [reviewOpen, setReviewOpen] = React.useState(false)
 
-  const busy = status !== "idle";
+  const busy = status !== 'idle'
 
   // Merging is only ever offered off the default branch — on it there is
   // nothing to land, and the ladder's job there is to branch off instead.
   // `git.defaultBranch` is the same field the ↓n chip and the merge dialog
   // read, so the label always names the branch the operation actually targets.
-  const defaultBranch = git?.defaultBranch ?? "main";
-  const canMerge = !!git?.defaultBranch && git.branch !== git.defaultBranch;
+  const defaultBranch = git?.defaultBranch ?? 'main'
+  const canMerge = !!git?.defaultBranch && git.branch !== git.defaultBranch
 
   const scrollToBottom = React.useCallback((smooth = false): void => {
-    const el = scrollRef.current;
-    if (!el) return;
-    el.scrollTo({ top: el.scrollHeight, behavior: smooth ? "smooth" : "auto" });
-  }, []);
+    const el = scrollRef.current
+    if (!el) return
+    el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' })
+  }, [])
 
   // Fires per scroll event — dozens a second on a wheel — so the state write
   // is skipped unless the answer moved; the pin itself is a ref and free.
   const onScroll = (): void => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const pinned = el.scrollHeight - el.scrollTop - el.clientHeight < 90;
-    if (pinned === pinnedRef.current) return;
-    pinnedRef.current = pinned;
-    setShowJump(!pinned);
-  };
+    const el = scrollRef.current
+    if (!el) return
+    const pinned = el.scrollHeight - el.scrollTop - el.clientHeight < 90
+    if (pinned === pinnedRef.current) return
+    pinnedRef.current = pinned
+    setShowJump(!pinned)
+  }
 
   // Follow the stream while the user is pinned to the bottom.
   //
@@ -537,52 +478,51 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
   // the reader back down. The scroller itself is observed too, so a window
   // resize while pinned keeps the bottom rather than the top.
   React.useEffect(() => {
-    const scroller = scrollRef.current;
-    const column = columnRef.current;
-    if (!scroller || !column) return;
+    const scroller = scrollRef.current
+    const column = columnRef.current
+    if (!scroller || !column) return
     const observer = new ResizeObserver(() => {
-      if (pinnedRef.current) scrollToBottom();
-    });
-    observer.observe(column);
-    observer.observe(scroller);
-    return () => observer.disconnect();
-  }, [scrollToBottom]);
+      if (pinnedRef.current) scrollToBottom()
+    })
+    observer.observe(column)
+    observer.observe(scroller)
+    return () => observer.disconnect()
+  }, [scrollToBottom])
 
   // Jump to the bottom when switching chats.
   React.useEffect(() => {
-    pinnedRef.current = true;
+    pinnedRef.current = true
     // The scroll handler now writes state only on a transition, so the pin
     // and the control have to be reset together here rather than by the
     // scroll event that follows.
-    setShowJump(false);
-    requestAnimationFrame(() => scrollToBottom());
-  }, [chat.id, scrollToBottom]);
+    setShowJump(false)
+    requestAnimationFrame(() => scrollToBottom())
+  }, [chat.id, scrollToBottom])
 
   const loadEarlier = React.useCallback((): void => {
-    const el = scrollRef.current;
-    bottomAnchor.current = el ? el.scrollHeight - el.scrollTop : null;
+    const el = scrollRef.current
+    bottomAnchor.current = el ? el.scrollHeight - el.scrollTop : null
     // Asking for older messages is a statement that you want to read up, not
     // follow the stream — otherwise the follow-the-tail effect below would
     // immediately undo the restore.
-    pinnedRef.current = false;
-    setShowJump(true);
-    void loadOlderMessages();
-  }, [loadOlderMessages]);
+    pinnedRef.current = false
+    setShowJump(true)
+    void loadOlderMessages()
+  }, [loadOlderMessages])
 
   // Restore the reading position after a prepend, before the browser paints.
   React.useLayoutEffect(() => {
-    const el = scrollRef.current;
-    const anchor = bottomAnchor.current;
-    if (!el || anchor === null) return;
-    bottomAnchor.current = null;
-    el.scrollTop = el.scrollHeight - anchor;
-  }, [hiddenBefore]);
+    const el = scrollRef.current
+    const anchor = bottomAnchor.current
+    if (!el || anchor === null) return
+    bottomAnchor.current = null
+    el.scrollTop = el.scrollHeight - anchor
+  }, [hiddenBefore])
 
   // The live turn's message — only the *last* message counts, so a just-sent user
   // message (before the reply starts) isn't mistaken for the previous reply.
-  const lastMsg = messages[messages.length - 1];
-  const liveAssistant =
-    busy && lastMsg?.role === "assistant" ? lastMsg : undefined;
+  const lastMsg = messages[messages.length - 1]
+  const liveAssistant = busy && lastMsg?.role === 'assistant' ? lastMsg : undefined
   // Has the live *turn* shown anything yet? Scanned back to the prompt that
   // started it rather than read off the last message alone: the CLI opens a
   // fresh assistant message per thinking block, and each one arrives empty —
@@ -593,16 +533,16 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
   // that already does; Claude withholds the text, so there it stays honest.
   const producedSomething = React.useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
-      const m = messages[i];
-      if (m.role === "user") break;
+      const m = messages[i]
+      if (m.role === 'user') break
       if (
-        m.role === "assistant" &&
-        m.parts.some((p) => p && (p.type === "tool" || p.text.length > 0))
+        m.role === 'assistant' &&
+        m.parts.some((p) => p && (p.type === 'tool' || p.text.length > 0))
       )
-        return true;
+        return true
     }
-    return false;
-  }, [messages]);
+    return false
+  }, [messages])
   // The turn's indicator has a *slot* for exactly as long as the turn runs, and
   // a *label* only while nothing else on screen is moving.
   //
@@ -622,33 +562,26 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
   // or a result, where a silent transcript would otherwise read as a hang. A
   // gap shorter than that between two calls shows nothing, which is what keeps
   // a run from blinking a label per call.
-  const showActivity = busy && permissions.length === 0;
+  const showActivity = busy && permissions.length === 0
   // "Thinking…" until the model has produced something this turn; "Working…" after.
-  const activityLabel = producedSomething ? "Working…" : "Thinking…";
+  const activityLabel = producedSomething ? 'Working…' : 'Thinking…'
 
   // The one prompt Enter/Esc answer: the oldest plain permission. A question
   // has several answers and a plan has its own review, so neither takes keys.
   const keyboardPermission = permissions.find(
-    (r) => r.toolName !== "AskUserQuestion" && r.toolName !== "ExitPlanMode",
-  )?.id;
-  const pendingPlanRequest = permissions.find(
-    (r) => r.toolName === "ExitPlanMode",
-  );
-  const pendingPlan = (pendingPlanRequest?.input as { plan?: unknown } | null)
-    ?.plan;
+    (r) => r.toolName !== 'AskUserQuestion' && r.toolName !== 'ExitPlanMode'
+  )?.id
+  const pendingPlanRequest = permissions.find((r) => r.toolName === 'ExitPlanMode')
+  const pendingPlan = (pendingPlanRequest?.input as { plan?: unknown } | null)?.plan
   const displayedMessages = React.useMemo(
     () =>
-      chat.provider === "codex" &&
+      chat.provider === 'codex' &&
       pendingPlanRequest &&
-      typeof pendingPlan === "string"
-        ? withCompactLegacyCodexPlan(
-            messages,
-            pendingPlan,
-            pendingPlanRequest.id,
-          )
+      typeof pendingPlan === 'string'
+        ? withCompactLegacyCodexPlan(messages, pendingPlan, pendingPlanRequest.id)
         : messages,
-    [chat.provider, messages, pendingPlan, pendingPlanRequest],
-  );
+    [chat.provider, messages, pendingPlan, pendingPlanRequest]
+  )
 
   // The chat's checklist, folded out of the whole loaded window: Claude Code's
   // TaskCreate/TaskUpdate calls carry no list of their own, and a TaskUpdate's
@@ -664,38 +597,35 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
   // is a card nothing draws. `reconcileTimeline` keeps both halves at their old
   // identity when nothing moved, so a streamed token re-renders neither the
   // dock nor the history.
-  const timelineRef = React.useRef<TaskTimeline>(NO_TASK_TIMELINE);
+  const timelineRef = React.useRef<TaskTimeline>(NO_TASK_TIMELINE)
   const timeline = React.useMemo(() => {
     const next = reconcileTimeline(
       timelineRef.current,
       foldTaskTimeline(
         messages.filter((m) => !isBlankMsg(m)),
-        busy,
-      ),
-    );
-    timelineRef.current = next;
-    return next;
-  }, [messages, busy]);
-  const tasks = timeline.tasks;
+        busy
+      )
+    )
+    timelineRef.current = next
+    return next
+  }, [messages, busy])
+  const tasks = timeline.tasks
 
   // Sub-agent runs are folded out of the same window, for the panel and the
   // activity bar rather than for the transcript — which is why the result goes
   // to `agentsStore` instead of down through props. `reconcileAgentRuns` keeps
   // an unmoved list at its old identity so neither subscriber re-renders on a
   // token that changed nothing about any agent.
-  const agentRunsRef = React.useRef<AgentRunView[]>([]);
+  const agentRunsRef = React.useRef<AgentRunView[]>([])
   const agentRuns = React.useMemo(() => {
-    const next = reconcileAgentRuns(
-      agentRunsRef.current,
-      foldAgentRuns(messages),
-    );
-    agentRunsRef.current = next;
-    return next;
-  }, [messages]);
-  const setAgentRuns = useAgents((s) => s.setRuns);
+    const next = reconcileAgentRuns(agentRunsRef.current, foldAgentRuns(messages))
+    agentRunsRef.current = next
+    return next
+  }, [messages])
+  const setAgentRuns = useAgents((s) => s.setRuns)
   React.useEffect(() => {
-    setAgentRuns(agentRuns);
-  }, [agentRuns, setAgentRuns]);
+    setAgentRuns(agentRuns)
+  }, [agentRuns, setAgentRuns])
   // Clear on unmount, in an effect of its own so it fires *only* then: folded
   // into the publish above it would empty the store between every two updates
   // and flicker the tab out of the strip on each one. The store outlives this
@@ -703,28 +633,28 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
   // chat for the home screen leaves the dead chat's roster on screen, since
   // nothing else ever publishes an empty list. `ChatView` is keyed by chat id,
   // so React runs this cleanup before the next chat's publish.
-  React.useEffect(() => () => setAgentRuns([]), [setAgentRuns]);
+  React.useEffect(() => () => setAgentRuns([]), [setAgentRuns])
 
   // Published to its own store so the dock — and only the dock — re-renders
   // when a task moves; see `taskListStore`. Kept out of the history render path,
   // and stamped with the chat it belongs to, because one box now serves every
   // chat and this effect runs a frame after the switch.
-  const setTasks = useTaskList((s) => s.setTasks);
+  const setTasks = useTaskList((s) => s.setTasks)
   React.useEffect(() => {
-    setTasks(chat.id, tasks);
-  }, [chat.id, tasks, setTasks]);
+    setTasks(chat.id, tasks)
+  }, [chat.id, tasks, setTasks])
 
   const openPlan = React.useCallback(
     (plan: string) => {
       openPlanPanel({
         chatId: chat.id,
         plan,
-        requestId: pendingPlanRequest?.id ?? null,
-      });
+        requestId: pendingPlanRequest?.id ?? null
+      })
     },
-    [openPlanPanel, chat.id, pendingPlanRequest?.id],
-  );
-  const historyEnd = liveAssistant ? messages.length - 1 : messages.length;
+    [openPlanPanel, chat.id, pendingPlanRequest?.id]
+  )
+  const historyEnd = liveAssistant ? messages.length - 1 : messages.length
   // A live message that is itself only tool calls joins the trailing run of
   // tool-only history messages in ONE live ToolGroup — the same row history
   // will render once the turn ends. Without this, each new search/read/agent
@@ -740,55 +670,40 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
     // history, collapsed, once per call. Nothing was drawn in the gap, so the
     // whole effect was a row folding and unfolding under the reader with no
     // content to show for it.
-    if (
-      !liveAssistant ||
-      !(isGroupableMsg(liveAssistant) || isBlankMsg(liveAssistant))
-    ) {
-      return null;
+    if (!liveAssistant || !(isGroupableMsg(liveAssistant) || isBlankMsg(liveAssistant))) {
+      return null
     }
-    let start = historyEnd;
+    let start = historyEnd
     while (start > 0) {
-      const prev = displayedMessages[start - 1];
-      if (
-        prev.role === "assistant" &&
-        (isGroupableMsg(prev) || isBlankMsg(prev))
-      )
-        start -= 1;
-      else break;
+      const prev = displayedMessages[start - 1]
+      if (prev.role === 'assistant' && (isGroupableMsg(prev) || isBlankMsg(prev))) start -= 1
+      else break
     }
-    const members = [
-      ...displayedMessages.slice(start, historyEnd),
-      liveAssistant,
-    ];
+    const members = [...displayedMessages.slice(start, historyEnd), liveAssistant]
     const parts = members.flatMap((m) =>
-      m.role === "assistant"
-        ? m.parts.filter((p): p is ToolPart => !!p && p.type === "tool")
-        : [],
-    );
-    if (parts.length < GROUP_MIN) return null;
+      m.role === 'assistant'
+        ? m.parts.filter((p): p is ToolPart => !!p && p.type === 'tool')
+        : []
+    )
+    if (parts.length < GROUP_MIN) return null
     // Keyed as history will key it — off the run's first message that draws,
     // since `renderMessages` drops the blank ones before it names a run — so
     // the group folds in place when the turn ends instead of being remade.
-    const first = members.find((m) => !isBlankMsg(m)) ?? liveAssistant;
-    return { start, parts, key: groupKey(first.id) };
-  }, [liveAssistant, displayedMessages, historyEnd]);
+    const first = members.find((m) => !isBlankMsg(m)) ?? liveAssistant
+    return { start, parts, key: groupKey(first.id) }
+  }, [liveAssistant, displayedMessages, historyEnd])
   // Where the label draws — see `showActivity` above for the slot.
   // A thought with text is Codex's shape (Claude withholds the text): while it
   // is the message's last part, `ThinkingBlock` shimmers "Thinking…" — through
   // the pause after the last reasoning delta too — so that header is the
   // motion, and "Working…" two lines under it would say the same thing twice.
-  const livePart = liveAssistant?.parts[liveAssistant.parts.length - 1];
-  const thinkingShown =
-    livePart?.type === "thinking" && livePart.text.length > 0;
+  const livePart = liveAssistant?.parts[liveAssistant.parts.length - 1]
+  const thinkingShown = livePart?.type === 'thinking' && livePart.text.length > 0
   const tailMoving = liveRun
     ? groupRunning(liveRun.parts)
     : !!liveAssistant &&
       (thinkingShown ||
-        groupRunning(
-          liveAssistant.parts.filter(
-            (p): p is ToolPart => !!p && p.type === "tool",
-          ),
-        ));
+        groupRunning(liveAssistant.parts.filter((p): p is ToolPart => !!p && p.type === 'tool')))
   // The clock is what the tail *draws*, not the last message's identity.
   // Every streamed event replaces the message object, and several of them draw
   // nothing — a withheld thought's once-a-second token ping, a blank thinking
@@ -801,69 +716,67 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
   // contribute nothing and re-arm nothing.
   const drawn = React.useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
-      const m = messages[i];
-      if (m.role !== "assistant") return "";
-      if (isBlankMsg(m)) continue;
+      const m = messages[i]
+      if (m.role !== 'assistant') return ''
+      if (isBlankMsg(m)) continue
       return (
         m.id +
-        ":" +
+        ':' +
         m.parts
           .map((p) =>
             !p
-              ? ""
-              : p.type === "tool"
-                ? p.status +
-                  (p.partial ? "~" + JSON.stringify(p.input ?? null).length : "")
+              ? ''
+              : p.type === 'tool'
+                ? p.status + (p.partial ? '~' + JSON.stringify(p.input ?? null).length : '')
                 : p.text.length
                   ? String(p.text.length)
-                  : "",
+                  : ''
           )
           // Dropped before the join, not after: a blank part that stayed in
           // the array would still add a separator, and that separator was
           // enough to re-arm the clock once per blank reasoning item.
           .filter(Boolean)
-          .join(",")
-      );
+          .join(',')
+      )
     }
-    return "";
-  }, [messages]);
-  const [quiet, setQuiet] = React.useState(false);
+    return ''
+  }, [messages])
+  const [quiet, setQuiet] = React.useState(false)
   React.useEffect(() => {
     // Re-armed on every drawn change and fires only in a lull.
     // `setQuiet(false)` on an already-false state is a bail-out, not a render.
-    setQuiet(false);
-    if (!busy) return undefined;
-    const t = setTimeout(() => setQuiet(true), QUIET_MS);
-    return () => clearTimeout(t);
-  }, [drawn, busy]);
-  const showActivityLabel =
-    showActivity && (!producedSomething || (quiet && !tailMoving));
+    setQuiet(false)
+    if (!busy) return undefined
+    const t = setTimeout(() => setQuiet(true), QUIET_MS)
+    return () => clearTimeout(t)
+  }, [drawn, busy])
+  const showActivityLabel = showActivity && (!producedSomething || (quiet && !tailMoving))
   // The most recent switch divider renders live ("writing handoff brief…")
   // exactly while main reports the handoff in flight; the busy gate means a
   // crash or restart can never leave a divider shimmering forever.
   const switchPendingId = React.useMemo(() => {
-    if (!busy || !chat.switchingNote) return undefined;
+    if (!busy || !chat.switchingNote) return undefined
     for (let i = messages.length - 1; i >= 0; i--) {
-      const m = messages[i];
-      if (m.role === "event" && m.kind === "switch") return m.id;
+      const m = messages[i]
+      if (m.role === 'event' && m.kind === 'switch') return m.id
     }
-    return undefined;
-  }, [busy, chat.switchingNote, messages]);
+    return undefined
+  }, [busy, chat.switchingNote, messages])
   const historyCtx = React.useMemo<RenderCtx>(
     () => ({
       cwd: chat.cwd,
       busy,
       onOpenPlan: openPlan,
       switchPendingId,
-      taskCompletions: timeline.completions,
+      taskCompletions: timeline.completions
     }),
-    [chat.cwd, busy, openPlan, switchPendingId, timeline.completions],
-  );
+    [chat.cwd, busy, openPlan, switchPendingId, timeline.completions]
+  )
   const historyNodes = useHistoryNodes(
     displayedMessages,
     liveRun ? liveRun.start : historyEnd,
-    historyCtx,
-  );
+    historyCtx
+  )
   // The turn's live block, under exactly the key and element shape
   // `renderMessages` will give the same message once it is history — a
   // run's group under the run's key, a lone message under its own id inside
@@ -873,44 +786,31 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
     <ToolGroup key={liveRun.key} parts={liveRun.parts} cwd={chat.cwd} live />
   ) : liveAssistant ? (
     <React.Fragment key={liveAssistant.id}>
-      <AssistantBlock
-        message={liveAssistant}
-        cwd={chat.cwd}
-        streaming
-        onOpenPlan={openPlan}
-      />
+      <AssistantBlock message={liveAssistant} cwd={chat.cwd} streaming onOpenPlan={openPlan} />
     </React.Fragment>
-  ) : null;
+  ) : null
 
   return (
-    <div
-      data-chatview
-      className="relative flex h-full min-w-[420px] flex-1 flex-col"
-    >
+    <div data-chatview className="relative flex h-full min-w-[420px] flex-1 flex-col">
       {/* Header */}
       <header
         className={cn(
           // pr matches the panel header's px-2.5 so the panel toggle sits at the
           // same inset whether it renders here or over there.
-          "drag flex h-[38px] shrink-0 items-center gap-2 pl-4 pr-2.5",
-          !sidebarOpen && "pl-[84px]",
+          'drag flex h-[38px] shrink-0 items-center gap-2 pl-4 pr-2.5',
+          !sidebarOpen && 'pl-[84px]'
         )}
       >
         {!sidebarOpen && (
           <WithTooltip label="Show sidebar  ⌘B">
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              onClick={toggleSidebar}
-              aria-label="Show sidebar"
-            >
+            <Button size="icon-sm" variant="ghost" onClick={toggleSidebar} aria-label="Show sidebar">
               <PanelLeft />
             </Button>
           </WithTooltip>
         )}
         <div className="min-w-0 flex-1">
           <div className="truncate text-[13px] font-semibold">
-            {chat.title || "New chat"}
+            {chat.title || 'New chat'}
           </div>
         </div>
         <BackgroundJobs />
@@ -925,8 +825,8 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
           <DropdownMenuContent align="end">
             <DropdownMenuItem
               onClick={() => {
-                setRenameValue(chat.title);
-                setRenameOpen(true);
+                setRenameValue(chat.title)
+                setRenameOpen(true)
               }}
             >
               <Pencil /> Rename
@@ -938,15 +838,10 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
             {(chat.worktree || canMerge) && <DropdownMenuSeparator />}
             {canMerge && (
               <>
-                <DropdownMenuItem
-                  onClick={() => void runGitAction("update-from-main")}
-                >
+                <DropdownMenuItem onClick={() => void runGitAction('update-from-main')}>
                   <RefreshCw /> Update from {defaultBranch}
                 </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={() => setMergeOpen(true)}
-                  disabled={busy}
-                >
+                <DropdownMenuItem onClick={() => setMergeOpen(true)} disabled={busy}>
                   <GitMerge /> Merge into {defaultBranch}
                 </DropdownMenuItem>
               </>
@@ -971,9 +866,7 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
             the collapse button at the same inset, so open and close are one
             unmoving target rather than two positions with the ⋯ menu between. */}
         {!panelOpen && (
-          <WithTooltip
-            label={busyTerminals.length ? `${busyLabel} running` : "Show files"}
-          >
+          <WithTooltip label={busyTerminals.length ? `${busyLabel} running` : 'Show files'}>
             <Button
               size="icon-sm"
               variant="ghost"
@@ -997,9 +890,8 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
           lock; this one still works, it just is not persisting. */}
       {lockedElsewhere && (
         <div className="border-b border-amber-500/25 bg-amber-500/10 px-4 py-2 text-xs text-amber-200/90">
-          This chat is open in another Carbon instance, which owns it. Changes
-          made here are <span className="font-medium">not being saved</span>.
-          Close it there, then reopen this chat.
+          This chat is open in another Carbon instance, which owns it. Changes made here
+          are <span className="font-medium">not being saved</span>. Close it there, then reopen this chat.
         </div>
       )}
 
@@ -1009,25 +901,19 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
       {worktreeNotice && (
         <div className="flex items-start gap-2 border-b border-border bg-secondary/40 px-4 py-2 text-xs text-muted-foreground">
           <span className="min-w-0 flex-1">
-            {worktreeNotice === "empty-base" ? (
+            {worktreeNotice === 'empty-base' ? (
               <>
-                This worktree is empty: a worktree checks out <em>committed</em>{" "}
-                work, and nothing in{" "}
-                <span className="text-foreground">
-                  {basename(chat.worktree?.repoRoot ?? "")}
-                </span>{" "}
-                has been committed yet. Commit the project on This Mac first, or
-                let the agent build here and merge it back.
+                This worktree is empty: a worktree checks out{' '}
+                <em>committed</em> work, and nothing in{' '}
+                <span className="text-foreground">{basename(chat.worktree?.repoRoot ?? '')}</span>{' '}
+                has been committed yet. Commit the project on This Mac first, or let the agent build
+                here and merge it back.
               </>
             ) : (
               <>
-                This worktree is a fresh checkout with no dependencies installed
-                — the project has no{" "}
-                <code className="font-mono text-[11px] text-foreground">
-                  .karbun/setup.sh
-                </code>
-                . Add one (or run your install command in a terminal tab) if the
-                agent needs them.
+                This worktree is a fresh checkout with no dependencies installed — the project has
+                no <code className="font-mono text-[11px] text-foreground">.karbun/setup.sh</code>.
+                Add one (or run your install command in a terminal tab) if the agent needs them.
               </>
             )}
           </span>
@@ -1057,10 +943,7 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
           onScroll={onScroll}
           className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]"
         >
-          <div
-            ref={columnRef}
-            className="mx-auto flex max-w-3xl flex-col gap-4 px-6 py-6"
-          >
+          <div ref={columnRef} className="mx-auto flex max-w-3xl flex-col gap-4 px-6 py-6">
             {hiddenBefore > 0 && (
               <div className="flex justify-center">
                 <Button
@@ -1071,62 +954,53 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
                   disabled={loadingOlder}
                 >
                   {loadingOlder
-                    ? "Loading…"
+                    ? 'Loading…'
                     : `Load earlier messages (${hiddenBefore.toLocaleString()})`}
                 </Button>
               </div>
             )}
             {/* One array, deliberately: written as `{historyNodes}{liveNode}`
-              the two are separate children and the array is its own implicit
-              fragment, which puts the live node in a different parent again. */}
+                the two are separate children and the array is its own implicit
+                fragment, which puts the live node in a different parent again. */}
             {liveNode ? [...historyNodes, liveNode] : historyNodes}
             {permissions.map((request) => {
-              if (request.toolName === "AskUserQuestion")
+              if (request.toolName === 'AskUserQuestion')
                 return (
-                  <QuestionCard
-                    key={request.id}
-                    request={request}
-                    provider={chat.provider}
-                  />
-                );
-              if (request.toolName === "ExitPlanMode")
+                  <QuestionCard key={request.id} request={request} provider={chat.provider} />
+                )
+              if (request.toolName === 'ExitPlanMode')
                 return (
                   <div
                     key={request.id}
                     className="flex animate-enter items-center gap-2.5 rounded-xl border border-primary/30 bg-primary/5 px-3.5 py-2.5"
                   >
                     <span className="text-[13px]">
-                      {PROVIDER_SHORT_LABELS[chat.provider]} prepared a plan for
-                      your review.
+                      {PROVIDER_SHORT_LABELS[chat.provider]} prepared a plan for your review.
                     </span>
                     <div className="flex-1" />
                     <Button
                       size="sm"
                       variant="secondary"
                       onClick={() => {
-                        const plan = (request.input as { plan?: string } | null)
-                          ?.plan;
-                        if (typeof plan === "string") openPlan(plan);
+                        const plan = (request.input as { plan?: string } | null)?.plan
+                        if (typeof plan === 'string') openPlan(plan)
                       }}
                     >
                       Review plan
                     </Button>
                   </div>
-                );
+                )
               return (
                 <PermissionCard
                   key={request.id}
                   request={request}
                   keyboard={request.id === keyboardPermission}
                 />
-              );
+              )
             })}
             {showActivity && (
               <div className="min-h-7">
-                <StreamingIndicator
-                  label={activityLabel}
-                  visible={showActivityLabel}
-                />
+                <StreamingIndicator label={activityLabel} visible={showActivityLabel} />
               </div>
             )}
             <div className="h-2" />
@@ -1169,7 +1043,7 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
               project={projectRoot(chat)}
               git={git}
               onReviewChanges={() => void reviewChanges()}
-              onUpdateFromDefault={() => void runGitAction("update-from-main")}
+              onUpdateFromDefault={() => void runGitAction('update-from-main')}
             />
             {queued.length > 0 && (
               <div className="mb-2 space-y-1.5">
@@ -1180,7 +1054,7 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
                   >
                     <Clock className="size-3 shrink-0" />
                     <span className="min-w-0 flex-1 truncate">
-                      {q.text || q.attachments?.map((a) => a.name).join(", ")}
+                      {q.text || q.attachments?.map((a) => a.name).join(', ')}
                     </span>
                     <span className="shrink-0 text-[10px] tracking-wide text-muted-foreground/60 uppercase">
                       queued
@@ -1216,69 +1090,65 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
                 onStart={startCodexReview}
               />
               <Composer
-                // The checklist rides the composer's own box rather than sitting
-                // above it, so the two read as one object however the border moves.
-                header={
-                  <>
-                    {chat.provider === "codex" && (
-                      <CodexGoalBar
-                        chatId={chat.id}
-                        threadId={chat.sessionId}
-                        working={busy}
-                      />
-                    )}
-                    <TaskDock chatId={chat.id} />
-                  </>
+              // The checklist rides the composer's own box rather than sitting
+              // above it, so the two read as one object however the border moves.
+              header={
+                <>
+                  {chat.provider === 'codex' && (
+                    <CodexGoalBar
+                      chatId={chat.id}
+                      threadId={chat.sessionId}
+                      working={busy}
+                    />
+                  )}
+                  <TaskDock chatId={chat.id} />
+                </>
+              }
+              // Returned, not voided: the composer needs the promise so a failed
+              // send restores the draft instead of discarding it.
+              onSend={(text, attachments) => {
+                if (
+                  composerProvider === 'codex' &&
+                  text.trim().toLowerCase() === '/review' &&
+                  attachments.length === 0
+                ) {
+                  setReviewOpen(true)
+                  return Promise.resolve()
                 }
-                // Returned, not voided: the composer needs the promise so a failed
-                // send restores the draft instead of discarding it.
-                onSend={(text, attachments) => {
-                  if (
-                    composerProvider === "codex" &&
-                    text.trim().toLowerCase() === "/review" &&
-                    attachments.length === 0
-                  ) {
-                    setReviewOpen(true);
-                    return Promise.resolve();
-                  }
-                  return sendMessage(text, attachments);
-                }}
-                draft={initialDraft}
-                onDraftChange={(next) => saveChatDraft(chat.id, next)}
-                streaming={busy}
-                onStop={() => void interrupt()}
-                // A cross-provider pick is only armed until the next send; the
-                // composer previews it (chip, efforts, placeholder) while the chat
-                // itself stays on its current backend.
-                model={chat.pendingModel ?? chat.model ?? ""}
-                onModelChange={(model, modelProvider) =>
-                  void setChatOptions({ model, modelProvider })
-                }
-                effort={chat.effort ?? ""}
-                onEffortChange={(effort, opts) =>
-                  void setChatOptions({ effort, ...opts })
-                }
-                modelEfforts={modelEfforts}
-                serviceTier={chat.serviceTier ?? "standard"}
-                onServiceTierChange={(serviceTier, opts) =>
-                  void setChatOptions({ serviceTier, ...opts })
-                }
-                permissionMode={chat.permissionMode}
-                onPermissionModeChange={(permissionMode) =>
-                  void setChatOptions({ permissionMode })
-                }
-                contextTokens={chat.contextTokens}
-                contextWindow={chat.contextWindow}
-                provider={composerProvider}
-                cwd={chat.cwd}
-                commands={commands}
-                // Busy-gated so a note left behind by a crash can never stick.
-                switchingNote={busy ? chat.switchingNote : undefined}
-                placeholder={
-                  composerProvider === "claude"
-                    ? undefined
-                    : `Ask ${PROVIDER_SHORT_LABELS[composerProvider]} anything…`
-                }
+                return sendMessage(text, attachments)
+              }}
+              draft={initialDraft}
+              onDraftChange={(next) => saveChatDraft(chat.id, next)}
+              streaming={busy}
+              onStop={() => void interrupt()}
+              // A cross-provider pick is only armed until the next send; the
+              // composer previews it (chip, efforts, placeholder) while the chat
+              // itself stays on its current backend.
+              model={chat.pendingModel ?? chat.model ?? ''}
+              onModelChange={(model, modelProvider) =>
+                void setChatOptions({ model, modelProvider })
+              }
+              effort={chat.effort ?? ''}
+              onEffortChange={(effort, opts) => void setChatOptions({ effort, ...opts })}
+              modelEfforts={modelEfforts}
+              serviceTier={chat.serviceTier ?? 'standard'}
+              onServiceTierChange={(serviceTier, opts) =>
+                void setChatOptions({ serviceTier, ...opts })
+              }
+              permissionMode={chat.permissionMode}
+              onPermissionModeChange={(permissionMode) => void setChatOptions({ permissionMode })}
+              contextTokens={chat.contextTokens}
+              contextWindow={chat.contextWindow}
+              provider={composerProvider}
+              cwd={chat.cwd}
+              commands={commands}
+              // Busy-gated so a note left behind by a crash can never stick.
+              switchingNote={busy ? chat.switchingNote : undefined}
+              placeholder={
+                composerProvider === 'claude'
+                  ? undefined
+                  : `Ask ${PROVIDER_SHORT_LABELS[composerProvider]} anything…`
+              }
               />
             </div>
           </div>
@@ -1292,10 +1162,10 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
           <form
             className="mt-3 space-y-3"
             onSubmit={(e) => {
-              e.preventDefault();
+              e.preventDefault()
               if (renameValue.trim()) {
-                void renameChat(chat.id, renameValue.trim());
-                setRenameOpen(false);
+                void renameChat(chat.id, renameValue.trim())
+                setRenameOpen(false)
               }
             }}
           >
@@ -1319,33 +1189,18 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
 
       {chat.worktree && (
         <>
-          <WorktreeHandoffDialog
-            chat={chat}
-            open={handoffOpen}
-            onOpenChange={setHandoffOpen}
-          />
-          <WorktreeFinishDialog
-            chat={chat}
-            open={finishOpen}
-            onOpenChange={setFinishOpen}
-          />
+          <WorktreeHandoffDialog chat={chat} open={handoffOpen} onOpenChange={setHandoffOpen} />
+          <WorktreeFinishDialog chat={chat} open={finishOpen} onOpenChange={setFinishOpen} />
         </>
       )}
-      {canMerge && (
-        <MergeIntoMainDialog
-          chat={chat}
-          open={mergeOpen}
-          onOpenChange={setMergeOpen}
-        />
-      )}
+      {canMerge && <MergeIntoMainDialog chat={chat} open={mergeOpen} onOpenChange={setMergeOpen} />}
 
       {/* Delete dialog */}
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <DialogContent>
           <DialogTitle>Delete this chat?</DialogTitle>
           <DialogDescription>
-            “{chat.title || "New chat"}” and its history will be removed
-            permanently.
+            “{chat.title || 'New chat'}” and its history will be removed permanently.
           </DialogDescription>
           <div className="mt-4 flex justify-end gap-2">
             <Button variant="ghost" onClick={() => setDeleteOpen(false)}>
@@ -1354,8 +1209,8 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
             <Button
               variant="destructive"
               onClick={() => {
-                setDeleteOpen(false);
-                void deleteChat(chat.id);
+                setDeleteOpen(false)
+                void deleteChat(chat.id)
               }}
             >
               Delete
@@ -1364,5 +1219,5 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
         </DialogContent>
       </Dialog>
     </div>
-  );
+  )
 }
