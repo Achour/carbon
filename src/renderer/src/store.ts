@@ -1981,32 +1981,32 @@ export const useApp = create<AppState>((set, get) => ({
       const f = files.indexOf(id)
       if (f !== -1) {
         const t = files.indexOf(target)
-        if (t === -1) return {}
+        if (t === -1) return s
         const next = moveItem(s.openFiles, f, t, side)
-        return next === s.openFiles ? {} : { openFiles: next as OpenTab[] }
+        return next === s.openFiles ? s : { openFiles: next as OpenTab[] }
       }
       const c = s.canvasTabs.indexOf(id)
       if (c !== -1) {
         const t = s.canvasTabs.indexOf(target)
-        if (t === -1) return {}
+        if (t === -1) return s
         const next = moveItem(s.canvasTabs, c, t, side)
-        return next === s.canvasTabs ? {} : { canvasTabs: next as string[] }
+        return next === s.canvasTabs ? s : { canvasTabs: next as string[] }
       }
       const term = s.terminals.findIndex((x) => x.id === id)
       if (term !== -1) {
         const t = s.terminals.findIndex((x) => x.id === target)
-        if (t === -1) return {}
+        if (t === -1) return s
         const next = moveItem(s.terminals, term, t, side)
-        return next === s.terminals ? {} : { terminals: next as TerminalTab[] }
+        return next === s.terminals ? s : { terminals: next as TerminalTab[] }
       }
       const prev = s.previews.findIndex((x) => x.id === id)
       if (prev !== -1) {
         const t = s.previews.findIndex((x) => x.id === target)
-        if (t === -1) return {}
+        if (t === -1) return s
         const next = moveItem(s.previews, prev, t, side)
-        return next === s.previews ? {} : { previews: next as PreviewTab[] }
+        return next === s.previews ? s : { previews: next as PreviewTab[] }
       }
-      return {}
+      return s
     })
   },
   async refreshCanvases() {

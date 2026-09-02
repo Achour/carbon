@@ -701,7 +701,9 @@ one color in a message and another in the file it came from.
   `check-ignore --stdin -z` from inside the folder it just read — one probe per
   expand, no repo root needed, tracked files never reported. Exit 1 (nothing
   matched) and 128 (not a repo) are answers, and a timeout degrades to undimmed:
-  the listing must never wait on or fail for git.
+  a listing waits at most `IGNORE_PROBE_MS` on git and never fails for it. The
+  cost is one git process per listed folder — on expand and on the tree refresh
+  at every turn's end — typically tens of milliseconds.
 
 ### The image viewer (`ImageView.tsx`)
 

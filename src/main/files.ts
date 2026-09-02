@@ -75,8 +75,8 @@ const TREE_HIDDEN = new Set(['.git', '.svn', '.hg', 'CVS', '.DS_Store', 'Thumbs.
 // from inside it, so no repo root has to be known. Bare names on stdin, NUL
 // separated so a name with a newline cannot split. Exit 1 means nothing
 // matched and 128 means not a repository — both are answers, not failures, and
-// the listing must never wait on or fail for this: a repo that has no git on
-// PATH still has files to show.
+// the listing waits at most IGNORE_PROBE_MS on this and never fails for it: a
+// folder with no git on PATH still has files to show.
 const IGNORE_PROBE_MS = 2000
 
 function gitIgnored(dir: string, names: string[]): Promise<Set<string>> {
