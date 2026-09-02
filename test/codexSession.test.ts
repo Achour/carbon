@@ -397,6 +397,47 @@ test('native Codex review streams findings without a prompt turn', async () => {
   }
 })
 
+test('completed native review ignores a stale active thread status', async () => {
+  const gate = deferred()
+  const h = harness([
+    async function* () {
+      yield { type: 'turn.started' }
+      await gate.promise
+      yield {
+        type: 'item.completed',
+        item: { id: 'review-result', type: 'agent_message', text: 'No findings.' }
+      }
+      yield { type: 'turn.completed', usage }
+    }
+  ])
+  const status = h.session as unknown as {
+    handleNativeThreadStatus(
+      threadId: string,
+      value:
+        | { type: 'active'; activeFlags?: string[] }
+        | { type: 'idle' | 'notLoaded' | 'systemError' }
+    ): void
+  }
+  try {
+    h.session.codexReview('review-message', { type: 'uncommittedChanges' })
+    await waitFor(() => h.codex.reviewCalls.length === 1)
+
+    status.handleNativeThreadStatus('thread-1', { type: 'active', activeFlags: [] })
+    assert.equal(h.session.idle, false)
+
+    gate.resolve()
+    await waitFor(() => h.session.idle)
+    assert.deepEqual(h.events.at(-1), {
+      type: 'status',
+      chatId: 'chat-1',
+      status: 'idle'
+    })
+  } finally {
+    gate.resolve()
+    cleanup(h)
+  }
+})
+
 test('review focus uses App Server custom review target', async () => {
   const h = harness([
     async function* () {

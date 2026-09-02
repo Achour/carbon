@@ -937,12 +937,19 @@ export class CodexSession implements AgentSession {
 
   private handleNativeThreadStatus(threadId: string, status: NativeThreadStatus): void {
     if (threadId !== this.threadId && threadId !== this.chat.sessionId) return
-    this.nativeThreadActive = status.type === 'active'
     if (status.type === 'active') {
+      // `running` already owns the lifecycle of turns Carbon explicitly started.
+      // App Server can omit the matching idle status after a native review even
+      // though its turn stream closed cleanly. Latching that transient `active`
+      // state leaves the completed review spinning forever and prevents queued
+      // messages from draining. Keep the separate latch only for autonomous
+      // work, where there is no Carbon run to publish the eventual idle state.
+      if (!this.running) this.nativeThreadActive = true
       const waiting = status.activeFlags?.includes('waitingOnApproval') === true
       this.setStatus(waiting ? 'waiting-permission' : 'streaming')
       return
     }
+    this.nativeThreadActive = false
     if (!this.running && this.pending.length === 0 && !this.planReview) this.setStatus('idle')
   }
 
