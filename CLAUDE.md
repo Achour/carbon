@@ -671,6 +671,38 @@ consumed by both highlighters — highlight.js for chat code blocks and the diff
 view, CodeMirror for the editor. They were separate, which meant a token could be
 one color in a message and another in the file it came from.
 
+### The panel's tabs (`RightPanel.tsx`, `lib/tabOrder.ts`)
+
+- **⌘W is decided in the renderer, and the menu had to give it up first.** The
+  File menu bound ⌘W to Electron's `close` role, and a menu accelerator is
+  consumed in *main* before any `keydown` reaches the window — so the key every
+  editor uses to close a file closed Carbon's window, and no renderer handler
+  could ever have caught it. File → Close Tab now sends `ui:close-tab`; the
+  panel resolves what "close" means for the tab it is on (a dirty file still
+  asks, through the same `requestCloseFile` as the ✕), the derived tabs
+  (Agents, the Canvas library) ignore it, and with nothing open it asks main
+  for `window:close` — through `win.close()` so the unsaved-edits veto runs.
+  Close Window keeps the role on ⌘⇧W. It is a store *tick* rather than an
+  action that closes something, because `current` and the confirm dialog both
+  live in the panel; the effect keys on the tick alone and reads everything
+  else through a ref, since `current` in its deps would close on every switch.
+- **Browse mode has a tab.** Picking Files from the launcher docked the tree
+  under an empty pane with nothing in the strip and no way to leave it. The
+  Files tab exists exactly while `activeTab === 'files'`, the way the Canvas
+  tab is OR-ed in; a picked file's own tab takes over.
+- **A tab moves only within its own kind.** Files, canvases, terminals and
+  previews each keep their own array and the strip draws them in that fixed
+  sequence, so a drop on another kind is a no-op rather than a jump to the
+  kind's edge. `moveItem` is pure and pinned by `test/tabOrder.test.ts` —
+  removing the dragged item first shifts every index past it, which is the
+  off-by-one that reads right. The drag carries `application/x-carbon-tab` so
+  the composer's file-drop highlight, keyed on `Files`, stays dark under it.
+- **Gitignored entries are dimmed by asking git, per listing.** `listDir` runs
+  `check-ignore --stdin -z` from inside the folder it just read — one probe per
+  expand, no repo root needed, tracked files never reported. Exit 1 (nothing
+  matched) and 128 (not a repo) are answers, and a timeout degrades to undimmed:
+  the listing must never wait on or fail for git.
+
 ### The image viewer (`ImageView.tsx`)
 
 Click an image in a message and it opens full-window, sized in real pixels
