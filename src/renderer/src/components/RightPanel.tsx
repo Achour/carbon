@@ -790,6 +790,36 @@ export function RightPanel(): React.JSX.Element | null {
     !currentIsChanges &&
     !isEmpty &&
     !isUntitled
+  // ⌘W. What "close" means is decided here, where `current` is resolved and
+  // where the unsaved-edits question lives — a file tab goes through
+  // `requestCloseFile`, so ⌘W on a dirty buffer asks the same question the ✕
+  // does rather than discarding silently. The Agents roster and the Canvas
+  // library have no close (they are derived state) and so ⌘W is a no-op on
+  // them; anything else closes, and with nothing open the window does, which
+  // is what the key used to mean unconditionally. Everything is read through a
+  // ref so the effect keys on the tick alone: `current` in its deps would run
+  // the close on every tab switch.
+  const closeTabTick = useApp((s) => s.closeTabTick)
+  const closeCurrent = React.useRef<() => void>(() => {})
+  closeCurrent.current = () => {
+    if (!panelOpen || current === null) {
+      void window.api.closeWindow()
+      return
+    }
+    if (current === 'files') setActiveTab(null)
+    else if (current === 'plan') closePlanPanel()
+    else if (currentCanvasId) closeCanvas(currentCanvasId)
+    else if (currentIsTerminal) closeTerminal(current)
+    else if (currentIsPreview) closePreview(current)
+    else if (activeEntry) requestCloseFile(current)
+  }
+  const handledTick = React.useRef(closeTabTick)
+  React.useEffect(() => {
+    if (handledTick.current === closeTabTick) return
+    handledTick.current = closeTabTick
+    closeCurrent.current()
+  }, [closeTabTick])
+
   const targetWidth = width
     ? `min(${width}px, calc(100vw - ${CHAT_RESERVED_PX}px))`
     : '52%'

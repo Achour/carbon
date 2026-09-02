@@ -172,6 +172,7 @@ const api: Api = {
     invoke('window:set-appearance', mode, resolvedDark),
   setDockIcon: (palette: DockIconPalette) => invoke('window:set-dock-icon', palette),
   setWindowTranslucent: (on: boolean) => invoke('window:set-translucent', on),
+  closeWindow: () => invoke('window:close'),
   platform: process.platform,
   home: homedir(),
   terminalCreate: (opts: TerminalCreateOpts) => invoke('terminal:create', opts),
@@ -204,6 +205,11 @@ const api: Api = {
     const listener = (): void => cb()
     ipcRenderer.on('ui:new-chat', listener)
     return () => ipcRenderer.removeListener('ui:new-chat', listener)
+  },
+  onCloseTab: (cb: () => void) => {
+    const listener = (): void => cb()
+    ipcRenderer.on('ui:close-tab', listener)
+    return () => ipcRenderer.removeListener('ui:close-tab', listener)
   },
   onOpenChat: (cb: (id: string) => void) => {
     const listener = (_e: Electron.IpcRendererEvent, id: string): void => cb(id)

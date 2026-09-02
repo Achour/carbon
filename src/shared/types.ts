@@ -1941,6 +1941,8 @@ export interface Api {
    * covers the constructor-created material. No-op off macOS.
    */
   setWindowTranslucent(on: boolean): Promise<void>
+  /** Close the window — ⌘W's fallback once the panel has nothing to close. */
+  closeWindow(): Promise<void>
   /** Host platform (e.g. 'darwin'); gates macOS-only appearance options. */
   readonly platform: string
   /** The user's home directory, so paths can be shown as `~/…`. */
@@ -1990,6 +1992,8 @@ export interface Api {
   canvasDelete(id: string): Promise<void>
   onChatEvent(cb: (ev: ChatEvent) => void): () => void
   onNewChat(cb: () => void): () => void
+  /** File → Close Tab (⌘W). The renderer owns what "close" means. */
+  onCloseTab(cb: () => void): () => void
   /** A notification was clicked — bring this chat to the foreground. */
   onOpenChat(cb: (id: string) => void): () => void
   onTerminalEvent(cb: (ev: TerminalEvent) => void): () => void

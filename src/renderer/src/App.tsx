@@ -49,6 +49,7 @@ export default function App(): React.JSX.Element {
     preloadHeavyChunks()
     const offEvents = window.api.onChatEvent(applyEvent)
     const offNewChat = window.api.onNewChat(() => useApp.getState().startNewChat())
+    const offCloseTab = window.api.onCloseTab(() => useApp.getState().closeActiveTab())
     const offOpenChat = window.api.onOpenChat((id) => void openChat(id))
     const offPreview = window.api.onPreviewEvent((ev) => {
       if (ev.type === 'state') useApp.getState().applyPreviewState(ev.state)
@@ -161,6 +162,7 @@ export default function App(): React.JSX.Element {
     return () => {
       offEvents()
       offNewChat()
+      offCloseTab()
       offOpenChat()
       offPreview()
       offTerminal()

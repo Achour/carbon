@@ -580,6 +580,14 @@ interface AppState {
   /** Pins a preview tab so the next preview doesn't replace it. */
   promoteTab(path: string): void
   setActiveTab(tab: string | null): void
+  /**
+   * ⌘W. A counter rather than an action that closes something, because what
+   * the active tab *is* — and the unsaved-edits question a file tab may have
+   * to ask first — both live in `RightPanel`, which resolves `activeTab` against
+   * what is actually open. The panel observes the tick and does the closing.
+   */
+  closeTabTick: number
+  closeActiveTab(): void
   refreshCanvases(): Promise<void>
   /** Open one canvas as its own tab, or `null` for the Recents list. */
   openCanvas(id: string | null): Promise<void>
@@ -1943,6 +1951,10 @@ export const useApp = create<AppState>((set, get) => ({
 
   setActiveTab(tab) {
     set({ activeTab: tab })
+  },
+  closeTabTick: 0,
+  closeActiveTab() {
+    set((s) => ({ closeTabTick: s.closeTabTick + 1 }))
   },
   async refreshCanvases() {
     const project = canvasProject(get())

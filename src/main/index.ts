@@ -420,7 +420,18 @@ function buildMenu(): void {
           click: () => win?.webContents.send('ui:new-chat')
         },
         { type: 'separator' },
-        { role: 'close' }
+        // ⌘W is the renderer's: every editor closes a *tab* on it, and with the
+        // `close` role holding the accelerator the key never reached the window
+        // — the menu consumes it in main before any keydown fires — so hitting
+        // ⌘W on a file took the whole window with it. The renderer decides what
+        // "close" means for the tab it is on and asks for the window only when
+        // nothing is open (`window:close`, so the dirty-edits guard still runs).
+        {
+          label: 'Close Tab',
+          accelerator: 'CmdOrCtrl+W',
+          click: () => win?.webContents.send('ui:close-tab')
+        },
+        { label: 'Close Window', accelerator: 'Shift+CmdOrCtrl+W', role: 'close' }
       ]
     },
     { label: 'Edit', role: 'editMenu' },
@@ -777,6 +788,9 @@ function registerIpc(): void {
   )
 
   ipcMain.handle('window:set-translucent', (_e, on: boolean) => setWindowTranslucent(on))
+  // ⌘W with nothing left to close. Goes through `win.close()` rather than the
+  // renderer's own `window.close()` so the unsaved-edits veto on 'close' runs.
+  ipcMain.handle('window:close', () => win?.close())
 
   ipcMain.handle('window:set-dock-icon', (_e, palette: DockIconPalette) => setDockIcon(palette))
 
