@@ -637,6 +637,7 @@ export class GrokSession implements AgentSession {
         name,
         input: grokToolInput(name, call.rawInput),
         status: toolStatus(call.status),
+        startedAt: Date.now(),
         ...(images ? { outputImages: images } : {}),
         // A Grok spawn is timed and nothing else. ACP carries no nested traffic
         // for a sub-agent and no per-agent usage — the CLI runs it inside its

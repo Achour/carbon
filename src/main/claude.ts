@@ -262,6 +262,9 @@ function toolResultText(content: unknown): string {
 // the 80ms text coalescer: a command or a path is read, not watched, and each
 // emit is a full-part IPC plus a parse of the whole prefix.
 const PARTIAL_INPUT_MS = 120
+// How often a redacted thought's running token estimate is shipped. Nothing
+// draws it, so once a second is already generous.
+const THINKING_PING_MS = 1000
 const ADVISOR_TOOL = 'advisor'
 
 /**
@@ -519,6 +522,8 @@ class ClaudeSession implements AgentSession {
    * while the model is still typing it — without an IPC per JSON fragment.
    */
   private partialTimers = new Map<number, NodeJS.Timeout>()
+  /** One trailing timer per thinking part, for the `estimated_tokens` pings. */
+  private thinkingPingTimers = new Map<number, NodeJS.Timeout>()
   // Route a tool's result (which lands on a later `user` message, matched by
   // toolUseId) back to its streamed part. Entries are pruned the moment a result
   // is applied (see handleToolResults) so these stay ~O(in-flight tools) instead
@@ -1166,6 +1171,8 @@ class ClaudeSession implements AgentSession {
     this.setTitlePending(false)
     for (const timer of this.partialTimers.values()) clearTimeout(timer)
     this.partialTimers.clear()
+    for (const timer of this.thinkingPingTimers.values()) clearTimeout(timer)
+    this.thinkingPingTimers.clear()
     this.terminalizeRunning('error')
     this.disposed = true
     this.dead = true
@@ -1670,6 +1677,7 @@ class ClaudeSession implements AgentSession {
             toolUseId: block.id ?? randomUUID(),
             name,
             status: 'pending',
+            startedAt: Date.now(),
             // Stamped where the spawn is *seen*, not where its first reply
             // lands: a cold sub-agent is several seconds of nothing, and that
             // wait is exactly what the Agents panel exists to show.
@@ -1713,7 +1721,22 @@ class ClaudeSession implements AgentSession {
           // exact count arrives instead, on the `thinking_tokens` system message.
           if (typeof delta.estimated_tokens === 'number') {
             part.tokens = (part.tokens ?? 0) + delta.estimated_tokens
-            this.emitPart(message, index)
+            // Nothing draws this number, and a ping lands several times a
+            // second for the whole of a long thought — each one a full-part
+            // IPC and a store write that re-rendered the transcript for a
+            // change nobody could see. The count accumulates on the part
+            // above on every ping; it is *shipped* at most once a second,
+            // and once more at block close.
+            if (!this.thinkingPingTimers.has(index)) {
+              this.thinkingPingTimers.set(
+                index,
+                setTimeout(() => {
+                  this.thinkingPingTimers.delete(index)
+                  if (this.disposed || this.current !== message) return
+                  this.emitPart(message, index)
+                }, THINKING_PING_MS)
+              )
+            }
           }
           if (delta.thinking) this.deltas.queue(message.id, index, delta.thinking)
         } else if (delta.type === 'input_json_delta') {
@@ -1744,6 +1767,14 @@ class ClaudeSession implements AgentSession {
         if (!message) break
         const index = event.index ?? message.parts.length - 1
         const part = message.parts[index]
+        if (part?.type === 'thinking') {
+          const timer = this.thinkingPingTimers.get(index)
+          if (timer) {
+            clearTimeout(timer)
+            this.thinkingPingTimers.delete(index)
+            this.emitPart(message, index)
+          }
+        }
         if (part?.type === 'tool') {
           const timer = this.partialTimers.get(index)
           if (timer) {
@@ -1888,6 +1919,19 @@ class ClaudeSession implements AgentSession {
           output: existing?.output,
           outputImages: existing?.outputImages,
           denied: existing?.denied,
+          // The clock has to survive this rebuild or it is never seen at all.
+          // A tool block closes — and its message finalizes — *before* the call
+          // returns, so a long `npm test` spends its entire run on a part the
+          // reconcile has already replaced: dropping the stamp here left every
+          // slow call showing a bare spinner, the one case the count exists
+          // for. Falling back to now, rather than to nothing, keeps a call that
+          // is still running from losing its clock outright; a settled one
+          // draws none either way.
+          startedAt:
+            existing?.startedAt ??
+            (this.turnActive && existing?.status !== 'success' && existing?.status !== 'error'
+              ? Date.now()
+              : undefined),
           // Keep sub-agent activity across the reconcile (same array ref, so
           // childToolLoc indexes stay valid). `agent` rides along for the same
           // reason and is the easier one to lose: the reconcile rebuilds every

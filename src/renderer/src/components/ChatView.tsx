@@ -373,6 +373,8 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
   const deleteChat = useApp((s) => s.deleteChat)
 
   const scrollRef = React.useRef<HTMLDivElement>(null)
+  /** The reading column inside the scroller — what the follow observer measures. */
+  const columnRef = React.useRef<HTMLDivElement>(null)
   const pinnedRef = React.useRef(true)
   /**
    * Distance from the BOTTOM of the scroller, captured just before older
@@ -416,13 +418,32 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
     setShowJump(!pinned)
   }
 
-  // Follow the stream while the user is pinned to the bottom. One animation
-  // frame coalesces message, status and permission updates that land together.
+  // Follow the stream while the user is pinned to the bottom.
+  //
+  // This keys on the column's *height*, not on the store. A store-keyed effect
+  // (`[messages, permissions, status]`) was the first version, and it missed
+  // most of what actually moves the bottom edge: `useStreamText` reveals words
+  // on animation frames *between* deltas, releases the held last word 400ms
+  // after the final one with no store change at all, images decode late, a
+  // code block's rows land one at a time, and a collapsible animates its height
+  // over 200ms. Each of those grew the column under a scroller that was still
+  // parked at the previous height, so the reply's last line sat just below the
+  // fold — a lag that read as the stream stuttering. A ResizeObserver fires
+  // after layout for every one of them, and `pinnedRef` is the only guard it
+  // needs: `loadEarlier` unpins before it prepends, so a prepend never snaps
+  // the reader back down. The scroller itself is observed too, so a window
+  // resize while pinned keeps the bottom rather than the top.
   React.useEffect(() => {
-    if (!pinnedRef.current) return
-    const frame = requestAnimationFrame(() => scrollToBottom())
-    return () => cancelAnimationFrame(frame)
-  }, [messages, permissions, status, scrollToBottom])
+    const scroller = scrollRef.current
+    const column = columnRef.current
+    if (!scroller || !column) return
+    const observer = new ResizeObserver(() => {
+      if (pinnedRef.current) scrollToBottom()
+    })
+    observer.observe(column)
+    observer.observe(scroller)
+    return () => observer.disconnect()
+  }, [scrollToBottom])
 
   // Jump to the bottom when switching chats.
   React.useEffect(() => {
@@ -480,6 +501,11 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
   // "Thinking…" until the model has produced something this turn; "Working…" after.
   const activityLabel = producedSomething ? 'Working…' : 'Thinking…'
 
+  // The one prompt Enter/Esc answer: the oldest plain permission. A question
+  // has several answers and a plan has its own review, so neither takes keys.
+  const keyboardPermission = permissions.find(
+    (r) => r.toolName !== 'AskUserQuestion' && r.toolName !== 'ExitPlanMode'
+  )?.id
   const pendingPlanRequest = permissions.find((r) => r.toolName === 'ExitPlanMode')
   const pendingPlan = (pendingPlanRequest?.input as { plan?: unknown } | null)?.plan
   const displayedMessages = React.useMemo(
@@ -760,7 +786,7 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
         onScroll={onScroll}
         className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]"
       >
-        <div className="mx-auto flex max-w-3xl flex-col gap-4 px-6 py-6">
+        <div ref={columnRef} className="mx-auto flex max-w-3xl flex-col gap-4 px-6 py-6">
           {hiddenBefore > 0 && (
             <div className="flex justify-center">
               <Button
@@ -820,7 +846,13 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
                   </Button>
                 </div>
               )
-            return <PermissionCard key={request.id} request={request} />
+            return (
+              <PermissionCard
+                key={request.id}
+                request={request}
+                keyboard={request.id === keyboardPermission}
+              />
+            )
           })}
           {showActivity && <StreamingIndicator label={activityLabel} />}
           <div className="h-2" />

@@ -11,10 +11,37 @@ function summarize(request: PermissionRequestPayload): string | null {
   return typeof candidate === 'string' ? candidate : null
 }
 
+/**
+ * Whether a keypress with this element focused may answer a permission prompt.
+ *
+ * The answer is "when the key would otherwise do nothing": nothing focused, or
+ * the composer with nothing typed in it. A non-empty composer is a message being
+ * written, where Enter sends and Esc is the user's own; any other input is a
+ * dialog or a rename, and a menu item focuses itself while its menu is open, so
+ * every one of those falls through to the buttons. `value` is read off the
+ * element rather than the store because the composer keeps its text out of
+ * zustand on purpose (see Drafts) — the DOM is the only place it is current.
+ */
+function keyMayAnswer(target: EventTarget | null): boolean {
+  const el = target instanceof HTMLElement ? target : null
+  if (!el || el === document.body) return true
+  if (el instanceof HTMLTextAreaElement && el.closest('[data-composer]')) {
+    return el.value.trim() === ''
+  }
+  return false
+}
+
 export function PermissionCard({
-  request
+  request,
+  keyboard = false
 }: {
   request: PermissionRequestPayload
+  /**
+   * This is the prompt Enter and Esc answer. Only one card holds the keys at a
+   * time — the oldest pending one — so two prompts never both fire on one
+   * keypress, and the card that owns them says so beside its buttons.
+   */
+  keyboard?: boolean
 }): React.JSX.Element {
   const respondPermission = useApp((s) => s.respondPermission)
   const [busy, setBusy] = React.useState(false)
@@ -36,6 +63,30 @@ export function PermissionCard({
     }
     await respondPermission(request.id, decision)
   }
+
+  // Enter allows, Esc denies. "Feels fast" in an agent GUI is mostly how
+  // quickly you can say yes, and a prompt that needs the mouse while your hands
+  // are on the keyboard is the slowest thing on screen. The listener rides the
+  // window in the bubble phase, so anything that handles the key itself has
+  // already run; `keyMayAnswer` is what keeps it out of a message being typed
+  // and out of every dialog. The `busy` check is the double-fire guard — the
+  // card stays mounted until the response round-trips.
+  const respondRef = React.useRef(respond)
+  respondRef.current = respond
+  React.useEffect(() => {
+    if (!keyboard) return
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey || e.isComposing) return
+      if (e.key !== 'Enter' && e.key !== 'Escape') return
+      if (!keyMayAnswer(e.target)) return
+      e.preventDefault()
+      void respondRef.current({ behavior: e.key === 'Enter' ? 'allow' : 'deny' })
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+    // `busy` is a dep so a card that has answered stops listening at once,
+    // rather than on unmount.
+  }, [keyboard, busy])
 
   return (
     <div className="animate-enter overflow-hidden rounded-xl border border-warning/40 bg-warning/8 dark:bg-warning/6">
@@ -72,6 +123,11 @@ export function PermissionCard({
         </div>
       </div>
       <div className="flex items-center justify-end gap-2 px-3.5 py-2.5">
+        {keyboard && !busy && (
+          <span className="mr-auto text-[11px] text-muted-foreground/60 select-none">
+            <kbd className="font-sans">↵</kbd> allow · <kbd className="font-sans">esc</kbd> deny
+          </span>
+        )}
         <Button size="sm" variant="ghost" disabled={busy} onClick={() => void respond({ behavior: 'deny' })}>
           Deny
         </Button>

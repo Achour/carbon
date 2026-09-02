@@ -115,6 +115,15 @@ Path aliases: `@` → `src/renderer/src`, `@shared` → `src/shared` (renderer a
   leaves a part claiming more is coming. Before the first parseable prefix
   lands, `ToolCard` pulses a placeholder in the summary's slot rather than
   drawing the label alone: a row that is forming should look like one.
+- **Two more emitters are throttled at the same grain, for the same reason.** A
+  redacted thought's `estimated_tokens` pings went out as a full-part IPC each,
+  several a second for the whole of a long thought, re-rendering the transcript
+  for a number nothing draws; the count still accumulates on the part per ping
+  and is *shipped* at most every `THINKING_PING_MS`, and once more at block
+  close. Codex's `item/commandExecution/outputDelta` arrived as the whole item
+  and went out as the whole part per write to the pipe — O(k²) bytes for a
+  chatty command, plus a persist each; `OUTPUT_MS` (`codex.ts`) holds one
+  trailing timer per item and the terminal update flushes it.
 - Permissions: the SDK's `canUseTool` callback returns a Promise held in a `pending` map until the renderer answers via `chat:respond-permission`. "Always allow" uses the SDK's permission `suggestions`.
 - Changing **effort** has no live SDK setter — `setOptions` disposes the session and the next send resumes it in a fresh process. Model and permission mode change live.
 - Sub-agent traffic never becomes a top-level message, but it is no longer *dropped*: only a
@@ -433,6 +442,17 @@ time.
 - The elapsed time per frame is clamped: a backgrounded window fires its first
   frame minutes later, and an unclamped delta would reveal everything in one
   jump, which is exactly the behaviour this replaced.
+- **The scroller follows the column's *height*, not the store.** The pinned
+  follow was an effect keyed on `[messages, permissions, status]`, and the
+  drain above is precisely what that misses: words are revealed on animation
+  frames *between* deltas, the held last word is released 400ms after the
+  final one with no store change at all, images decode late and a collapsible
+  animates its height over 200ms. Each grew the column under a scroller still
+  parked at the previous height, so the reply's last line sat just below the
+  fold and the stream read as stuttering. A `ResizeObserver` on the reading
+  column (and on the scroller, for a window resize) fires after layout for all
+  of them, and `pinnedRef` is the only guard it needs — `loadEarlier` unpins
+  before it prepends, so a prepend never snaps the reader back down.
 
 ### Drafts (`lib/drafts.ts`, `DraftItem`)
 
@@ -1087,6 +1107,40 @@ where the output already lived.
   kind of line as the row summarizing them. An indent would say they are a
   different kind of thing, and at three levels (group → call → its output) it
   walks the transcript steadily rightwards.
+- **A long call carries a clock on its collapsed row, and only a long one.** A
+  spinner beside `npm test` for a minute reads as hung; a `Read` returns in a
+  few hundred milliseconds and a number on it is a flicker. So
+  `ToolPart.startedAt` — stamped at first sighting by all three adapters, and
+  carried across Codex's wholesale part rebuilds — draws `12s` beside the
+  spinner once a call has run past `ELAPSED_AFTER_MS`, ticking in the component
+  the way the agent clock does. It is `startedAt` and not the SDK's
+  `tool_progress`: that message is declared, and the CLI binary contains its
+  emitter, but a probe of a 7.7-second Bash call on 2.1.258 produced zero
+  frames of it, and it carries elapsed time only — no stdout — so it could not
+  have shown more than the stamp does. Live Bash output for Claude is not
+  available through the SDK.
+- **An Edit is a diff, inside the panel.** `old_string` over `new_string` as a
+  red block and a green block meant reading forty lines to find the one that
+  moved. `lib/lineDiff.ts` (LCS over lines, prefix and suffix trimmed, a cell
+  cap past which it degrades to the two-block answer; `test/lineDiff.test.ts`)
+  draws the change in its context, and it renders *progressively*: the
+  streamed `new_string` prefix diffs against the whole `old_string`. Until that
+  prefix has a first character the replacement reads as unchanged rather than
+  as every anchor line deleted for a beat. Nothing about the collapsed row
+  changes — a row is one line, folded, and stays so.
+- **A result is cut to its tail, not its head.** The one output people open is
+  a failed build or test run, and the error is at the bottom; keeping the first
+  6,000 characters hid exactly that. `OutputBlock` keeps the last, cuts on a
+  line boundary, says how many lines are above the cut, and shows all of them
+  on one click.
+- **Enter allows and Esc denies a permission prompt**, on the oldest plain one
+  (a question has several answers and a plan has its own review, so neither
+  takes keys), and the card that owns the keys says so beside its buttons. The
+  listener rides the window in the bubble phase, and `keyMayAnswer` is what
+  keeps it honest: nothing focused, or the composer with nothing typed — read
+  off the DOM, since the composer keeps its text out of zustand on purpose. A
+  non-empty composer is a message being written, and any other input is a
+  dialog.
 
 **`summarizeActivity` is the part that carries information rather than style.**
 A mixed run said `Workspace activity · 7 actions` — a count of the one thing the

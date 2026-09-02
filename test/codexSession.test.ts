@@ -1415,7 +1415,10 @@ test('streamed item lifecycle updates one tool part in place', async () => {
 
   const assistant = h.chat.messages.find((message) => message.role === 'assistant')
   assert.equal(assistant?.parts.length, 1)
-  assert.deepEqual(assistant?.parts[0], {
+  const { startedAt, ...part } = assistant?.parts[0] as ToolPart
+  // Stamped at first sighting and carried across every rebuild of the part.
+  assert.equal(typeof startedAt, 'number')
+  assert.deepEqual(part, {
     type: 'tool',
     toolUseId: 'cmd-1',
     name: 'Bash',
@@ -1423,6 +1426,13 @@ test('streamed item lifecycle updates one tool part in place', async () => {
     output: 'passed',
     status: 'success'
   })
+  // A running command's output is shipped on a trailing timer, not per chunk:
+  // the completion landed inside that window, so the intermediate output was
+  // never its own IPC — the renderer saw the slot open, then the result.
+  const outputs = h.events.flatMap((event) =>
+    event.type === 'part' && event.part.type === 'tool' ? [event.part.output] : []
+  )
+  assert.deepEqual(outputs, [undefined, 'passed'])
   cleanup(h)
 })
 

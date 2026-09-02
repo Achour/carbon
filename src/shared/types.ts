@@ -336,6 +336,12 @@ export interface ToolPart {
    */
   partial?: boolean
   status: ToolStatus
+  /**
+   * When the call was first seen, so a row can say how long it has been
+   * running. Every adapter stamps it at first sighting; parts written before
+   * it existed simply have none and draw no clock.
+   */
+  startedAt?: number
   output?: string
   /** Image blocks a tool returned (e.g. preview_screenshot) — base64, no prefix. */
   outputImages?: { mediaType: string; data: string }[]

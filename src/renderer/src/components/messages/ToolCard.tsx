@@ -35,6 +35,7 @@ import {
 import { cn } from '@/lib/utils'
 import { humanizeShellCommand } from '@/lib/toolLabels'
 import { summarizeActivity } from '@/lib/toolSummary'
+import { lineDiff, type DiffLine } from '@/lib/lineDiff'
 import { Markdown } from '@/components/Markdown'
 import { useApp } from '@/store'
 import {
@@ -574,6 +575,112 @@ function MonoBlock({
   )
 }
 
+/**
+ * An edit as a diff: the lines that changed, in the lines around them, rather
+ * than a red block of everything removed over a green block of everything
+ * added. It takes `MonoBlock`'s chrome so the two read as one kind of thing in
+ * a panel, and the same `--diff-*` tints as the review, since an added line is
+ * the same state wherever it is drawn. Rows are `pre`-wrapped like the block
+ * they replace; a long line wraps rather than scrolls, which is the right
+ * answer for a snippet a few lines high.
+ */
+function DiffBlock({ lines, label }: { lines: DiffLine[]; label?: string }): React.JSX.Element {
+  return (
+    <div>
+      {label && (
+        <div className="mb-1 text-[10px] font-medium tracking-wider text-muted-foreground uppercase">
+          {label}
+        </div>
+      )}
+      <pre className="max-h-72 select-text overflow-auto rounded-lg border border-border bg-code py-1.5 font-mono text-xs leading-relaxed whitespace-pre-wrap">
+        {lines.map((line, i) => (
+          <div
+            key={i}
+            className={cn(
+              'flex px-2.5',
+              line.kind === 'add' && 'bg-[var(--diff-add-bg)] text-success',
+              line.kind === 'del' && 'bg-[var(--diff-del-bg)] text-destructive'
+            )}
+          >
+            <span className="w-4 shrink-0 select-none opacity-70">
+              {line.kind === 'add' ? '+' : line.kind === 'del' ? '−' : ''}
+            </span>
+            <span className="min-w-0 flex-1">{line.text || ' '}</span>
+          </div>
+        ))}
+      </pre>
+    </div>
+  )
+}
+
+/** Past this many characters a result is cut, and it is the *head* that goes. */
+const OUTPUT_PREVIEW_CHARS = 6000
+
+/**
+ * A tool's result, cut to its tail when long. It used to keep the head and
+ * drop the rest behind "(truncated)", which for the one output people actually
+ * open — a failed build, a failed test run — hid exactly the lines that say
+ * why: the error is at the bottom. The cut lands on a line boundary, the row
+ * above the block says how much is hidden, and one click shows all of it.
+ */
+function OutputBlock({ text, label }: { text: string; label: string }): React.JSX.Element {
+  const [all, setAll] = React.useState(false)
+  const cut = !all && text.length > OUTPUT_PREVIEW_CHARS
+  let shown = text
+  let hiddenLines = 0
+  if (cut) {
+    let from = text.length - OUTPUT_PREVIEW_CHARS
+    const nl = text.indexOf('\n', from)
+    if (nl !== -1 && nl < text.length - 1) from = nl + 1
+    shown = text.slice(from)
+    for (let i = 0; i < from; i++) if (text.charCodeAt(i) === 10) hiddenLines++
+  }
+  return (
+    <div>
+      <div className="mb-1 flex items-center gap-2 text-[10px] font-medium tracking-wider text-muted-foreground uppercase">
+        {label}
+        {cut && (
+          <button
+            type="button"
+            className="cursor-pointer normal-case tracking-normal text-muted-foreground/70 underline-offset-2 hover:text-foreground hover:underline"
+            onClick={() => setAll(true)}
+          >
+            {hiddenLines > 0 ? `${hiddenLines.toLocaleString()} earlier lines hidden · show all` : 'show all'}
+          </button>
+        )}
+      </div>
+      <pre className="max-h-72 select-text overflow-auto rounded-lg border border-border bg-code p-2.5 font-mono text-xs leading-relaxed whitespace-pre-wrap">
+        {cut && '…\n'}
+        {shown}
+      </pre>
+    </div>
+  )
+}
+
+/**
+ * A live count of how long a call has been running, drawn on the collapsed
+ * row beside its spinner — and only once it has run long enough to be worth
+ * a number. A `Read` returns in a few hundred milliseconds and a clock on it
+ * is a flicker; a test suite runs for a minute and a spinner alone reads as
+ * hung. Ticks in the component and only while running, the way the agent
+ * clock does, so a settled row costs nothing.
+ */
+const ELAPSED_AFTER_MS = 2000
+
+function useToolElapsed(part: ToolPart): string | null {
+  const running = part.status === 'pending' || part.status === 'running'
+  const [now, setNow] = React.useState(() => Date.now())
+  React.useEffect(() => {
+    if (!running) return
+    setNow(Date.now())
+    const id = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(id)
+  }, [running])
+  if (!running || !part.startedAt) return null
+  const ms = now - part.startedAt
+  return ms >= ELAPSED_AFTER_MS ? formatAgentDuration(ms) : null
+}
+
 interface TodoItem {
   content?: string
   status?: string
@@ -586,24 +693,22 @@ function ToolDetails({ part }: { part: ToolPart }): React.JSX.Element {
     switch (part.name) {
       case 'Bash':
         return str(input.command) ? <MonoBlock label="Command">{String(input.command)}</MonoBlock> : null
-      case 'Edit':
+      case 'Edit': {
+        const before = str(input.old_string)
+        if (!before) return null
+        // `new_string` streams in after `old_string`. Until its first character
+        // lands the edit has not said what it changes to, and diffing against
+        // "" would draw every anchor line as deleted for a beat — so an
+        // unwritten replacement reads as unchanged, and an *empty* one, once
+        // the input is final, reads as the deletion it is.
+        const after = str(input.new_string) ?? (part.partial ? before : '')
         return (
-          <div className="space-y-2">
-            {str(input.old_string) && (
-              <MonoBlock
-                label="Remove"
-                className="border-destructive/25 bg-destructive/8 dark:bg-destructive/10"
-              >
-                {String(input.old_string)}
-              </MonoBlock>
-            )}
-            {str(input.new_string) && (
-              <MonoBlock label="Add" className="border-success/25 bg-success/8 dark:bg-success/10">
-                {String(input.new_string)}
-              </MonoBlock>
-            )}
-          </div>
+          <DiffBlock
+            lines={lineDiff(before, after)}
+            label={input.replace_all === true ? 'Edit · every occurrence' : 'Edit'}
+          />
         )
+      }
       case 'Write':
         return str(input.content) ? <MonoBlock label="Content">{String(input.content)}</MonoBlock> : null
       case 'ExitPlanMode':
@@ -650,9 +755,7 @@ function ToolDetails({ part }: { part: ToolPart }): React.JSX.Element {
     <div className="space-y-2.5 py-2">
       {inputView}
       {part.output != null && part.output !== '' && (
-        <MonoBlock label={part.status === 'error' ? 'Error' : 'Output'}>
-          {part.output.length > 6000 ? `${part.output.slice(0, 6000)}\n… (truncated)` : part.output}
-        </MonoBlock>
+        <OutputBlock text={part.output} label={part.status === 'error' ? 'Error' : 'Output'} />
       )}
       {part.outputImages?.map((img, i) => (
         <img
@@ -693,6 +796,7 @@ export const ToolCard = React.memo(function ToolCard({
   // of one call's status: a call is in flight for a few hundred milliseconds, so
   // keying on it opens and shuts the row once per call.
   const [open, onOpenChange] = React.useState(false)
+  const elapsed = useToolElapsed(part)
 
   // Task/Agent tools render their spawned sub-agent's live activity.
   if (part.name === 'Task' || part.name === 'Agent') {
@@ -783,6 +887,11 @@ export const ToolCard = React.memo(function ToolCard({
           >
             <ExternalLink className="size-3.5" />
           </RowAction>
+        )}
+        {elapsed && (
+          <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground/50">
+            {elapsed}
+          </span>
         )}
         <ActivityStatus part={part} />
       </Collapsible.Trigger>

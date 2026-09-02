@@ -321,6 +321,13 @@ function agentStatus(status: string): ToolStatus {
   }
 }
 
+/**
+ * How often a running command's accumulated output is re-shipped to the
+ * renderer. The same grain as Claude's `PARTIAL_INPUT_MS`, for the same reason:
+ * each emit is a full-part IPC, and output is read rather than watched.
+ */
+const OUTPUT_MS = 120
+
 function cap(text: string): string {
   return text.length > OUTPUT_CAP ? `${text.slice(0, OUTPUT_CAP)}\n… (truncated)` : text
 }
@@ -483,6 +490,14 @@ export class CodexSession implements AgentSession {
   // Last full text emitted per streaming slot (`${messageId}:${partIndex}`), so
   // the next update can be diffed down to its appended suffix.
   private lastText = new Map<string, string>()
+  // A running command's output arrives as `outputDelta`s, each of which lands
+  // here as the *whole* item and used to go out as a full-part IPC per chunk —
+  // O(k²) bytes for a chatty command, plus a `saveChatSoon` each. The part in
+  // memory is updated on every chunk; only the emit is deferred, one trailing
+  // timer per item, so the renderer sees the latest output every OUTPUT_MS
+  // rather than every write to the pipe. Keyed by item id: a timer firing
+  // reads the part back off the message, so it always ships what is current.
+  private outputTimers = new Map<string, NodeJS.Timeout>()
   dead = false
   private disposed = false
   // One-shot AI title guards — see ClaudeSession for the rationale. `titledResumed`
@@ -1874,14 +1889,40 @@ export class CodexSession implements AgentSession {
     const message = this.ensureCurrent()
     const loc = this.itemLoc.get(item.id)
     if (loc) {
+      const prev = loc.message.parts[loc.index]
+      // The clock started at first sighting; an update that rebuilds the part
+      // from the item must not restart it.
+      if (part.type === 'tool' && prev?.type === 'tool' && prev.startedAt) {
+        part.startedAt = prev.startedAt
+      }
       loc.message.parts[loc.index] = part
       // reasoning/agent_message blocks re-send the full accumulated text on every
       // update; while streaming, emit only the appended suffix as a delta. Any
       // non-streaming or diverged update falls through to an authoritative part.
       if (!terminal && this.emitStreamingDelta(loc.message, loc.index, item, part)) return
+      const timer = this.outputTimers.get(item.id)
+      if (!terminal && item.type === 'command_execution') {
+        // Output still streaming: the part above is current, and a timer
+        // already armed will ship it. Otherwise arm one.
+        if (timer) return
+        this.outputTimers.set(
+          item.id,
+          setTimeout(() => {
+            this.outputTimers.delete(item.id)
+            if (this.disposed) return
+            this.emitPart(loc.message, loc.index)
+          }, OUTPUT_MS)
+        )
+        return
+      }
+      if (timer) {
+        clearTimeout(timer)
+        this.outputTimers.delete(item.id)
+      }
       this.emitPart(loc.message, loc.index)
     } else {
       const index = message.parts.length
+      if (part.type === 'tool') part.startedAt = Date.now()
       message.parts[index] = part
       this.itemLoc.set(item.id, { message, index })
       // First sighting sends a full part so the renderer has a slot to append into.
@@ -2879,6 +2920,8 @@ export class CodexSession implements AgentSession {
     // disposed is now set, so this clears the coalescing timer + buffer without
     // emitting — no leaked timer after the session is superseded.
     this.deltas.flush()
+    for (const timer of this.outputTimers.values()) clearTimeout(timer)
+    this.outputTimers.clear()
     this.rolloutWatcher.stop()
     this.clearCodexJobs()
     // Preserve a plan review in ChatData. Native App Server questions belong to
