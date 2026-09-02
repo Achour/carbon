@@ -1386,6 +1386,8 @@ export interface FileEntry {
   name: string
   path: string
   kind: 'dir' | 'file'
+  /** Matched by a `.gitignore` rule — drawn dimmed, like a dotfile. */
+  ignored?: boolean
 }
 
 export type FileContent =

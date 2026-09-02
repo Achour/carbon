@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process'
 import { mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
 import { dirname, extname, join, relative, resolve, sep } from 'node:path'
 import type { FileContent, FileEntry, FsCreateResult, FileWriteResult } from '@shared/types'
@@ -66,14 +67,70 @@ const LANGUAGE_BY_EXT: Record<string, string> = {
 // Hidden from the file tree, matching Cursor/VS Code's default files.exclude.
 const TREE_HIDDEN = new Set(['.git', '.svn', '.hg', 'CVS', '.DS_Store', 'Thumbs.db'])
 
+// Which of a folder's entries `.gitignore` rules match, so the tree can dim
+// `node_modules`, `dist` and a build's `*.tsbuildinfo` the way Cursor and VS
+// Code do — otherwise generated output reads exactly like source. One
+// `check-ignore` per listing rather than one `status --ignored` per project:
+// the tree loads a folder at a time, and this answers for exactly that folder,
+// from inside it, so no repo root has to be known. Bare names on stdin, NUL
+// separated so a name with a newline cannot split. Exit 1 means nothing
+// matched and 128 means not a repository — both are answers, not failures, and
+// the listing must never wait on or fail for this: a repo that has no git on
+// PATH still has files to show.
+const IGNORE_PROBE_MS = 2000
+
+function gitIgnored(dir: string, names: string[]): Promise<Set<string>> {
+  if (names.length === 0) return Promise.resolve(new Set())
+  return new Promise((resolve) => {
+    const done = new Set<string>()
+    let out = ''
+    let settled = false
+    const finish = (): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      for (const name of out.split('\0')) if (name) done.add(name)
+      resolve(done)
+    }
+    let child: ReturnType<typeof spawn>
+    try {
+      child = spawn('git', ['-C', dir, 'check-ignore', '--stdin', '-z'], {
+        stdio: ['pipe', 'pipe', 'ignore']
+      })
+    } catch {
+      resolve(done)
+      return
+    }
+    const timer = setTimeout(() => {
+      child.kill()
+      finish()
+    }, IGNORE_PROBE_MS)
+    child.stdout?.setEncoding('utf8')
+    child.stdout?.on('data', (chunk: string) => {
+      out += chunk
+    })
+    child.on('error', finish)
+    child.on('close', finish)
+    child.stdin?.on('error', () => {})
+    child.stdin?.end(names.join('\0') + '\0')
+  })
+}
+
 export async function listDir(dir: string): Promise<FileEntry[]> {
   const entries = await readdir(dir, { withFileTypes: true })
-  return entries
-    .filter((e) => (e.isDirectory() || e.isFile()) && !TREE_HIDDEN.has(e.name))
+  const shown = entries.filter(
+    (e) => (e.isDirectory() || e.isFile()) && !TREE_HIDDEN.has(e.name)
+  )
+  const ignored = await gitIgnored(
+    dir,
+    shown.map((e) => e.name)
+  )
+  return shown
     .map((e) => ({
       name: e.name,
       path: join(dir, e.name),
-      kind: e.isDirectory() ? ('dir' as const) : ('file' as const)
+      kind: e.isDirectory() ? ('dir' as const) : ('file' as const),
+      ...(ignored.has(e.name) ? { ignored: true } : {})
     }))
     .sort((a, b) => {
       if (a.kind !== b.kind) return a.kind === 'dir' ? -1 : 1

@@ -238,7 +238,7 @@ function TreeNode({
                   className={cn(
                     'flex w-full items-center gap-1.5 rounded-md py-[3px] pr-2 text-left text-[length:var(--ui-row)] transition-colors outline-none hover:bg-accent/60 focus-visible:bg-accent focus-visible:ring-1 focus-visible:ring-primary/50',
                     activeTab === entry.path && 'bg-accent',
-                    dotfile && 'opacity-60'
+                    (dotfile || entry.ignored) && 'opacity-60'
                   )}
                   style={{ paddingLeft: 6 + depth * 14 }}
                 >
