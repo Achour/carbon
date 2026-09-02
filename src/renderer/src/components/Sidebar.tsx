@@ -180,6 +180,7 @@ const sameProjectMenu = (a: RowProjectMenu | null, b: RowProjectMenu | null): bo
 
 function ChatItemRow({
   chat,
+  now,
   active,
   activity,
   titling,
@@ -188,6 +189,8 @@ function ChatItemRow({
   actions
 }: {
   chat: ChatMeta
+  /** Minute-aligned clock supplied by the sidebar so relative labels advance. */
+  now: number
   active: boolean
   activity: ChatActivity
   titling: boolean
@@ -231,7 +234,7 @@ function ChatItemRow({
       {activity.kind !== 'idle' ? (
         <ActivityIndicator activity={activity} />
       ) : (
-        relativeTime(chat.updatedAt)
+        relativeTime(chat.updatedAt, now)
       )}
     </span>
   )
@@ -409,6 +412,8 @@ const ChatItem = React.memo(
     prev.titling === next.titling &&
     prev.actions === next.actions &&
     sameActivity(prev.activity, next.activity) &&
+    (prev.activity.kind !== 'idle' ||
+      relativeTime(prev.chat.updatedAt, prev.now) === relativeTime(next.chat.updatedAt, next.now)) &&
     sameDetail(prev.detail, next.detail) &&
     sameProjectMenu(prev.projectMenu, next.projectMenu)
 )
@@ -430,11 +435,13 @@ function SearchChatsDialog({
   open,
   onOpenChange,
   chats,
+  now,
   onOpen
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   chats: ChatMeta[]
+  now: number
   onOpen: (id: string) => void
 }): React.JSX.Element {
   const [q, setQ] = React.useState('')
@@ -515,7 +522,7 @@ function SearchChatsDialog({
                   {projectNames[projectRoot(c)]?.trim() || basename(projectRoot(c))}
                 </span>
                 <span className="shrink-0 text-[11px] text-muted-foreground/50">
-                  {relativeTime(c.updatedAt)}
+                  {relativeTime(c.updatedAt, now)}
                 </span>
               </button>
             ))
@@ -815,7 +822,44 @@ function DraftItem({
   )
 }
 
+/**
+ * Relative timestamps are derived from the wall clock, not app state. Wake the
+ * sidebar on minute boundaries and immediately after returning to a visible
+ * window; `ChatItem`'s comparator still skips rows whose displayed label did
+ * not change, so hour/day-old histories do not all repaint every minute.
+ */
+function useMinuteNow(): number {
+  const [now, setNow] = React.useState(() => Date.now())
+
+  React.useEffect(() => {
+    let timer: number | undefined
+
+    const arm = (at: number): void => {
+      if (timer !== undefined) window.clearTimeout(timer)
+      timer = window.setTimeout(tick, 60_000 - (at % 60_000) + 50)
+    }
+    const tick = (): void => {
+      const at = Date.now()
+      setNow(at)
+      arm(at)
+    }
+    const onVisibilityChange = (): void => {
+      if (document.visibilityState === 'visible') tick()
+    }
+
+    arm(Date.now())
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => {
+      if (timer !== undefined) window.clearTimeout(timer)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    }
+  }, [])
+
+  return now
+}
+
 export function Sidebar(): React.JSX.Element {
+  const now = useMinuteNow()
   const chats = useApp((s) => s.chats)
   const activeId = useApp((s) => s.activeId)
   const statuses = useApp((s) => s.statuses)
@@ -1154,7 +1198,7 @@ export function Sidebar(): React.JSX.Element {
   // across midnight) and print a second "Yesterday" under the first.
   const flatSections: { label: string; chats: ChatMeta[] }[] = []
   for (const chat of flatShown) {
-    const label = dateGroup(chat.updatedAt)
+    const label = dateGroup(chat.updatedAt, now)
     const section = flatSections.find((s) => s.label === label)
     if (section) section.chats.push(chat)
     else flatSections.push({ label, chats: [chat] })
@@ -1214,6 +1258,7 @@ export function Sidebar(): React.JSX.Element {
       <ChatItem
         key={chat.id}
         chat={chat}
+        now={now}
         active={chat.id === activeId}
         activity={chatActivity(statuses[chat.id], backgroundJobs[chat.id], permissions[chat.id])}
         titling={!!titling[chat.id]}
@@ -1663,6 +1708,7 @@ export function Sidebar(): React.JSX.Element {
         open={searchOpen}
         onOpenChange={setSearchOpen}
         chats={chats}
+        now={now}
         onOpen={(id) => void openChat(id)}
       />
 

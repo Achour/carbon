@@ -8,8 +8,8 @@ export function shortenPath(path: string, home?: string): string {
   return path
 }
 
-export function relativeTime(ts: number): string {
-  const diff = Date.now() - ts
+export function relativeTime(ts: number, now: number = Date.now()): string {
+  const diff = now - ts
   const min = Math.floor(diff / 60_000)
   if (min < 1) return 'now'
   if (min < 60) return `${min}m`
@@ -42,13 +42,13 @@ export function resetsIn(ts: number): string {
  * end — so a bump nothing would draw differently costs a new `chats` array, a
  * new row object, and a full Sidebar re-render for no visible change.
  */
-export function sameDisplayedTime(a: number, b: number): boolean {
-  return relativeTime(a) === relativeTime(b) && dateGroup(a) === dateGroup(b)
+export function sameDisplayedTime(a: number, b: number, now: number = Date.now()): boolean {
+  return relativeTime(a, now) === relativeTime(b, now) && dateGroup(a, now) === dateGroup(b, now)
 }
 
-export function dateGroup(ts: number): string {
+export function dateGroup(ts: number, now: number = Date.now()): string {
   const date = new Date(ts)
-  const today = new Date()
+  const today = new Date(now)
   today.setHours(0, 0, 0, 0)
   const startOfDay = new Date(date)
   startOfDay.setHours(0, 0, 0, 0)
