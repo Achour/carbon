@@ -31,6 +31,11 @@ E2E=""
 # The marker rides an env var Carbon ignores, so it identifies this launch's
 # Electron process even though its command line is identical to every other.
 cd "$REPO" || exit 1
+# A screenshot left by a previous run under the same prefix is indistinguishable
+# from this run's, and the wait below would see it at once and kill the app a
+# couple of seconds into its launch — which surfaces as esbuild "service was
+# stopped" errors from vite, not as anything naming the real cause.
+rm -f "$OUT".png "$OUT"-*.png
 CARBON_SHOOT_ID="$MARKER" \
 AIGUI_USERDATA="$DEMO/userdata" \
 AIGUI_CAPTURE="$OUT.png" \
