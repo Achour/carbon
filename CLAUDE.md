@@ -1510,10 +1510,18 @@ chats in one folder — while `openChat(null)` cleared nothing and refreshed
 nothing, so leaving a chat for the home screen and picking another project left
 the previous one's canvas tabs standing over the new one, their titles resolving
 to a bare "Canvas" because the id was no longer in the list. `canvasScopePatch`
-is the one rule at all three seams (`openChat` both ways, `setSelectedCwd`):
-clear exactly when `canvasProject` changes. A stale `activeTab` of
-`canvas:<id>` needs no handling — `RightPanel` already falls through to the next
-real tab when `canvasTabs` does not hold it.
+is the one rule at all three seams (`openChat` both ways, `setSelectedCwd`),
+and what it does when `canvasProject` changes is **stash and restore**, not
+clear. Clearing was the first version, and it meant a canvas open in project X
+was gone the moment you looked at a chat in project Y and back: the chat's
+`activeTab` came back as `canvas:<id>` — tabs are stashed per chat — but the id
+was no longer in `canvasTabs`, so the panel fell through and the document had to
+be reopened from the list every time. The outgoing project's tabs go under its
+root in `canvasTabsByProject` (`tabsByChat`'s shape one level up); the incoming
+one's come back out. `canvasHtml` is left alone across the switch — a cache
+keyed by id, and keeping it is what lets a restored document paint at once. A
+stale `activeTab` of `canvas:<id>` needs no handling — `RightPanel` already
+falls through to the next real tab when `canvasTabs` does not hold it.
 
 **The document has to be written for both themes, and only the rules can ask for
 that.** `color-scheme` on the iframe rescues a document that styles *nothing*;

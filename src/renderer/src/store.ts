@@ -330,6 +330,13 @@ interface AppState {
    * meant teaching every one of those rules a case that never applies.
    */
   canvasTabs: string[]
+  /**
+   * Open canvas tabs of every project that is not the current one, keyed by
+   * project root — `tabsByChat`'s shape one level up. Leaving a project
+   * stashes its tabs here and returning restores them, so a document open in
+   * one project survives a visit to another chat's project.
+   */
+  canvasTabsByProject: Record<string, string[]>
   /** Canvas awaiting a delete confirmation, or null. */
   pendingCanvasDelete: CanvasSummary | null
   /** Body per open canvas; `null` while its read is in flight. */
@@ -947,14 +954,6 @@ function canvasProject(s: Pick<AppState, 'activeId' | 'chats' | 'selectedCwd'>):
   return chat ? projectRoot(chat) : s.selectedCwd
 }
 
-/** Canvas UI state, emptied. */
-const NO_CANVASES = {
-  canvases: [] as CanvasSummary[],
-  canvasTabs: [] as string[],
-  canvasHtml: {} as Record<string, string | null>,
-  pendingCanvasDelete: null
-} satisfies Partial<AppState>
-
 /**
  * Canvas state follows the **project**, not the chat.
  *
@@ -967,16 +966,43 @@ const NO_CANVASES = {
  * titles resolving to a bare "Canvas" because the id was no longer in the list:
  * project X's document, open and readable, while you work on project Y.
  *
- * So the answer is one rule at every seam where the project can change — clear
- * exactly when it does. A stale `activeTab` of `canvas:<id>` needs no handling:
- * `RightPanel` already falls through to the next real tab when `canvasTabs`
- * does not hold it.
+ * So the answer is one rule at every seam where the project can change — and
+ * what it does there is **stash and restore**, not clear. Clearing was the
+ * first version, and it meant a canvas open in project X was gone the moment
+ * you looked at a chat in project Y and back: the chat's `activeTab` came back
+ * as `canvas:<id>` (tabs are stashed per chat) but the id was no longer in
+ * `canvasTabs`, so the panel fell through to the next real tab and the
+ * document had to be reopened from the list every time. The outgoing project's
+ * tabs go under its root in `canvasTabsByProject`; the incoming one's come
+ * back out, empty for a project never visited. `canvasHtml` is left alone —
+ * it is a cache keyed by id, and keeping it is what lets a restored document
+ * paint at once rather than after a round trip. The list itself is refetched
+ * by every caller, and the pending delete is dropped: a question about
+ * another project's document must not survive into this one.
+ *
+ * A stale `activeTab` of `canvas:<id>` needs no handling: `RightPanel` already
+ * falls through to the next real tab when `canvasTabs` does not hold it.
  */
 function canvasScopePatch(
-  s: Pick<AppState, 'activeId' | 'chats' | 'selectedCwd'>,
+  s: Pick<AppState, 'activeId' | 'chats' | 'selectedCwd' | 'canvasTabs' | 'canvasTabsByProject'>,
   next: Pick<AppState, 'activeId' | 'chats' | 'selectedCwd'>
 ): Partial<AppState> {
-  return canvasProject(s) === canvasProject(next) ? {} : NO_CANVASES
+  const from = canvasProject(s)
+  const to = canvasProject(next)
+  if (from === to) return {}
+  const canvasTabsByProject = { ...s.canvasTabsByProject }
+  if (from) {
+    if (s.canvasTabs.length) canvasTabsByProject[from] = s.canvasTabs
+    else delete canvasTabsByProject[from]
+  }
+  const canvasTabs = (to ? canvasTabsByProject[to] : undefined) ?? []
+  if (to) delete canvasTabsByProject[to]
+  return {
+    canvases: [],
+    canvasTabs,
+    canvasTabsByProject,
+    pendingCanvasDelete: null
+  }
 }
 
 function homeCwdLeaving(outgoing: ChatMeta | undefined, selectedCwd: string | null): string | null {
@@ -1216,6 +1242,7 @@ export const useApp = create<AppState>((set, get) => ({
   planPanel: null,
   canvases: [],
   canvasTabs: [],
+  canvasTabsByProject: {},
   canvasHtml: {},
   pendingCanvasDelete: null,
   defaults: null,
@@ -2068,6 +2095,12 @@ export const useApp = create<AppState>((set, get) => ({
     get().closeCanvas(id)
     set((st) => ({
       canvases: st.canvases.filter((c) => c.id !== id),
+      // A canvas belongs to one project, and it is deleted from that project's
+      // own list — so the stash should never hold it. Scrubbed anyway: a
+      // stale id there would restore as a tab with no document behind it.
+      canvasTabsByProject: Object.fromEntries(
+        Object.entries(st.canvasTabsByProject).map(([k, v]) => [k, v.filter((c) => c !== id)])
+      ),
       pendingCanvasDelete: st.pendingCanvasDelete?.id === id ? null : st.pendingCanvasDelete
     }))
   },
