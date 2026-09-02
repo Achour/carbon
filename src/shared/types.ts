@@ -425,9 +425,44 @@ export interface SelectionRef {
  */
 export const SELECTION_MAX_CHARS = 4000
 
+/**
+ * A canvas attached to a prompt as context.
+ *
+ * The extracted text rides along with the id for `describeSelection`'s reason,
+ * at one remove: the text is what lets the model answer about the document with
+ * no tool call, and the id is what it revises against once the answer is
+ * "change it". Neither half is sufficient — a canvas with no id produces a
+ * *second* canvas on the next request for an edit, and an id with no text costs
+ * a `canvas read` round trip before the model can say anything at all.
+ *
+ * The text is extracted in the renderer at attach time rather than resolved in
+ * main at send time: all three providers build their prompt in a different
+ * place (one of them a free function with no session handle), and a snapshot
+ * makes every one of them the same single line.
+ */
+export interface CanvasRef {
+  /** The canvas's id — the handle `canvas read`/`write` take to revise it. */
+  id: string
+  /** Its title at attach time; the chip's label and the heading in the prompt. */
+  title: string
+  /** The document as readable text, capped at CANVAS_ATTACH_MAX_CHARS. */
+  text: string
+  /** `text` was cut at the cap — the model is told to `read` the rest. */
+  truncated?: boolean
+}
+
+/**
+ * Bigger than a selection's cap because a canvas *is* the document rather than
+ * an excerpt of one, and small enough that it stays reference-shaped: a canvas
+ * attachment carries no `data`, so `persistableAttachments` keeps it in a
+ * draft, and `localStorage`'s ~5 MB quota is the ceiling every draft shares.
+ * Past the cap the id still names the whole thing.
+ */
+export const CANVAS_ATTACH_MAX_CHARS = 8000
+
 export interface Attachment {
   id: string
-  kind: 'image' | 'file' | 'element' | 'selection'
+  kind: 'image' | 'file' | 'element' | 'selection' | 'canvas'
   name: string
   /** Images (and element screenshots): IANA media type + raw base64 (no data: prefix). */
   mediaType?: string
@@ -443,6 +478,12 @@ export interface Attachment {
   element?: ElementRef
   /** Selections: the file, line range and snippet picked in the file viewer. */
   selection?: SelectionRef
+  /**
+   * Canvases: the document's id, title and extracted text. Like a selection it
+   * deliberately sets no `path` — the composer dedupes its inbox on that field,
+   * and a canvas has no file for it to name.
+   */
+  canvas?: CanvasRef
 }
 
 export interface UserMessage {

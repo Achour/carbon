@@ -1,5 +1,5 @@
 import React from 'react'
-import { List, PenLine, Plus, Shapes, Trash2 } from 'lucide-react'
+import { AtSign, List, PenLine, Plus, Shapes, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { WithTooltip } from '@/components/ui/tooltip'
 import { relativeTime } from '@/lib/format'
@@ -29,6 +29,7 @@ function CanvasRow({
 }): React.JSX.Element {
   const openCanvas = useApp((s) => s.openCanvas)
   const confirmCanvasDelete = useApp((s) => s.confirmCanvasDelete)
+  const attachCanvas = useApp((s) => s.attachCanvas)
   const canvas = useApp((s) => s.canvases.find((c) => c.id === id))
 
   return (
@@ -53,6 +54,17 @@ function CanvasRow({
       {/* Space reserved rather than conditionally rendered: a control that
           appears on hover and reflows the row makes the list flinch away from
           the pointer. */}
+      <WithTooltip label="Add to chat">
+        <Button
+          size="icon-sm"
+          variant="ghost"
+          aria-label={`Add ${title} to chat`}
+          className="shrink-0 opacity-0 transition-opacity group-hover/row:opacity-100 focus-visible:opacity-100"
+          onClick={() => void attachCanvas(id)}
+        >
+          <AtSign />
+        </Button>
+      </WithTooltip>
       <Button
         size="icon-sm"
         variant="ghost"
@@ -157,6 +169,7 @@ function CanvasList({
 export function CanvasDoc({ id }: { id: string }): React.JSX.Element {
   const html = useApp((s) => s.canvasHtml[id])
   const title = useApp((s) => s.canvases.find((c) => c.id === id)?.title)
+  const attachCanvas = useApp((s) => s.attachCanvas)
   const dark = useApp((s) => s.resolvedAppearance) === 'dark'
   // **Closed by default, and persisted.** The document is what this panel is
   // for; a list that opens itself takes a fifth of an already narrow pane away
@@ -178,6 +191,21 @@ export function CanvasDoc({ id }: { id: string }): React.JSX.Element {
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-2">
         <span className="min-w-0 flex-1 truncate text-[13px]">{title ?? 'Canvas'}</span>
+        {/* The document you are reading is the one you are most likely to want
+            to ask about, so the action rides its header as well as its row —
+            the same reason the code editor's "Add to chat" pill sits on the
+            selection rather than only in a menu. */}
+        <WithTooltip label="Add to chat">
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            aria-label="Add canvas to chat"
+            className="shrink-0"
+            onClick={() => void attachCanvas(id)}
+          >
+            <AtSign />
+          </Button>
+        </WithTooltip>
         <WithTooltip label={listOpen ? 'Hide canvases' : 'Show canvases'}>
           <Button
             size="icon-sm"

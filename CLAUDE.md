@@ -1417,6 +1417,70 @@ name: "Open" in the row's muted colour was there and unfindable, because it
 named nothing and read as more narration. It also drops the mono face the
 summary slot otherwise uses — a path is code, a canvas title is prose.
 
+**A canvas can be attached to a prompt, and what it carries is *text*, not
+HTML.** The document the agent just wrote is the thing the next question is
+usually about, and until now the only way to ask about it was to describe it
+back. `Attachment.kind` grew a `canvas` member carrying a `CanvasRef` — id,
+title, extracted text — and `describeCanvas` (`attachmentText.ts`, beside
+`describeSelection`) turns it into prompt text.
+
+- **The text and the id both ship**, which is `describeSelection`'s bargain at
+  one remove: the text answers "what does this say" with no tool call, and the
+  id is what a revision is written against. Neither half is sufficient — an id
+  alone costs a `read` round trip before the model can say anything, and text
+  alone means the next "add a column" writes a *second* canvas with the same
+  title, the exact failure `write`'s own result text already guards against.
+- **`canvasText` (`shared/canvasText.ts`) is why it is text.** A canvas is a
+  styled document: measured over the ten real ones in this database, 4–24 KB of
+  HTML reduces to 0.9–7 KB of reading, ~70% of it CSS and script the model
+  cannot act on. Regex rather than a parser, because the renderer builds the
+  attachment and `node --test` runs the test directly, so neither may pull in a
+  DOM (`test/canvasText.test.ts`).
+- **Cell closes become ` | ` and block closes become `\n`, via sentinels.** The
+  sentinel is the part that took two tries: injecting the newline directly makes
+  a break we *chose* indistinguishable from the source's own indentation, and
+  every table then arrives double-spaced. HTML collapses whitespace in text
+  nodes to one space, so the collapse has to run *between* marking the breaks
+  and emitting them. Without the cell rule at all, a comparison table — the
+  single most common thing a canvas holds — comes out `Vite2.1swebpack14.8s`,
+  every number silently reassigned to the wrong row. `<title>` is dropped with
+  `<script>` and `<style>`: a canvas repeats it as its `<h1>` and the attachment
+  carries the title separately, so keeping it says the name twice.
+- **It is resolved at attach time in the renderer, never at send time in main.**
+  The three adapters build their prompts in three different places, and one of
+  them (`buildGrokPrompt`) is a free function with no session handle. A snapshot
+  makes all three the same single line beside the selection line they already
+  have — which is what "works on every provider" means here, and is pinned for
+  Grok specifically (`test/grokAcp.test.ts`), the one with no SDK.
+- **The cap is a drafts constraint, not a context one.** A canvas attachment
+  carries no `data`, so `persistableAttachments` keeps it in a draft, and
+  `localStorage`'s ~5 MB quota is the ceiling every draft shares.
+  `CANVAS_ATTACH_MAX_CHARS` is 8000; past it the id still names the whole thing.
+- **The way in is a row action, not an @-mention.** `@` matches `[\w./-]*` and
+  canvas titles have spaces in them, so the mention path would have covered a
+  fraction of the library while looking like it covered all of it. The button
+  rides the list row and the open document's header — the code-selection pill's
+  seam (`attachmentInbox`), so nothing new crosses IPC. The composer dedupes on
+  `canvas.id` for the reason it dedupes files on `path`: a canvas sets no
+  `path`, and the attachment id is minted per click, so without it the button
+  stacks a chip per press.
+- **The chip in the transcript is a *button*.** It is the one attachment whose
+  subject is still there and one click away — a file chip's file is already in
+  the tree, and a selection's lines have since moved.
+
+**The canvas panel follows the project, and the leak was in the tabs rather
+than the store.** Storage was project-scoped from the start (`canvases_project`,
+`list(project)`), but the *UI* state was not: `openChat` cleared it on every
+chat switch — closing the documents you had open when you moved between two
+chats in one folder — while `openChat(null)` cleared nothing and refreshed
+nothing, so leaving a chat for the home screen and picking another project left
+the previous one's canvas tabs standing over the new one, their titles resolving
+to a bare "Canvas" because the id was no longer in the list. `canvasScopePatch`
+is the one rule at all three seams (`openChat` both ways, `setSelectedCwd`):
+clear exactly when `canvasProject` changes. A stale `activeTab` of
+`canvas:<id>` needs no handling — `RightPanel` already falls through to the next
+real tab when `canvasTabs` does not hold it.
+
 **The document has to be written for both themes, and only the rules can ask for
 that.** `color-scheme` on the iframe rescues a document that styles *nothing*;
 one that sets its own light background is a white sheet in a dark window, which

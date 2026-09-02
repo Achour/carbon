@@ -359,3 +359,29 @@ test('buildGrokPrompt lists a file attachment by its existing path', () => {
   const link = blocks.find((block) => block.type === 'resource_link')
   assert.equal(link?.name, 'notes.md')
 })
+
+test('buildGrokPrompt carries an attached canvas into the prompt', () => {
+  // Grok is the provider with no SDK, so its prompt is built by a free function
+  // rather than a session method — the one place a new attachment kind can be
+  // silently dropped while the other two work. That asymmetry is exactly what
+  // this pins: the canvas has to arrive on all three or on none.
+  const { blocks } = buildGrokPrompt('what should I fix first?', [
+    {
+      id: 'att-1',
+      kind: 'canvas',
+      name: 'Query Audit',
+      canvas: {
+        id: 'c-9f2a',
+        title: 'Query Audit',
+        text: 'listFeed | 1,204 calls'
+      }
+    }
+  ])
+  const text = blocks
+    .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
+    .map((b) => b.text)
+    .join('\n')
+  assert.match(text, /what should I fix first\?/)
+  assert.match(text, /Attached canvas "Query Audit" \(id: c-9f2a\)/)
+  assert.match(text, /listFeed \| 1,204 calls/)
+})

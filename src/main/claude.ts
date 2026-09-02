@@ -85,7 +85,7 @@ import {
   type Emit
 } from './session'
 import { DeltaCoalescer } from './deltaCoalescer'
-import { describeSelection } from './attachmentText.ts'
+import { describeCanvas, describeSelection } from './attachmentText.ts'
 import { TITLE_SYSTEM, buildTitlePrompt, cleanTitle, deriveTitle, firstUserText } from './titles'
 import {
   HANDOFF_BRIEF_SYSTEM,
@@ -809,6 +809,7 @@ class ClaudeSession implements AgentSession {
       }
       if (a.kind === 'element' && a.element) elementBlocks.push(describeElement(a.element))
       if (a.kind === 'selection' && a.selection) elementBlocks.push(describeSelection(a.selection))
+      if (a.kind === 'canvas' && a.canvas) elementBlocks.push(describeCanvas(a.canvas))
     }
     const filePaths = attachments.filter((a) => a.kind === 'file' && a.path).map((a) => a.path!)
     const epoch = this.sendEpoch

@@ -1,4 +1,4 @@
-import type { SelectionRef } from '@shared/types'
+import type { CanvasRef, SelectionRef } from '@shared/types'
 
 /**
  * A fence long enough to survive the snippet's own backticks.
@@ -34,6 +34,36 @@ export function describeSelection(sel: SelectionRef): string {
     `Selected code from ${where} (${range}${note}):`,
     `${fence}${sel.language ?? ''}`,
     sel.text,
+    fence
+  ].join('\n')
+}
+
+/**
+ * A canvas attached to a prompt, as prompt text.
+ *
+ * Shared by all three providers for the reason `describeSelection` is: the
+ * three adapters build their prompts in three different places, and a canvas
+ * that read one way on Claude and another on Grok would be exactly the silent
+ * provider asymmetry this codebase keeps ruling out.
+ *
+ * The id sentence is the load-bearing half. Every provider has the same
+ * `canvas` MCP server, so naming the id makes "add a column to that" a
+ * *revision* of this document on all three — without it the model has no handle
+ * and writes a second canvas with the same title, which is the failure the
+ * `write` tool's own result text already guards against.
+ */
+export function describeCanvas(ref: CanvasRef): string {
+  const fence = fenceFor(ref.text)
+  const note = ref.truncated
+    ? ' — truncated; call the canvas `read` tool with this id for the rest'
+    : ''
+  return [
+    `Attached canvas "${ref.title}" (id: ${ref.id}${note}).`,
+    'It is a saved HTML document shown beside this chat, not a file in the project.',
+    'Its readable content follows. To revise it, call the canvas `read` tool with' +
+      ` id ${ref.id} for the full HTML, then \`write\` with the same id.`,
+    `${fence}`,
+    ref.text,
     fence
   ].join('\n')
 }

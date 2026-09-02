@@ -10,6 +10,7 @@ import {
   MousePointerClick,
   Paperclip,
   PencilLine,
+  PenLine,
   ShieldOff,
   ShieldQuestion,
   Sparkles,
@@ -214,6 +215,7 @@ function AttachmentChip({
       ? [att.element.source?.file, att.element.selector].filter(Boolean).join('\n')
       : undefined
   const sel = att.kind === 'selection' ? att.selection : undefined
+  const canvas = att.kind === 'canvas' ? att.canvas : undefined
   return (
     <div className="group/att relative shrink-0">
       {att.kind === 'image' ? (
@@ -248,6 +250,17 @@ function AttachmentChip({
         >
           <FileIcon path={sel.path} />
           <span className="truncate font-mono text-[11px]">{att.name}</span>
+        </div>
+      ) : canvas ? (
+        // Prose face, not mono: a canvas title is a name someone wrote, where a
+        // path and a selection are code. `PenLine` is the canvas glyph
+        // everywhere else in the app — the tool rows, the list, the tab.
+        <div
+          title={canvas.text.slice(0, 400)}
+          className="flex h-8 max-w-52 items-center gap-1.5 rounded-lg border border-border bg-secondary/60 px-2.5"
+        >
+          <PenLine className="size-3.5 shrink-0 text-muted-foreground" />
+          <span className="truncate text-xs">{att.name}</span>
         </div>
       ) : (
         <div
@@ -882,14 +895,20 @@ export function Composer({
     if (inbox.length === 0) return
     setAttachments((prev) => {
       // Dedupe on path as well as id: the same file can be sent here more than
-      // once (tree menu, repeatedly) and should stay a single chip.
+      // once (tree menu, repeatedly) and should stay a single chip. A canvas
+      // dedupes on *its* id for the same reason — it deliberately sets no
+      // `path`, and the attachment id is minted fresh on every click, so
+      // without this the list button stacks a chip per press.
       const seen = new Set(prev.map((a) => a.id))
       const paths = new Set(prev.flatMap((a) => (a.path ? [a.path] : [])))
+      const canvasIds = new Set(prev.flatMap((a) => (a.canvas ? [a.canvas.id] : [])))
       const fresh: Attachment[] = []
       for (const att of inbox) {
         if (seen.has(att.id) || (att.path && paths.has(att.path))) continue
+        if (att.canvas && canvasIds.has(att.canvas.id)) continue
         seen.add(att.id)
         if (att.path) paths.add(att.path)
+        if (att.canvas) canvasIds.add(att.canvas.id)
         fresh.push(att)
       }
       return fresh.length === 0 ? prev : [...prev, ...fresh]

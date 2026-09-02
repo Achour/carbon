@@ -12,7 +12,8 @@ import {
   GitCommitHorizontal,
   Loader2,
   MousePointerClick,
-  Pencil
+  Pencil,
+  PenLine
 } from 'lucide-react'
 import type { AssistantMessage, EventMessage, ToolPart, UserMessage } from '@shared/types'
 import { CHAT_BLEED, CHAT_BLEED_PAD, CHAT_FRAME } from '@/lib/chatColumn'
@@ -179,6 +180,7 @@ const GROUP_MIN = 2
  * were attached to.
  */
 function PromptAttachments({ message }: { message: UserMessage }): React.JSX.Element | null {
+  const openCanvas = useApp((s) => s.openCanvas)
   if (!message.attachments || message.attachments.length === 0) return null
   return (
     <div className="flex flex-wrap gap-1.5">
@@ -200,6 +202,20 @@ function PromptAttachments({ message }: { message: UserMessage }): React.JSX.Ele
             <MousePointerClick className="size-3.5 shrink-0 text-primary" />
             <span className="truncate font-mono text-[11px]">{att.name}</span>
           </div>
+        ) : att.kind === 'canvas' && att.canvas ? (
+          // The one attachment chip that is a *button*: the document it names is
+          // still there, one click away, where a file chip's file is already
+          // reachable through the tree and a selection's lines have moved.
+          <button
+            key={att.id}
+            type="button"
+            onClick={() => void openCanvas(att.canvas!.id)}
+            title={att.canvas.text.slice(0, 400)}
+            className="flex h-8 max-w-56 items-center gap-1.5 rounded-lg border border-border bg-secondary/60 px-2.5 transition-colors hover:bg-accent/60"
+          >
+            <PenLine className="size-3.5 shrink-0 text-muted-foreground" />
+            <span className="truncate text-xs">{att.name}</span>
+          </button>
         ) : att.kind === 'selection' && att.selection ? (
           <div
             key={att.id}

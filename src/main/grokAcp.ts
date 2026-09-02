@@ -8,7 +8,7 @@ import { createInterface } from 'node:readline'
 import type { Attachment, ElementRef, ToolPart, UserQuestion } from '@shared/types'
 import { cliAvailable, providerCli } from './providerCli.ts'
 import { isPreviewToolName, type PreviewToolName } from './previewTools.ts'
-import { describeSelection } from './attachmentText.ts'
+import { describeCanvas, describeSelection } from './attachmentText.ts'
 import type { StdioMcpServer } from './previewMcpConfig.ts'
 
 /**
@@ -1013,6 +1013,9 @@ export function buildGrokPrompt(
     }
     if (attachment.kind === 'selection' && attachment.selection) {
       elementNotes.push(describeSelection(attachment.selection))
+    }
+    if (attachment.kind === 'canvas' && attachment.canvas) {
+      elementNotes.push(describeCanvas(attachment.canvas))
     }
   }
 

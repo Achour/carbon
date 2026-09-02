@@ -48,12 +48,14 @@ import {
 } from '@/lib/drafts'
 import type { ComposerDraft, ProjectDraft, ProjectDraftOptions } from '@/lib/drafts'
 import {
+  CANVAS_ATTACH_MAX_CHARS,
   PROVIDER_SHORT_LABELS,
   USAGE_DEFAULT_DAYS,
   knownProviderForModel,
   projectRoot,
   providerForRememberedModel
 } from '@shared/types'
+import { canvasText } from '@shared/canvasText'
 import type {
   CanvasSummary,
   AppDefaults,
@@ -585,6 +587,11 @@ interface AppState {
   /** Ask before deleting; `null` dismisses. `deleteCanvas` is the answer. */
   confirmCanvasDelete(canvas: CanvasSummary | null): void
   deleteCanvas(id: string): Promise<void>
+  /**
+   * Put a canvas in the composer as context. Resolves the body and extracts its
+   * readable text here, so every provider's prompt builder is one line.
+   */
+  attachCanvas(id: string): Promise<void>
   /** An empty canvas with a name, for the agent to fill. Returns its id. */
   createCanvas(title: string): Promise<string | null>
   refreshFiles(options?: { invalidateImages?: boolean }): Promise<void>
@@ -921,6 +928,38 @@ body{margin:0;display:grid;place-items:center;height:100vh;font:13px -apple-syst
 function canvasProject(s: Pick<AppState, 'activeId' | 'chats' | 'selectedCwd'>): string | null {
   const chat = s.chats.find((c) => c.id === s.activeId)
   return chat ? projectRoot(chat) : s.selectedCwd
+}
+
+/** Canvas UI state, emptied. */
+const NO_CANVASES = {
+  canvases: [] as CanvasSummary[],
+  canvasTabs: [] as string[],
+  canvasHtml: {} as Record<string, string | null>,
+  pendingCanvasDelete: null
+} satisfies Partial<AppState>
+
+/**
+ * Canvas state follows the **project**, not the chat.
+ *
+ * Both halves of that are bugs this replaces. Clearing on every chat switch
+ * closed the documents you had open when you moved between two chats in the
+ * same folder — a canvas is a property of the project, which is what the
+ * RightPanel tab comment has said all along. And *not* clearing on the paths
+ * that leave a chat (`openChat(null)`, then picking another folder) left the
+ * previous project's open canvas tabs standing over the new one, with their
+ * titles resolving to a bare "Canvas" because the id was no longer in the list:
+ * project X's document, open and readable, while you work on project Y.
+ *
+ * So the answer is one rule at every seam where the project can change — clear
+ * exactly when it does. A stale `activeTab` of `canvas:<id>` needs no handling:
+ * `RightPanel` already falls through to the next real tab when `canvasTabs`
+ * does not hold it.
+ */
+function canvasScopePatch(
+  s: Pick<AppState, 'activeId' | 'chats' | 'selectedCwd'>,
+  next: Pick<AppState, 'activeId' | 'chats' | 'selectedCwd'>
+): Partial<AppState> {
+  return canvasProject(s) === canvasProject(next) ? {} : NO_CANVASES
 }
 
 function homeCwdLeaving(outgoing: ChatMeta | undefined, selectedCwd: string | null): string | null {
@@ -1703,14 +1742,17 @@ export const useApp = create<AppState>((set, get) => ({
     // the cwd (the draft flows that call this then open a fresh chat, which
     // clears the tab set via chatSwitchPatch).
     set((s) => {
+      // Canvases follow the project, and on the home screen the folder *is* the
+      // project — so a pick that changes it closes the previous one's documents.
+      const canvas = canvasScopePatch(s, { ...s, selectedCwd: cwd })
       // Explicitly picking a folder brings a hidden project back into the sidebar.
       if (cwd && s.hiddenProjects[cwd]) {
         const hiddenProjects = { ...s.hiddenProjects }
         delete hiddenProjects[cwd]
         localStorage.setItem('hiddenProjects', JSON.stringify(hiddenProjects))
-        return { selectedCwd: cwd, hiddenProjects }
+        return { ...canvas, selectedCwd: cwd, hiddenProjects }
       }
-      return { selectedCwd: cwd }
+      return { ...canvas, selectedCwd: cwd }
     })
     get().loadCommands(cwd)
     if (cwd) {
@@ -1963,6 +2005,27 @@ export const useApp = create<AppState>((set, get) => ({
       canvases: st.canvases.filter((c) => c.id !== id),
       pendingCanvasDelete: st.pendingCanvasDelete?.id === id ? null : st.pendingCanvasDelete
     }))
+  },
+
+  async attachCanvas(id) {
+    const summary = get().canvases.find((c) => c.id === id)
+    // Straight from the store rather than from `canvasHtml`: a canvas can be
+    // attached from the Recents list without ever having been opened, so the
+    // cached body is only ever an optimization that is usually absent.
+    const canvas = await window.api.canvasGet(id)
+    if (!canvas) return
+    const { text, truncated } = canvasText(canvas.html, CANVAS_ATTACH_MAX_CHARS)
+    get().addAttachment({
+      id: crypto.randomUUID(),
+      kind: 'canvas',
+      name: canvas.title || summary?.title || 'Canvas',
+      canvas: {
+        id: canvas.id,
+        title: canvas.title || 'Canvas',
+        text,
+        ...(truncated ? { truncated } : {})
+      }
+    })
   },
 
   async createCanvas(title) {
@@ -2599,6 +2662,14 @@ export const useApp = create<AppState>((set, get) => ({
       set((s) => ({
         // Stash the outgoing chat's tabs; the draft/home state opens no tabs.
         ...chatSwitchPatch(s, null),
+        // The home screen answers for `selectedCwd`, which may be a different
+        // project than the chat being left — so this path can change the canvas
+        // project just as a chat switch can, and used to clear nothing at all.
+        ...canvasScopePatch(s, {
+          activeId: null,
+          chats: s.chats,
+          selectedCwd: homeCwdLeaving(outgoing, s.selectedCwd)
+        }),
         selectedCwd: homeCwdLeaving(outgoing, s.selectedCwd),
         activeId: null,
         messages: [],
@@ -2611,6 +2682,9 @@ export const useApp = create<AppState>((set, get) => ({
         // The right panel is per chat; a fresh/draft chat starts collapsed.
         panelOpen: false
       }))
+      // The list is `selectedCwd`'s now, and nothing else refreshes it on the
+      // way out of a chat.
+      void get().refreshCanvases()
       return
     }
     set((s) => ({
@@ -2626,13 +2700,11 @@ export const useApp = create<AppState>((set, get) => ({
       hiddenBefore: 0,
       loadingOlder: false,
       planPanel: null,
-      // The outgoing project's canvases are cleared synchronously for the
-      // reason `hiddenBefore` is: left standing, they would briefly list
-      // another project's documents under this chat's tab.
-      canvases: [],
-      canvasTabs: [],
-      canvasHtml: {},
-      pendingCanvasDelete: null,
+      // Cleared synchronously when the *project* changes, for the reason
+      // `hiddenBefore` is: left standing they would briefly list another
+      // project's documents under this chat's tab. Within one project they
+      // stay — the open documents belong to the folder, not to the chat.
+      ...canvasScopePatch(s, { activeId: id, chats: s.chats, selectedCwd: s.selectedCwd }),
       settingsOpen: false,
       usageOpen: false,
       panelMaximized: false,
