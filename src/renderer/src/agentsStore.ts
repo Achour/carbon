@@ -9,8 +9,8 @@ import { agentTotals, type AgentRunView, type AgentTotals } from '@shared/agentR
  * per API call, per agent, and three agents working at once push several updates
  * a second. The Agents panel and the activity bar want every one of them; the
  * transcript wants none — so the fold is published here and those two subscribe,
- * rather than being threaded through props across the `MessageHistory` memo
- * boundary where it would re-render every row in the conversation on each tick.
+ * rather than being threaded through props across the cached history nodes,
+ * where it would re-render every row in the conversation on each tick.
  *
  * It holds one chat's runs (the active one), because that is the only chat whose
  * messages the renderer has. Switching chats republishes.

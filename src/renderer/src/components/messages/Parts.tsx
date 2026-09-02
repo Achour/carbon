@@ -18,7 +18,7 @@ import type { AssistantMessage, EventMessage, ToolPart, UserMessage } from '@sha
 import { CHAT_BLEED, CHAT_BLEED_PAD, CHAT_FRAME } from '@/lib/chatColumn'
 import { cn } from '@/lib/utils'
 import { formatCost, formatDuration } from '@/lib/format'
-import { Markdown, StreamingMarkdown, useStreamText } from '@/components/Markdown'
+import { AssistantMarkdown, Markdown, useStreamText } from '@/components/Markdown'
 import { Button } from '@/components/ui/button'
 import { WithTooltip } from '@/components/ui/tooltip'
 import { useApp } from '@/store'
@@ -442,10 +442,11 @@ export const AssistantBlock = React.memo(function AssistantBlock({
         const { part, index: i } = item
         const isLast = i === lastIndex
         if (part.type === 'text') {
-          return streaming && isLast ? (
-            <StreamingMarkdown key={i} text={part.text} cwd={cwd} />
-          ) : (
-            <Markdown key={i} text={part.text} cwd={cwd} />
+          // One component whether the part is still arriving or done, so a
+          // part that stops being the last one — a tool call landing after it,
+          // or the turn ending — changes a prop and never the subtree.
+          return (
+            <AssistantMarkdown key={i} text={part.text} cwd={cwd} streaming={streaming && isLast} />
           )
         }
         if (part.type === 'thinking') {
@@ -546,8 +547,10 @@ export const EventRow = React.memo(function EventRow({
 })
 
 export function StreamingIndicator({ label = 'Thinking…' }: { label?: string }): React.JSX.Element {
+  // A fade, not `animate-enter`: this label appears in a slot that is already
+  // there, and a slide would say something arrived when nothing did.
   return (
-    <div className="flex items-center gap-2 py-1">
+    <div className="flex animate-fade items-center gap-2 py-1">
       <span className="shimmer-text text-[13px] font-medium">{label}</span>
     </div>
   )

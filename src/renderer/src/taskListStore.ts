@@ -8,7 +8,7 @@ import { reconcileTasks, type TaskItem } from '@/lib/taskList'
  * It churns constantly — an agent flips tasks in-progress/done many times a
  * turn, and the fold reruns on every streamed token — while the only thing
  * reading it is one box above the composer. Threading it through props would
- * cross the `MessageHistory` memo boundary and re-render every row in the
+ * cross the cached history nodes and re-render every row in the
  * transcript on each flip; here, a change re-renders the dock and nothing else.
  *
  * **`chatId` is load-bearing, not bookkeeping.** The list is published from an

@@ -453,6 +453,55 @@ time.
   column (and on the scroller, for a window resize) fires after layout for all
   of them, and `pinnedRef` is the only guard it needs — `loadEarlier` unpins
   before it prepends, so a prepend never snaps the reader back down.
+- **A message keeps its DOM when it stops being live.** With the pacing right,
+  the last visible seam was the *transitions*, and there were two, measured
+  with `demo/e2e/stream-probe.js` (which pumps a Claude-shaped and a
+  Codex-shaped turn through the real reducer and checks whether nodes survive).
+  First, history was a memoized `MessageHistory` component and the live message
+  its sibling — a different React parent, across which keys never match — so
+  when the turn moved on the whole message was unmounted and mounted again: on
+  Claude every settled Edit or Bash row replayed its enter animation the moment
+  the *next* (usually blank) message opened, every finished reply was re-parsed,
+  a diagram blanked to its source; at the turn's end the same happened to the
+  last message on every provider. `useHistoryNodes` keeps the memo (the same
+  element objects come back while the prefix is untouched, which React skips by
+  identity) but returns an *array*, spread into **one** keyed array with the live
+  node — spelled `{[...history, live]}` and deliberately not `{history}{live}`,
+  which is two children and an implicit fragment, i.e. two parents again. The
+  live node takes exactly the key and element shape `renderMessages` will give
+  it (`groupKey` for a run, the message's own `Fragment` otherwise), so crossing
+  over is a prop change. Second, streamed text was `StreamingMarkdown` and
+  settled text `<Markdown>`, and a type change is a rebuild regardless of key;
+  on Codex, whose turn is one accumulating message, that fired every time a tool
+  call landed after a paragraph. `AssistantMarkdown` draws the chunked tree in
+  both states — the chunk strings are the same strings, so every memoized body
+  is skipped at settle — and falls back to the single whole parse only when the
+  text carries something a chunk cannot resolve alone (`needsWholeParse`: a
+  link or footnote definition, an HTML block that may span a blank line), which
+  is the one thing the old settle-time parse was for. What still remounts, by
+  design: a lone call becoming the first row of a group, and a run whose
+  summary card hides its edits down to a single card.
+- **The foot's "Thinking…" / "Working…" is a slot and a label, and they follow
+  different rules.** The *slot* is reserved for as long as the turn runs
+  (`showActivity`): keyed on whether a call was in flight it unmounted and
+  remounted once per call, and the ~28px it takes moved the foot of the column
+  each time. The *label* draws only while nothing else on screen is moving
+  (`showActivityLabel`): drawn unconditionally it sat under a tool row that
+  already carried a spinner and under a paragraph still growing — the same
+  statement twice, and the reader noticed. So it appears before the turn has
+  produced anything, and again once the tail has been still for `QUIET_MS`
+  with nothing moving in the live block — no running call (`groupRunning`, the
+  group row's own test) and no shimmering thought header: Codex streams its
+  reasoning visibly, and `ThinkingBlock` says "Thinking…" for as long as the
+  thought is the message's last part, the pause after its final delta
+  included, so on Codex that header is the motion and the foot stays empty
+  under it (`demo/e2e/foot-probe.js` pins both shapes).
+  The clock is the last message's identity, which every streamed event
+  replaces; the timer re-arms per delta and fires only in a lull. `QUIET_MS`
+  sits above the held word's ~400ms release, so the label never shows under
+  text still being revealed, and below the pause of a slow step, which is the
+  silence it is there to explain. It fades rather than entering: the slot was
+  already there, and a slide would claim something arrived.
 
 ### Drafts (`lib/drafts.ts`, `DraftItem`)
 

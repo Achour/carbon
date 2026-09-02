@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { splitMarkdownStream } from '../src/renderer/src/lib/markdownStream.ts'
+import { needsWholeParse, splitMarkdownStream } from '../src/renderer/src/lib/markdownStream.ts'
 
 // A tiny minChunk so a couple of paragraphs is enough to force a seal.
 const MIN = 10
@@ -189,4 +189,47 @@ test('an open fence body only ever grows', () => {
     if (prev && body) assert.ok(body.startsWith(prev), `body shrank at length ${n}`)
     if (body) prev = body
   }
+})
+
+// ---- needsWholeParse: when settled text may not keep its chunked render ----
+
+test('plain prose, lists, fences and tables settle chunked', () => {
+  const text = [
+    '# Title',
+    '',
+    '- [ ] a task item',
+    '- [x] another',
+    '',
+    '```ts',
+    'const a = 1',
+    '```',
+    '',
+    '| a | b |',
+    '| - | - |',
+    '| 1 | 2 |',
+    '',
+    'A [link](https://example.com) and an ![image](x.png).'
+  ].join('\n')
+  assert.equal(needsWholeParse(text), false)
+})
+
+test('a link reference definition forces the whole parse', () => {
+  assert.equal(needsWholeParse('See [docs][1].\n\n[1]: https://example.com'), true)
+  // Up to three leading spaces is still a definition.
+  assert.equal(needsWholeParse('   [ref]: https://example.com'), true)
+})
+
+test('a footnote definition forces the whole parse', () => {
+  assert.equal(needsWholeParse('Claim.[^1]\n\n[^1]: The source.'), true)
+})
+
+test('an HTML block that may span blank lines forces the whole parse', () => {
+  assert.equal(needsWholeParse('<pre>\n\nraw\n\n</pre>'), true)
+  assert.equal(needsWholeParse('<!-- note\n\nstill the comment -->'), true)
+  assert.equal(needsWholeParse('<script>\nlet x\n</script>'), true)
+})
+
+test('inline HTML and a bracketed phrase mid-line do not', () => {
+  assert.equal(needsWholeParse('a <b>bold</b> word, and [x]: is not a definition here'), false)
+  assert.equal(needsWholeParse('<div>\n\ntext\n\n</div>'), false)
 })

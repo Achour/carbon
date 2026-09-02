@@ -63,6 +63,7 @@ import {
 } from '@/components/messages/Parts'
 import {
   FILE_MUTATION_TOOLS,
+  groupRunning,
   isGroupableTool,
   ToolCard,
   ToolGroup
@@ -79,6 +80,15 @@ const NO_QUEUED: never[] = []
 
 /** Coalesce a run of this many consecutive read/search-only messages into one row. */
 const GROUP_MIN = 2
+
+/**
+ * How long the transcript's tail has to be still before the foot says
+ * "Working…". Longer than the ~400ms the held last word takes to land after a
+ * reply's final delta, so the label never shows under text that is still
+ * being revealed; shorter than the pause between a result and the next call
+ * on a slow step, which is the silence it exists to explain.
+ */
+const QUIET_MS = 700
 
 /** True when a message is nothing but read/search tool calls — each such call
  *  arrives as its own assistant message, so these are what pile up. A withheld
@@ -122,7 +132,6 @@ function isBlankMsg(m: ChatMessage): boolean {
 interface RenderCtx {
   cwd: string
   busy: boolean
-  lastAssistantId?: string
   onOpenPlan?: (plan: string) => void
   /** Assistant message id → the finished checklist to draw after it. */
   taskCompletions?: ReadonlyMap<string, TaskItem[]>
@@ -194,11 +203,19 @@ function isLegacyCodexGoalSummary(message: ChatMessage): boolean {
   )
 }
 
+/** The key a run of groupable messages renders under, live or settled. */
+const groupKey = (firstId: string): string => `grp-${firstId}`
+
 /**
  * Renders the message list, collapsing runs of consecutive read/search-only
  * assistant messages into a single ToolGroup ("Read 12 files"). Since every tool
  * call is its own assistant message, a task that reads many files would otherwise
  * bury the conversation under a wall of identical cards.
+ *
+ * The keys and element shapes here are a contract with the live slot below
+ * (`liveNode` in `ChatView`): a message renders under the *same* key, as the
+ * same element type, whether it is the turn's live message or history — that
+ * is what lets it cross over without React rebuilding it.
  */
 function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
   const out: React.ReactNode[] = []
@@ -215,7 +232,7 @@ function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
         <AssistantBlock
           message={m}
           cwd={ctx.cwd}
-          streaming={ctx.busy && m.id === ctx.lastAssistantId}
+          streaming={false}
           onOpenPlan={ctx.onOpenPlan}
           summarizeEdits={turn?.hasChanges ?? false}
         />
@@ -243,7 +260,7 @@ function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
           )
         : parts
       if (visibleParts.length >= GROUP_MIN) {
-        out.push(<ToolGroup key={`grp-${run[0].id}`} parts={visibleParts} cwd={ctx.cwd} />)
+        out.push(<ToolGroup key={groupKey(run[0].id)} parts={visibleParts} cwd={ctx.cwd} />)
       } else if (visibleParts.length === 1) {
         out.push(<ToolCard key={visibleParts[0].toolUseId} part={visibleParts[0]} cwd={ctx.cwd} />)
       }
@@ -285,42 +302,69 @@ function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
   return out
 }
 
+interface HistoryRender {
+  messages: ChatMessage[]
+  end: number
+  ctx: RenderCtx
+  nodes: React.ReactNode[]
+}
+
 /**
- * Keep completed history out of the live-stream render loop. Zustand replaces
- * the active assistant message for each delta but preserves earlier message
- * objects, so a cheap reference comparison is enough to detect the uncommon
- * case where a background tool updates an older message.
+ * The settled part of the transcript, as a cached array of elements.
+ *
+ * Two things have to be true of it at once, and a component can only give one.
+ * History must stay out of the live-stream render loop: zustand replaces the
+ * active assistant message on every delta but preserves every earlier message
+ * object, so a reference walk over the prefix is enough to know nothing there
+ * moved, and the same *element objects* are handed back — React skips a child
+ * whose element is identical to last time, so a streamed token re-renders
+ * nothing above the live message. That half used to be a memoized
+ * `MessageHistory` component, and it was right.
+ *
+ * But it also has to share a parent with the live message. A component's
+ * children are their own subtree, so when the turn's message crossed from the
+ * live slot into history it changed parents, and React cannot match keys
+ * across parents: the whole message was unmounted and mounted again. On
+ * Claude that fired the moment the *next* message opened — every settled Edit
+ * or Bash row replayed its enter animation once its call had returned, every
+ * finished reply was re-parsed as the next step began; on both providers it
+ * fired again at the turn's end, for the last message. Returning the nodes to
+ * `ChatView` instead lets it spread them into one keyed array with the live
+ * node, where a message that stops being live is the same key in the same
+ * parent, and crossing over is a prop change.
  */
-const MessageHistory = React.memo(
-  function MessageHistory({
-    messages,
-    end,
-    ctx
-  }: {
-    messages: ChatMessage[]
-    end: number
-    ctx: RenderCtx
-  }): React.JSX.Element {
-    return <>{renderMessages(messages.slice(0, end), ctx)}</>
-  },
-  (prev, next) => {
-    if (
-      prev.end !== next.end ||
-      prev.ctx.cwd !== next.ctx.cwd ||
-      prev.ctx.busy !== next.ctx.busy ||
-      prev.ctx.lastAssistantId !== next.ctx.lastAssistantId ||
-      prev.ctx.onOpenPlan !== next.ctx.onOpenPlan ||
-      prev.ctx.switchPendingId !== next.ctx.switchPendingId ||
-      prev.ctx.taskCompletions !== next.ctx.taskCompletions
-    ) {
-      return false
-    }
-    for (let i = 0; i < prev.end; i++) {
-      if (prev.messages[i] !== next.messages[i]) return false
-    }
-    return true
+function useHistoryNodes(messages: ChatMessage[], end: number, ctx: RenderCtx): React.ReactNode[] {
+  const cache = React.useRef<HistoryRender | null>(null)
+  return React.useMemo(() => {
+    const prev = cache.current
+    if (prev && sameHistory(prev, messages, end, ctx)) return prev.nodes
+    const nodes = renderMessages(messages.slice(0, end), ctx)
+    cache.current = { messages, end, ctx, nodes }
+    return nodes
+  }, [messages, end, ctx])
+}
+
+function sameHistory(
+  prev: HistoryRender,
+  messages: ChatMessage[],
+  end: number,
+  ctx: RenderCtx
+): boolean {
+  if (
+    prev.end !== end ||
+    prev.ctx.cwd !== ctx.cwd ||
+    prev.ctx.busy !== ctx.busy ||
+    prev.ctx.onOpenPlan !== ctx.onOpenPlan ||
+    prev.ctx.switchPendingId !== ctx.switchPendingId ||
+    prev.ctx.taskCompletions !== ctx.taskCompletions
+  ) {
+    return false
   }
-)
+  for (let i = 0; i < end; i++) {
+    if (prev.messages[i] !== messages[i]) return false
+  }
+  return true
+}
 
 export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
   const messages = useApp((s) => s.messages)
@@ -499,16 +543,25 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
     }
     return false
   }, [messages])
-  // One indicator for exactly as long as the turn runs, hidden only while a
-  // permission prompt has the floor. It used to stand down whenever the tail
-  // was a running tool — "a spinner already animates there" — and that rule is
-  // the flicker: between any two calls in a run there is a moment when the
-  // last has returned and the next has not started, so the row unmounted and
-  // remounted once per call, and the ~28px it takes moved the foot of the
-  // column (and the follow-scroll with it) each time. A spinner on a tool row
-  // says that step is running; this row says the turn is, and the two are not
-  // the same statement. `ToolGroup` learned the same lesson: key on the turn
-  // (`live`), never on whether a call happens to be in flight.
+  // The turn's indicator has a *slot* for exactly as long as the turn runs, and
+  // a *label* only while nothing else on screen is moving.
+  //
+  // The slot is the part that must not come and go. It used to stand down
+  // whenever the tail was a running tool, and between any two calls in a run
+  // there is a moment when the last has returned and the next has not started
+  // — so the row unmounted and remounted once per call, and the ~28px it takes
+  // moved the foot of the column (and the follow-scroll with it) each time. So
+  // the height is reserved while the chat is busy, whatever the label does.
+  //
+  // The label is the part that must not *repeat*. Drawn unconditionally it sat
+  // under a tool row that already carried a spinner, and under a paragraph that
+  // was itself still growing — "Working…" beneath the work, twice over. So it
+  // draws in exactly two states: before the turn has produced anything (the
+  // only feedback the send gets), and once the tail has been still for
+  // `QUIET_MS` with no spinner in the live block — the pause after a paragraph
+  // or a result, where a silent transcript would otherwise read as a hang. A
+  // gap shorter than that between two calls shows nothing, which is what keeps
+  // a run from blinking a label per call.
   const showActivity = busy && permissions.length === 0
   // "Thinking…" until the model has produced something this turn; "Working…" after.
   const activityLabel = producedSomething ? 'Working…' : 'Thinking…'
@@ -622,13 +675,42 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
       if (prev.role === 'assistant' && (isGroupableMsg(prev) || isBlankMsg(prev))) start -= 1
       else break
     }
-    const parts = [...displayedMessages.slice(start, historyEnd), liveAssistant].flatMap((m) =>
+    const members = [...displayedMessages.slice(start, historyEnd), liveAssistant]
+    const parts = members.flatMap((m) =>
       m.role === 'assistant'
         ? m.parts.filter((p): p is ToolPart => !!p && p.type === 'tool')
         : []
     )
-    return parts.length >= GROUP_MIN ? { start, parts } : null
+    if (parts.length < GROUP_MIN) return null
+    // Keyed as history will key it — off the run's first message that draws,
+    // since `renderMessages` drops the blank ones before it names a run — so
+    // the group folds in place when the turn ends instead of being remade.
+    const first = members.find((m) => !isBlankMsg(m)) ?? liveAssistant
+    return { start, parts, key: groupKey(first.id) }
   }, [liveAssistant, displayedMessages, historyEnd])
+  // Where the label draws — see `showActivity` above for the slot.
+  // A thought with text is Codex's shape (Claude withholds the text): while it
+  // is the message's last part, `ThinkingBlock` shimmers "Thinking…" — through
+  // the pause after the last reasoning delta too — so that header is the
+  // motion, and "Working…" two lines under it would say the same thing twice.
+  const livePart = liveAssistant?.parts[liveAssistant.parts.length - 1]
+  const thinkingShown = livePart?.type === 'thinking' && livePart.text.length > 0
+  const tailMoving = liveRun
+    ? groupRunning(liveRun.parts)
+    : !!liveAssistant &&
+      (thinkingShown ||
+        groupRunning(liveAssistant.parts.filter((p): p is ToolPart => !!p && p.type === 'tool')))
+  const [quiet, setQuiet] = React.useState(false)
+  React.useEffect(() => {
+    // Every streamed event replaces the last message, so its identity is the
+    // clock: the timer is re-armed per delta and only ever fires in a lull.
+    // `setQuiet(false)` on an already-false state is a bail-out, not a render.
+    setQuiet(false)
+    if (!busy) return undefined
+    const t = setTimeout(() => setQuiet(true), QUIET_MS)
+    return () => clearTimeout(t)
+  }, [lastMsg, busy])
+  const showActivityLabel = showActivity && (!producedSomething || (quiet && !tailMoving))
   // The most recent switch divider renders live ("writing handoff brief…")
   // exactly while main reports the handoff in flight; the busy gate means a
   // crash or restart can never leave a divider shimmering forever.
@@ -650,6 +732,23 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
     }),
     [chat.cwd, busy, openPlan, switchPendingId, timeline.completions]
   )
+  const historyNodes = useHistoryNodes(
+    displayedMessages,
+    liveRun ? liveRun.start : historyEnd,
+    historyCtx
+  )
+  // The turn's live block, under exactly the key and element shape
+  // `renderMessages` will give the same message once it is history — a
+  // run's group under the run's key, a lone message under its own id inside
+  // the same Fragment. Both go into ONE keyed array below, so when the turn
+  // moves on React updates the block in place rather than rebuilding it.
+  const liveNode = liveRun ? (
+    <ToolGroup key={liveRun.key} parts={liveRun.parts} cwd={chat.cwd} live />
+  ) : liveAssistant ? (
+    <React.Fragment key={liveAssistant.id}>
+      <AssistantBlock message={liveAssistant} cwd={chat.cwd} streaming onOpenPlan={openPlan} />
+    </React.Fragment>
+  ) : null
 
   return (
     <div data-chatview className="relative flex h-full min-w-[420px] flex-1 flex-col">
@@ -814,23 +913,10 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
               </Button>
             </div>
           )}
-          <MessageHistory
-            messages={displayedMessages}
-            end={liveRun ? liveRun.start : historyEnd}
-            ctx={historyCtx}
-          />
-          {liveRun ? (
-            <ToolGroup parts={liveRun.parts} cwd={chat.cwd} live />
-          ) : (
-            liveAssistant && (
-              <AssistantBlock
-                message={liveAssistant}
-                cwd={chat.cwd}
-                streaming
-                onOpenPlan={openPlan}
-              />
-            )
-          )}
+          {/* One array, deliberately: written as `{historyNodes}{liveNode}`
+              the two are separate children and the array is its own implicit
+              fragment, which puts the live node in a different parent again. */}
+          {liveNode ? [...historyNodes, liveNode] : historyNodes}
           {permissions.map((request) => {
             if (request.toolName === 'AskUserQuestion')
               return (
@@ -866,7 +952,11 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
               />
             )
           })}
-          {showActivity && <StreamingIndicator label={activityLabel} />}
+          {showActivity && (
+            <div className="min-h-7">
+              {showActivityLabel && <StreamingIndicator label={activityLabel} />}
+            </div>
+          )}
           <div className="h-2" />
         </div>
       </div>

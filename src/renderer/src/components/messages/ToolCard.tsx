@@ -961,7 +961,7 @@ export function isGroupableTool(name: string): boolean {
 
 /** True while any call in the run — or, for agents, any of their children — is
  *  still working, so a mixed done/running group shows the spinner. */
-function groupRunning(parts: ToolPart[]): boolean {
+export function groupRunning(parts: ToolPart[]): boolean {
   return parts.some((p) => {
     if (p.denied) return false
     if (p.status === 'running' || p.status === 'pending') return true

@@ -17,7 +17,7 @@ import {
   remarkHighlightLang
 } from '@/lib/highlight'
 import { splitHighlightedLines } from '@/lib/highlightLines'
-import { splitMarkdownStream, type OpenFence } from '@/lib/markdownStream'
+import { needsWholeParse, splitMarkdownStream, type OpenFence } from '@/lib/markdownStream'
 
 /** Project folder used to resolve relative file paths in inline code. */
 const MarkdownCwd = React.createContext<string | null>(null)
@@ -728,27 +728,50 @@ export function useStreamText(text: string, streaming: boolean): string {
   return streaming ? shown : text
 }
 
+const NO_CHUNKS: string[] = []
+
 /**
- * Markdown parsing and syntax highlighting are intentionally capped while text
- * streams, and the sealed prefix of the message (blocks that can no longer
- * change) renders through memoized MarkdownBody chunks so each commit only
- * re-parses the small live tail instead of the whole accumulated message.
- * Everything renders into one `.markdown` wrapper, so block margins behave
- * exactly as a single parse. The turn's end swaps in plain <Markdown> (see
- * AssistantBlock), whose single full-text parse also resolves any link or
- * footnote references that spanned a chunk boundary while streaming.
+ * An assistant's prose, streaming or settled — **one component, and one tree,
+ * for both states.**
+ *
+ * While the text streams, the sealed prefix (blocks that can no longer change)
+ * renders through memoized `MarkdownBody` chunks so each commit re-parses only
+ * the small live tail, and an open code fence skips the markdown parse
+ * entirely (`StreamingCode`). Everything renders into one `.markdown` wrapper,
+ * so block margins behave exactly as a single parse would.
+ *
+ * It used to be two components — this one while streaming and plain
+ * `<Markdown>` once settled — and the swap was the last visible seam in a
+ * reply. A different component type is a different React subtree, so the
+ * moment a text stopped being live its whole DOM was torn down and rebuilt: a
+ * full re-parse and re-highlight of everything it held, a diagram blanked to
+ * its source for a beat, an image back to its fallback until the cache
+ * answered. On Claude that fired when the *next* message opened; on Codex,
+ * whose turn is one accumulating message, it fired every time a tool call
+ * landed after a paragraph — mid-turn, several times a reply. Keeping the
+ * chunked tree for settled text makes the settle a no-op for React: the chunk
+ * strings are the same strings, so every memoized body is skipped.
+ *
+ * What that gives up is the single whole-text parse that resolved a link or
+ * footnote *reference* against a definition in another chunk, so a settled
+ * text that carries one falls back to the whole parse (`needsWholeParse`) —
+ * the old behaviour, for the one case that needs it.
  */
-export const StreamingMarkdown = React.memo(function StreamingMarkdown({
+export const AssistantMarkdown = React.memo(function AssistantMarkdown({
   text,
   cwd = null,
-  className
+  className,
+  streaming
 }: {
   text: string
   cwd?: string | null
   className?: string
+  /** Still receiving deltas: pace the reveal and hold the arriving word. */
+  streaming: boolean
 }): React.JSX.Element {
-  const shown = useStreamText(text, true)
+  const shown = useStreamText(text, streaming)
   const { chunks, tail, code } = React.useMemo(() => {
+    if (!streaming && needsWholeParse(shown)) return { chunks: NO_CHUNKS, tail: shown, code: null }
     const split = splitMarkdownStream(shown)
     // A `mermaid` fence is a diagram, not code: `MermaidBlock` renders the last
     // source that parsed and keeps it while the rest streams in, so it has to
@@ -758,7 +781,7 @@ export const StreamingMarkdown = React.memo(function StreamingMarkdown({
       return { ...split, tail: split.tail + split.code.open + split.code.body, code: null }
     }
     return split
-  }, [shown])
+  }, [shown, streaming])
   return (
     <div className={cn('markdown text-[14px] leading-[1.6]', className)}>
       <MarkdownCwd.Provider value={cwd}>
@@ -778,7 +801,9 @@ const CodeLine = React.memo(function CodeLine({ html }: { html: string }): React
 })
 
 /**
- * The live, still-open fenced code block at the end of a streaming message.
+ * The live, still-open fenced code block at the end of a streaming message —
+ * and, once the message settles, a fence the model never closed, which
+ * CommonMark also runs to the end of the document.
  *
  * An open fence can never seal (nothing inside one is a block boundary), so
  * left to the markdown path it is the whole tail: remark re-parses it,

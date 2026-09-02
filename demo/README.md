@@ -34,7 +34,12 @@ node demo/seed.mjs                           # write the chats
   nothing survived and fails if anything did.
 - **`e2e/`** — one script per shot, in the renderer, clicking its way to the
   state being photographed. `probe-tabs.js` is a plain inspector rather than a
-  shot.
+  shot, and so is `stream-probe.js`: it pumps a Claude-shaped and a Codex-shaped
+  turn through the real `applyEvent` reducer at a model's pace and reports frame
+  timing, reducer cost per delta, and whether a finished reply or a settled tool
+  row keeps its DOM across the moments it stops being live — the numbers behind
+  the "Smooth streaming" section of `CLAUDE.md`. `foot-probe.js` does the same
+  for the "Thinking…" / "Working…" label at the foot, in both shapes.
 
 The appearance mode is persisted in `settings.json`, so a script that wants dark
 sets it explicitly; otherwise the previous shoot decides what this one looks

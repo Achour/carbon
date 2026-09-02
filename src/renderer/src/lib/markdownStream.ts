@@ -156,3 +156,31 @@ export function splitMarkdownStream(
 
   return { chunks, tail: text.slice(chunkStart), code: null }
 }
+
+// A link or footnote *definition* — `[id]: url`, `[^1]: note` — anywhere in
+// the text. Its references may sit in another chunk, and a chunk parsed alone
+// cannot see a definition it does not hold.
+const REFERENCE_DEFINITION = /^ {0,3}\[[^\]]+\]:/m
+// The HTML block kinds CommonMark lets run across blank lines (types 1 and 2),
+// so a seal boundary inside one would cut the block in half.
+const SPANNING_HTML_BLOCK = /^ {0,3}<(?:pre|script|style|textarea)\b|^ {0,3}<!--/im
+
+/**
+ * Whether *settled* text has to be parsed whole rather than as the chunks it
+ * streamed in as.
+ *
+ * A finished reply keeps the chunked render it streamed with — same
+ * component, same chunk strings, so the moment it stops streaming changes
+ * nothing on screen — and that leaves the seal heuristic without the single
+ * full parse that used to catch what it cannot see. The heuristic is right
+ * about everything that is local to a line (a fence, a list, a heading, a
+ * table), and wrong about exactly two things that are not: a reference
+ * definition, which resolves links and footnotes in *other* chunks, and an
+ * HTML block that may span a blank line. Both are visible in the text itself,
+ * so this is the one test that decides which render a settled message gets.
+ * A false positive costs one whole parse at settle — the old behaviour — and
+ * never a wrong render.
+ */
+export function needsWholeParse(text: string): boolean {
+  return REFERENCE_DEFINITION.test(text) || SPANNING_HTML_BLOCK.test(text)
+}
