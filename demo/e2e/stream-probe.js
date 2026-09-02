@@ -13,6 +13,10 @@
 //   ./demo/shoot.sh /tmp/probe 60000 demo/e2e/stream-probe.js
 (() => {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  // The store parks stream events while the window is hidden — and a probe
+  // window behind the user's own is exactly that — so pin the page visible for
+  // the run, or a parked `tool-update` reads as a label that never moved.
+  Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
   const app = window.__app;
   const log = [];
   const startsWith = (t, sel = 'button,[role="button"],li,a,div,span') =>

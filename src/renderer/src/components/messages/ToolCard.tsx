@@ -1018,12 +1018,17 @@ export const ToolGroup = React.memo(function ToolGroup({
         .filter(Boolean)
         .join(' · ')
     : ''
-  // While running, surface the file/target of the last call for a sense of motion.
-  const trailing = agentTrailing || (running ? metas[metas.length - 1]?.summary : undefined)
   // Open for as long as this is the live block, folded to one line the moment
   // the turn hands it to history. `running` still counts, so a group holding a
   // backgrounded agent that outlives its turn does not shut on it.
   const { open, onOpenChange } = useRunDisclosure(live || running)
+  // A running group that has been folded shut still shows what its last call
+  // is on, for a sense of motion. Only then: while the group is open the call
+  // is on screen one row down with its own summary, and the same command
+  // trailing the row above it was the summary saying it twice — in mono, at the
+  // end of a sentence it was not part of.
+  const trailing =
+    agentTrailing || (running && !open ? metas[metas.length - 1]?.summary : undefined)
   // A canvas is the one thing a run produces that lives somewhere else, and
   // grouping had put its only link one expand away — a document the turn just
   // wrote, with nothing on screen to open it. So the way in rides the collapsed

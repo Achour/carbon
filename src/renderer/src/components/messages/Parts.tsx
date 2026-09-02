@@ -546,12 +546,30 @@ export const EventRow = React.memo(function EventRow({
   }
 })
 
-export function StreamingIndicator({ label = 'Thinking…' }: { label?: string }): React.JSX.Element {
-  // A fade, not `animate-enter`: this label appears in a slot that is already
-  // there, and a slide would say something arrived when nothing did.
+export function StreamingIndicator({
+  label = 'Thinking…',
+  visible = true
+}: {
+  label?: string
+  /** Drawn or not; the row stays mounted so both edges of it are a fade. */
+  visible?: boolean
+}): React.JSX.Element {
+  // A fade in *both* directions, not `animate-enter`: this label lives in a
+  // slot that is already there, so a slide would say something arrived when
+  // nothing did — and a hard cut on the way out, beside a row that has just
+  // started moving, reads as a blink. `visibility` rides the same transition
+  // so a hidden label is out of the accessibility tree once it has faded, and
+  // the shimmer is dropped while hidden rather than animated at zero opacity.
   return (
-    <div className="flex animate-fade items-center gap-2 py-1">
-      <span className="shimmer-text text-[13px] font-medium">{label}</span>
+    <div
+      className={cn(
+        'flex items-center gap-2 py-1 transition-[opacity,visibility] duration-200',
+        visible ? 'opacity-100' : 'invisible opacity-0'
+      )}
+    >
+      <span className={cn('text-[13px] font-medium', visible ? 'shimmer-text' : 'text-muted-foreground')}>
+        {label}
+      </span>
     </div>
   )
 }

@@ -260,7 +260,6 @@
   --animate-shimmer: shimmer 2s linear infinite;
   --animate-pulse-soft: pulse-soft 1.6s ease-in-out infinite;
   --animate-enter: enter 0.25s cubic-bezier(0.16, 1, 0.3, 1);
-  --animate-fade: fade 0.2s ease-out;
 
   @keyframes shimmer {
     from {
@@ -277,14 +276,6 @@
     }
     50% {
       opacity: 0.35;
-    }
-  }
-  @keyframes fade {
-    from {
-      opacity: 0;
-    }
-    to {
-      opacity: 1;
     }
   }
   @keyframes enter {

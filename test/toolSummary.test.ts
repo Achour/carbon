@@ -87,3 +87,11 @@ test('an empty run still says something', () => {
   assert.equal(summarizeActivity([]), 'No activity')
   assert.equal(summarizeActivity([], true), 'Working')
 })
+
+test('the shell file verbs have clauses of their own', () => {
+  // `mkdir`, `cp`, `mv` and `rm` typed into Bash arrive under their humanized
+  // labels; they used to fall to the unknown fallback and print "×1".
+  assert.equal(summarizeActivity(['Create folder']), 'Created 1 folder')
+  assert.equal(summarizeActivity(['Read', 'Create folder', 'Remove', 'Remove']), 'Created 1 folder, removed 2 files, read 1 file')
+  assert.equal(summarizeActivity(['Copy', 'Move'], true), 'Copying 1 file, moving 1 file')
+})

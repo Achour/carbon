@@ -222,14 +222,18 @@ function sendPreviewCommand(cmd: Omit<PreviewCommand, 'id'>): Promise<PreviewCom
 
 function createWindow(): void {
   const bounds = store.getWindowBounds()
+  // Dev utility: AIGUI_WINDOW=WxH opens at that size instead of the saved
+  // bounds, so a layout at a small window can be captured without a human
+  // dragging the corner.
+  const devSize = /^(\d+)x(\d+)$/.exec(process.env.AIGUI_WINDOW ?? '')
   // Create the native material once and keep its effect state active. Runtime
   // setVibrancy() can only create a followWindow material; that briefly flattens
   // to an opaque-looking slab when Chromium replaces the focused chat's layer
   // tree. CSS and the window backing decide whether the material is visible.
   const mac = process.platform === 'darwin'
   win = new BrowserWindow({
-    width: bounds?.width ?? 1280,
-    height: bounds?.height ?? 832,
+    width: devSize ? Number(devSize[1]) : (bounds?.width ?? 1280),
+    height: devSize ? Number(devSize[2]) : (bounds?.height ?? 832),
     x: bounds?.x,
     y: bounds?.y,
     minWidth: 940,
@@ -267,7 +271,8 @@ function createWindow(): void {
     })
   }
   win.on('close', (event) => {
-    if (win) store.setWindowBounds(win.getBounds())
+    // A dev-override size is not a choice the user made, so it is never saved.
+    if (win && !devSize) store.setWindowBounds(win.getBounds())
     // Closing a *tab* with unsaved edits asks; closing the window used to throw
     // the same edits away without a word. The buffer is the only copy — nothing
     // on disk holds it — so this is the last moment the question can be asked.

@@ -50,6 +50,14 @@ const ACTIVITIES: Record<string, Activity> = {
   // Beside Write, and above the reads: a canvas is a *result* of the turn, the
   // same kind of thing a written file is.
   Canvas: { rank: 1, past: 'Wrote', gerund: 'Writing', one: 'canvas', many: 'canvases' },
+  // The shell verbs `humanizeShellCommand` names — Codex does its file work
+  // through them. Without a clause each fell to the unknown-label fallback,
+  // and a run read "read 1 file, create folder ×1": a label wearing a
+  // multiplication sign, in a sentence where everything else has a verb.
+  'Create folder': { rank: 1, past: 'Created', gerund: 'Creating', one: 'folder', many: 'folders' },
+  Copy: { rank: 1, past: 'Copied', gerund: 'Copying', one: 'file', many: 'files' },
+  Move: { rank: 1, past: 'Moved', gerund: 'Moving', one: 'file', many: 'files' },
+  Remove: { rank: 1, past: 'Removed', gerund: 'Removing', one: 'file', many: 'files' },
   Read: { rank: 3, past: 'Read', gerund: 'Reading', one: 'file', many: 'files' },
   List: { rank: 4, past: 'Listed', gerund: 'Listing', one: 'folder', many: 'folders' },
   // Every way of asking "where is it" counts as one kind. Grep and Glob are one
@@ -99,7 +107,11 @@ export function summarizeActivity(labels: string[], running = false): string {
   for (const label of labels) {
     const activity = ACTIVITIES[label]
     if (activity) {
-      const key = `${activity.rank}:${activity.many}`
+      // Keyed on the *words*, so two kinds that share a verb and a noun merge
+      // (every shell label is "Ran … commands"; every search is "… searches")
+      // and two that share only a rank or a noun stay apart — Copy, Move and
+      // Remove all count files at Write's rank, and are three clauses.
+      const key = `${activity.past}|${activity.gerund}|${activity.many}`
       const seen = known.get(key)
       if (seen) seen.n += 1
       else known.set(key, { activity, n: 1 })

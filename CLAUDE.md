@@ -26,6 +26,8 @@ directly without a bundler.
 Dev utilities (env vars for `npm run dev`, used for UI iteration without a human clicking):
 - `AIGUI_CAPTURE=/tmp/shot.png` — saves a window screenshot after load. `AIGUI_CAPTURE_DELAY=2000,8000` takes a comma list of delays and saves `shot-1.png`, `shot-2.png`, …
 - `AIGUI_E2E='<js>'` — runs a script in the renderer after load and logs the result to the terminal.
+- `AIGUI_WINDOW=940x800` — opens the window at that size instead of the saved bounds, for
+  capturing a layout at a small window without dragging the corner.
 - `AIGUI_PROFILE=/tmp/run.cpuprofile` — with `AIGUI_E2E`, samples the renderer's
   main thread for the whole of the script and writes a `.cpuprofile` (open it in
   DevTools → Performance, or reduce it with a script). The Performance API says
@@ -500,12 +502,29 @@ time.
   thought is the message's last part, the pause after its final delta
   included, so on Codex that header is the motion and the foot stays empty
   under it (`demo/e2e/foot-probe.js` pins both shapes).
-  The clock is the last message's identity, which every streamed event
-  replaces; the timer re-arms per delta and fires only in a lull. `QUIET_MS`
+  The clock is the **drawn shape** of the last message that draws anything
+  (`drawn`: each call's status and how much of its input has arrived, each
+  text's length), and deliberately not the last message's identity. Every
+  streamed event replaces the message object, and several of them draw
+  nothing — a withheld thought's once-a-second token ping, a blank thinking
+  message opening between two of Claude's calls, a reasoning item Codex
+  re-states on completion with no text — so keyed on identity the label hid
+  and came back `QUIET_MS` later two or three times per step, which a timeline
+  probe of a real Codex turn showed and the reader called flashing. `QUIET_MS`
   sits above the held word's ~400ms release, so the label never shows under
   text still being revealed, and below the pause of a slow step, which is the
-  silence it is there to explain. It fades rather than entering: the slot was
-  already there, and a slide would claim something arrived.
+  silence it is there to explain. It fades in *and out* rather than entering
+  or cutting: the slot was already there, so a slide would claim something
+  arrived, and a hard cut beside a row that has just started moving is a blink.
+- **A running group's row trails its last call only while folded.** The
+  trailing mono summary ("what the last call is on") was drawn whenever the
+  group was running, and a live group is open — so the command sat at the end
+  of the summary sentence *and* one row below it with its own label. It now
+  shows only when someone has folded a running group shut, which is the one
+  state where the motion would otherwise be invisible. And the shell verbs
+  `humanizeShellCommand` names (`Create folder`, `Copy`, `Move`, `Remove`)
+  have clauses in `summarizeActivity`; they fell to the unknown-label fallback
+  and printed `create folder ×1` in a sentence where everything else has a verb.
 
 ### Drafts (`lib/drafts.ts`, `DraftItem`)
 
