@@ -744,6 +744,16 @@ export const ToolCard = React.memo(function ToolCard({
           </span>
           {written ? (
             <CanvasLink canvas={written} />
+          ) : !meta.summary && part.status === 'pending' ? (
+            // The call's input is still streaming and nothing parseable has
+            // landed yet — the summary's slot pulses so the row reads as one
+            // that is *forming* rather than one with nothing to say. Main
+            // streams the parsed prefix (`part.partial`), so this normally
+            // gives way to the command or path within a frame or two.
+            <span
+              aria-hidden
+              className="h-[0.7em] w-40 shrink-0 animate-pulse-soft rounded-sm bg-muted-foreground/15"
+            />
           ) : (
             meta.summary && (
               <span className="min-w-0 truncate font-mono text-xs text-muted-foreground/60">

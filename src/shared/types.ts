@@ -329,6 +329,12 @@ export interface ToolPart {
   toolUseId: string
   name: string
   input?: unknown
+  /**
+   * `input` is a best-effort parse of the JSON prefix streamed so far, not the
+   * call's final input. Set while the block is open so a row can show the
+   * command or path as it is typed; cleared when the block closes.
+   */
+  partial?: boolean
   status: ToolStatus
   output?: string
   /** Image blocks a tool returned (e.g. preview_screenshot) — base64, no prefix. */

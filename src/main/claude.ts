@@ -86,6 +86,7 @@ import {
 } from './session'
 import { DeltaCoalescer } from './deltaCoalescer'
 import { describeCanvas, describeSelection } from './attachmentText.ts'
+import { parsePartialJson } from './partialJson'
 import { TITLE_SYSTEM, buildTitlePrompt, cleanTitle, deriveTitle, firstUserText } from './titles'
 import {
   HANDOFF_BRIEF_SYSTEM,
@@ -257,6 +258,10 @@ function toolResultText(content: unknown): string {
 }
 
 /** The one server-side tool Claude Code ships: `server_tool_use` name `advisor`. */
+// How often a still-streaming tool input is re-parsed and shown. Coarser than
+// the 80ms text coalescer: a command or a path is read, not watched, and each
+// emit is a full-part IPC plus a parse of the whole prefix.
+const PARTIAL_INPUT_MS = 120
 const ADVISOR_TOOL = 'advisor'
 
 /**
@@ -507,6 +512,13 @@ class ClaudeSession implements AgentSession {
   private input = createInputQueue()
   private current: AssistantMessage | null = null
   private jsonAcc = new Map<number, string>()
+  /**
+   * One armed timer per tool block whose input is still streaming. The
+   * accumulated prefix is parsed and emitted on the part at most once per
+   * `PARTIAL_INPUT_MS`, which is what lets a row fill in its command or path
+   * while the model is still typing it — without an IPC per JSON fragment.
+   */
+  private partialTimers = new Map<number, NodeJS.Timeout>()
   // Route a tool's result (which lands on a later `user` message, matched by
   // toolUseId) back to its streamed part. Entries are pruned the moment a result
   // is applied (see handleToolResults) so these stay ~O(in-flight tools) instead
@@ -1152,6 +1164,8 @@ class ClaudeSession implements AgentSession {
 
   dispose(): void {
     this.setTitlePending(false)
+    for (const timer of this.partialTimers.values()) clearTimeout(timer)
+    this.partialTimers.clear()
     this.terminalizeRunning('error')
     this.disposed = true
     this.dead = true
@@ -1518,6 +1532,12 @@ class ClaudeSession implements AgentSession {
   private terminalizeRunning(status: 'success' | 'error'): void {
     const settle = (part: ToolPart): boolean => {
       let changed = false
+      if (part.partial) {
+        // A block cut off mid-stream: whatever prefix was parsed is what there
+        // is, and a flag saying more is coming would never be cleared.
+        delete part.partial
+        changed = true
+      }
       if (part.status === 'running' || part.status === 'pending') {
         // A `server_tool_use` whose result block never came. That is a normal
         // outcome for the advisor — a turn can end with the consult still open,
@@ -1698,6 +1718,23 @@ class ClaudeSession implements AgentSession {
           if (delta.thinking) this.deltas.queue(message.id, index, delta.thinking)
         } else if (delta.type === 'input_json_delta') {
           this.jsonAcc.set(index, (this.jsonAcc.get(index) ?? '') + (delta.partial_json ?? ''))
+          if (part.type === 'tool' && !this.partialTimers.has(index)) {
+            this.partialTimers.set(
+              index,
+              setTimeout(() => {
+                this.partialTimers.delete(index)
+                // The block may have closed, or the message moved on, in the
+                // meantime — then the final input has already been emitted.
+                const raw = this.jsonAcc.get(index)
+                if (raw === undefined || this.current !== message || this.disposed) return
+                const parsed = parsePartialJson(raw)
+                if (parsed === undefined) return
+                part.input = parsed
+                part.partial = true
+                this.emitPart(message, index)
+              }, PARTIAL_INPUT_MS)
+            )
+          }
         }
         break
       }
@@ -1708,6 +1745,11 @@ class ClaudeSession implements AgentSession {
         const index = event.index ?? message.parts.length - 1
         const part = message.parts[index]
         if (part?.type === 'tool') {
+          const timer = this.partialTimers.get(index)
+          if (timer) {
+            clearTimeout(timer)
+            this.partialTimers.delete(index)
+          }
           const raw = this.jsonAcc.get(index)
           if (raw) {
             try {
@@ -1716,6 +1758,7 @@ class ClaudeSession implements AgentSession {
               part.input = raw
             }
           }
+          delete part.partial
           part.status = 'running'
           this.jsonAcc.delete(index)
           this.emitPart(message, index)

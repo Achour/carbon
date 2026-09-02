@@ -100,6 +100,21 @@ Path aliases: `@` → `src/renderer/src`, `@shared` → `src/shared` (renderer a
 - Conversations resume across app restarts via `chat.sessionId` (`resume` option); the session id arrives on the SDK `init` message.
 - SDK stream events are normalized into `AssistantPart[]` (`text` / `thinking` / `tool`); when the final `assistant` message arrives, `reconcileAssistant` replaces the streamed parts wholesale. Tool results come back on `user` messages and are matched by `toolUseId` via the `toolLoc` map.
 - Streaming text deltas are coalesced ~80ms before IPC emission (`deltaCoalescer.ts`) — per-token IPC, and a persist per token, are genuinely too expensive. That window is about *cost*, not about pacing: the renderer spreads the text back out (see "Smooth streaming" below), so widening or narrowing it here does not change what the reading looks like.
+- **A tool call's input streams, and the row streams with it.** The input
+  arrives as `input_json_delta` fragments and used to land on the part only at
+  `content_block_stop` — so a row read "Terminal" beside a spinner for as long
+  as the model took to type the command, then filled in all at once. Now the
+  accumulated prefix is run through `parsePartialJson` (`main/partialJson.ts`,
+  dependency-free, `test/partialJson.test.ts`) and emitted on the part with
+  `partial: true` at most every `PARTIAL_INPUT_MS` — coarser than the text
+  coalescer, since each emit is a full-part IPC plus a parse of the whole
+  prefix. The parser closes whatever is open (a string, a key with no value, the
+  brackets), backs off a half-written escape, and cuts back to the last `,` or
+  opening bracket when the tail is an unfinishable literal. The flag is cleared
+  at block close and by `terminalizeRunning`, so an interrupted stream never
+  leaves a part claiming more is coming. Before the first parseable prefix
+  lands, `ToolCard` pulses a placeholder in the summary's slot rather than
+  drawing the label alone: a row that is forming should look like one.
 - Permissions: the SDK's `canUseTool` callback returns a Promise held in a `pending` map until the renderer answers via `chat:respond-permission`. "Always allow" uses the SDK's permission `suggestions`.
 - Changing **effort** has no live SDK setter — `setOptions` disposes the session and the next send resumes it in a fresh process. Model and permission mode change live.
 - Sub-agent traffic never becomes a top-level message, but it is no longer *dropped*: only a
