@@ -40,6 +40,10 @@ node demo/seed.mjs                           # write the chats
   row keeps its DOM across the moments it stops being live — the numbers behind
   the "Smooth streaming" section of `CLAUDE.md`. `foot-probe.js` does the same
   for the "Thinking…" / "Working…" label at the foot, in both shapes.
+  `real-turn-probe.js` sends a *real* prompt through the chat named in it (full
+  access, so nothing waits on a permission) and reports the same frame numbers
+  plus every entrance animation that replayed — pair it with `AIGUI_PROFILE` to
+  see what a long task was doing. It spends real tokens.
 
 The appearance mode is persisted in `settings.json`, so a script that wants dark
 sets it explicitly; otherwise the previous shoot decides what this one looks

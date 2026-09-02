@@ -13,6 +13,7 @@ import { ImageLightbox } from '@/components/ImageView'
 import { FindBar } from '@/components/FindBar'
 import { openEditorSearch } from '@/lib/editorSearch'
 import { preloadHeavyChunks } from '@/lib/preloadHeavy'
+import { warmCues } from '@/lib/sounds'
 import { Settings } from '@/components/Settings'
 import { UsageStats } from '@/components/UsageStats'
 import { useApp } from '@/store'
@@ -47,6 +48,11 @@ export default function App(): React.JSX.Element {
     // The editor, terminal and diagram chunks are no longer in the entry
     // bundle; this is what keeps them from being a wait on first use instead.
     preloadHeavyChunks()
+    // The completion cue is rendered ahead of the first turn's end for the
+    // same reason: built on demand it was the one long task left in a turn,
+    // landing on the very frame the reply settled.
+    const prefs = useApp.getState().notifyPrefs
+    if (prefs.sound) warmCues(prefs.pack)
     const offEvents = window.api.onChatEvent(applyEvent)
     const offNewChat = window.api.onNewChat(() => useApp.getState().startNewChat())
     const offCloseTab = window.api.onCloseTab(() => useApp.getState().closeActiveTab())

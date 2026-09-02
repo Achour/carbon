@@ -306,32 +306,127 @@ function buildCue(ctx: BaseAudioContext, out: AudioNode, kind: CueKind, id: Soun
   }
 }
 
+// ---- Playback ----
+//
+// **A cue is rendered ahead of time, and the turn's end plays a buffer.**
+// It used to build the graph on the live context at the moment it was
+// wanted, which put ~80 ms on the main thread at the one instant the transcript
+// is settling: `new AudioContext()` is ~67 ms the first time (the output
+// stream), and setting a ConvolverNode's buffer is ~25 ms on *every* cue,
+// because Chromium partitions the impulse for FFT convolution synchronously on
+// the setter. Measured with `AIGUI_PROFILE` on a real turn, that was the single
+// long task left in a turn — the completion chime dropping the frame the
+// completion landed on.
+//
+// So each (pack, kind) is rendered **offline** once — the same `buildCue`
+// graph into an `OfflineAudioContext`, whose render runs off the main thread —
+// and playing is a buffer source, which costs nothing. `warmCues` does the
+// render, and the one-off context creation, on idle after launch, so the first
+// turn of a session pays neither; a cue that was never warmed still renders on
+// demand and lands a few tens of milliseconds late rather than early.
+
+/** The offline render rate. A live context at another rate resamples the buffer. */
+const RENDER_RATE = 48000
+
+const rendered = new Map<string, Promise<AudioBuffer>>()
+
+/** One cue as audio, rendered once per (pack, kind) and cached for the session. */
+function cueBuffer(kind: CueKind, pack: SoundPackId): Promise<AudioBuffer> {
+  const key = `${pack}:${kind}`
+  let pending = rendered.get(key)
+  if (!pending) {
+    const ctx = new OfflineAudioContext(2, Math.ceil(RENDER_RATE * cueSeconds(kind, pack)), RENDER_RATE)
+    buildCue(ctx, ctx.destination, kind, pack)
+    pending = ctx.startRendering()
+    rendered.set(key, pending)
+    // A failed render is not cached: the next request tries again.
+    pending.catch(() => rendered.delete(key))
+  }
+  return pending
+}
+
 let audio: AudioContext | null = null
 let audioIdle: ReturnType<typeof setTimeout> | null = null
 let idleAt = 0
 
+/**
+ * The live output. A running AudioContext holds a realtime output stream open
+ * forever (~100 silent callbacks/s across the renderer and coreaudiod, and it
+ * blocks process idling), so it is woken just for a cue and suspended once the
+ * tail has faded — the cue's *own* length, since Bell rings for over three
+ * seconds and a fixed timer would cut it off mid-decay.
+ */
+function liveContext(): AudioContext {
+  audio ??= new AudioContext()
+  return audio
+}
+
+function keepAwake(seconds: number): void {
+  // Overlapping cues: the later suspend wins, never the earlier one.
+  const until = Date.now() + seconds * 1000
+  if (until > idleAt || !audioIdle) {
+    idleAt = until
+    if (audioIdle) clearTimeout(audioIdle)
+    audioIdle = setTimeout(() => void audio?.suspend(), seconds * 1000)
+  }
+}
+
 /** Play one cue in the given pack. Never throws — audio is not worth a crash. */
 export function playCue(kind: CueKind, pack: SoundPackId = DEFAULT_SOUND_PACK): void {
   try {
-    audio ??= new AudioContext()
-    // A running AudioContext holds a realtime output stream open forever
-    // (~100 silent callbacks/s across the renderer and coreaudiod, and it
-    // blocks process idling). Wake it just for the cue; suspend once the tail
-    // has faded — which now means the cue's *own* length, since Bell rings for
-    // over three seconds and a fixed timer would cut it off mid-decay.
-    if (audio.state === 'suspended') void audio.resume()
-    buildCue(audio, audio.destination, kind, pack)
-    const tail = cueSeconds(kind, pack)
-    // Overlapping cues: the later suspend wins, never the earlier one.
-    const until = Date.now() + tail * 1000
-    if (until > idleAt || !audioIdle) {
-      idleAt = until
-      if (audioIdle) clearTimeout(audioIdle)
-      audioIdle = setTimeout(() => void audio?.suspend(), tail * 1000)
-    }
+    const ctx = liveContext()
+    void cueBuffer(kind, pack)
+      .then((buffer) => {
+        if (ctx.state === 'suspended') void ctx.resume()
+        const source = ctx.createBufferSource()
+        source.buffer = buffer
+        source.connect(ctx.destination)
+        source.start()
+        keepAwake(buffer.duration + 0.1)
+      })
+      .catch(() => undefined)
+    // The other cues of this pack are the next thing likely to be wanted.
+    warmCues(pack)
   } catch {
     // audio unavailable — never block the event flow over a chime
   }
+}
+
+const warmed = new Set<SoundPackId>()
+
+/**
+ * Render a pack's cues and open the output ahead of the first turn's end, one
+ * step per idle callback so a busy launch is never made busier. Idempotent per
+ * pack; the on-demand path in `playCue` covers whatever this has not reached.
+ */
+export function warmCues(pack: SoundPackId): void {
+  if (warmed.has(pack)) return
+  warmed.add(pack)
+  const steps: (() => void)[] = [
+    () => {
+      // Creating the context opens the output stream, which is the 67 ms; it
+      // is suspended straight away, so this costs no idle CPU afterwards.
+      if (!audio) void liveContext().suspend()
+    },
+    ...(Object.keys(MOTIFS) as CueKind[]).map((kind) => () => void cueBuffer(kind, pack))
+  ]
+  let next = 0
+  const step = (): void => {
+    const run = steps[next++]
+    if (!run) return
+    try {
+      run()
+    } catch {
+      // see playCue
+    }
+    whenIdle(step)
+  }
+  whenIdle(step)
+}
+
+function whenIdle(run: () => void): void {
+  if (typeof requestIdleCallback === 'function') requestIdleCallback(run, { timeout: 10_000 })
+  else setTimeout(run, 1_000)
 }
 
 /**
@@ -344,15 +439,12 @@ export async function renderCue(
   kind: CueKind,
   pack: SoundPackId
 ): Promise<{ peak: number; rms: number; seconds: number }> {
-  const seconds = cueSeconds(kind, pack)
-  const ctx = new OfflineAudioContext(2, Math.ceil(48000 * seconds), 48000)
-  buildCue(ctx, ctx.destination, kind, pack)
-  const rendered = await ctx.startRendering()
+  const buffer = await cueBuffer(kind, pack)
   let peak = 0
   let sum = 0
   let n = 0
-  for (let ch = 0; ch < rendered.numberOfChannels; ch++) {
-    const data = rendered.getChannelData(ch)
+  for (let ch = 0; ch < buffer.numberOfChannels; ch++) {
+    const data = buffer.getChannelData(ch)
     for (let i = 0; i < data.length; i++) {
       const v = Math.abs(data[i])
       if (v > peak) peak = v
@@ -360,7 +452,7 @@ export async function renderCue(
       n++
     }
   }
-  return { peak, rms: Math.sqrt(sum / Math.max(1, n)), seconds }
+  return { peak, rms: Math.sqrt(sum / Math.max(1, n)), seconds: cueSeconds(kind, pack) }
 }
 
 if (import.meta.env.DEV) {

@@ -114,8 +114,8 @@ function Tab({
       onClick={onSelect}
       onDoubleClick={onDoubleClick}
       // Middle-click closes, the way every tabbed editor and browser does. Only
-      // a tab that *has* a close — the derived ones (Agents, the Canvas
-      // library) ignore it rather than doing something else.
+      // a tab that *has* a close — the derived one (Agents) ignores it rather
+      // than doing something else.
       onAuxClick={(e) => {
         if (e.button === 1 && onClose) {
           e.preventDefault()
@@ -781,15 +781,17 @@ export function RightPanel(): React.JSX.Element | null {
   // activity bar above the composer, or the tab itself.
   const showAgents = useAgents((s) => s.runs.length > 0)
   const agentsRunning = useAgents((s) => s.totals.running > 0)
-  // The Canvas tab is a property of the *project*, not the chat — every chat in
-  // a folder sees the same documents. `activeTab` is OR-ed in so the launcher
-  // can open an empty one: without it, a project with no canvas yet has no way
-  // in, and the tab it opened would vanish under it.
-  const canvasCount = useApp((s) => s.canvases.length)
+  // The Canvas library exists exactly while it is the active tab — the Files
+  // tab's rule. It was pinned for as long as the project had a canvas, which
+  // made it the one tab in the strip with no close: a project keeps its
+  // documents for good, so the library sat beside a dozen file tabs with no
+  // way to give its space back. The ways in are the + menu, the launcher and
+  // the List button in an open document's header, none of which needs the tab
+  // to be standing already.
   const canvasTabs = useApp((s) => s.canvasTabs)
   const canvasList = useApp((s) => s.canvases)
   const closeCanvas = useApp((s) => s.closeCanvas)
-  const showCanvas = canvasCount > 0 || activeTab === 'canvas'
+  const showCanvas = activeTab === 'canvas'
   const current =
     activeTab === 'files'
       ? 'files'
@@ -852,9 +854,9 @@ export function RightPanel(): React.JSX.Element | null {
   // ⌘W. What "close" means is decided here, where `current` is resolved and
   // where the unsaved-edits question lives — a file tab goes through
   // `requestCloseFile`, so ⌘W on a dirty buffer asks the same question the ✕
-  // does rather than discarding silently. The Agents roster and the Canvas
-  // library have no close (they are derived state) and so ⌘W is a no-op on
-  // them; anything else closes, and with nothing open the window does, which
+  // does rather than discarding silently. The Agents roster has no close (it
+  // is derived state) and so ⌘W is a no-op on it; anything else closes, and
+  // with nothing open the window does, which
   // is what the key used to mean unconditionally. Everything is read through a
   // ref so the effect keys on the tick alone: `current` in its deps would run
   // the close on every tab switch.
@@ -865,7 +867,7 @@ export function RightPanel(): React.JSX.Element | null {
       void window.api.closeWindow()
       return
     }
-    if (current === 'files') setActiveTab(null)
+    if (current === 'files' || current === 'canvas') setActiveTab(null)
     else if (current === 'plan') closePlanPanel()
     else if (currentCanvasId) closeCanvas(currentCanvasId)
     else if (currentIsTerminal) closeTerminal(current)
@@ -969,6 +971,7 @@ export function RightPanel(): React.JSX.Element | null {
               label="Canvas"
               active={current === 'canvas'}
               onSelect={() => setActiveTab('canvas')}
+              onClose={() => setActiveTab(null)}
             />
           )}
           {/* Browse mode — the tree docked with nothing selected. It is a state

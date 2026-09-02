@@ -26,6 +26,10 @@ directly without a bundler.
 Dev utilities (env vars for `npm run dev`, used for UI iteration without a human clicking):
 - `AIGUI_CAPTURE=/tmp/shot.png` — saves a window screenshot after load. `AIGUI_CAPTURE_DELAY=2000,8000` takes a comma list of delays and saves `shot-1.png`, `shot-2.png`, …
 - `AIGUI_E2E='<js>'` — runs a script in the renderer after load and logs the result to the terminal.
+- `AIGUI_PROFILE=/tmp/run.cpuprofile` — with `AIGUI_E2E`, samples the renderer's
+  main thread for the whole of the script and writes a `.cpuprofile` (open it in
+  DevTools → Performance, or reduce it with a script). The Performance API says
+  *when* a long task happened; this is how to learn what it was doing.
 - `CARBON_CLAUDE_PATH` / `CARBON_CODEX_PATH` / `CARBON_GROK_PATH` — pin a provider's
   CLI to a specific binary, above the Settings → Providers value. Useful for testing
   a prerelease CLI, or the "not installed" path (point one at a path that isn't there).
@@ -1509,9 +1513,13 @@ of a document panel, and one slot makes comparing them a round trip through a
 list. They are still deliberately not `openFiles` entries: a canvas has no path,
 no dirty state, no preview slot and nothing to save, so riding that plumbing
 would mean teaching every one of those rules a case that never applies. The
-library tab is shown while the project has a canvas *or* `activeTab` is on it,
-which is what lets the launcher open an empty one without it vanishing
-underneath.
+library tab exists exactly while `activeTab` is on it — the Files tab's rule —
+and closes with a ✕ or ⌘W. It was pinned for as long as the project had a
+canvas, which made it the one tab in the strip that could not be closed: a
+project keeps its documents for good, so the library sat beside a dozen file
+tabs with no way to give its space back. The ways in (the panel's + menu, the
+launcher, the List button in an open document's header) all go through
+`openCanvas(null)`, so none of them needs the tab to be standing already.
 
 **The renderer is `<iframe sandbox="allow-scripts" srcdoc>`, and the two flags
 are only safe apart.** With `allow-same-origin` the document could reach out of
@@ -1737,6 +1745,19 @@ whose licensing is someone else's to grant.
   cue and suspended after — but the fixed 1200 ms it inherited was written for a
   450 ms beep, and Bell rings for over four seconds. `cueSeconds` is the same
   arithmetic the offline render uses, so the timer cannot drift from the sound.
+- **A cue is rendered ahead of time; the turn's end plays a buffer.** Built on
+  the live context at the moment it was wanted, the completion chime was the
+  one long task left in a real turn — ~80 ms on the frame the reply settled,
+  found with `AIGUI_PROFILE`: `new AudioContext()` is ~67 ms once (the output
+  stream) and setting a ConvolverNode's buffer ~25 ms on *every* cue, since
+  Chromium partitions the impulse for FFT convolution synchronously on the
+  setter. `cueBuffer` renders each (pack, kind) once through the same
+  `buildCue` graph into an `OfflineAudioContext` — off the main thread — and
+  `playCue` is then a buffer source at ~0.1 ms. `warmCues` does the renders and
+  the one-off context creation on idle after launch (`App`, only when sound is
+  on), one per idle callback like `preloadHeavy`; a cue nothing warmed still
+  renders on demand and lands a few tens of milliseconds late rather than
+  early. `renderCue`, the dev-only level checker, reads the same cache.
 - **A stopped turn stays silent.** The failure cue rides the existing `error`
   event, and all three adapters already suppress that event on an intentional
   interrupt (`interruptedTurn` / `interrupted`) — so cancelling never dings.

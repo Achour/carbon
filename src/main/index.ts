@@ -342,14 +342,44 @@ function createWindow(): void {
   }
 
   // Dev utility: AIGUI_E2E=<js> runs a script in the renderer after load.
+  // AIGUI_PROFILE=<path.cpuprofile> samples the renderer's main thread for the
+  // whole of the script and writes the profile beside its result — the only
+  // way to attribute a long task an E2E run reports, since the Performance
+  // API says when one happened and never what it was doing.
   const e2e = process.env.AIGUI_E2E
+  const profilePath = process.env.AIGUI_PROFILE
   if (e2e) {
     win.webContents.once('did-finish-load', () => {
-      setTimeout(() => {
-        win?.webContents
-          .executeJavaScript(e2e)
-          .then((r) => console.log('[e2e result]', JSON.stringify(r)))
-          .catch((err) => console.error('[e2e error]', err))
+      setTimeout(async () => {
+        const wc = win?.webContents
+        if (!wc) return
+        const dbg = wc.debugger
+        if (profilePath) {
+          try {
+            dbg.attach('1.3')
+            await dbg.sendCommand('Profiler.enable')
+            await dbg.sendCommand('Profiler.setSamplingInterval', { interval: 250 })
+            await dbg.sendCommand('Profiler.start')
+          } catch (err) {
+            console.error('[e2e profile] could not start:', err)
+          }
+        }
+        try {
+          const r = await wc.executeJavaScript(e2e)
+          console.log('[e2e result]', JSON.stringify(r))
+        } catch (err) {
+          console.error('[e2e error]', err)
+        }
+        if (profilePath && dbg.isAttached()) {
+          try {
+            const { profile } = (await dbg.sendCommand('Profiler.stop')) as { profile: unknown }
+            writeFileSync(profilePath, JSON.stringify(profile))
+            console.log('[e2e profile]', profilePath)
+          } catch (err) {
+            console.error('[e2e profile] could not write:', err)
+          }
+          dbg.detach()
+        }
       }, 1000)
     })
   }
