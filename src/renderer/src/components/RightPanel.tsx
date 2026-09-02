@@ -56,6 +56,10 @@ const TerminalPane = React.lazy(() =>
 )
 
 
+// The drag payload's own type, so the composer's file-drop highlight — which
+// keys on `Files` in `dataTransfer.types` — stays dark while a tab crosses it.
+const TAB_DRAG_MIME = 'application/x-carbon-tab'
+
 function Tab({
   icon,
   label,
@@ -64,6 +68,8 @@ function Tab({
   preview = false,
   dirty = false,
   busy,
+  dragId,
+  onReorder,
   onSelect,
   onDoubleClick,
   onClose
@@ -77,6 +83,10 @@ function Tab({
   dirty?: boolean
   /** Foreground process name; renders the activity dot when set. */
   busy?: string
+  /** Set on a tab that can be dragged into a new position; its identity. */
+  dragId?: string
+  /** A tab was dropped on this one: put `id` on `side` of it. */
+  onReorder?: (id: string, side: 'before' | 'after') => void
   onSelect: () => void
   onDoubleClick?: () => void
   /** Omitted by tabs that are derived state rather than something opened — the
@@ -84,19 +94,67 @@ function Tab({
       a close button could do that the next spawn would not undo. */
   onClose?: () => void
 }): React.JSX.Element {
+  // Which edge the dragged tab would land on, drawn as a bar at that edge. Held
+  // here rather than in the strip: it is one tab's own hover state.
+  const [over, setOver] = React.useState<'before' | 'after' | null>(null)
+  const sideOf = (e: React.DragEvent<HTMLDivElement>): 'before' | 'after' => {
+    const r = e.currentTarget.getBoundingClientRect()
+    return e.clientX < r.left + r.width / 2 ? 'before' : 'after'
+  }
+  const isTabDrag = (e: React.DragEvent): boolean =>
+    Array.from(e.dataTransfer.types).includes(TAB_DRAG_MIME)
   return (
     <div
       className={cn(
-        'group flex h-7 shrink-0 cursor-default items-center gap-1.5 rounded-md pr-1.5 pl-2 text-xs transition-colors',
+        'group relative flex h-7 shrink-0 cursor-default items-center gap-1.5 rounded-md pr-1.5 pl-2 text-xs transition-colors',
         active
           ? 'bg-accent text-foreground'
           : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground'
       )}
       onClick={onSelect}
       onDoubleClick={onDoubleClick}
+      // Middle-click closes, the way every tabbed editor and browser does. Only
+      // a tab that *has* a close — the derived ones (Agents, the Canvas
+      // library) ignore it rather than doing something else.
+      onAuxClick={(e) => {
+        if (e.button === 1 && onClose) {
+          e.preventDefault()
+          onClose()
+        }
+      }}
+      draggable={dragId !== undefined}
+      onDragStart={(e) => {
+        if (dragId === undefined) return
+        e.dataTransfer.setData(TAB_DRAG_MIME, dragId)
+        e.dataTransfer.effectAllowed = 'move'
+      }}
+      onDragOver={(e) => {
+        if (!onReorder || !isTabDrag(e)) return
+        e.preventDefault()
+        e.dataTransfer.dropEffect = 'move'
+        const side = sideOf(e)
+        if (side !== over) setOver(side)
+      }}
+      onDragLeave={() => setOver(null)}
+      onDrop={(e) => {
+        setOver(null)
+        if (!onReorder || !isTabDrag(e)) return
+        e.preventDefault()
+        const id = e.dataTransfer.getData(TAB_DRAG_MIME)
+        if (id && id !== dragId) onReorder(id, sideOf(e))
+      }}
       role="tab"
       aria-selected={active}
     >
+      {over && (
+        <span
+          aria-hidden
+          className={cn(
+            'pointer-events-none absolute inset-y-1 w-0.5 rounded-full bg-primary',
+            over === 'before' ? '-left-[3px]' : '-right-[3px]'
+          )}
+        />
+      )}
       <span className={cn(attention && 'text-warning')}>{icon}</span>
       <span className={cn('max-w-36 truncate', preview && 'italic')}>{label}</span>
       {/* One fixed-size slot for everything that can appear at the end of a tab:
@@ -240,7 +298,7 @@ function QuickOpen(): React.JSX.Element {
   const actions = [
     {
       icon: <FolderTree className="size-4" />,
-      label: 'Browse files',
+      label: 'Files',
       run: () => {
         browseFiles()
         setOpen(false)
@@ -576,6 +634,7 @@ export function RightPanel(): React.JSX.Element | null {
   const fileContents = useApp((s) => s.fileContents)
   const activeTab = useApp((s) => s.activeTab)
   const setActiveTab = useApp((s) => s.setActiveTab)
+  const reorderTab = useApp((s) => s.reorderTab)
   const closeFile = useApp((s) => s.closeFile)
   const dirtyFiles = useApp((s) => s.dirtyFiles)
   const saveFile = useApp((s) => s.saveFile)
@@ -934,6 +993,8 @@ export function RightPanel(): React.JSX.Element | null {
               icon={<PenLine className="size-3.5" />}
               label={canvasList.find((c) => c.id === id)?.title ?? 'Canvas'}
               active={current === `canvas:${id}`}
+              dragId={id}
+              onReorder={(from, side) => reorderTab(from, id, side)}
               onSelect={() => setActiveTab(`canvas:${id}`)}
               onClose={() => closeCanvas(id)}
             />
@@ -954,6 +1015,8 @@ export function RightPanel(): React.JSX.Element | null {
               active={current === file.path}
               preview={file.preview}
               dirty={!!dirtyFiles[file.path]}
+              dragId={file.path}
+              onReorder={(from, side) => reorderTab(from, file.path, side)}
               onSelect={() => setActiveTab(file.path)}
               onDoubleClick={file.preview ? () => promoteTab(file.path) : undefined}
               onClose={() => requestCloseFile(file.path)}
@@ -966,6 +1029,8 @@ export function RightPanel(): React.JSX.Element | null {
               label={t.label ?? `Terminal ${t.n}`}
               active={current === t.id}
               busy={terminalBusy[t.id]}
+              dragId={t.id}
+              onReorder={(from, side) => reorderTab(from, t.id, side)}
               onSelect={() => setActiveTab(t.id)}
               onClose={() => closeTerminal(t.id)}
             />
@@ -976,6 +1041,8 @@ export function RightPanel(): React.JSX.Element | null {
               icon={<Globe className="size-3.5" />}
               label={`Preview ${p.n}`}
               active={current === p.id}
+              dragId={p.id}
+              onReorder={(from, side) => reorderTab(from, p.id, side)}
               onSelect={() => setActiveTab(p.id)}
               onClose={() => closePreview(p.id)}
             />

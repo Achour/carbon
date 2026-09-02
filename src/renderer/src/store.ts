@@ -47,6 +47,7 @@ import {
   saveDrafts
 } from '@/lib/drafts'
 import type { ComposerDraft, ProjectDraft, ProjectDraftOptions } from '@/lib/drafts'
+import { moveItem } from '@/lib/tabOrder'
 import {
   CANVAS_ATTACH_MAX_CHARS,
   PROVIDER_SHORT_LABELS,
@@ -588,6 +589,14 @@ interface AppState {
    */
   closeTabTick: number
   closeActiveTab(): void
+  /**
+   * Drop `id` beside `target` in the tab strip. Each kind of tab lives in its
+   * own array — files, canvases, terminals, previews — and the strip draws them
+   * in that fixed sequence, so a tab moves only within its own kind; a drop on
+   * a tab of another kind is a no-op rather than a move to the kind's edge,
+   * which would look like the drop had been ignored anyway.
+   */
+  reorderTab(id: string, target: string, side: 'before' | 'after'): void
   refreshCanvases(): Promise<void>
   /** Open one canvas as its own tab, or `null` for the Recents list. */
   openCanvas(id: string | null): Promise<void>
@@ -1955,6 +1964,41 @@ export const useApp = create<AppState>((set, get) => ({
   closeTabTick: 0,
   closeActiveTab() {
     set((s) => ({ closeTabTick: s.closeTabTick + 1 }))
+  },
+  reorderTab(id, target, side) {
+    if (id === target) return
+    set((s) => {
+      const files = s.openFiles.map((f) => f.path)
+      const f = files.indexOf(id)
+      if (f !== -1) {
+        const t = files.indexOf(target)
+        if (t === -1) return {}
+        const next = moveItem(s.openFiles, f, t, side)
+        return next === s.openFiles ? {} : { openFiles: next as OpenTab[] }
+      }
+      const c = s.canvasTabs.indexOf(id)
+      if (c !== -1) {
+        const t = s.canvasTabs.indexOf(target)
+        if (t === -1) return {}
+        const next = moveItem(s.canvasTabs, c, t, side)
+        return next === s.canvasTabs ? {} : { canvasTabs: next as string[] }
+      }
+      const term = s.terminals.findIndex((x) => x.id === id)
+      if (term !== -1) {
+        const t = s.terminals.findIndex((x) => x.id === target)
+        if (t === -1) return {}
+        const next = moveItem(s.terminals, term, t, side)
+        return next === s.terminals ? {} : { terminals: next as TerminalTab[] }
+      }
+      const prev = s.previews.findIndex((x) => x.id === id)
+      if (prev !== -1) {
+        const t = s.previews.findIndex((x) => x.id === target)
+        if (t === -1) return {}
+        const next = moveItem(s.previews, prev, t, side)
+        return next === s.previews ? {} : { previews: next as PreviewTab[] }
+      }
+      return {}
+    })
   },
   async refreshCanvases() {
     const project = canvasProject(get())
