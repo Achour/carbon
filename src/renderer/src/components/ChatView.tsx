@@ -479,25 +479,37 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
   // message (before the reply starts) isn't mistaken for the previous reply.
   const lastMsg = messages[messages.length - 1]
   const liveAssistant = busy && lastMsg?.role === 'assistant' ? lastMsg : undefined
-  // Has the live turn shown anything yet? Empty parts (a thinking block whose first
-  // token hasn't arrived) don't count.
-  const producedSomething =
-    liveAssistant?.parts.some((p) => p && (p.type === 'tool' || p.text.length > 0)) ?? false
-  // The tail of the live turn: a running tool card and a streaming thinking block
-  // already animate on their own, so a second indicator under them is just noise.
-  const tail = liveAssistant
-    ? [...liveAssistant.parts].reverse().find((p) => Boolean(p))
-    : undefined
-  const tailAnimatesItself =
-    (tail?.type === 'tool' && (tail.status === 'pending' || tail.status === 'running')) ||
-    // A thinking block only shimmers once its first token lands; an empty one
-    // renders nothing, so keep the indicator up until then.
-    (tail?.type === 'thinking' && tail.text.length > 0)
-  // Show a working indicator the whole time the agent is busy — before the first
-  // token, while streaming text, and in the gaps between tool calls — not just at
-  // the very start. Hide it only while a permission prompt awaits the user, or when
-  // the tail is already animating itself.
-  const showActivity = busy && permissions.length === 0 && !tailAnimatesItself
+  // Has the live *turn* shown anything yet? Scanned back to the prompt that
+  // started it rather than read off the last message alone: the CLI opens a
+  // fresh assistant message per thinking block, and each one arrives empty —
+  // so keyed on the last message, the label fell back to "Thinking…" after
+  // every tool call and returned to "Working…" on the next, once per step.
+  // Thinking *text* counts (Codex streams its reasoning visibly), which is what
+  // keeps the foot from reading "Thinking…" two lines under a block header
+  // that already does; Claude withholds the text, so there it stays honest.
+  const producedSomething = React.useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i]
+      if (m.role === 'user') break
+      if (
+        m.role === 'assistant' &&
+        m.parts.some((p) => p && (p.type === 'tool' || p.text.length > 0))
+      )
+        return true
+    }
+    return false
+  }, [messages])
+  // One indicator for exactly as long as the turn runs, hidden only while a
+  // permission prompt has the floor. It used to stand down whenever the tail
+  // was a running tool — "a spinner already animates there" — and that rule is
+  // the flicker: between any two calls in a run there is a moment when the
+  // last has returned and the next has not started, so the row unmounted and
+  // remounted once per call, and the ~28px it takes moved the foot of the
+  // column (and the follow-scroll with it) each time. A spinner on a tool row
+  // says that step is running; this row says the turn is, and the two are not
+  // the same statement. `ToolGroup` learned the same lesson: key on the turn
+  // (`live`), never on whether a call happens to be in flight.
+  const showActivity = busy && permissions.length === 0
   // "Thinking…" until the model has produced something this turn; "Working…" after.
   const activityLabel = producedSomething ? 'Working…' : 'Thinking…'
 

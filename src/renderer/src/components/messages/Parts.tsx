@@ -9,7 +9,6 @@ import {
   Code2,
   Copy,
   FileText,
-  GitCommitHorizontal,
   Loader2,
   MousePointerClick,
   Pencil,
@@ -247,21 +246,29 @@ export const UserBubble = React.memo(function UserBubble({
 }): React.JSX.Element {
   const [editing, setEditing] = React.useState(false)
   const [copied, setCopied] = React.useState(false)
-  // App-initiated actions (e.g. a "Commit" from the source-control button) show
-  // as a compact chip, Cursor-style — the verbose prompt behind it stays hidden.
-  // It keeps its own shape rather than joining the box below, because it is a
-  // record of a button that was pressed rather than something anyone wrote, and
-  // the two must not look alike. No actions either: the text behind the chip is
-  // a prompt the app wrote, so editing it would leave the label describing
-  // something that never ran, and copying it would hand over words the user
-  // never typed.
+  // App-initiated actions — a "Commit" from the source-control button, a
+  // `/review` from the Codex review dialog — draw as the same box a typed
+  // prompt gets, tinted with the primary colour and holding only the command,
+  // Cursor's shape for a pressed action. It was a small pill first, on the
+  // argument that a pressed button and a written prompt must not look alike;
+  // in the column it read as a stray chip rather than as a turn's opening
+  // move. The tint is what now separates them, at the prompt's own size and
+  // width. The verbose prompt behind it stays hidden, and there are no
+  // actions: the text is one the app wrote, so editing it would leave the
+  // label describing something that never ran, and copying it would hand over
+  // words the user never typed. A slash command shows its token first, so a
+  // review reads `/review · Uncommitted changes`.
   if (message.label) {
+    const command = message.text.startsWith('/') ? message.text.split(/\s+/, 1)[0] : null
     return (
-      <div className="flex animate-enter items-center">
-        <div className="flex items-center gap-1.5 rounded-full border border-primary/25 bg-primary/10 py-1 pr-3 pl-2.5">
-          <GitCommitHorizontal className="size-3.5 shrink-0 text-primary" />
-          <span className="text-[12.5px] font-medium text-primary">{message.label}</span>
-        </div>
+      <div
+        className={cn(
+          PROMPT_BOX,
+          'flex animate-enter items-center gap-2 border-primary/30 bg-primary/10 py-2.5 text-primary'
+        )}
+      >
+        {command && <span className="shrink-0 font-mono text-[13px]">{command}</span>}
+        <span className="min-w-0 font-medium leading-relaxed break-words">{message.label}</span>
       </div>
     )
   }
