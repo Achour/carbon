@@ -36,7 +36,7 @@ import {
   type ServiceTier,
   type SlashCommand
 } from '@shared/types'
-import { CHAT_BLEED_PAD } from '@/lib/chatColumn'
+import { CHAT_BLEED_PAD, CHAT_FRAME } from '@/lib/chatColumn'
 import { cn } from '@/lib/utils'
 import { formatTokens } from '@/lib/format'
 import type { ComposerDraft } from '@/lib/drafts'
@@ -1079,7 +1079,10 @@ export function Composer({
         void addFiles(e.dataTransfer.files)
       }}
       className={cn(
-        'relative rounded-2xl border border-border bg-card shadow-lg shadow-black/5 transition-colors focus-within:border-ring/60 dark:shadow-black/20',
+        // The frame is shared with the sent prompt above it (`CHAT_FRAME`);
+        // what is added here is only what is true of the composer alone.
+        CHAT_FRAME,
+        'relative transition-colors focus-within:border-ring/60',
         dragOver && 'border-primary/60 ring-2 ring-primary/25',
         locked && 'opacity-60'
       )}

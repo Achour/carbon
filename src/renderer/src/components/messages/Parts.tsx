@@ -15,7 +15,7 @@ import {
   Pencil
 } from 'lucide-react'
 import type { AssistantMessage, EventMessage, ToolPart, UserMessage } from '@shared/types'
-import { CHAT_BLEED, CHAT_BLEED_PAD } from '@/lib/chatColumn'
+import { CHAT_BLEED, CHAT_BLEED_PAD, CHAT_FRAME } from '@/lib/chatColumn'
 import { cn } from '@/lib/utils'
 import { formatCost, formatDuration } from '@/lib/format'
 import { Markdown, StreamingMarkdown, useStreamText } from '@/components/Markdown'
@@ -58,13 +58,21 @@ function MessageAction({
  * indent the prompt, putting two text columns on one screen.
  *
  * One shape for both states, so clicking Edit changes what the box holds and
- * never the box itself: a border, radius or padding that moved on the click
- * would read as the message being replaced rather than opened.
+ * never the box itself: a border, radius, padding or fill that moved on the
+ * click would read as the message being replaced rather than opened. That is
+ * why the fill sits here rather than at the two call sites, which set it at
+ * 40% and 60% — the box already changed shade on the click.
  *
- * The bleed itself is `lib/chatColumn` — the composer has to hang out by the
- * same amount, and two frames that nearly agree read worse than either.
+ * **It is the composer's frame, not one of its own** (`CHAT_FRAME`). A prompt
+ * is the box the user's words sit in after sending, and the composer is the
+ * same box before, so the transcript should read as that box scrolled up. It
+ * did not: translucent `--secondary` over the transcript came out a hair off
+ * the page — 0.975 against 0.985 in light mode — at a smaller radius and with
+ * no shadow, so a sent prompt looked like a fainter, flatter copy of the thing
+ * that sent it. The bleed is shared for the same reason and from the same
+ * file: two frames that nearly agree read worse than either.
  */
-const PROMPT_BOX = `${CHAT_BLEED} ${CHAT_BLEED_PAD} min-w-0 rounded-xl border border-border`
+const PROMPT_BOX = `${CHAT_BLEED} ${CHAT_BLEED_PAD} ${CHAT_FRAME} min-w-0`
 
 /**
  * Reword a sent message and run it again, dropping everything after it.
@@ -119,7 +127,7 @@ function MessageEditor({
   }
 
   return (
-    <div className={cn(PROMPT_BOX, 'flex flex-col gap-2 bg-secondary/60 py-2.5')}>
+    <div className={cn(PROMPT_BOX, 'flex flex-col gap-2 py-2.5')}>
       {/* The attachments stay on screen while the text is reworded: they are
           part of the message being edited, and the resend carries them. */}
       <PromptAttachments message={message} />
@@ -261,7 +269,7 @@ export const UserBubble = React.memo(function UserBubble({
             <div
               className={cn(
                 PROMPT_BOX,
-                'flex select-text flex-col gap-2 bg-secondary/40 py-2.5 break-words'
+                'flex select-text flex-col gap-2 py-2.5 break-words'
               )}
             >
               <PromptAttachments message={message} />
@@ -283,8 +291,11 @@ export const UserBubble = React.memo(function UserBubble({
                 sits *on* the prompt: over a line of text, two bare icons are
                 unreadable. `right-0` is the box's own text column, so the
                 cluster lines up with the last character of a wrapped line rather
-                than with the border floating 14px further out. */}
-            <div className="absolute top-1.5 right-0 flex items-center gap-0.5 rounded-lg border border-border bg-card/90 p-0.5 opacity-0 shadow-sm backdrop-blur-sm transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+                than with the border floating 14px further out. It takes
+                `--secondary` rather than `--card`, which is now the prompt's
+                own surface: a chip in the same fill as the box under it is a
+                floating rectangle of nothing. */}
+            <div className="absolute top-1.5 right-0 flex items-center gap-0.5 rounded-lg border border-border bg-secondary p-0.5 opacity-0 shadow-sm transition-opacity group-hover:opacity-100 focus-within:opacity-100">
               <MessageAction label="Edit and resend" icon={Pencil} onClick={() => setEditing(true)} />
               <MessageAction
                 label={copied ? 'Copied' : 'Copy prompt'}
