@@ -579,7 +579,7 @@ interface AppState {
   closeFile(path: string): void
   /** Pins a preview tab so the next preview doesn't replace it. */
   promoteTab(path: string): void
-  setActiveTab(tab: string): void
+  setActiveTab(tab: string | null): void
   refreshCanvases(): Promise<void>
   /** Open one canvas as its own tab, or `null` for the Recents list. */
   openCanvas(id: string | null): Promise<void>

@@ -882,6 +882,22 @@ export function RightPanel(): React.JSX.Element | null {
               onSelect={() => setActiveTab('canvas')}
             />
           )}
+          {/* Browse mode — the tree docked with nothing selected. It is a state
+              the user chose from the launcher or the + menu, so it gets a tab
+              like anything else opened, and the tab is what lets it be left:
+              without one the panel showed a docked tree under an empty pane
+              with no strip entry and no close. It exists exactly while it is
+              the active tab, the way the Canvas tab does when OR-ed in — the
+              moment a file is picked, the file's own tab takes over. */}
+          {current === 'files' && (
+            <Tab
+              icon={<FolderTree className="size-3.5" />}
+              label="Files"
+              active
+              onSelect={() => setActiveTab('files')}
+              onClose={() => setActiveTab(null)}
+            />
+          )}
           {canvasTabs.map((id) => (
             <Tab
               key={id}
