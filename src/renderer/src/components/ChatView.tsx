@@ -405,10 +405,13 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
     el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' })
   }, [])
 
+  // Fires per scroll event — dozens a second on a wheel — so the state write
+  // is skipped unless the answer moved; the pin itself is a ref and free.
   const onScroll = (): void => {
     const el = scrollRef.current
     if (!el) return
     const pinned = el.scrollHeight - el.scrollTop - el.clientHeight < 90
+    if (pinned === pinnedRef.current) return
     pinnedRef.current = pinned
     setShowJump(!pinned)
   }
@@ -424,6 +427,10 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
   // Jump to the bottom when switching chats.
   React.useEffect(() => {
     pinnedRef.current = true
+    // The scroll handler now writes state only on a transition, so the pin
+    // and the control have to be reset together here rather than by the
+    // scroll event that follows.
+    setShowJump(false)
     requestAnimationFrame(() => scrollToBottom())
   }, [chat.id, scrollToBottom])
 

@@ -1072,7 +1072,16 @@ function updateAssistant(
   id: string,
   update: (message: AssistantMessage) => AssistantMessage
 ): ChatMessage[] {
-  const idx = messages.findIndex((message) => message.id === id && message.role === 'assistant')
+  // From the tail: the message being updated is the one streaming, which is
+  // the last one or within a few of it, and this runs once per streamed event.
+  let idx = -1
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i]
+    if (message.id === id && message.role === 'assistant') {
+      idx = i
+      break
+    }
+  }
   if (idx === -1) return messages
   const next = messages.slice()
   next[idx] = update(messages[idx] as AssistantMessage)

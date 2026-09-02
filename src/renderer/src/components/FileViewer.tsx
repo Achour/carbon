@@ -83,6 +83,13 @@ export const FileViewer = React.memo(function FileViewer({
   mode?: 'preview' | 'source'
 }): React.JSX.Element {
   const isMarkdown = !!name && MARKDOWN_RE.test(name)
+  // Split once per document rather than per render: the preview re-renders
+  // with the panel (a resize, a tab switch), and the split walks the text.
+  const text = content?.kind === 'text' ? content.content : null
+  const fm = React.useMemo(
+    () => (isMarkdown && text !== null ? splitFrontmatter(text) : null),
+    [isMarkdown, text]
+  )
 
   if (!content) return <Placeholder>Loading…</Placeholder>
 
@@ -102,7 +109,6 @@ export const FileViewer = React.memo(function FileViewer({
         // Frontmatter is split off before parsing: to CommonMark the opening
         // `---` is a thematic break and the closing one makes the keys above it
         // a setext H2, so the whole block rendered as one giant bold heading.
-        const fm = splitFrontmatter(content.content)
         return (
           <div className="h-full overflow-auto px-8 py-6">
             <div className="mx-auto max-w-3xl">
