@@ -1898,6 +1898,22 @@ sidebar. `updatedAt` still tracks the last message: it is what a row's timestamp
 shows and how the next launch seeds the order. It just no longer decides
 position while you're looking at it.
 
+**A `status` event is therefore a promise, and main is the only side that can
+keep it: a chat may publish one exactly when a turn starts.** The renderer has
+no way to tell a real turn from a faked one, so a control-plane request that
+borrows turn state moves a row the user never touched. `codexGoalGet` did:
+`CodexGoalBar`'s mount effect reads the goal on every open of a Codex chat that
+has a thread, and the read was wrapped in the same `beginGoalControl` /
+`finishGoalControl` as the two mutators — so opening a chat from yesterday
+hoisted it to the top of the sidebar stamped "now", and paid for an `idle`
+transition on the way out (queue drain, a usage read spawning a CLI process per
+provider, branches, git). A read publishes nothing; the mutators keep both
+halves, because those are the user's own gesture in the open chat. Nothing was
+persisted either way — main never bumped `updatedAt`, so a relaunch always
+healed the order, which is what made it look like a rendering bug rather than a
+lie told upstream. Fix it at the source: a guard in the renderer would be a
+second source of truth for a question the event already answers.
+
 The **project filter** (`All projects ▾`) heads the list in **both** modes. It
 was detailed-only at first, on the reasoning that compact's project rows already
 are the filter — but "show me one project" is not a question only a flat list

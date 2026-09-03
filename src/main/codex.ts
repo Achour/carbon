@@ -878,19 +878,29 @@ export class CodexSession implements AgentSession {
     }
   }
 
+  /**
+   * A control-plane *read* is not a turn, so it publishes no turn status — the
+   * one caller is `CodexGoalBar`'s mount effect, which runs on every open of a
+   * Codex chat that has a thread. Wrapped in `beginGoalControl`/
+   * `finishGoalControl` like the mutators, merely opening such a chat emitted
+   * `streaming` and then `idle`, and the renderer reads the first of those as
+   * the start of a turn: `hoistChat` moved the row to the top of the sidebar
+   * and stamped its `updatedAt` to now, so a chat from yesterday sat above
+   * today's saying "now" without anyone having sent anything. The `idle` half
+   * is no cheaper — it drains the queue and refreshes usage (a CLI process per
+   * provider), branches and git. `idle` is computed from `running`/`pending`
+   * rather than from the emitted status, so the read still sequences correctly
+   * against a live turn. The mutators keep both halves: those are user gestures
+   * in the open chat, so the work is attributable and the move is theirs.
+   */
   async codexGoalGet(): Promise<CodexGoal | null> {
-    this.beginGoalControl()
-    try {
-      const threadId = await this.ensureControlThreadId()
-      const response = await this.controlRequest<{ goal?: CodexGoal | null }>('thread/goal/get', {
-        threadId
-      })
-      const goal = response.goal ?? null
-      this.emit({ type: 'codex-goal', chatId: this.chat.id, goal })
-      return goal
-    } finally {
-      this.finishGoalControl()
-    }
+    const threadId = await this.ensureControlThreadId()
+    const response = await this.controlRequest<{ goal?: CodexGoal | null }>('thread/goal/get', {
+      threadId
+    })
+    const goal = response.goal ?? null
+    this.emit({ type: 'codex-goal', chatId: this.chat.id, goal })
+    return goal
   }
 
   async codexGoalSet(params: {
@@ -935,6 +945,7 @@ export class CodexSession implements AgentSession {
     }
   }
 
+  /** Mutators only — see `codexGoalGet` for why a read publishes no status. */
   private beginGoalControl(): void {
     if (!this.nativeThreadActive && !this.running) {
       this.setStatus(this.threadId ? 'streaming' : 'starting')
