@@ -4,6 +4,7 @@ import {
   accumulateAppServerUsage,
   appServerApprovalResponse,
   appServerImmediateResponse,
+  appServerSandboxPolicy,
   CodexAppServerClient,
   isCodexCompactionItem,
   normalizeAppServerItem,
@@ -50,6 +51,40 @@ test('thread overlay keeps service-tier keys and layers extra MCP config', () =>
   assert.equal(overlay.service_tier, 'fast')
   assert.deepEqual(overlay.features, { fast_mode: true })
   assert.deepEqual(overlay.mcp_servers, { preview: { command: '/bin/echo' } })
+})
+
+test('App Server turns carry the selected sandbox policy', async () => {
+  assert.deepEqual(appServerSandboxPolicy('read-only'), { type: 'readOnly' })
+  assert.deepEqual(appServerSandboxPolicy('workspace-write'), { type: 'workspaceWrite' })
+  assert.deepEqual(appServerSandboxPolicy('danger-full-access'), { type: 'dangerFullAccess' })
+
+  const client = new CodexAppServerClient()
+  const calls: { method: string; params: unknown }[] = []
+  const transport = client as unknown as {
+    ensureReady(): Promise<void>
+    request(method: string, params: unknown): Promise<unknown>
+  }
+  transport.ensureReady = async () => {}
+  transport.request = async (method, params) => {
+    calls.push({ method, params })
+    if (method === 'thread/start') {
+      return { thread: { id: 'thread-full-access' }, model: 'gpt-test' }
+    }
+    if (method === 'turn/start') {
+      return { turn: { id: 'turn-full-access', status: 'inProgress' } }
+    }
+    throw new Error(`Unexpected request: ${method}`)
+  }
+
+  const thread = client.startThread({ sandboxMode: 'danger-full-access' })
+  await thread.runStreamed([{ type: 'text', text: 'Commit the changes.' }])
+
+  const turn = calls.find((call) => call.method === 'turn/start')
+  assert.deepEqual(
+    (turn?.params as { sandboxPolicy?: unknown } | undefined)?.sandboxPolicy,
+    { type: 'dangerFullAccess' }
+  )
+  client.dispose()
 })
 
 test('a started App Server file change stays running until completion', () => {

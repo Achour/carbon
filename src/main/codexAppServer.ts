@@ -166,6 +166,32 @@ export interface AppServerTurnOptions extends TurnOptions {
   clientUserMessageId?: string
 }
 
+type AppServerSandboxPolicy =
+  | { type: 'readOnly' }
+  | { type: 'workspaceWrite' }
+  | { type: 'dangerFullAccess' }
+
+/**
+ * Thread start/resume still accepts the SDK's legacy kebab-case `sandbox`
+ * value, but current App Server turns take the structured `sandboxPolicy`.
+ * Send both at their respective boundaries so a permission-mode change cannot
+ * leave a resumed thread running under its previous sandbox.
+ */
+export function appServerSandboxPolicy(
+  mode: ThreadOptions['sandboxMode']
+): AppServerSandboxPolicy | null {
+  switch (mode) {
+    case 'read-only':
+      return { type: 'readOnly' }
+    case 'workspace-write':
+      return { type: 'workspaceWrite' }
+    case 'danger-full-access':
+      return { type: 'dangerFullAccess' }
+    default:
+      return null
+  }
+}
+
 export interface CodexThreadLike {
   readonly id?: string | null
   /** Start or resume the native App Server thread without creating a model turn. */
@@ -740,6 +766,7 @@ class CodexAppServerThread implements CodexThreadLike {
         cwd: this.options.workingDirectory ?? null,
         approvalPolicy: this.options.approvalPolicy ?? 'never',
         approvalsReviewer: this.options.approvalsReviewer ?? 'user',
+        sandboxPolicy: appServerSandboxPolicy(this.options.sandboxMode),
         model: this.options.model ?? null,
         serviceTier: this.options.serviceTier === 'fast' ? 'fast' : 'default',
         effort: this.options.modelReasoningEffort ?? null,
