@@ -472,6 +472,12 @@ export class CodexSession implements AgentSession {
   /** App Server work that did not originate in `runTurn` — most notably a
    * durable goal continuing on its own. */
   private nativeThreadActive = false
+  /**
+   * An inline review can close its turn stream and then publish a stale parent
+   * `active` status with no matching `idle`. Ignore that orphan pulse until the
+   * server proves new work with turn/started (or a non-active status).
+   */
+  private ignoreUnpairedNativeActive = false
   /** Autonomous root-thread turns waiting to enter the ordinary event reducer. */
   private nativeTurns: NativeTurnStream[] = []
   private nativeInterrupt: (() => void) | null = null
@@ -965,16 +971,15 @@ export class CodexSession implements AgentSession {
     if (threadId !== this.threadId && threadId !== this.chat.sessionId) return
     if (status.type === 'active') {
       // `running` already owns the lifecycle of turns Carbon explicitly started.
-      // App Server can omit the matching idle status after a native review even
-      // though its turn stream closed cleanly. Latching that transient `active`
-      // state leaves the completed review spinning forever and prevents queued
-      // messages from draining. Keep the separate latch only for autonomous
-      // work, where there is no Carbon run to publish the eventual idle state.
+      // After a native review, App Server can send a stale parent-thread pulse
+      // after that lifecycle ended. It is not new work without turn/started.
+      if (!this.running && this.ignoreUnpairedNativeActive) return
       if (!this.running) this.nativeThreadActive = true
       const waiting = status.activeFlags?.includes('waitingOnApproval') === true
       this.setStatus(waiting ? 'waiting-permission' : 'streaming')
       return
     }
+    this.ignoreUnpairedNativeActive = false
     this.nativeThreadActive = false
     if (!this.running && this.pending.length === 0 && !this.planReview) this.setStatus('idle')
   }
@@ -991,6 +996,7 @@ export class CodexSession implements AgentSession {
       })()
       return
     }
+    this.ignoreUnpairedNativeActive = false
     this.nativeTurns.push(stream)
     this.setStatus('streaming')
     void this.drainNativeTurns()
@@ -1241,6 +1247,13 @@ export class CodexSession implements AgentSession {
       this.lastText.clear()
       this.abort = null
       this.nativeInterrupt = null
+      if (turn.reviewTarget) {
+        // review/start's terminal stream is authoritative. A later bare
+        // thread/status `active` belongs to this completed review unless a new
+        // turn/started proves otherwise.
+        this.nativeThreadActive = false
+        this.ignoreUnpairedNativeActive = true
+      }
       // The SDK consumed any temp attachment copies at turn start — drop them now
       // rather than holding them for the session's lifetime.
       for (const f of turn.temps) {
