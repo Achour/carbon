@@ -96,7 +96,7 @@ const OUTPUT_CAP = 100_000
  * explicit "use my Chrome" request from being answered with the preview.
  */
 const CODEX_BROWSER_SESSION_RULES =
-  "Carbon has two different browser surfaces. Use the `preview` MCP server for this project's local dev-server UI and its screenshots/console. When the user explicitly asks for their Chrome browser, an existing signed-in browser session, or a browser extension, use an enabled Chrome/browser-control skill and its configured tools instead. Do not substitute one surface for the other."
+  "Carbon has two different browser surfaces. Use the `preview` MCP server for this project's local dev-server UI and its screenshots/console. When the user explicitly asks for their Chrome browser, an existing signed-in browser session, or a browser extension, use an enabled Chrome/browser-control skill and its configured tools instead. Do not substitute one surface for the other. Carbon renders image blocks returned by tools inline in the transcript, outside collapsed activity. Once a screenshot tool has returned the requested image, do not save, re-emit, or link another copy merely to make it visible; discuss it normally. Create an image file only when the user asks to export or save one."
 
 /**
  * One-shot Codex text turn on a throwaway read-only thread — backs the chat

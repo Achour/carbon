@@ -757,11 +757,30 @@ function ToolDetails({ part }: { part: ToolPart }): React.JSX.Element {
       {part.output != null && part.output !== '' && (
         <OutputBlock text={part.output} label={part.status === 'error' ? 'Error' : 'Output'} />
       )}
-      {part.outputImages?.map((img, i) => (
+    </div>
+  )
+}
+
+/**
+ * Images are results, not debugging detail. Keep them outside a tool's
+ * disclosure so a screenshot remains visible after the activity row folds at
+ * the end of a turn. Groups render their collected images once below the group;
+ * their nested dense ToolCards suppress this copy.
+ */
+function ToolOutputImages({
+  images
+}: {
+  images: NonNullable<ToolPart['outputImages']>
+}): React.JSX.Element {
+  return (
+    <div className="space-y-2 pt-1">
+      {images.map((img, i) => (
         <img
           key={i}
           src={`data:${img.mediaType};base64,${img.data}`}
           alt="Tool screenshot"
+          loading="lazy"
+          decoding="async"
           className="max-h-[28rem] w-full rounded-lg border border-border object-contain"
         />
       ))}
@@ -773,7 +792,8 @@ export const ToolCard = React.memo(function ToolCard({
   part,
   cwd,
   onOpenPlan,
-  dense = false
+  dense = false,
+  showOutputImages = true
 }: {
   part: ToolPart
   cwd: string
@@ -785,6 +805,8 @@ export const ToolCard = React.memo(function ToolCard({
    * entrance is a stutter rather than an arrival.
    */
   dense?: boolean
+  /** A containing ToolGroup owns the one always-visible image copy. */
+  showOutputImages?: boolean
 }): React.JSX.Element {
   const meta = toolMeta(part, cwd)
   // A canvas row's summary IS its way in, so it is drawn by `CanvasLink` rather
@@ -827,78 +849,83 @@ export const ToolCard = React.memo(function ToolCard({
 
   const failed = part.status === 'error' || !!part.denied
   return (
-    <Collapsible.Root
-      open={open}
-      onOpenChange={onOpenChange}
-      className={cn(!dense && 'animate-enter')}
-    >
-      <Collapsible.Trigger className={ACTIVITY_ROW}>
-        {/* The label and what it acted on are one phrase and shrink together,
-            so the chevron stays beside the words rather than being flung to the
-            far edge of a wide transcript, where it no longer reads as belonging
-            to this row. */}
-        <span className="flex min-w-0 items-center gap-1.5">
-          <span
-            className={cn(
-              'shrink-0 text-[13px]',
-              failed ? 'text-destructive' : 'text-muted-foreground'
-            )}
-          >
-            {meta.label}
-          </span>
-          {written ? (
-            <CanvasLink canvas={written} />
-          ) : !meta.summary && part.status === 'pending' ? (
-            // The call's input is still streaming and nothing parseable has
-            // landed yet — the summary's slot pulses so the row reads as one
-            // that is *forming* rather than one with nothing to say. Main
-            // streams the parsed prefix (`part.partial`), so this normally
-            // gives way to the command or path within a frame or two.
+    <>
+      <Collapsible.Root
+        open={open}
+        onOpenChange={onOpenChange}
+        className={cn(!dense && 'animate-enter')}
+      >
+        <Collapsible.Trigger className={ACTIVITY_ROW}>
+          {/* The label and what it acted on are one phrase and shrink together,
+              so the chevron stays beside the words rather than being flung to the
+              far edge of a wide transcript, where it no longer reads as belonging
+              to this row. */}
+          <span className="flex min-w-0 items-center gap-1.5">
             <span
-              aria-hidden
-              className="h-[0.7em] w-40 shrink-0 animate-pulse-soft rounded-sm bg-muted-foreground/15"
-            />
-          ) : (
-            meta.summary && (
-              <span className="min-w-0 truncate font-mono text-xs text-muted-foreground/60">
-                {meta.open ? (
-                  <RowAction
-                    title={`${meta.open.kind === 'preview' ? 'Preview' : 'Open'} ${meta.open.target}`}
-                    className="cursor-pointer underline-offset-2 hover:text-foreground hover:underline"
-                    onActivate={() => openTarget(meta.open!, cwd)}
-                  >
-                    {meta.summary}
-                  </RowAction>
-                ) : (
-                  meta.summary
-                )}
-              </span>
-            )
-          )}
-        </span>
-        <ChevronRight className={ACTIVITY_CHEVRON} />
-        <span className="flex-1" />
-        {meta.external && (
-          <RowAction
-            title={`Open ${meta.external}`}
-            ariaLabel="Open published artifact in browser"
-            className="shrink-0 cursor-pointer text-muted-foreground/60 hover:text-foreground"
-            onActivate={() => void window.api.openExternal(meta.external!)}
-          >
-            <ExternalLink className="size-3.5" />
-          </RowAction>
-        )}
-        {elapsed && (
-          <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground/50">
-            {elapsed}
+              className={cn(
+                'shrink-0 text-[13px]',
+                failed ? 'text-destructive' : 'text-muted-foreground'
+              )}
+            >
+              {meta.label}
+            </span>
+            {written ? (
+              <CanvasLink canvas={written} />
+            ) : !meta.summary && part.status === 'pending' ? (
+              // The call's input is still streaming and nothing parseable has
+              // landed yet — the summary's slot pulses so the row reads as one
+              // that is *forming* rather than one with nothing to say. Main
+              // streams the parsed prefix (`part.partial`), so this normally
+              // gives way to the command or path within a frame or two.
+              <span
+                aria-hidden
+                className="h-[0.7em] w-40 shrink-0 animate-pulse-soft rounded-sm bg-muted-foreground/15"
+              />
+            ) : (
+              meta.summary && (
+                <span className="min-w-0 truncate font-mono text-xs text-muted-foreground/60">
+                  {meta.open ? (
+                    <RowAction
+                      title={`${meta.open.kind === 'preview' ? 'Preview' : 'Open'} ${meta.open.target}`}
+                      className="cursor-pointer underline-offset-2 hover:text-foreground hover:underline"
+                      onActivate={() => openTarget(meta.open!, cwd)}
+                    >
+                      {meta.summary}
+                    </RowAction>
+                  ) : (
+                    meta.summary
+                  )}
+                </span>
+              )
+            )}
           </span>
-        )}
-        <ActivityStatus part={part} />
-      </Collapsible.Trigger>
-      <Collapsible.Panel className={ACTIVITY_PANEL}>
-        <ToolDetails part={part} />
-      </Collapsible.Panel>
-    </Collapsible.Root>
+          <ChevronRight className={ACTIVITY_CHEVRON} />
+          <span className="flex-1" />
+          {meta.external && (
+            <RowAction
+              title={`Open ${meta.external}`}
+              ariaLabel="Open published artifact in browser"
+              className="shrink-0 cursor-pointer text-muted-foreground/60 hover:text-foreground"
+              onActivate={() => void window.api.openExternal(meta.external!)}
+            >
+              <ExternalLink className="size-3.5" />
+            </RowAction>
+          )}
+          {elapsed && (
+            <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground/50">
+              {elapsed}
+            </span>
+          )}
+          <ActivityStatus part={part} />
+        </Collapsible.Trigger>
+        <Collapsible.Panel className={ACTIVITY_PANEL}>
+          <ToolDetails part={part} />
+        </Collapsible.Panel>
+      </Collapsible.Root>
+      {showOutputImages && part.outputImages?.length ? (
+        <ToolOutputImages images={part.outputImages} />
+      ) : null}
+    </>
   )
 })
 
@@ -1034,39 +1061,43 @@ export const ToolGroup = React.memo(function ToolGroup({
   // wrote, with nothing on screen to open it. So the way in rides the collapsed
   // row, beside the status, the way a published artifact's does on a ToolCard.
   const canvas = canvasInRun(parts)
+  const outputImages = parts.flatMap((part) => part.outputImages ?? [])
 
   return (
-    <Collapsible.Root open={open} onOpenChange={onOpenChange} className="animate-enter">
-      <Collapsible.Trigger className={ACTIVITY_ROW}>
-        <span className="flex min-w-0 items-center gap-1.5">
-          {/* The summary stays muted even when a call inside failed. A group is
-              a description of several calls, not a call that failed: colouring
-              "Ran 7 commands" red says all seven did, when six succeeded and the
-              one that didn't is already red a row below. The ✕ at the end is
-              what carries it — that one is kept, because it is the only signal
-              left once the group is collapsed over the row that failed. */}
-          <span className="shrink-0 text-[13px] text-muted-foreground">{title}</span>
-          {canvas && <CanvasLink canvas={canvas} />}
-          {trailing && (
-            <span className="min-w-0 truncate font-mono text-xs text-muted-foreground/60">
-              {trailing}
-            </span>
-          )}
-        </span>
-        <ChevronRight className={ACTIVITY_CHEVRON} />
-        <span className="flex-1" />
-        {running ? (
-          <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground/60" />
-        ) : errored ? (
-          <X className="size-3.5 shrink-0 text-destructive" />
-        ) : null}
-      </Collapsible.Trigger>
-      <Collapsible.Panel className={ACTIVITY_PANEL}>
-        {parts.map((p) => (
-          <ToolCard key={p.toolUseId} part={p} cwd={cwd} dense />
-        ))}
-      </Collapsible.Panel>
-    </Collapsible.Root>
+    <>
+      <Collapsible.Root open={open} onOpenChange={onOpenChange} className="animate-enter">
+        <Collapsible.Trigger className={ACTIVITY_ROW}>
+          <span className="flex min-w-0 items-center gap-1.5">
+            {/* The summary stays muted even when a call inside failed. A group is
+                a description of several calls, not a call that failed: colouring
+                "Ran 7 commands" red says all seven did, when six succeeded and the
+                one that didn't is already red a row below. The ✕ at the end is
+                what carries it — that one is kept, because it is the only signal
+                left once the group is collapsed over the row that failed. */}
+            <span className="shrink-0 text-[13px] text-muted-foreground">{title}</span>
+            {canvas && <CanvasLink canvas={canvas} />}
+            {trailing && (
+              <span className="min-w-0 truncate font-mono text-xs text-muted-foreground/60">
+                {trailing}
+              </span>
+            )}
+          </span>
+          <ChevronRight className={ACTIVITY_CHEVRON} />
+          <span className="flex-1" />
+          {running ? (
+            <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground/60" />
+          ) : errored ? (
+            <X className="size-3.5 shrink-0 text-destructive" />
+          ) : null}
+        </Collapsible.Trigger>
+        <Collapsible.Panel className={ACTIVITY_PANEL}>
+          {parts.map((p) => (
+            <ToolCard key={p.toolUseId} part={p} cwd={cwd} dense showOutputImages={false} />
+          ))}
+        </Collapsible.Panel>
+      </Collapsible.Root>
+      {outputImages.length ? <ToolOutputImages images={outputImages} /> : null}
+    </>
   )
 })
 

@@ -18,9 +18,16 @@ import {
 } from '@/lib/highlight'
 import { splitHighlightedLines } from '@/lib/highlightLines'
 import { needsWholeParse, splitMarkdownStream, type OpenFence } from '@/lib/markdownStream'
+import {
+  explicitMarkdownImageTargets,
+  normalizeMarkdownImageTarget
+} from '@/lib/markdownImages'
 
 /** Project folder used to resolve relative file paths in inline code. */
 const MarkdownCwd = React.createContext<string | null>(null)
+/** Explicit `![…](path)` destinations in the whole message, for link dedupe. */
+const EMPTY_MARKDOWN_IMAGES: ReadonlySet<string> = new Set()
+const ExplicitMarkdownImages = React.createContext<ReadonlySet<string>>(EMPTY_MARKDOWN_IMAGES)
 
 /** Flattens a React node tree to its raw text (for fenced-block source). */
 function nodeText(node: React.ReactNode): string {
@@ -557,9 +564,17 @@ const components = {
   },
   a: ({ children, href, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => {
     const h = href ?? ''
+    const explicitImages = React.useContext(ExplicitMarkdownImages)
     // A link whose target is a local image file (Codex writes `[file](path.png)`)
-    // renders as the image itself, with the link kept as the fallback.
-    if (h && !/^https?:\/\//i.test(h) && IMAGE_EXT.test(h.split(/[?#]/)[0])) {
+    // renders as the image itself, with the link kept as the fallback. If an
+    // explicit image already displays this exact file, keep this as a normal
+    // link — upgrading both is how one screenshot became two identical rows.
+    if (
+      h &&
+      !/^https?:\/\//i.test(h) &&
+      IMAGE_EXT.test(h.split(/[?#]/)[0]) &&
+      !explicitImages.has(normalizeMarkdownImageTarget(h))
+    ) {
       return (
         <LocalImage
           src={h}
@@ -633,10 +648,13 @@ export const Markdown = React.memo(function Markdown({
   /** Treat single newlines as line breaks. See `REMARK_PLUGINS_BREAKS`. */
   breaks?: boolean
 }): React.JSX.Element {
+  const explicitImages = React.useMemo(() => explicitMarkdownImageTargets(text), [text])
   return (
     <div className={cn('markdown text-[14px] leading-[1.6]', className)}>
       <MarkdownCwd.Provider value={cwd}>
-        <MarkdownBody text={text} breaks={breaks} />
+        <ExplicitMarkdownImages.Provider value={explicitImages}>
+          <MarkdownBody text={text} breaks={breaks} />
+        </ExplicitMarkdownImages.Provider>
       </MarkdownCwd.Provider>
     </div>
   )
@@ -770,6 +788,13 @@ export const AssistantMarkdown = React.memo(function AssistantMarkdown({
   streaming: boolean
 }): React.JSX.Element {
   const shown = useStreamText(text, streaming)
+  // Streaming markdown is deliberately parsed in stable chunks so a new word
+  // never rescans a long answer. Preserve that property here: duplicate-link
+  // cleanup matters once the answer settles, not while its syntax is incomplete.
+  const explicitImages = React.useMemo(
+    () => (streaming ? EMPTY_MARKDOWN_IMAGES : explicitMarkdownImageTargets(shown)),
+    [shown, streaming]
+  )
   const { chunks, tail, code } = React.useMemo(() => {
     if (!streaming && needsWholeParse(shown)) return { chunks: NO_CHUNKS, tail: shown, code: null }
     const split = splitMarkdownStream(shown)
@@ -785,11 +810,13 @@ export const AssistantMarkdown = React.memo(function AssistantMarkdown({
   return (
     <div className={cn('markdown text-[14px] leading-[1.6]', className)}>
       <MarkdownCwd.Provider value={cwd}>
-        {chunks.map((chunk, i) => (
-          <MarkdownBody key={i} text={chunk} />
-        ))}
-        <MarkdownBody text={tail} />
-        {code && <StreamingCode fence={code} />}
+        <ExplicitMarkdownImages.Provider value={explicitImages}>
+          {chunks.map((chunk, i) => (
+            <MarkdownBody key={i} text={chunk} />
+          ))}
+          <MarkdownBody text={tail} />
+          {code && <StreamingCode fence={code} />}
+        </ExplicitMarkdownImages.Provider>
       </MarkdownCwd.Provider>
     </div>
   )
