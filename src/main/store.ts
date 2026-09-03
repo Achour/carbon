@@ -1121,6 +1121,44 @@ export class Store {
   }
 
   /**
+   * Every side chat on disk, newest first — the complement of `listChats`.
+   *
+   * Side chats outlive the app now, so the renderer has to be told about them
+   * at boot: without this the reopen list is empty after a relaunch and a
+   * conversation that is still very much there looks deleted.
+   *
+   * Live objects win over their rows for the reason they do in `listChats` — a
+   * title derived a moment ago must not be up to a debounce interval stale —
+   * and an unreadable row is skipped rather than counted, the opposite of
+   * `hasOtherChatIn`'s rule: this answer only decides whether a row is offered
+   * for reopening, so failing to place one costs a menu entry, where guessing
+   * would put an unopenable row in the list.
+   */
+  listSideChats(): ChatMeta[] {
+    const rows = this.db
+      .prepare(
+        "SELECT id, meta FROM chats WHERE json_extract(meta, '$.ephemeral') IS NOT NULL" +
+          ' ORDER BY updated_at DESC'
+      )
+      .all() as { id: string; meta: string }[]
+    const out: ChatMeta[] = []
+    const seen = new Set<string>()
+    for (const row of rows) {
+      const chat = this.live(row.id)
+      const meta = chat ? metaOf(chat) : safeMeta(row.meta)
+      if (!meta?.ephemeral) continue
+      out.push(meta)
+      seen.add(row.id)
+    }
+    // A side chat created this session may not have been written yet.
+    for (const [id, entry] of this.resident) {
+      if (seen.has(id) || !entry.chat.ephemeral) continue
+      out.push(metaOf(entry.chat))
+    }
+    return out.sort((a, b) => b.updatedAt - a.updatedAt)
+  }
+
+  /**
    * The chat's own fields without hydrating its message bodies. Returns the SAME
    * object getChat would when one is live, so it can never hand back a stale
    * copy; `Readonly` keeps that from becoming a licence to mutate it — a
@@ -1444,11 +1482,11 @@ export class Store {
    * judged by whatever its row still says.
    *
    * `where` narrows the scan in SQL. Without one this parses every row in the
-   * database on a path that runs at startup, at quit and on every delete:
-   * measured on a 542-chat corpus that is 1.47 ms of blocked main thread
-   * against 0.36 ms for a `json_extract` predicate — and it grows with the
-   * corpus rather than with the answer. The JS predicate still decides, so the
-   * SQL only has to be a superset.
+   * database on the path every chat deletion takes: measured on a 542-chat
+   * corpus that is 1.47 ms of blocked main thread against 0.36 ms for a
+   * `json_extract` predicate — and it grows with the corpus rather than with
+   * the answer. The JS predicate still decides, so the SQL only has to be a
+   * superset.
    */
   private idsWhere(pred: (meta: ChatMeta) => boolean, where: string): string[] {
     const ids = new Set<string>()
@@ -1483,36 +1521,6 @@ export class Store {
     )
   }
 
-  /** Ids of every side chat on disk — see `ChatMeta.ephemeral`. */
-  ephemeralIds(): string[] {
-    return this.idsWhere((m) => !!m.ephemeral, "json_extract(meta, '$.ephemeral') IS NOT NULL")
-  }
-
-  /**
-   * Delete every side chat. Runs at startup (rows a crash or a force-quit left
-   * behind, which `before-quit` never got to) and again on the way out.
-   *
-   * The quit call has to happen **before** `flushAll`, which sets `closed` — and
-   * past that point `deleteChat` can only forget in memory, so the rows would
-   * survive to the next launch and be cleaned up a launch late.
-   */
-  purgeEphemeral(): number {
-    let purged = 0
-    for (const id of this.ephemeralIds()) {
-      // Another live instance owns this one. `userData` is shared between the
-      // dev and packaged builds on purpose, so launching one while the other has
-      // a side chat mid-turn would otherwise delete the chat *and its lock row*
-      // out from under it — and the owner's next write, asserting `rev` against
-      // a row that is gone, would `refuse` and put the "not being saved" banner
-      // on a conversation that did nothing wrong. Whoever owns it will purge it
-      // on their own way out; this is exactly what the lock table is for.
-      if (this.lockedElsewhere(id)) continue
-      this.deleteChat(id)
-      purged++
-    }
-    return purged
-  }
-
   private liveIds(): Set<string> {
     const ids = new Set<string>(this.resident.keys())
     for (const id of this.dirty.keys()) ids.add(id)
@@ -1543,8 +1551,7 @@ export class Store {
       // The `locks` row is gone below, so the claim on it is too. Left behind,
       // every heartbeat keeps issuing a no-op UPDATE for a dead id and
       // `lockedElsewhere` keeps answering for a chat that no longer exists.
-      // Harmless once per deleted chat, which is what this used to be — side
-      // chats make it once per closed tab.
+      // Harmless, but once per deleted chat rather than never.
       this.held.delete(id)
       this.denied.delete(id)
     }
@@ -1565,13 +1572,11 @@ export class Store {
         )?.updated_at
       ) ||
       0
-    // A side chat needs no tombstone, and giving it one would be a slow leak.
-    // The tomb exists solely to stop the legacy `chats/<id>.json` archive
-    // resurrecting a deleted chat, and a side chat postdates the migration by
-    // construction, so it has no archive file to be resurrected from. Nothing
-    // prunes tombstones — one row per delete, forever — and side chats are
-    // deleted on *every quit*, so writing them would grow `kv` without bound
-    // for a hedge that can never fire.
+    // A side chat needs no tombstone. The tomb exists solely to stop the legacy
+    // `chats/<id>.json` archive resurrecting a deleted chat, and a side chat
+    // postdates the migration by construction, so it has no archive file to be
+    // resurrected from. Nothing prunes tombstones — one row per delete,
+    // forever — so this is a row that could never do anything but accumulate.
     //
     // A chat that is **already gone** gets nothing either, and that half has to
     // be enforced here rather than trusted to the callers: a second delete

@@ -484,6 +484,7 @@ function buildMenu(): void {
 
 function registerIpc(): void {
   ipcMain.handle('chats:list', () => store.listChats())
+  ipcMain.handle('chats:list-side', () => store.listSideChats())
   ipcMain.handle('canvas:list', (_e, project: string) => canvas.list(project))
   ipcMain.handle('canvas:get', (_e, id: string) => canvas.get(id))
   ipcMain.handle(
@@ -667,7 +668,16 @@ function registerIpc(): void {
       const res = await run(chat.cwd, chat.worktree)
       // `cwd` is set whenever the worktree is gone — even on a failure like a
       // surviving branch, the chat must move or it points at a deleted directory.
-      if (res.cwd) manager.relocateChat(chatId, res.cwd)
+      // The side chats opened beside it move with it, and must: they run in the
+      // parent's cwd (which is what keeps `hasOtherChatIn` from counting them
+      // and refusing this exit in the first place), they outlive the app now, so
+      // one left behind would be reopened months later against a checkout git
+      // deleted — and `relocateChat` also clears the stale `worktree` metadata
+      // and the session id that resumes into it.
+      if (res.cwd) {
+        manager.relocateChat(chatId, res.cwd)
+        for (const sideId of store.sideChatIdsOf(chatId)) manager.relocateChat(sideId, res.cwd)
+      }
       return res.ok ? { ok: true } : { ok: false, error: res.error ?? fallback }
     })
   }
@@ -1003,10 +1013,6 @@ app.whenReady().then(() => {
     // instance owns the chat.
     onLockDenied: (chatId) => emit({ type: 'chat-locked', chatId })
   })
-  // Side chats a crash or a force-quit left behind — `before-quit` never ran,
-  // so they are still on disk. Cleared before `registerIpc`, so the renderer's
-  // first `chats:list` cannot race them, and before any session can resume one.
-  store.purgeEphemeral()
   // Provider CLI settings before any manager: session construction, the model
   // catalog and the usage probes all resolve a binary through this, and a
   // resolution that ran against an empty config would cache the wrong answer
@@ -1053,12 +1059,6 @@ app.on('before-quit', (event) => {
   terminals.disposeAll()
   preview.disposeAll()
   lsp.disposeAll()
-  // "Side chats disappear when you close the app" — this is that. It must run
-  // *before* `flushAll`, which sets `closed`: past that point `deleteChat` can
-  // only forget in memory, and the rows would survive to be cleaned up a launch
-  // late by the startup purge. After `disposeAll` so no session is still
-  // writing to a chat being deleted.
-  store.purgeEphemeral()
   quitting = store.flushAll().finally(() => {
     readyToQuit = true
     app.quit()

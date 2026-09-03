@@ -1002,18 +1002,25 @@ export function ChatView({
         >
           <div ref={columnRef} className="mx-auto flex max-w-3xl flex-col gap-4 px-6 py-6">
             {/* A side chat opens on an empty pane, which on its own reads as a
-                conversation that failed to load — the empty-canvas argument. It
-                also has one thing to say that nothing else on screen does: this
-                conversation is not being kept. Said here, before the first
-                message, rather than as a banner that would then sit over every
-                turn repeating it. */}
+                conversation that failed to load — the empty-canvas argument.
+                What it has to say has now been wrong twice, in the two ways
+                this feature's lifecycle was: it said "in this project" while
+                the tab is stashed with *one chat*, so a reader would go looking
+                for it beside a sibling chat and find nothing; and it promised
+                the app cleared these at quit, which was true of the code and
+                the wrong design — the ✕ on a tab already kept the conversation,
+                so quitting, the weaker gesture, had no business destroying it.
+                What is left is the one thing a reader cannot infer from an
+                empty pane: where this conversation goes when it leaves the
+                screen. Said here, before the first message, rather than as a
+                banner that would sit over every turn repeating it. */}
             {side && messages.length === 0 && hiddenBefore === 0 && (
               <div className="flex flex-col items-center gap-1.5 px-4 py-16 text-center">
                 <MessageSquare className="size-5 text-muted-foreground/70" />
                 <div className="text-[13px] font-medium">Side chat</div>
                 <p className="max-w-[38ch] text-xs text-muted-foreground">
-                  A scratch conversation in this project. Side chats are temporary and disappear
-                  when you close the app.
+                  A scratch conversation beside this chat. It stays out of the sidebar, and
+                  closing its tab keeps it — reopen it from ＋.
                 </p>
               </div>
             )}

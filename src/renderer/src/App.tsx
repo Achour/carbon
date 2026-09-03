@@ -9,6 +9,7 @@ import { FileSearchDialog } from '@/components/FileSearchDialog'
 import { PublishDialog } from '@/components/PublishDialog'
 import { DeleteFileDialog } from '@/components/DeleteFileDialog'
 import { CanvasDeleteDialog } from '@/components/CanvasDeleteDialog'
+import { SideChatDeleteDialog } from '@/components/SideChatDeleteDialog'
 import { ImageLightbox } from '@/components/ImageView'
 import { FindBar } from '@/components/FindBar'
 import { openEditorSearch } from '@/lib/editorSearch'
@@ -227,6 +228,7 @@ export default function App(): React.JSX.Element {
       <PublishDialog />
       <DeleteFileDialog />
       <CanvasDeleteDialog />
+      <SideChatDeleteDialog />
       <ImageLightbox />
       <FindBar />
     </TooltipProvider>

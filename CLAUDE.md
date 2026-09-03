@@ -1722,8 +1722,8 @@ event channel for a panel that may never open.
 
 ### Side chats (`ChatMeta.ephemeral`, `SideChatSlot`, `openSideChat`)
 
-A second, throwaway conversation in a right-panel tab, running in the same
-project as the main one and deleted when the app closes. It exists because every
+A second, scratch conversation in a right-panel tab, running in the same
+project as the main one and kept out of the sidebar. It exists because every
 question *about* the work in flight — what an error means, what a function is
 for, whether there is a shorter way — either interrupted the turn you were
 watching or cost a chat switch that took the transcript, the tabs and the file
@@ -1747,8 +1747,9 @@ notion of an active one, so main needed no new concept at all.
   permissions, tools and streaming. `ephemeral` rides the JSON `meta` blob, so
   there is no migration and no `user_version` bump — which matters because
   `userData` is shared between builds and an older one has to open this
-  database. It reads the row as an ordinary chat, and that window is exactly one
-  launch wide, which is why the purge runs **on quit** and not only at startup.
+  database — which reads the row as an ordinary chat, and is also why the field
+  keeps the name `ephemeral` now that nothing about it is: 0.1.95 rows already
+  carry it, and renaming would cost compatibility code to say the same thing.
 - **`listChats` is where it is hidden, and that is deliberate.** That one read
   seeds the renderer's `chats`, which is the sidebar's order, the chat search,
   ⌘N's project list, the Recents section and `pruneChatDrafts` — filtering at
@@ -1793,15 +1794,16 @@ notion of an active one, so main needed no new concept at all.
 - **Deleting a chat deletes the side chats opened beside it** (`pruneSideChats`,
   shared by `deleteChat` and `removeProject`). Without it the tab restores over
   whatever chat comes next, the slot sits in `sideChats` for the rest of the
-  session, and the row survives on disk until the quit purge.
+  session, and the row outlives the conversation it belonged to.
 - **Closing its tab does not delete it**, and the first version got this exactly
   backwards. "Temporary" was read as "✕ discards it", which makes the side chat
   you close the one you can never get back — and the one you close is very often
   the one you want two minutes later, because that is what a scratch
   conversation *is*. So ✕ means what it means on a file tab: the tab goes, the
   conversation stays, and the panel's `+` menu grows a **Closed side chats**
-  section to bring it back. Only two things delete one: the ✕ on a row in that
-  list, and quitting — which is the promise the empty state actually makes.
+  section to bring it back. **One thing deletes one: the ✕ on a row in that
+  list, and it asks first** (`confirmSideChatDelete` → `SideChatDeleteDialog`,
+  rendered by `App` because the menu the ✕ lives in closes on the click).
   - **The slot is dropped on close and refetched on reopen** (`getChat`,
     layering anything that streamed in during the round trip, exactly as
     `openChat` does). Holding the transcript across the close was the obvious
@@ -1862,26 +1864,72 @@ notion of an active one, so main needed no new concept at all.
   whether a directory is destroyed, and the safe reading of "I cannot tell" is
   that someone is in there.
 
-**The purge is ordered, and both ends matter.** On quit it runs after
-`disposeAll` and **before** `flushAll`, which sets `closed` — past that point
-`deleteChat` can only forget in memory and the rows would survive to be cleaned
-up a launch late. At startup it clears what a crash or a force-quit left behind,
-before `registerIpc` so the renderer's first `chats:list` cannot race it. It
-skips any chat `lockedElsewhere`: dev and packaged share one database, and
-deleting a row (and its lock) out from under the instance mid-turn on it would
-make that instance's next write fail the `rev` assertion and put the "not being
-saved" banner on a conversation that did nothing wrong. And it writes **no
-tombstone** — a tomb only guards against the legacy `chats/<id>.json` archive
-resurrecting a chat, which a side chat postdates by construction, and nothing
-prunes tombs, so one per side chat per quit would grow `kv` without bound.
+**They were deleted at quit, and that was wrong twice.** The first design
+borrowed the tool this feature was modelled on — "side chats are temporary and
+disappear when you close the app" — and it survived one round of use before both
+halves came apart.
+
+The first is a lifecycle inverted. ✕ on a tab already *keeps* the conversation,
+for the reason recorded above: the one you close is very often the one you want
+two minutes later. Quitting is a **weaker** statement of intent than that click —
+it is closing a laptop, an auto-update, a crash — so an app where the smaller
+gesture is conservative and the larger one destroys is one that loses work at
+exactly the moment the user was not thinking about this feature at all. Carbon
+had already written the rule down: drafts exist because unsent text vanished on
+a chat switch, and a side chat holds an *answer*.
+
+The second is that the promise was never true. A side chat drives the real CLI,
+which writes its own transcript to `~/.claude/projects/<slug>/<session>.jsonl`
+regardless — the Usage page reads those files and already bills the side chat's
+tokens. `ephemeral` gates exactly one thing in the adapters (`maybeGenerateTitle`).
+So the purge deleted *Carbon's ability to show the conversation*, not the
+conversation, which is the half that costs the user and none of the half that
+reassures them.
+
+Removing it took more out than it put in: `purgeEphemeral`, `ephemeralIds`, the
+`before-quit` ordering against `flushAll`'s `closed` flag, the startup pass ahead
+of `registerIpc`, and with them the whole crash story — a killed instance leaves
+its `locks` row behind, and for `LOCK_STALE_MS` (30 s) that row is
+indistinguishable from a live instance's, so the purge correctly declined and a
+force-quit orphan waited for the launch after next. What is left is one rule: a
+side chat is removed when the user says so, or when the chat it belongs to is.
+
+**`listSideChats` is the price of persisting them.** `listChats` filters side
+chats out, and that read is what seeds the renderer's `chats` — so left alone, a
+side chat survived the quit on disk and was invisible on the next launch, which
+is worse than deleting it. It is a **second read** rather than a flag on the
+first, because that one call is also the sidebar's order, the chat search, ⌘N's
+project list and Recents, and widening it puts the predicate back at every one
+of them. Both land in the renderer's own `chats`, which is where side chat metas
+already lived for the session that opened them; `visibleChats` filters at the
+single place that draws history (`Sidebar`), and `homeCwd` takes the visible
+half so the newest chat's project is never a side chat's. `pruneChatDrafts` gets
+the **union**, or the launch that restores a side chat drops its draft.
+
+`ClosedSideChats` sorts on `updatedAt` rather than reversing `chats`. Reversing
+read array position, which meant "newest last" only for the ones `openSideChat`
+appended this session: restored metas arrive newest-first, and `hoistChat`
+reorders on every turn start anyway — so after a relaunch the row you closed a
+minute ago sat at the bottom.
+
+A delete still writes **no tombstone** — a tomb only guards against the legacy
+`chats/<id>.json` archive resurrecting a chat, which a side chat postdates by
+construction, so it is a row that could never do anything but accumulate.
+
+**Side chats leave a worktree with their parent.** The three exits
+(`worktree:handoff` / `:merge` / `:finish`) relocate `sideChatIdsOf(chatId)`
+alongside the chat itself. They run in the parent's cwd — which is exactly why
+`hasOtherChatIn` ignores them and the exit is offered at all — so one left
+behind would now be reopened months later against a checkout git deleted, still
+carrying the `worktree` metadata and a session id that resumes into it.
 
 No AI title either (a second model call for a tab), though `send`'s derived
 placeholder still lands and is what tells two open side chats apart. No OS
 notification, on both sides: its only action is `openChat`, and a side chat as
 the active chat is a state nothing else in the design allows. The completion
 *cue* still plays — it is on screen, and "your answer is ready" is what it says.
-Drafts stay in memory and never reach `localStorage`, since a draft written under
-an id that is deleted at quit could never be reopened.
+Drafts persist like any other chat's: they were held in memory only while the id
+died at quit, which would have made the stored draft unreopenable.
 
 `demo/e2e/side-chat.js` pins the part that has no other symptom: it pumps a
 synthetic turn through the real reducer into each transcript and asserts the

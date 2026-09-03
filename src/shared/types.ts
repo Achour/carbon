@@ -259,17 +259,27 @@ export interface ChatMeta {
    */
   pinnedAt?: number
   /**
-   * A **side chat**: a throwaway conversation the user opened beside a real one,
+   * A **side chat**: a scratch conversation the user opened beside a real one,
    * hosted as a right-panel tab. It is an ordinary chat in every way a session
    * cares about — same `ChatManager`, same tools, same permissions, same
-   * persistence — and differs only in who may see it and how long it lives: it
-   * is filtered out of `listChats` (so the sidebar can never seed one), gets no
-   * AI-generated title, and is deleted on quit.
+   * persistence — and differs only in **who may see it**: it is filtered out of
+   * `listChats`, so the sidebar, the chat search, ⌘N's project list and Recents
+   * can never seed one, and it gets no AI-generated title.
+   *
+   * It is deliberately *not* temporary. Deleting it at quit was the original
+   * design, borrowed from the tool this feature was modelled on, and it was
+   * wrong twice: closing a side chat's tab already keeps the conversation
+   * (because the one you close is very often the one you want two minutes
+   * later), so destroying it on the *weaker* gesture — quitting, which is
+   * closing a laptop, an auto-update or a crash — had the lifecycle backwards.
+   * And the promise was only half true: the session drives the real CLI, which
+   * writes its own transcript to `~/.claude/projects` either way, so the purge
+   * removed Carbon's ability to *show* the conversation rather than the
+   * conversation. Only an explicit, confirmed delete removes one now.
    *
    * It rides the JSON `meta` blob like every other optional field, so an older
-   * build opening this database reads it as a normal chat rather than failing.
-   * That window is exactly one launch wide, which is the reason the purge runs
-   * on quit rather than only at startup.
+   * build opening this database reads it as a normal chat rather than failing —
+   * which is also why the field keeps this name: 0.1.95 rows already carry it.
    */
   ephemeral?: true
   /**
@@ -1757,6 +1767,17 @@ export interface UpdateInfo {
 
 export interface Api {
   listChats(): Promise<ChatMeta[]>
+  /**
+   * Every side chat, across every parent — the half `listChats` filters out.
+   *
+   * A separate read rather than a flag on `listChats`, because that one call
+   * seeds the sidebar's order, the chat search, ⌘N's project list and Recents,
+   * and widening it would put the predicate back at each of them. The renderer
+   * merges both into its own `chats` array (see `visibleChats`) — which is
+   * where side chat metas already lived for the session that opened them; this
+   * is only what puts them back after a relaunch.
+   */
+  listSideChats(): Promise<ChatMeta[]>
   getChat(id: string): Promise<ChatView | null>
   /**
    * The window of messages immediately before `before`. Returns an empty list

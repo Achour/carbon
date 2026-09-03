@@ -42,6 +42,7 @@ async function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
 
 const api: Api = {
   listChats: () => invoke('chats:list'),
+  listSideChats: () => invoke('chats:list-side'),
   canvasList: (project: string) => invoke('canvas:list', project),
   canvasGet: (id: string) => invoke('canvas:get', id),
   canvasSave: (input: {

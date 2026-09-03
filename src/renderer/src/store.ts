@@ -391,6 +391,8 @@ interface AppState {
   canvasHtml: Record<string, string | null>
 
   // ---- Side chats ----
+  /** Side chat awaiting a delete confirmation, or null. */
+  pendingSideChatDelete: ChatMeta | null
   /** Transcript per open side chat, keyed by chat id. See `SideChatSlot`. */
   sideChats: Record<string, SideChatSlot>
   /**
@@ -459,6 +461,11 @@ interface AppState {
    */
   reopenSideChat(id: string): Promise<void>
   /** Discards a side chat for good, from the reopen list's ✕. */
+  /**
+   * Ask before deleting a side chat, answered by `SideChatDeleteDialog`. Null
+   * dismisses.
+   */
+  confirmSideChatDelete(chat: ChatMeta | null): void
   deleteSideChat(id: string): Promise<void>
 
   defaults: AppDefaults | null
@@ -1217,9 +1224,14 @@ function chatSwitchPatch(
     // `sideChats` itself is deliberately untouched: the slots are keyed by chat
     // id and hold live transcripts, so a stashed tab keeps accumulating its
     // turn and paints instantly on return. They are released by
-    // `closeSideChat`, by deleting the owning chat, and by the quit purge.
+    // `closeSideChat` and by deleting the owning chat.
     sideChatTabs,
-    sideChatTabsByChat
+    sideChatTabsByChat,
+    // The reopen list is scoped to the active chat, so a confirmation still
+    // standing after a switch would be asking about a side chat the list it was
+    // opened from is no longer drawing — `canvasScopePatch`'s rule, one level
+    // down.
+    pendingSideChatDelete: null
   }
 }
 
@@ -1819,16 +1831,7 @@ export const useApp = create<AppState>((set, get) => ({
       const chatDrafts = { ...s.chatDrafts }
       if (isEmptyDraft(draft)) delete chatDrafts[chatId]
       else chatDrafts[chatId] = draft
-      // A side chat's draft lives in memory and never on disk. In memory it is
-      // still needed — the composer unmounts on every tab switch, which is the
-      // bug drafts exist to fix — but persisting it would write a draft under an
-      // id that is deleted at quit, so nothing could ever reopen it. There is no
-      // cap on the `chats` half of the draft store, so those would simply
-      // accumulate; `pruneChatDrafts` only clears them on a *later* launch,
-      // because a side chat is absent from `listChats` by then.
-      if (!s.chats.find((c) => c.id === chatId)?.ephemeral) {
-        saveDrafts({ chats: chatDrafts, projects: s.projectDrafts })
-      }
+      saveDrafts({ chats: chatDrafts, projects: s.projectDrafts })
       return { chatDrafts }
     })
   },
@@ -2148,15 +2151,23 @@ export const useApp = create<AppState>((set, get) => ({
     // Awaited with the rest of boot rather than fired off: every model picker
     // reads from it, and a list that arrives late would render the composer's
     // chip empty for a beat, or — worse — offer a provider that isn't there.
-    const [chats, defaults, providerClis] = await Promise.all([
+    const [visible, side, defaults, providerClis] = await Promise.all([
       window.api.listChats(),
+      // Side chats outlive the app, so they have to be put back: `listChats`
+      // filters them out, and without this the reopen list is empty after a
+      // relaunch for conversations that are still on disk. They join `chats`
+      // exactly as a side chat opened *this* session does — one array, filtered
+      // by `visibleChats` at the single place that draws history.
+      window.api.listSideChats().catch(() => [] as ChatMeta[]),
       window.api.getDefaults(),
       window.api.providerClis().catch(() => [])
     ])
+    const chats = [...visible, ...side]
     // A chat deleted in another window (the database is shared) leaves its draft
-    // behind; this is the first moment we can tell. Project drafts are NOT
-    // pruned against this list — a draft is often the very first thing in a
-    // folder that has no chats yet.
+    // behind; this is the first moment we can tell. Pruned against the union, or
+    // every side chat's draft would be dropped at the launch that restores it.
+    // Project drafts are NOT pruned against this list — a draft is often the
+    // very first thing in a folder that has no chats yet.
     const chatDrafts = pruneChatDrafts(get().chatDrafts, chats.map((c) => c.id))
     if (Object.keys(chatDrafts).length !== Object.keys(get().chatDrafts).length) {
       saveDrafts({ chats: chatDrafts, projects: get().projectDrafts })
@@ -2167,7 +2178,7 @@ export const useApp = create<AppState>((set, get) => ({
       defaults,
       providerClis,
       loading: false,
-      selectedCwd: homeCwd(chats, defaults.recentDirs)
+      selectedCwd: homeCwd(visible, defaults.recentDirs)
     })
     // Fire-and-forget: an update check must never gate the first paint, and it
     // resolves to null when offline. Re-checked every 6h so a long-running
@@ -2244,6 +2255,12 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   // ---- Side chats ----
+
+  pendingSideChatDelete: null,
+
+  confirmSideChatDelete(chat) {
+    set({ pendingSideChatDelete: chat })
+  },
 
   async openSideChat() {
     const s = get()
@@ -2372,6 +2389,7 @@ export const useApp = create<AppState>((set, get) => ({
       // over the app.
       sideChats: omit(st.sideChats, [id]),
       chats: st.chats.filter((c) => c.id !== id),
+      pendingSideChatDelete: st.pendingSideChatDelete?.id === id ? null : st.pendingSideChatDelete,
       ...forgetChat(st, [id])
     }))
     await window.api.deleteChat(id)

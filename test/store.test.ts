@@ -1587,12 +1587,11 @@ test('a side chat is hidden from listChats but is a real chat underneath', async
   const loaded = reopened.getChat(side.id)
   assert.equal(loaded?.ephemeral, true)
   assert.deepEqual(loaded?.messages.map((m) => m.id), ['s0'])
-  assert.deepEqual(reopened.ephemeralIds(), [side.id])
   await reopened.flushAll()
   rmSync(dir, { recursive: true, force: true })
 })
 
-test('purgeEphemeral drops side chats and leaves no tombstone behind', async () => {
+test('deleting a side chat removes it and leaves no tombstone behind', async () => {
   const dir = userDir()
   const store = new Store(dir)
   const normal = makeChat()
@@ -1603,8 +1602,14 @@ test('purgeEphemeral drops side chats and leaves no tombstone behind', async () 
   store.saveChat(side.id)
   await store.flushAll()
 
+  // Reopening is the quit-and-relaunch this feature now has to survive: the
+  // row is still there, because nothing deletes a side chat on the way out.
   const reopened = new Store(dir)
-  assert.equal(reopened.purgeEphemeral(), 1)
+  assert.ok(reopened.getChat(side.id), 'a side chat outlives the app that made it')
+  assert.equal(rowCount(dir, side.id), 1)
+
+  // Only an explicit delete removes one.
+  reopened.deleteChat(side.id)
   assert.equal(reopened.getChat(side.id), null)
   assert.equal(rowCount(dir, side.id), 0)
   // The real chat is untouched.
@@ -1615,12 +1620,50 @@ test('purgeEphemeral drops side chats and leaves no tombstone behind', async () 
   await reopened.flushAll()
 
   // No `tomb:` row: the tombstone only guards against the legacy JSON archive
-  // resurrecting a chat, which a side chat has none of — and side chats are
-  // deleted on every quit, so writing one would grow `kv` without bound.
+  // resurrecting a chat, and a side chat postdates the migration by
+  // construction, so it has no archive file to be resurrected from.
   const db = new DatabaseSync(join(dir, 'chats.db'), { readOnly: true })
   const tombs = db.prepare("SELECT k FROM kv WHERE k LIKE 'tomb:%'").all() as { k: string }[]
   db.close()
   assert.deepEqual(tombs, [])
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('listSideChats returns what listChats hides, so a relaunch can reopen it', async () => {
+  const dir = userDir()
+  const store = new Store(dir)
+  const parent = makeChat()
+  const older = makeChat({ ephemeral: true, sideOf: parent.id, updatedAt: 1_000 })
+  const newer = makeChat({ ephemeral: true, sideOf: parent.id, updatedAt: 2_000 })
+  for (const c of [parent, older, newer]) store.addChat(c)
+  await store.flushAll()
+
+  // The two reads are complements: neither surface can see the other's rows.
+  const reopened = new Store(dir)
+  assert.deepEqual(
+    reopened.listChats().map((c) => c.id),
+    [parent.id]
+  )
+  // Newest first — `ClosedSideChats` orders on `updatedAt`, and the one you
+  // closed a minute ago is the one you are reaching for.
+  assert.deepEqual(
+    reopened.listSideChats().map((c) => c.id),
+    [newer.id, older.id]
+  )
+  // The title `send` derives from the first message is the only one a side chat
+  // ever gets — `maybeGenerateTitle` bails on `ephemeral` — so it is what tells
+  // two rows in the reopen list apart, and it has to survive the round trip.
+  const live = reopened.getChat(newer.id)
+  assert.ok(live)
+  live.title = 'what does this error mean?'
+  reopened.saveChat(newer.id)
+  await reopened.flushAll()
+  const again = new Store(dir)
+  assert.equal(
+    again.listSideChats().find((c) => c.id === newer.id)?.title,
+    'what does this error mean?'
+  )
+  await again.flushAll()
   rmSync(dir, { recursive: true, force: true })
 })
 
@@ -1642,27 +1685,6 @@ test('a side chat does not hold a worktree directory against its own chat', asyn
   reopened.addChat(other)
   assert.equal(reopened.hasOtherChatIn('/tmp/wt', work.id), true)
   await reopened.flushAll()
-  rmSync(dir, { recursive: true, force: true })
-})
-
-test('purgeEphemeral leaves a side chat another instance is holding', async () => {
-  const dir = userDir()
-  // The instance that owns the chat: writing it is what claims the lock.
-  const owner = new Store(dir)
-  const side = makeChat({ ephemeral: true })
-  owner.addChat(side)
-  side.messages.push(userMsg('s0', 'mid-turn'))
-  owner.saveChat(side.id)
-
-  // A second instance launching against the same shared userData.
-  const other = new Store(dir)
-  assert.equal(other.purgeEphemeral(), 0)
-  assert.ok(other.getChat(side.id), 'the owner still has its side chat')
-
-  // The owner's own purge — on its way out — does delete it.
-  assert.equal(owner.purgeEphemeral(), 1)
-  await owner.flushAll()
-  await other.flushAll()
   rmSync(dir, { recursive: true, force: true })
 })
 

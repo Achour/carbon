@@ -26,6 +26,7 @@ import { cn } from '@/lib/utils'
 import { FileIcon } from '@/lib/fileIcon'
 import { CanvasDoc, CanvasPanel } from '@/components/CanvasPanel'
 import { useApp, type OpenTab } from '@/store'
+import type { ChatMeta } from '@shared/types'
 import {
   Dialog,
   DialogContent,
@@ -252,17 +253,25 @@ function ClosedSideChats({
   onDelete
 }: {
   onReopen: (id: string) => void
-  onDelete: (id: string) => void
+  onDelete: (chat: ChatMeta) => void
 }): React.JSX.Element | null {
   const activeId = useApp((s) => s.activeId)
   const chats = useApp((s) => s.chats)
   const sideChatTabs = useApp((s) => s.sideChatTabs)
   const statuses = useApp((s) => s.statuses)
   // A side chat carries the chat it belongs to (`sideOf`), which is the only
-  // handle a *closed* one leaves — it has no tab to be found by. Newest last in
-  // `chats`, so reversed: the one you just closed is the one you are reaching for.
+  // handle a *closed* one leaves — it has no tab to be found by.
+  //
+  // Sorted on `updatedAt` rather than reversed. Reversing read `chats` position,
+  // which meant "newest last" only for side chats appended by `openSideChat`
+  // this session: ones restored at boot arrive newest-*first*, and `hoistChat`
+  // moves a row on every turn start regardless. So after a relaunch the one you
+  // closed a minute ago sat at the bottom of the list.
   const closed = React.useMemo(
-    () => chats.filter((c) => c.sideOf === activeId && !sideChatTabs.includes(c.id)).reverse(),
+    () =>
+      chats
+        .filter((c) => c.sideOf === activeId && !sideChatTabs.includes(c.id))
+        .sort((a, b) => b.updatedAt - a.updatedAt),
     [chats, activeId, sideChatTabs]
   )
   if (closed.length === 0) return null
@@ -293,8 +302,8 @@ function ClosedSideChats({
           </button>
           <button
             type="button"
-            onClick={() => onDelete(c.id)}
-            aria-label={`Discard ${c.title?.trim() || 'side chat'}`}
+            onClick={() => onDelete(c)}
+            aria-label={`Delete ${c.title?.trim() || 'side chat'}`}
             className="shrink-0 rounded p-1 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:bg-secondary hover:text-foreground"
           >
             <X className="size-3.5" />
@@ -321,7 +330,7 @@ function QuickOpen(): React.JSX.Element {
   const openCanvas = useApp((s) => s.openCanvas)
   const openSideChat = useApp((s) => s.openSideChat)
   const reopenSideChat = useApp((s) => s.reopenSideChat)
-  const deleteSideChat = useApp((s) => s.deleteSideChat)
+  const confirmSideChatDelete = useApp((s) => s.confirmSideChatDelete)
   const hasActiveChat = useApp((s) => s.activeId !== null)
 
   const [open, setOpen] = React.useState(false)
@@ -522,7 +531,12 @@ function QuickOpen(): React.JSX.Element {
                   void reopenSideChat(id)
                   setOpen(false)
                 }}
-                onDelete={deleteSideChat}
+                onDelete={(c) => {
+                  // The menu closes on the click, so the question has to be
+                  // asked somewhere that outlives it — `App` renders the dialog.
+                  setOpen(false)
+                  confirmSideChatDelete(c)
+                }}
               />
             </>
           )}
