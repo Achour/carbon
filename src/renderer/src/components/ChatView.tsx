@@ -59,6 +59,7 @@ import {
 import {
   AssistantBlock,
   EventRow,
+  turnAnswerText,
   StreamingIndicator,
   UserBubble
 } from '@/components/messages/Parts'
@@ -288,7 +289,9 @@ function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
     run = []
   }
 
+  let lastAssistantId: string | undefined
   for (const m of messages) {
+    if (m.role === 'assistant') lastAssistantId = m.id
     if (m.role === 'assistant' && isGroupableMsg(m)) {
       run.push(m)
       continue
@@ -298,7 +301,24 @@ function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
       out.push(<UserBubble key={m.id} message={m} />)
     }
     else if (m.role === 'assistant') out.push(renderAssistant(m))
-    else out.push(<EventRow key={m.id} message={m} pending={m.id === ctx.switchPendingId} />)
+    else {
+      // The stats row that closes a turn carries the copy control, so it needs
+      // the turn's own prose. An event message is not in `presentations` —
+      // `turnPresentations` walks users and assistants — so it is resolved
+      // through the last assistant seen, which is the turn this row closes.
+      // `summary` is only set once that turn is complete, which is the right
+      // gate anyway: a turn still running has no answer to copy.
+      const closing = lastAssistantId ? presentations.get(lastAssistantId)?.summary : undefined
+      const answer = m.kind === 'turn' && closing ? turnAnswerText(closing) : undefined
+      out.push(
+        <EventRow
+          key={m.id}
+          message={m}
+          pending={m.id === ctx.switchPendingId}
+          answer={answer || undefined}
+        />
+      )
+    }
   }
   flush()
   return out

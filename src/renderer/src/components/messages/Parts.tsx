@@ -458,24 +458,92 @@ export const AssistantBlock = React.memo(function AssistantBlock({
   )
 })
 
+/**
+ * The turn's prose, and only its prose — what "copy the answer" means.
+ *
+ * **The unit is the turn, not the message, and that is the whole decision.**
+ * Claude persists a turn as many assistant messages — a thought, a paragraph, a
+ * call, another paragraph — while Codex persists one, so a per-message copy
+ * would hand over a fragment on one provider and the answer on the other. It is
+ * fed `turnPresentations`' `summary`, whose `parts` are the turn's parts
+ * flattened, which is the same anchor `TurnChangesCard` and `TasksCard` use.
+ *
+ * Tool calls and thoughts are dropped. The reason to reach for this is to hand
+ * an answer to another agent, and a transcript of twenty `Read` rows is the
+ * noise that makes the paste worse than retyping it.
+ */
+export function turnAnswerText(message: AssistantMessage): string {
+  return message.parts
+    // Persisted arrays turn streamed holes into `null`, so this is not only a
+    // type narrowing.
+    .filter((part) => !!part && part.type === 'text' && !!part.text)
+    .map((part) => (part as { text: string }).text)
+    .join('\n\n')
+}
+
+/**
+ * Copy the turn's answer, riding the turn's own stats line.
+ *
+ * It sits beside the duration and cost rather than in a row of its own, and
+ * that is the placement working twice: the line is already the turn's footer,
+ * so the control costs no height in a transcript where every turn would
+ * otherwise carry an extra row — and a reader looking for what a turn *was*
+ * already looks there.
+ *
+ * Icon alone, named by its tooltip. At 11px beside `1m 36s · $0.28` the word
+ * "Copy" is wider than both stats together, which makes an action the reader
+ * rarely wants the loudest thing on the line.
+ */
+function CopyAnswer({ text }: { text: string }): React.JSX.Element {
+  const [copied, setCopied] = React.useState(false)
+  const copy = (): void => {
+    void navigator.clipboard.writeText(text)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1500)
+  }
+  return (
+    <WithTooltip label={copied ? 'Copied' : 'Copy answer'}>
+      <button
+        type="button"
+        onClick={copy}
+        aria-label={copied ? 'Answer copied' : 'Copy the answer'}
+        className="mr-0.5 cursor-pointer transition-colors hover:text-foreground"
+      >
+        {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
+      </button>
+    </WithTooltip>
+  )
+}
+
 export const EventRow = React.memo(function EventRow({
   message,
-  pending = false
+  pending = false,
+  answer
 }: {
   message: EventMessage
   /** Switch dividers only: the handoff this divider records is still running. */
   pending?: boolean
+  /**
+   * Turn rows only: the prose of the turn this row closes, when there is any.
+   * Resolved by `renderMessages`, which is the only place that knows which turn
+   * an event message belongs to.
+   */
+  answer?: string
 }): React.JSX.Element | null {
   switch (message.kind) {
     case 'turn': {
       const s = message.stats
-      if (!s) return null
+      // Stats are the row's usual reason to exist, but no longer its only one:
+      // a turn that reported none still has an answer worth copying, and
+      // returning null there would drop the control on exactly those turns.
+      if (!s && !answer) return null
       return (
-        <div className="flex justify-end gap-1 pt-0.5 text-[11px] text-muted-foreground/70">
-          <span>{formatDuration(s.durationMs)}</span>
+        <div className="flex items-center justify-end gap-1 pt-0.5 text-[11px] text-muted-foreground/70">
+          {answer && <CopyAnswer text={answer} />}
+          {s && <span>{formatDuration(s.durationMs)}</span>}
           {/* Subscription turns (Codex on ChatGPT, Claude on a plan) report no
               per-turn dollar cost — show duration only rather than "$0.0000". */}
-          {s.costUsd > 0 && (
+          {s && s.costUsd > 0 && (
             <>
               <span>·</span>
               <span>{formatCost(s.costUsd)}</span>

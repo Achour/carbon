@@ -881,6 +881,33 @@ second review of its own.
   and it is a popover that *checks first* — the preview round-trip is what lets
   it say how many files it would restore, or why it can't.
 
+**Copying a turn's answer rides the same anchor** (`turnAnswerText`,
+`CopyAnswer`). The reason to want it is to hand an answer to another agent, so
+what it copies is the turn's *prose* — tool calls and thoughts dropped, since a
+transcript of twenty `Read` rows is the noise that makes the paste worse than
+retyping it. Three things follow from that:
+
+- **The unit is the turn, not the message.** Claude persists a turn as many
+  assistant messages and Codex as one, so a per-message copy hands over a
+  fragment on one provider and the answer on the other. `turnPresentations`
+  already flattens the turn's parts into `summary`, which is why this needed no
+  new grouping — the same anchor `TurnChangesCard` and `TasksCard` hang on.
+- **It rides the turn's stats line rather than a row of its own.** A row per turn
+  is ~24px of chrome down the whole transcript for a control most turns never
+  need, and the alternative — hiding it until hover — wants a wrapper around the
+  turn's messages, which is the remount `useHistoryNodes` exists to prevent. The
+  stats line is already the turn's footer, so the control costs no height and
+  lands where a reader already looks for what a turn *was*. It is the icon alone:
+  at 11px beside `1m 36s · $0.28` the word "Copy" is wider than both stats
+  together. `EventRow`'s `turn` case therefore no longer returns null on missing
+  stats — a turn that reported none still has an answer worth copying — and
+  `renderMessages` resolves the answer through the last assistant message seen,
+  since an event message is not itself in `presentations`.
+- **A turn with no prose draws no control.** `summary` is only set once the turn
+  is complete, so a running turn offers nothing (there is no answer yet), and a
+  tool-only turn yields an empty string and renders nothing rather than a button
+  with nothing behind it.
+
 ### The review (`DiffView.tsx`, `MultiDiffView.tsx`, `lib/diffRows.ts`)
 
 Every changed file stacked in one scroller under a sticky, collapsible header.
