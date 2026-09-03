@@ -180,6 +180,7 @@ const GROUP_MIN = 2
  */
 function PromptAttachments({ message }: { message: UserMessage }): React.JSX.Element | null {
   const openCanvas = useApp((s) => s.openCanvas)
+  const openLightbox = useApp((s) => s.openLightbox)
   if (!message.attachments || message.attachments.length === 0) return null
   return (
     <div className="flex flex-wrap gap-1.5">
@@ -190,7 +191,16 @@ function PromptAttachments({ message }: { message: UserMessage }): React.JSX.Ele
             src={`data:${att.mediaType};base64,${att.data}`}
             alt={att.name}
             title={att.name}
-            className="max-h-40 max-w-56 rounded-xl border border-border object-cover"
+            // The chip is a thumbnail — `object-cover`, so it is also *cropped*.
+            // Clicking is the only way back to what was actually sent.
+            onClick={() =>
+              openLightbox({
+                kind: 'data',
+                src: `data:${att.mediaType};base64,${att.data}`,
+                name: att.name
+              })
+            }
+            className="max-h-40 max-w-56 cursor-zoom-in rounded-xl border border-border object-cover"
           />
         ) : att.kind === 'element' ? (
           <div

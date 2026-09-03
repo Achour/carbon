@@ -322,11 +322,14 @@ export function ImageView({
  * button away, for when it should stay open beside the conversation.
  */
 export function ImageLightbox(): React.JSX.Element | null {
-  const path = useApp((s) => s.lightbox)
+  const target = useApp((s) => s.lightbox)
   const closeLightbox = useApp((s) => s.closeLightbox)
   const openFile = useApp((s) => s.openFile)
   const [uri, setUri] = React.useState<string | null>(null)
   const [failed, setFailed] = React.useState(false)
+  // Only a `file` target is read; a `data` one is already the image, so the
+  // effect below never runs for it and its `src` is used directly.
+  const path = target?.kind === 'file' ? target.path : null
 
   React.useEffect(() => {
     if (!path) return undefined
@@ -349,8 +352,10 @@ export function ImageLightbox(): React.JSX.Element | null {
     }
   }, [path])
 
-  if (!path) return null
-  const name = path.split('/').pop() ?? path
+  if (!target) return null
+  const name =
+    target.kind === 'file' ? (target.path.split('/').pop() ?? target.path) : target.name
+  const src = target.kind === 'file' ? uri : target.src
 
   return (
     <Dialog open onOpenChange={(open) => !open && closeLightbox()}>
@@ -360,26 +365,28 @@ export function ImageLightbox(): React.JSX.Element | null {
       >
         <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
           <span className="min-w-0 flex-1 truncate text-[13px]">{name}</span>
-          <WithTooltip label="Open as a tab">
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              aria-label="Open as a tab"
-              onClick={() => {
-                void openFile(path, { preview: true })
-                closeLightbox()
-              }}
-            >
-              <ExternalLink />
-            </Button>
-          </WithTooltip>
+          {target.kind === 'file' && (
+            <WithTooltip label="Open as a tab">
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                aria-label="Open as a tab"
+                onClick={() => {
+                  void openFile(target.path, { preview: true })
+                  closeLightbox()
+                }}
+              >
+                <ExternalLink />
+              </Button>
+            </WithTooltip>
+          )}
           <Button size="icon-sm" variant="ghost" aria-label="Close" onClick={closeLightbox}>
             <X />
           </Button>
         </header>
         <div className="min-h-0 flex-1">
-          {uri ? (
-            <ImageView src={uri} alt={name} autoFocus />
+          {src ? (
+            <ImageView src={src} alt={name} autoFocus />
           ) : (
             <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
               {failed ? 'That file is not a readable image.' : 'Loading…'}

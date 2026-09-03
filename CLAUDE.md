@@ -850,6 +850,15 @@ inside a scroller so panning is the browser's own job.
   made the content 32px wider than the pane at "fit", so the fitted state always
   carried a scrollbar.
 
+- **An image in the transcript opens here too, and most of them have no file.**
+  `LightboxTarget` is `file | data`, because the two are not the same object: a
+  local path is read at open and can also be opened as a tab, where a tool's
+  returned screenshot, a `data:` URI in a reply and an image attached to a
+  prompt only ever existed as bytes in the transcript. That is why "Open as a
+  tab" belongs to the `file` kind rather than to the viewer. The attachment chip
+  is the case that needs the click most: it is `object-cover`, so it is
+  *cropped*, and opening it is the only way back to what was actually sent.
+
 ### The turn's changed files (`TurnChangesCard`, `lib/turnChanges.ts`)
 
 One card at the end of a turn saying what it edited: a count, the turn's line

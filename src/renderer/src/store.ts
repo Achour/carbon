@@ -182,6 +182,18 @@ export interface PlanPanelState {
   requestId: string | null
 }
 
+/**
+ * What the full-window image viewer is showing. Two kinds, because the two
+ * things it opens are not the same object: a `file` is on disk, so it is read
+ * at open and can also be opened as a tab; a `data` image only ever existed as
+ * bytes in the transcript — a tool's returned screenshot, an attachment sent
+ * with a prompt — and has no file to open, which is why the tab button is a
+ * property of the kind rather than of the viewer.
+ */
+export type LightboxTarget =
+  | { kind: 'file'; path: string }
+  | { kind: 'data'; src: string; name: string }
+
 export interface DiffTabMeta {
   cwd: string
   /** Repo-relative file path. */
@@ -858,9 +870,9 @@ interface AppState {
   setSelectedCwd(cwd: string | null): void
   openPlanPanel(panel: PlanPanelState): void
   closePlanPanel(): void
-  /** Absolute path of the image shown full-window, or null. See ImageLightbox. */
-  lightbox: string | null
-  openLightbox(path: string): void
+  /** The image shown full-window, or null. See ImageLightbox. */
+  lightbox: LightboxTarget | null
+  openLightbox(target: LightboxTarget): void
   closeLightbox(): void
   /** Reveal the sub-agent roster in the right panel (see AgentsPanel). */
   openAgentsPanel(): void
@@ -2240,8 +2252,8 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   lightbox: null,
-  openLightbox(path) {
-    set({ lightbox: path })
+  openLightbox(target) {
+    set({ lightbox: target })
   },
   closeLightbox() {
     // Guarded so closing an already-closed lightbox doesn't notify subscribers.

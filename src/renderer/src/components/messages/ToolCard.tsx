@@ -774,16 +774,25 @@ function ToolOutputImages({
 }): React.JSX.Element {
   return (
     <div className="space-y-2 pt-1">
-      {images.map((img, i) => (
-        <img
-          key={i}
-          src={`data:${img.mediaType};base64,${img.data}`}
-          alt="Tool screenshot"
-          loading="lazy"
-          decoding="async"
-          className="max-h-[28rem] w-full rounded-lg border border-border object-contain"
-        />
-      ))}
+      {images.map((img, i) => {
+        const src = `data:${img.mediaType};base64,${img.data}`
+        return (
+          <img
+            key={i}
+            src={src}
+            alt="Tool screenshot"
+            loading="lazy"
+            decoding="async"
+            // A capture is drawn at the transcript's width, which is where a
+            // screenshot of a whole window stops being readable. It never had a
+            // file, so the lightbox takes the data itself.
+            onClick={() =>
+              useApp.getState().openLightbox({ kind: 'data', src, name: 'Screenshot' })
+            }
+            className="max-h-[28rem] w-full cursor-zoom-in rounded-lg border border-border object-contain"
+          />
+        )
+      })}
     </div>
   )
 }

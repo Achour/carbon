@@ -526,7 +526,7 @@ function LocalImage({
       title={abs ?? undefined}
       // Full-window, not a tab: the tab is the narrowest column on screen and
       // had no zoom, so "show me that bigger" produced something smaller.
-      onClick={() => abs && useApp.getState().openLightbox(abs)}
+      onClick={() => abs && useApp.getState().openLightbox({ kind: 'file', path: abs })}
       className="my-2 max-h-96 cursor-zoom-in rounded-lg border border-border object-contain"
     />
   )
@@ -552,11 +552,17 @@ const components = {
     const s = typeof src === 'string' ? src : ''
     const a = typeof alt === 'string' ? alt : ''
     if (/^(https?:|data:)/i.test(s)) {
+      // No file behind this one, so the lightbox gets the src itself. Named by
+      // the alt text where there is one, since a `data:` URI has no file name
+      // and a remote one's last segment is often a hash.
+      const fromUrl = /^data:/i.test(s) ? '' : (s.split(/[?#]/)[0].split('/').pop() ?? '')
+      const name = a || fromUrl || 'Image'
       return (
         <img
           src={s}
           alt={a}
-          className="my-2 max-h-96 rounded-lg border border-border object-contain"
+          onClick={() => useApp.getState().openLightbox({ kind: 'data', src: s, name })}
+          className="my-2 max-h-96 cursor-zoom-in rounded-lg border border-border object-contain"
         />
       )
     }
