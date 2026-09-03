@@ -8,6 +8,7 @@ import {
   Folder,
   GitBranch,
   GitMerge,
+  MessageSquare,
   MoreHorizontal,
   PanelLeft,
   PanelRight,
@@ -77,6 +78,7 @@ import { turnPresentations } from '@/lib/turnChanges'
 
 const NO_PERMISSIONS: never[] = []
 const NO_QUEUED: never[] = []
+const NO_MESSAGES: ChatMessage[] = []
 
 /** Coalesce a run of this many consecutive read/search-only messages into one row. */
 const GROUP_MIN = 2
@@ -366,10 +368,33 @@ function sameHistory(
   return true
 }
 
-export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
-  const messages = useApp((s) => s.messages)
-  const hiddenBefore = useApp((s) => s.hiddenBefore)
-  const loadingOlder = useApp((s) => s.loadingOlder)
+export function ChatView({
+  chat,
+  side = false
+}: {
+  chat: ChatMeta
+  /**
+   * Draw the compact **side chat** variant, hosted in a right-panel tab.
+   *
+   * One component rather than two, because everything below the header — the
+   * transcript, the run grouping, the permission cards, the composer stack — is
+   * the same conversation, and two implementations of it would drift. What the
+   * flag turns off is the chrome belonging to the *main column* (its header and
+   * its dialogs, every one of which acts on a chat the sidebar can show) and
+   * the two publishes into app-wide singleton stores, which the second
+   * transcript on screen must not make.
+   */
+  side?: boolean
+}): React.JSX.Element {
+  // A side chat's transcript is a keyed slot; the main column's is the store's
+  // singular slice. Everything else about a chat is already keyed by id.
+  const messages = useApp((s) =>
+    side ? (s.sideChats[chat.id]?.messages ?? NO_MESSAGES) : s.messages
+  )
+  const hiddenBefore = useApp((s) =>
+    side ? (s.sideChats[chat.id]?.hiddenBefore ?? 0) : s.hiddenBefore
+  )
+  const loadingOlder = useApp((s) => (side ? !!s.sideChats[chat.id]?.loadingOlder : s.loadingOlder))
   const loadOlderMessages = useApp((s) => s.loadOlderMessages)
   const status = useApp((s) => s.statuses[chat.id] ?? 'idle')
   // Fall back to a stable constant — a fresh `[]` per render makes zustand's
@@ -507,7 +532,7 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
     // immediately undo the restore.
     pinnedRef.current = false
     setShowJump(true)
-    void loadOlderMessages()
+    void loadOlderMessages(chat.id)
   }, [loadOlderMessages])
 
   // Restore the reading position after a prepend, before the browser paints.
@@ -624,8 +649,16 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
   }, [messages])
   const setAgentRuns = useAgents((s) => s.setRuns)
   React.useEffect(() => {
+    // **The side variant publishes nothing here or below.** `agentsStore` is a
+    // pure singleton — it holds one chat's runs, with no chat id to check — and
+    // `taskListStore` is a singleton with a stamp. With two transcripts mounted,
+    // whichever folded last would win: the Agents tab would flip between the two
+    // chats' rosters as either streamed, and the dock would blank each time the
+    // other published. The main column owns both surfaces, which is also the
+    // honest answer — the dock sits on *its* composer, the roster tab beside it.
+    if (side) return
     setAgentRuns(agentRuns)
-  }, [agentRuns, setAgentRuns])
+  }, [side, agentRuns, setAgentRuns])
   // Clear on unmount, in an effect of its own so it fires *only* then: folded
   // into the publish above it would empty the store between every two updates
   // and flicker the tab out of the strip on each one. The store outlives this
@@ -633,7 +666,13 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
   // chat for the home screen leaves the dead chat's roster on screen, since
   // nothing else ever publishes an empty list. `ChatView` is keyed by chat id,
   // so React runs this cleanup before the next chat's publish.
-  React.useEffect(() => () => setAgentRuns([]), [setAgentRuns])
+  // Guarded for the same reason, and more sharply: unguarded, *closing a side
+  // chat* would clear the main chat's roster and take the Agents tab out of the
+  // strip while its agents were still running.
+  React.useEffect(() => {
+    if (side) return
+    return () => setAgentRuns([])
+  }, [side, setAgentRuns])
 
   // Published to its own store so the dock — and only the dock — re-renders
   // when a task moves; see `taskListStore`. Kept out of the history render path,
@@ -641,8 +680,9 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
   // chat and this effect runs a frame after the switch.
   const setTasks = useTaskList((s) => s.setTasks)
   React.useEffect(() => {
+    if (side) return
     setTasks(chat.id, tasks)
-  }, [chat.id, tasks, setTasks])
+  }, [side, chat.id, tasks, setTasks])
 
   const openPlan = React.useCallback(
     (plan: string) => {
@@ -791,8 +831,24 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
   ) : null
 
   return (
-    <div data-chatview className="relative flex h-full min-w-[420px] flex-1 flex-col">
-      {/* Header */}
+    <div
+      // `data-chatview` is the frosted main column — which a side chat, sitting
+      // inside the right panel, is not. `data-chat-surface` is the neutral
+      // "which chat is this" marker, and it is on both: it is how a permission
+      // keypress finds the transcript it happened in (see `PermissionCard`).
+      {...(side ? {} : { 'data-chatview': true })}
+      data-chat-surface={chat.id}
+      className={cn(
+        'relative flex h-full flex-1 flex-col',
+        // The panel sets a side chat's width, and it is routinely narrower than
+        // the main column's floor.
+        side ? 'min-w-0' : 'min-w-[420px]'
+      )}
+    >
+      {/* Header. The side variant has none: its tab is its header, and every
+          item in the ⋯ menu — rename, delete, and the whole worktree lifecycle —
+          acts on a chat the sidebar can show. */}
+      {!side && (
       <header
         className={cn(
           // pr matches the panel header's px-2.5 so the panel toggle sits at the
@@ -884,6 +940,7 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
           </WithTooltip>
         )}
       </header>
+      )}
 
       {/* userData is shared between the dev and packaged builds on purpose, so
           the same chat can be open twice. The other instance owns the write
@@ -944,6 +1001,22 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
           className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]"
         >
           <div ref={columnRef} className="mx-auto flex max-w-3xl flex-col gap-4 px-6 py-6">
+            {/* A side chat opens on an empty pane, which on its own reads as a
+                conversation that failed to load — the empty-canvas argument. It
+                also has one thing to say that nothing else on screen does: this
+                conversation is not being kept. Said here, before the first
+                message, rather than as a banner that would then sit over every
+                turn repeating it. */}
+            {side && messages.length === 0 && hiddenBefore === 0 && (
+              <div className="flex flex-col items-center gap-1.5 px-4 py-16 text-center">
+                <MessageSquare className="size-5 text-muted-foreground/70" />
+                <div className="text-[13px] font-medium">Side chat</div>
+                <p className="max-w-[38ch] text-xs text-muted-foreground">
+                  A scratch conversation in this project. Side chats are temporary and disappear
+                  when you close the app.
+                </p>
+              </div>
+            )}
             {hiddenBefore > 0 && (
               <div className="flex justify-center">
                 <Button
@@ -966,7 +1039,12 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
             {permissions.map((request) => {
               if (request.toolName === 'AskUserQuestion')
                 return (
-                  <QuestionCard key={request.id} request={request} provider={chat.provider} />
+                  <QuestionCard
+                    key={request.id}
+                    request={request}
+                    chatId={chat.id}
+                    provider={chat.provider}
+                  />
                 )
               if (request.toolName === 'ExitPlanMode')
                 return (
@@ -994,6 +1072,7 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
                 <PermissionCard
                   key={request.id}
                   request={request}
+                  chatId={chat.id}
                   keyboard={request.id === keyboardPermission}
                 />
               )
@@ -1037,14 +1116,23 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
               like the composer, and they read as one column only while their
               borders share an edge. */}
           <div className={CHAT_BLEED}>
-            <AgentActivityBar />
-            <ContextStrip
-              cwd={chat.cwd}
-              project={projectRoot(chat)}
-              git={git}
-              onReviewChanges={() => void reviewChanges()}
-              onUpdateFromDefault={() => void runGitAction('update-from-main')}
-            />
+            {/* Both belong to the main column. `AgentActivityBar` reads the
+                same singleton roster the side variant refuses to publish into,
+                so here it would describe the *other* chat's agents; and the
+                strip names the folder, branch and staleness of a project the
+                main column is already naming one pane over. */}
+            {!side && (
+              <>
+                <AgentActivityBar />
+                <ContextStrip
+                  cwd={chat.cwd}
+                  project={projectRoot(chat)}
+                  git={git}
+                  onReviewChanges={() => void reviewChanges()}
+                  onUpdateFromDefault={() => void runGitAction('update-from-main')}
+                />
+              </>
+            )}
             {queued.length > 0 && (
               <div className="mb-2 space-y-1.5">
                 {queued.map((q) => (
@@ -1087,22 +1175,27 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
                 cwd={chat.cwd}
                 currentBranch={git?.branch}
                 defaultBranch={git?.defaultBranch}
-                onStart={startCodexReview}
+                onStart={(target) => startCodexReview(chat.id, target)}
               />
               <Composer
               // The checklist rides the composer's own box rather than sitting
               // above it, so the two read as one object however the border moves.
               header={
-                <>
-                  {chat.provider === 'codex' && (
-                    <CodexGoalBar
-                      chatId={chat.id}
-                      threadId={chat.sessionId}
-                      working={busy}
-                    />
-                  )}
-                  <TaskDock chatId={chat.id} />
-                </>
+                side ? null : (
+                  <>
+                    {chat.provider === 'codex' && (
+                      <CodexGoalBar chatId={chat.id} threadId={chat.sessionId} working={busy} />
+                    )}
+                    {/* Both belong to the main column. The dock in particular
+                        would be *structurally* dead here: the side variant does
+                        not publish into `taskListStore`, so it could only ever
+                        draw nothing. Mounting UI that cannot render is worse
+                        than not offering it — a side chat's checklist being
+                        invisible is a stated tradeoff, an empty box that looks
+                        like a broken one is not. */}
+                    <TaskDock chatId={chat.id} />
+                  </>
+                )
               }
               // Returned, not voided: the composer needs the promise so a failed
               // send restores the draft instead of discarding it.
@@ -1115,31 +1208,34 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
                   setReviewOpen(true)
                   return Promise.resolve()
                 }
-                return sendMessage(text, attachments)
+                return sendMessage(chat.id, text, attachments)
               }}
               draft={initialDraft}
               onDraftChange={(next) => saveChatDraft(chat.id, next)}
               streaming={busy}
-              onStop={() => void interrupt()}
+              onStop={() => void interrupt(chat.id)}
               // A cross-provider pick is only armed until the next send; the
               // composer previews it (chip, efforts, placeholder) while the chat
               // itself stays on its current backend.
               model={chat.pendingModel ?? chat.model ?? ''}
               onModelChange={(model, modelProvider) =>
-                void setChatOptions({ model, modelProvider })
+                void setChatOptions(chat.id, { model, modelProvider })
               }
               effort={chat.effort ?? ''}
-              onEffortChange={(effort, opts) => void setChatOptions({ effort, ...opts })}
+              onEffortChange={(effort, opts) => void setChatOptions(chat.id, { effort, ...opts })}
               modelEfforts={modelEfforts}
               serviceTier={chat.serviceTier ?? 'standard'}
               onServiceTierChange={(serviceTier, opts) =>
-                void setChatOptions({ serviceTier, ...opts })
+                void setChatOptions(chat.id, { serviceTier, ...opts })
               }
               permissionMode={chat.permissionMode}
-              onPermissionModeChange={(permissionMode) => void setChatOptions({ permissionMode })}
+              onPermissionModeChange={(permissionMode) =>
+                void setChatOptions(chat.id, { permissionMode })
+              }
               contextTokens={chat.contextTokens}
               contextWindow={chat.contextWindow}
               provider={composerProvider}
+              chatId={chat.id}
               cwd={chat.cwd}
               commands={commands}
               // Busy-gated so a note left behind by a crash can never stick.
@@ -1155,7 +1251,11 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
         </div>
       </div>
 
-      {/* Rename dialog */}
+      {/* Rename dialog. All four dialogs below belong to the header's ⋯ menu,
+          which the side variant does not draw — so nothing can open them there,
+          and a side chat is deleted by closing its tab rather than by asking. */}
+      {!side && (
+        <>
       <Dialog open={renameOpen} onOpenChange={setRenameOpen}>
         <DialogContent>
           <DialogTitle>Rename chat</DialogTitle>
@@ -1218,6 +1318,8 @@ export function ChatView({ chat }: { chat: ChatMeta }): React.JSX.Element {
           </div>
         </DialogContent>
       </Dialog>
+        </>
+      )}
     </div>
   )
 }

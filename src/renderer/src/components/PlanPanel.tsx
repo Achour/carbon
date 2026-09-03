@@ -38,7 +38,10 @@ export function PlanContent({
 }): React.JSX.Element {
   const respondPermission = useApp((s) => s.respondPermission)
   const selectedCwd = useApp((s) => s.selectedCwd)
-  const chat = useApp((s) => s.chats.find((c) => c.id === s.activeId) ?? null)
+  // The chat that *made this plan*, which is not always the active one: a side
+  // chat can enter plan mode too, and resolving from `activeId` would price the
+  // "Build with" picker against the main chat's model and approve on its behalf.
+  const chat = useApp((s) => s.chats.find((c) => c.id === panel.chatId) ?? null)
   const dynamicModels = useApp((s) => s.models)
   const codexConfigModel = useApp((s) => s.codexConfigModel)
   const providerClis = useApp((s) => s.providerClis)
@@ -119,7 +122,7 @@ export function PlanContent({
   const approve = (): void => {
     if (!panel.requestId) return
     setBusy(true)
-    void respondPermission(panel.requestId, {
+    void respondPermission(panel.chatId, panel.requestId, {
       behavior: 'allow',
       always: autoAccept && hasSuggestions,
       ...(buildModel !== currentModel ? { model: buildModel, provider: buildProvider } : {}),
@@ -130,7 +133,10 @@ export function PlanContent({
   const requestChanges = (): void => {
     if (!panel.requestId || !feedback.trim()) return
     setBusy(true)
-    void respondPermission(panel.requestId, { behavior: 'deny', message: feedback.trim() })
+    void respondPermission(panel.chatId, panel.requestId, {
+      behavior: 'deny',
+      message: feedback.trim()
+    })
   }
 
   return (

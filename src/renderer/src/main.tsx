@@ -6,6 +6,8 @@ import ReactDOM from 'react-dom/client'
 import App from './App'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { useApp } from './store'
+import { useTaskList } from './taskListStore'
+import { useAgents } from './agentsStore'
 import { previewForCwd } from './lib/previewRegistry'
 import { releaseAllServers } from './lib/lspBridge'
 import {
@@ -51,6 +53,12 @@ if (import.meta.env.DEV) {
   // Expose the store (and preview registry) for the AIGUI_E2E dev hook.
   ;(window as unknown as Record<string, unknown>).__app = useApp
   ;(window as unknown as Record<string, unknown>).__previewForCwd = previewForCwd
+  // The two app-wide singletons a second transcript must never publish into
+  // (see Side chats). They are stores of their own, so `__app` cannot reach
+  // them, and "the side chat quietly took over the dock" has no other symptom
+  // than the wrong chat's checklist — which is exactly what a probe is for.
+  ;(window as unknown as Record<string, unknown>).__tasks = useTaskList
+  ;(window as unknown as Record<string, unknown>).__agents = useAgents
   // The editor's buffers and views live outside React and outside the store, so
   // the E2E hook needs its own handle on them to assert anything about editing.
   //

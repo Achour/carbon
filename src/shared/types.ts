@@ -258,6 +258,28 @@ export interface ChatMeta {
    * first) instead of reshuffling every time a pinned chat is used.
    */
   pinnedAt?: number
+  /**
+   * A **side chat**: a throwaway conversation the user opened beside a real one,
+   * hosted as a right-panel tab. It is an ordinary chat in every way a session
+   * cares about — same `ChatManager`, same tools, same permissions, same
+   * persistence — and differs only in who may see it and how long it lives: it
+   * is filtered out of `listChats` (so the sidebar can never seed one), gets no
+   * AI-generated title, and is deleted on quit.
+   *
+   * It rides the JSON `meta` blob like every other optional field, so an older
+   * build opening this database reads it as a normal chat rather than failing.
+   * That window is exactly one launch wide, which is the reason the purge runs
+   * on quit rather than only at startup.
+   */
+  ephemeral?: true
+  /**
+   * For a side chat, the chat it was opened beside. Ownership as *data* rather
+   * than only as a renderer map, because three things need it: the reopen list
+   * (a closed side chat has no tab to be found by), the cascade when the parent
+   * is deleted — including from another instance, which no renderer map sees —
+   * and knowing which conversation a stray row belonged to.
+   */
+  sideOf?: string
   createdAt: number
   updatedAt: number
 }
@@ -1750,6 +1772,15 @@ export interface Api {
     permissionMode?: PermissionModeId
     /** Where the chat runs; omitted or `local` means `cwd` itself. */
     worktree?: WorktreeTarget
+    /**
+     * Create a side chat — see `ChatMeta.ephemeral`. Also suppresses the
+     * `rememberOptions`/`rememberDir` side effects a normal creation has: a
+     * throwaway question asked on a cheaper model must not become the default
+     * model of the next real chat.
+     */
+    ephemeral?: boolean
+    /** For a side chat, the chat it is opened beside. See `ChatMeta.sideOf`. */
+    sideOf?: string
   }): Promise<ChatMeta>
   /** `worktree` decides the fate of a worktree chat's directory; default 'keep'. */
   deleteChat(id: string, worktree?: WorktreeDisposition): Promise<OpResult>

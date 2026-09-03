@@ -758,6 +758,11 @@ class ClaudeSession implements AgentSession {
   */
   private async maybeGenerateTitle(): Promise<void> {
     if (this.disposed || this.titledOnce || this.titledResumed || this.chat.titleManual) return
+    // A side chat is never titled. Its tab is labelled "Side chat" and it is
+    // deleted at quit, so the whole cost — a throwaway CLI process and an extra
+    // model call, in parallel with the very turn the user is waiting on — would
+    // buy a string nothing ever draws.
+    if (this.chat.ephemeral) return
     // Only the tail of a long chat is hydrated, so its opening message may not be
     // in memory at all. `titledResumed` already covers every realistic case (a
     // chat this long has a sessionId), but titling from the middle of someone's

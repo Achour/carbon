@@ -111,6 +111,12 @@ function notifyOnStatus(chatId: string, status: string): void {
   const prev = lastStatus.get(chatId)
   lastStatus.set(chatId, status)
   if (!win || win.isFocused() || !Notification.isSupported()) return
+  // A side chat is never notified about. The notification is titled with the
+  // chat's title — which an ephemeral chat deliberately never generates, so it
+  // would read "Carbon" — and clicking it sends `ui:open-chat`, which the
+  // sidebar cannot honour for a chat that is not in its list. A notification
+  // whose only action does nothing is worse than no notification.
+  if (store.getMeta(chatId)?.ephemeral) return
   const body =
     prev && prev !== 'idle' && status === 'idle'
       ? 'Finished responding'
@@ -509,6 +515,8 @@ function registerIpc(): void {
         serviceTier?: ServiceTier
         permissionMode?: PermissionModeId
         worktree?: WorktreeTarget
+        ephemeral?: boolean
+        sideOf?: string
       }
     ) => {
     const now = Date.now()
@@ -553,20 +561,29 @@ function registerIpc(): void {
       serviceTier: opts.serviceTier ?? 'standard',
       permissionMode: opts.permissionMode ?? store.getDefaults().permissionMode,
       worktree,
+      ...(opts.ephemeral ? { ephemeral: true as const } : {}),
+      ...(opts.sideOf ? { sideOf: opts.sideOf } : {}),
       createdAt: now,
       updatedAt: now,
       messages: []
     }
     store.addChat(chat)
-    // Recents track the project the user picked, never the worktree we derived.
-    store.rememberDir(worktree?.repoRoot ?? opts.cwd)
-    store.rememberOptions({
-      model: opts.model ?? '',
-      modelProvider: provider,
-      effort: effort ?? '',
-      serviceTier: opts.serviceTier,
-      permissionMode: chat.permissionMode
-    })
+    // A side chat leaves no trace in the app's defaults. Both of these calls
+    // describe *what the user chose for their next real chat*, and a throwaway
+    // question — routinely asked on a cheaper model, in whatever folder happened
+    // to be open — is not that. Left in, opening one side chat on Haiku would
+    // silently make Haiku the model the next New-chat screen offers.
+    if (!chat.ephemeral) {
+      // Recents track the project the user picked, never the worktree we derived.
+      store.rememberDir(worktree?.repoRoot ?? opts.cwd)
+      store.rememberOptions({
+        model: opts.model ?? '',
+        modelProvider: provider,
+        effort: effort ?? '',
+        serviceTier: opts.serviceTier,
+        permissionMode: chat.permissionMode
+      })
+    }
     const { messages: _messages, ...meta } = chat
     return meta
     }
@@ -595,8 +612,25 @@ function registerIpc(): void {
       // survivor (typically a dev server) would run on with nothing to stop it.
       terminals.killForChat(id)
 
-      // The chat record goes regardless — a failed cleanup leaves the worktree
-      // on disk, which is recoverable; a stuck chat row is not.
+      // Side chats opened beside this one go with it: they are a companion to
+      // a conversation, and there is nothing left for them to be beside. Done
+      // here rather than only in the renderer because the renderer's maps
+      // describe one window, and this database is shared between builds — and
+      // it is what lets the renderer simply drop them from its own state
+      // instead of firing an IPC delete per side chat.
+      //
+      // The parent keeps its own sequence above rather than calling this,
+      // because `removeWorktree` has to run between releasing the directory and
+      // deleting the row; the four steps that follow are the same for both.
+      const forget = (chatId: string): void => {
+        manager.disposeChat(chatId)
+        terminals.killForChat(chatId)
+        // A failed worktree cleanup leaves a directory on disk, which is
+        // recoverable; a stuck chat row is not.
+        store.deleteChat(chatId)
+        lastStatus.delete(chatId)
+      }
+      for (const sideId of store.sideChatIdsOf(id)) forget(sideId)
       store.deleteChat(id)
       lastStatus.delete(id)
       return result
@@ -969,6 +1003,10 @@ app.whenReady().then(() => {
     // instance owns the chat.
     onLockDenied: (chatId) => emit({ type: 'chat-locked', chatId })
   })
+  // Side chats a crash or a force-quit left behind — `before-quit` never ran,
+  // so they are still on disk. Cleared before `registerIpc`, so the renderer's
+  // first `chats:list` cannot race them, and before any session can resume one.
+  store.purgeEphemeral()
   // Provider CLI settings before any manager: session construction, the model
   // catalog and the usage probes all resolve a binary through this, and a
   // resolution that ran against an empty config would cache the wrong answer
@@ -1015,6 +1053,12 @@ app.on('before-quit', (event) => {
   terminals.disposeAll()
   preview.disposeAll()
   lsp.disposeAll()
+  // "Side chats disappear when you close the app" — this is that. It must run
+  // *before* `flushAll`, which sets `closed`: past that point `deleteChat` can
+  // only forget in memory, and the rows would survive to be cleaned up a launch
+  // late by the startup purge. After `disposeAll` so no session is still
+  // writing to a chat being deleted.
+  store.purgeEphemeral()
   quitting = store.flushAll().finally(() => {
     readyToQuit = true
     app.quit()

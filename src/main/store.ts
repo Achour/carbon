@@ -79,6 +79,20 @@ function parseMeta(json: string): ChatMeta {
 }
 
 /**
+ * `parseMeta` for the scans, which meet a row they cannot read and have to keep
+ * going rather than take the whole enumeration down with it. The corruption
+ * path owns the row itself; every caller here only needs "not a chat I can
+ * answer about".
+ */
+function safeMeta(json: string): ChatMeta | null {
+  try {
+    return parseMeta(json)
+  } catch {
+    return null
+  }
+}
+
+/**
  * Write via a temp file + atomic rename so a crash or force-quit mid-write can't
  * leave a half-written (and thus unparseable) JSON file. Only settings.json is
  * written this way now — chats live in SQLite, which gets the same guarantee
@@ -1097,7 +1111,13 @@ export class Store {
       seen.add(row.id)
     }
     for (const [id, entry] of this.resident) if (!seen.has(id)) out.push(metaOf(entry.chat))
-    return out.sort((a, b) => b.updatedAt - a.updatedAt)
+    // Side chats are filtered here rather than at each caller, because this is
+    // what seeds the renderer's `chats` array — and that array is the sidebar's
+    // order, the chat search, ⌘N's project list and the Recents section all at
+    // once. One of them forgetting the predicate is a throwaway conversation
+    // showing up as history, which is the one thing an ephemeral chat must not
+    // do. The renderer holds its side chats' metas separately.
+    return out.filter((m) => !m.ephemeral).sort((a, b) => b.updatedAt - a.updatedAt)
   }
 
   /**
@@ -1387,6 +1407,14 @@ export class Store {
   /**
    * Is any chat other than `exceptId` working in `cwd`? Used before removing a
    * worktree, so a directory another chat still occupies is left alone.
+   *
+   * **Side chats do not count.** This guard gates every worktree exit — remove,
+   * merge, hand off — and a side chat opened to ask one question about the work
+   * runs in that same cwd. Counted, it would silently refuse to clean up the
+   * worktree its own conversation was about, and the only symptom would be a
+   * menu item that quietly does nothing. They are deleted at quit and hold no
+   * work worth protecting a directory for, which is precisely what this guard
+   * is protecting.
    */
   hasOtherChatIn(cwd: string, exceptId?: string): boolean {
     // Live objects first and authoritatively: a chat whose cwd just changed in
@@ -1396,12 +1424,93 @@ export class Store {
       const chat = this.live(id)
       if (!chat) continue
       live.add(id)
-      if (id !== exceptId && chat.cwd === cwd) return true
+      if (id !== exceptId && chat.cwd === cwd && !chat.ephemeral) return true
     }
     const rows = this.db
-      .prepare('SELECT id FROM chats WHERE cwd = ? AND id <> ?')
-      .all(cwd, exceptId ?? '') as { id: string }[]
-    return rows.some((r) => !live.has(r.id))
+      .prepare('SELECT id, meta FROM chats WHERE cwd = ? AND id <> ?')
+      .all(cwd, exceptId ?? '') as { id: string; meta: string }[]
+    return rows.some((r) => {
+      if (live.has(r.id)) return false
+      // An unreadable row is counted rather than skipped: this answer decides
+      // whether a directory is destroyed, so the safe reading of "I cannot tell"
+      // is that someone is still in there.
+      return !safeMeta(r.meta)?.ephemeral
+    })
+  }
+
+  /**
+   * Ids of every chat whose meta matches — live objects first and
+   * authoritatively, since one whose meta just changed in memory must not be
+   * judged by whatever its row still says.
+   *
+   * `where` narrows the scan in SQL. Without one this parses every row in the
+   * database on a path that runs at startup, at quit and on every delete:
+   * measured on a 542-chat corpus that is 1.47 ms of blocked main thread
+   * against 0.36 ms for a `json_extract` predicate — and it grows with the
+   * corpus rather than with the answer. The JS predicate still decides, so the
+   * SQL only has to be a superset.
+   */
+  private idsWhere(pred: (meta: ChatMeta) => boolean, where: string): string[] {
+    const ids = new Set<string>()
+    for (const id of this.liveIds()) {
+      const chat = this.live(id)
+      if (chat && pred(chat)) ids.add(id)
+    }
+    const rows = this.db.prepare(`SELECT id, meta FROM chats WHERE ${where}`).all() as {
+      id: string
+      meta: string
+    }[]
+    for (const row of rows) {
+      if (ids.has(row.id)) continue
+      const meta = safeMeta(row.meta)
+      if (meta && pred(meta)) ids.add(row.id)
+    }
+    return [...ids]
+  }
+
+  /**
+   * Ids of the side chats opened beside `parentId` — see `ChatMeta.sideOf`.
+   *
+   * Answered here rather than only in the renderer because the renderer's maps
+   * describe *this* window: a chat deleted from another instance sharing this
+   * database would otherwise leave its side chats behind as rows belonging to a
+   * conversation that no longer exists.
+   */
+  sideChatIdsOf(parentId: string): string[] {
+    return this.idsWhere(
+      (m) => m.sideOf === parentId,
+      "json_extract(meta, '$.sideOf') IS NOT NULL"
+    )
+  }
+
+  /** Ids of every side chat on disk — see `ChatMeta.ephemeral`. */
+  ephemeralIds(): string[] {
+    return this.idsWhere((m) => !!m.ephemeral, "json_extract(meta, '$.ephemeral') IS NOT NULL")
+  }
+
+  /**
+   * Delete every side chat. Runs at startup (rows a crash or a force-quit left
+   * behind, which `before-quit` never got to) and again on the way out.
+   *
+   * The quit call has to happen **before** `flushAll`, which sets `closed` — and
+   * past that point `deleteChat` can only forget in memory, so the rows would
+   * survive to the next launch and be cleaned up a launch late.
+   */
+  purgeEphemeral(): number {
+    let purged = 0
+    for (const id of this.ephemeralIds()) {
+      // Another live instance owns this one. `userData` is shared between the
+      // dev and packaged builds on purpose, so launching one while the other has
+      // a side chat mid-turn would otherwise delete the chat *and its lock row*
+      // out from under it — and the owner's next write, asserting `rev` against
+      // a row that is gone, would `refuse` and put the "not being saved" banner
+      // on a conversation that did nothing wrong. Whoever owns it will purge it
+      // on their own way out; this is exactly what the lock table is for.
+      if (this.lockedElsewhere(id)) continue
+      this.deleteChat(id)
+      purged++
+    }
+    return purged
   }
 
   private liveIds(): Set<string> {
@@ -1431,6 +1540,13 @@ export class Store {
       this.evicted.delete(id)
       this.sizes.delete(id)
       this.holes.delete(id)
+      // The `locks` row is gone below, so the claim on it is too. Left behind,
+      // every heartbeat keeps issuing a no-op UPDATE for a dead id and
+      // `lockedElsewhere` keeps answering for a chat that no longer exists.
+      // Harmless once per deleted chat, which is what this used to be — side
+      // chats make it once per closed tab.
+      this.held.delete(id)
+      this.denied.delete(id)
     }
     // No durable delete is possible after the database is closed; just drop it.
     if (this.closed) return forget()
@@ -1449,6 +1565,21 @@ export class Store {
         )?.updated_at
       ) ||
       0
+    // A side chat needs no tombstone, and giving it one would be a slow leak.
+    // The tomb exists solely to stop the legacy `chats/<id>.json` archive
+    // resurrecting a deleted chat, and a side chat postdates the migration by
+    // construction, so it has no archive file to be resurrected from. Nothing
+    // prunes tombstones — one row per delete, forever — and side chats are
+    // deleted on *every quit*, so writing them would grow `kv` without bound
+    // for a hedge that can never fire.
+    //
+    // A chat that is **already gone** gets nothing either, and that half has to
+    // be enforced here rather than trusted to the callers: a second delete
+    // finds no row, so it cannot tell the chat was ephemeral, and tombs it.
+    // Deleting nothing should write nothing.
+    const meta = this.getMeta(id)
+    const ephemeral = !!meta?.ephemeral
+    const known = !!meta || !!this.db.prepare('SELECT 1 FROM chats WHERE id = ?').get(id)
     try {
       this.tx(() => {
         // A deletion is a change the backup must capture: without this the next
@@ -1461,7 +1592,9 @@ export class Store {
         // The legacy chats/<id>.json is never deleted (it is the rollback
         // archive), so record the deletion — otherwise the downgrade hedge would
         // resurrect the chat the next time an older build rewrote that file.
-        this.kvSet(`tomb:${id}`, String(Math.max(Date.now(), updatedAt)))
+        if (!ephemeral && known) {
+          this.kvSet(`tomb:${id}`, String(Math.max(Date.now(), updatedAt)))
+        }
       })
     } catch (err) {
       // The durable delete failed. Keep every in-memory entry so a still-live

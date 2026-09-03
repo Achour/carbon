@@ -87,9 +87,12 @@ function QuestionBlock({
 
 export function QuestionCard({
   request,
+  chatId,
   provider
 }: {
   request: PermissionRequestPayload
+  /** The chat that asked — a side chat is never the active one. */
+  chatId: string
   provider: Provider
 }): React.JSX.Element {
   const respondPermission = useApp((s) => s.respondPermission)
@@ -141,7 +144,7 @@ export function QuestionCard({
       if (q.id) answersById[q.id] = values
     })
     setBusy(true)
-    void respondPermission(request.id, {
+    void respondPermission(chatId, request.id, {
       behavior: 'allow',
       updatedInput:
         provider === 'codex'
@@ -177,7 +180,10 @@ export function QuestionCard({
           disabled={busy}
           onClick={() => {
             setBusy(true)
-            void respondPermission(request.id, { behavior: 'deny', message: 'The user dismissed the questions.' })
+            void respondPermission(chatId, request.id, {
+              behavior: 'deny',
+              message: 'The user dismissed the questions.'
+            })
           }}
         >
           Dismiss

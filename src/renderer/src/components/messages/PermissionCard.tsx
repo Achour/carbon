@@ -31,19 +31,44 @@ function keyMayAnswer(target: EventTarget | null): boolean {
   return false
 }
 
+/**
+ * Which chat's transcript a keypress happened *in*, or null for one that
+ * happened nowhere in particular (nothing focused — by far the common case).
+ *
+ * There are two transcripts on screen once a side chat is open, each with its
+ * own oldest pending prompt, so `keyboard` alone stops meaning "this card owns
+ * the keys": both cards would set it and both window listeners would fire on
+ * one Enter, answering two prompts the user only meant to answer one of. And
+ * `keyMayAnswer` cannot break the tie on its own — it unlocks on *either*
+ * composer being empty, so typing in the main column while the side composer
+ * sits empty still lets the key through.
+ *
+ * `data-chat-surface` rather than `data-chatview`: the latter is the frosted
+ * main column, which a side chat inside the right panel is not.
+ */
+function focusedChat(target: EventTarget | null): string | null {
+  const el = target instanceof HTMLElement ? target : null
+  const view = el?.closest('[data-chat-surface]')
+  return view instanceof HTMLElement ? view.dataset.chatSurface || null : null
+}
+
 export function PermissionCard({
   request,
+  chatId,
   keyboard = false
 }: {
   request: PermissionRequestPayload
+  /** The chat this prompt belongs to — a side chat is never the active one. */
+  chatId: string
   /**
-   * This is the prompt Enter and Esc answer. Only one card holds the keys at a
-   * time — the oldest pending one — so two prompts never both fire on one
-   * keypress, and the card that owns them says so beside its buttons.
+   * This is the prompt Enter and Esc answer. Only one card *per transcript*
+   * holds the keys — the oldest pending one — and which transcript answers is
+   * decided at the keypress by `focusedChat`.
    */
   keyboard?: boolean
 }): React.JSX.Element {
   const respondPermission = useApp((s) => s.respondPermission)
+  const activeId = useApp((s) => s.activeId)
   const [busy, setBusy] = React.useState(false)
   const summary = summarize(request)
   const authorizationUrl =
@@ -52,7 +77,7 @@ export function PermissionCard({
       ? ((request.input as Record<string, unknown>).url as string)
       : null
 
-  const respond = async (decision: Parameters<typeof respondPermission>[1]): Promise<void> => {
+  const respond = async (decision: Parameters<typeof respondPermission>[2]): Promise<void> => {
     setBusy(true)
     if (decision.behavior === 'allow' && authorizationUrl) {
       try {
@@ -61,7 +86,7 @@ export function PermissionCard({
         // The protocol response must still be resolved if the OS rejects the URL.
       }
     }
-    await respondPermission(request.id, decision)
+    await respondPermission(chatId, request.id, decision)
   }
 
   // Enter allows, Esc denies. "Feels fast" in an agent GUI is mostly how
@@ -79,6 +104,11 @@ export function PermissionCard({
       if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey || e.isComposing) return
       if (e.key !== 'Enter' && e.key !== 'Escape') return
       if (!keyMayAnswer(e.target)) return
+      // The transcript holding focus answers; with focus nowhere, the main
+      // column does. A side chat is never the active chat, so this is also what
+      // stops a background side chat's prompt from swallowing the key.
+      const focused = focusedChat(e.target)
+      if (focused ? focused !== chatId : chatId !== activeId) return
       e.preventDefault()
       void respondRef.current({ behavior: e.key === 'Enter' ? 'allow' : 'deny' })
     }
@@ -86,7 +116,7 @@ export function PermissionCard({
     return () => window.removeEventListener('keydown', onKey)
     // `busy` is a dep so a card that has answered stops listening at once,
     // rather than on unmount.
-  }, [keyboard, busy])
+  }, [keyboard, busy, chatId, activeId])
 
   return (
     <div className="animate-enter overflow-hidden rounded-xl border border-warning/40 bg-warning/8 dark:bg-warning/6">

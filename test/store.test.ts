@@ -1562,3 +1562,159 @@ test('a chat on a provider this build does have is left exactly as it was', asyn
   await reopened.flushAll()
   rmSync(dir, { recursive: true, force: true })
 })
+
+// ---------- Side chats ----------
+
+test('a side chat is hidden from listChats but is a real chat underneath', async () => {
+  const dir = userDir()
+  const store = new Store(dir)
+  const normal = makeChat()
+  const side = makeChat({ ephemeral: true })
+  store.addChat(normal)
+  store.addChat(side)
+  side.messages.push(userMsg('s0', 'what does this error mean?'))
+  store.saveChat(side.id)
+  await store.flushAll()
+
+  const reopened = new Store(dir)
+  // Filtered out of the one read that seeds every user-facing list.
+  assert.deepEqual(
+    reopened.listChats().map((c) => c.id),
+    [normal.id]
+  )
+  // ...but addressable, resumable and persisted like any other chat, which is
+  // what lets it share ChatManager and the whole session path.
+  const loaded = reopened.getChat(side.id)
+  assert.equal(loaded?.ephemeral, true)
+  assert.deepEqual(loaded?.messages.map((m) => m.id), ['s0'])
+  assert.deepEqual(reopened.ephemeralIds(), [side.id])
+  await reopened.flushAll()
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('purgeEphemeral drops side chats and leaves no tombstone behind', async () => {
+  const dir = userDir()
+  const store = new Store(dir)
+  const normal = makeChat()
+  const side = makeChat({ ephemeral: true })
+  store.addChat(normal)
+  store.addChat(side)
+  side.messages.push(userMsg('s0', 'scratch'))
+  store.saveChat(side.id)
+  await store.flushAll()
+
+  const reopened = new Store(dir)
+  assert.equal(reopened.purgeEphemeral(), 1)
+  assert.equal(reopened.getChat(side.id), null)
+  assert.equal(rowCount(dir, side.id), 0)
+  // The real chat is untouched.
+  assert.deepEqual(
+    reopened.listChats().map((c) => c.id),
+    [normal.id]
+  )
+  await reopened.flushAll()
+
+  // No `tomb:` row: the tombstone only guards against the legacy JSON archive
+  // resurrecting a chat, which a side chat has none of — and side chats are
+  // deleted on every quit, so writing one would grow `kv` without bound.
+  const db = new DatabaseSync(join(dir, 'chats.db'), { readOnly: true })
+  const tombs = db.prepare("SELECT k FROM kv WHERE k LIKE 'tomb:%'").all() as { k: string }[]
+  db.close()
+  assert.deepEqual(tombs, [])
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('a side chat does not hold a worktree directory against its own chat', async () => {
+  const dir = userDir()
+  const store = new Store(dir)
+  const work = makeChat({ cwd: '/tmp/wt' })
+  const side = makeChat({ cwd: '/tmp/wt', ephemeral: true })
+  store.addChat(work)
+  store.addChat(side)
+  await store.flushAll()
+
+  const reopened = new Store(dir)
+  // The guard that gates every worktree exit. Counting the side chat would
+  // silently refuse to clean up the worktree its own conversation was about.
+  assert.equal(reopened.hasOtherChatIn('/tmp/wt', work.id), false)
+  // A second real chat there still holds it — from disk, not just in memory.
+  const other = makeChat({ cwd: '/tmp/wt' })
+  reopened.addChat(other)
+  assert.equal(reopened.hasOtherChatIn('/tmp/wt', work.id), true)
+  await reopened.flushAll()
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('purgeEphemeral leaves a side chat another instance is holding', async () => {
+  const dir = userDir()
+  // The instance that owns the chat: writing it is what claims the lock.
+  const owner = new Store(dir)
+  const side = makeChat({ ephemeral: true })
+  owner.addChat(side)
+  side.messages.push(userMsg('s0', 'mid-turn'))
+  owner.saveChat(side.id)
+
+  // A second instance launching against the same shared userData.
+  const other = new Store(dir)
+  assert.equal(other.purgeEphemeral(), 0)
+  assert.ok(other.getChat(side.id), 'the owner still has its side chat')
+
+  // The owner's own purge — on its way out — does delete it.
+  assert.equal(owner.purgeEphemeral(), 1)
+  await owner.flushAll()
+  await other.flushAll()
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('sideChatIdsOf finds a chat\'s side chats, open or closed', async () => {
+  const dir = userDir()
+  const store = new Store(dir)
+  const parent = makeChat()
+  const other = makeChat()
+  const sideA = makeChat({ ephemeral: true, sideOf: parent.id })
+  const sideB = makeChat({ ephemeral: true, sideOf: parent.id })
+  const sideOther = makeChat({ ephemeral: true, sideOf: other.id })
+  for (const c of [parent, other, sideA, sideB, sideOther]) store.addChat(c)
+  await store.flushAll()
+
+  // From disk, not from any renderer map — which is the point: a *closed* side
+  // chat has no tab anywhere, and a chat deleted from another instance sharing
+  // this database leaves no renderer state behind at all.
+  const reopened = new Store(dir)
+  assert.deepEqual(reopened.sideChatIdsOf(parent.id).sort(), [sideA.id, sideB.id].sort())
+  assert.deepEqual(reopened.sideChatIdsOf(other.id), [sideOther.id])
+  assert.deepEqual(reopened.sideChatIdsOf('nobody'), [])
+  await reopened.flushAll()
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('deleting a chat that is already gone writes nothing at all', async () => {
+  const dir = userDir()
+  const store = new Store(dir)
+  const side = makeChat({ ephemeral: true, sideOf: 'parent-1' })
+  const normal = makeChat()
+  store.addChat(side)
+  store.addChat(normal)
+  await store.flushAll()
+
+  const reopened = new Store(dir)
+  // A second delete cannot see the row, so it cannot tell the chat was
+  // ephemeral — and used to tomb it. The renderer really did call twice (main
+  // cascades side chats, and the renderer re-deleted them), so this was one
+  // `kv` row per side chat per parent delete, forever.
+  reopened.deleteChat(side.id)
+  reopened.deleteChat(side.id)
+  // ...and the same for an ordinary chat: its first delete tombs it, the
+  // second must not add a duplicate or resurrect the write.
+  reopened.deleteChat(normal.id)
+  reopened.deleteChat(normal.id)
+  await reopened.flushAll()
+
+  const db = new DatabaseSync(join(dir, 'chats.db'), { readOnly: true })
+  const tombs = (db.prepare("SELECT k FROM kv WHERE k LIKE 'tomb:%'").all() as { k: string }[]).map(
+    (r) => r.k
+  )
+  db.close()
+  assert.deepEqual(tombs, [`tomb:${normal.id}`])
+  rmSync(dir, { recursive: true, force: true })
+})

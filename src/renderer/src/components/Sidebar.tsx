@@ -34,7 +34,7 @@ import { basename, dateGroup, relativeTime, shortenPath } from '@/lib/format'
 import { REVEAL_LABEL } from '@/lib/platform'
 import { chatActivity, projectActivity, type ChatActivity } from '@/lib/chatActivity'
 import { draftSummary, sortedProjectDrafts, type ProjectDraft } from '@/lib/drafts'
-import { useApp } from '@/store'
+import { useApp, visibleChats } from '@/store'
 import { UpdateBanner } from '@/components/UpdateBanner'
 import { UsagePanel } from '@/components/UsagePanel'
 import { Button } from '@/components/ui/button'
@@ -860,7 +860,18 @@ function useMinuteNow(): number {
 
 export function Sidebar(): React.JSX.Element {
   const now = useMinuteNow()
-  const chats = useApp((s) => s.chats)
+  // Every list on this surface derives from this one read — the chat rows, the
+  // pins, the project groups, `projectChatCount` and ⌘N's project list — so the
+  // side-chat filter belongs here rather than at each of them. A side chat is a
+  // throwaway conversation in the right panel; showing up as history, or making
+  // a project look like it has one more chat than it does, is the single thing
+  // it must never do.
+  //
+  // Filtered in a memo rather than inside the selector: a selector that returns
+  // a fresh array every call fails zustand's snapshot comparison on every read
+  // and loops React into a crash — the same trap `NO_PERMISSIONS` exists for.
+  const allChats = useApp((s) => s.chats)
+  const chats = React.useMemo(() => visibleChats(allChats), [allChats])
   const activeId = useApp((s) => s.activeId)
   const statuses = useApp((s) => s.statuses)
   const permissions = useApp((s) => s.permissions)

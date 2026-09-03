@@ -794,10 +794,18 @@ one color in a message and another in the file it came from.
   action that closes something, because `current` and the confirm dialog both
   live in the panel; the effect keys on the tick alone and reads everything
   else through a ref, since `current` in its deps would close on every switch.
-- **Browse mode has a tab.** Picking Files from the launcher docked the tree
-  under an empty pane with nothing in the strip and no way to leave it. The
-  Files tab exists exactly while `activeTab === 'files'`, the way the Canvas
-  tab is OR-ed in; a picked file's own tab takes over.
+- **Browse mode has a tab, and it is *opened* state.** Picking Files from the
+  launcher docked the tree under an empty pane with nothing in the strip and no
+  way to leave it. The tab that fixed that was derived — it existed exactly
+  while `activeTab === 'files'`, the way the Canvas library's still is — which
+  makes a tab that closes itself the moment the panel moves anywhere else: open
+  a file, glance at the Working Tree, click a preview, and browsing was over
+  with no way back but the launcher. So `filesTab` is a boolean the ✕ and ⌘W
+  clear, riding `tabsByChat` beside `openFiles`/`activeTab` (a restored
+  `activeTab: 'files'` under a global flag would select a tab the strip is not
+  drawing). It is also the *last* fallback in `RightPanel`'s `current` chain:
+  standing alone in the strip it must draw the tree, not the launcher's
+  "nothing is open".
 - **A tab moves only within its own kind.** Files, canvases, terminals and
   previews each keep their own array and the strip draws them in that fixed
   sequence, so a drop on another kind is a no-op rather than a jump to the
@@ -1711,6 +1719,175 @@ canvas landing mid-read must not take the document you are looking at off
 screen. The `canvas` `ChatEvent` carries the summary and never the HTML, so the
 Recents list goes live during a turn without pushing a megabyte through the
 event channel for a panel that may never open.
+
+### Side chats (`ChatMeta.ephemeral`, `SideChatSlot`, `openSideChat`)
+
+A second, throwaway conversation in a right-panel tab, running in the same
+project as the main one and deleted when the app closes. It exists because every
+question *about* the work in flight — what an error means, what a function is
+for, whether there is a shorter way — either interrupted the turn you were
+watching or cost a chat switch that took the transcript, the tabs and the file
+tree with it.
+
+**The renderer was built around there being exactly one conversation on screen,
+and that is the only thing this really changes.** `store.ts` holds the active
+chat's transcript in *bare* fields — `messages`, `hiddenBefore`, `loadingOlder`,
+`contextUsage` — and `applyEvent` gated every transcript write on
+`ev.chatId === s.activeId`. Those four fields are now also a `Record` keyed by
+chat id (`sideChats`), and `onScreen` / `patchTranscript` are the one pair of
+helpers every streamed case routes through, so the two surfaces cannot disagree
+about how a `tool-update` lands. Everything else about a chat was already
+`Record<chatId, …>` — `statuses`, `permissions`, `queued`, `backgroundJobs`,
+`rateLimits`, `fastMode` — and `ChatManager` keys sessions by chat id with no
+notion of an active one, so main needed no new concept at all.
+
+- **A side chat is a real chat wearing a flag, not a lighter kind of session.**
+  It goes through `chats:create`, `ChatManager` and the same persistence; a
+  parallel session type would have meant a second implementation of resume,
+  permissions, tools and streaming. `ephemeral` rides the JSON `meta` blob, so
+  there is no migration and no `user_version` bump — which matters because
+  `userData` is shared between builds and an older one has to open this
+  database. It reads the row as an ordinary chat, and that window is exactly one
+  launch wide, which is why the purge runs **on quit** and not only at startup.
+- **`listChats` is where it is hidden, and that is deliberate.** That one read
+  seeds the renderer's `chats`, which is the sidebar's order, the chat search,
+  ⌘N's project list, the Recents section and `pruneChatDrafts` — filtering at
+  each of them means the next one added forgets. The metas still live in `chats`
+  in the renderer (`visibleChats` filters the sidebar's own read, in a memo
+  rather than a selector, since a fresh array per call fails zustand's snapshot
+  comparison and loops React into a crash). They have to: `meta`, `message` and
+  `status` all patch that array by id, and holding them elsewhere would mean a
+  second branch in each.
+- **The tab is created eagerly, not on the first send.** The project-draft rule
+  says a prompt you never sent must leave nothing behind, and it does not
+  transfer here: its actual reasons are that `chats:create` freezes a
+  provider/model pair and, for a worktree target, runs a real `git worktree add`.
+  A side chat takes no worktree, its pickers stay live, and the row it writes is
+  invisible and deleted at quit. Deferring would have bought an empty tab
+  carrying its own pre-creation copy of the model, effort and permission mode —
+  `NewChat`'s state, per tab, for a chat that lasts an hour.
+- **It leaves no trace in the app's defaults.** `chats:create` skips
+  `rememberOptions`/`rememberDir` for an ephemeral chat and `setChatOptions`
+  skips the renderer's mirror of them. Both halves are needed or the defaults
+  flip back on relaunch — and without either, asking one throwaway question on a
+  cheaper model silently makes it the model the next New-chat screen offers.
+- **A side chat belongs to ONE chat, and its tab is stashed with that chat's.**
+  This was scoped by *project* first, mirroring `canvasScopePatch`, and that is
+  the wrong unit: moving between two chats in one folder left a scratch
+  conversation about the first one standing in the strip beside the second, with
+  a transcript answering a question the chat on screen never asked. A canvas is
+  a document that belongs to a project; a side chat is a conversation *about a
+  conversation*. So it rides `chatSwitchPatch` — the same stash-and-restore
+  `openFiles` and `activeTab` already get, at the same seams — which makes
+  project correctness follow for free, since a side chat runs in its parent's
+  cwd and is only ever visible while that parent is open. It is a **stash**, not
+  a close: a turn mid-flight keeps running and the tab comes back where you left
+  it. `sideChats` is deliberately untouched by the switch, so a stashed tab
+  keeps accumulating its turn and paints instantly on return. Two consequences:
+  `openSideChat` refuses on the home screen (nothing to sit beside, and a tab
+  keyed to no chat could never be stashed — the + menu and the launcher drop the
+  row there rather than offering one that does nothing), and it captures
+  `activeId` *before* its `createChat` round trip so a switch made inside that
+  trip files the tab under the chat it was opened beside — `openChat`'s
+  `if (get().activeId === id)` guard in the other shape.
+- **Deleting a chat deletes the side chats opened beside it** (`pruneSideChats`,
+  shared by `deleteChat` and `removeProject`). Without it the tab restores over
+  whatever chat comes next, the slot sits in `sideChats` for the rest of the
+  session, and the row survives on disk until the quit purge.
+- **Closing its tab does not delete it**, and the first version got this exactly
+  backwards. "Temporary" was read as "✕ discards it", which makes the side chat
+  you close the one you can never get back — and the one you close is very often
+  the one you want two minutes later, because that is what a scratch
+  conversation *is*. So ✕ means what it means on a file tab: the tab goes, the
+  conversation stays, and the panel's `+` menu grows a **Closed side chats**
+  section to bring it back. Only two things delete one: the ✕ on a row in that
+  list, and quitting — which is the promise the empty state actually makes.
+  - **The slot is dropped on close and refetched on reopen** (`getChat`,
+    layering anything that streamed in during the round trip, exactly as
+    `openChat` does). Holding the transcript across the close was the obvious
+    shortcut and is wrong twice: main keeps the session alive and keeps
+    persisting, so a retained slot is a second copy of the truth that drifts
+    from disk, and it would grow for every side chat closed in a session.
+    Dropping it also makes `onScreen` false, which is what correctly turns a
+    closed side chat into an ordinary background chat.
+  - **A side chat that was never used is discarded on close**, or `+` → Side
+    chat → close would leave a blank row in the list for the rest of the
+    session. "Never used" has to include *no turn in flight*: a message sent a
+    second ago has an empty transcript and an answer already on its way, and
+    deleting that would throw away the thing the user just asked for.
+  - **The reopen row carries the activity dot** the tab would have. A closed
+    side chat mid-turn has no tab, so without it a finished answer lands with
+    nothing on screen to say so — and a companion conversation that can lose an
+    answer is not one.
+- **Deleting a chat deletes the side chats opened beside it.** `ChatMeta.sideOf`
+  is what makes that answerable: a *closed* side chat has no tab anywhere, so
+  keying the cascade on the tab maps — which is how it was written first — would
+  have orphaned exactly the ones this lifecycle now produces most. It is
+  enforced in **main** as well as the renderer (`sideChatIdsOf`, in the
+  `chats:delete` handler), because the renderer's maps describe one window and
+  this database is shared between builds.
+
+**Four things break silently without a guard, and each is a case where the
+"obvious" code is wrong only once there are two transcripts:**
+
+- **The singleton stores.** `agentsStore` is a pure singleton (it holds one
+  chat's runs, with no id to check) and `taskListStore` is one with a stamp. The
+  side variant publishes into neither: whichever folded last would win, so the
+  Agents tab would flip between the two chats' rosters and the dock would blank
+  each time the other published. Worse, `ChatView`'s unmount-clear would let
+  *closing a side chat* empty the main chat's roster and pull the Agents tab out
+  of the strip while its agents were still running. The cost is that a side
+  chat's own checklist is invisible while it runs; the main column owns both
+  surfaces, which is also where they belong.
+- **The permission keys.** Enter/Esc ride a window-level listener per mounted
+  card, and `keyboard` alone stops meaning "this card owns them" once two
+  transcripts each nominate their own oldest prompt — both fire on one keypress.
+  `keyMayAnswer` cannot break the tie either: it unlocks on *either* composer
+  being empty. `focusedChat` resolves it off `data-chat-surface`, the neutral
+  marker on both roots (`data-chatview` is the frosted main column, which a side
+  chat is not); with focus nowhere, the main column answers.
+- **`respondPermission` resolved its chat as `activeId`**, so a prompt answered
+  in a side chat would have released the *main* chat's request. It, `sendMessage`,
+  `interrupt`, `setChatOptions`, `startCodexReview` and `loadOlderMessages` now
+  all take the chat explicitly — a side chat is never the active one, so every
+  one of them would have acted on the wrong conversation behind right-looking UI.
+  `PlanPanel` had the same bug twice over: it resolved its chat from `activeId`,
+  and `showPlan` gated the tab on it, so a side chat entering plan mode set
+  `activeTab: 'plan'` for a tab the strip refused to draw — the side tab
+  deselected and the plan appeared nowhere.
+- **`hasOtherChatIn` gates every worktree exit.** A side chat opened to ask about
+  the work runs in that same cwd, so counted it would refuse to remove, merge or
+  hand off the worktree its own conversation was about — a menu item that quietly
+  does nothing. An *unreadable* row still counts, though: that answer decides
+  whether a directory is destroyed, and the safe reading of "I cannot tell" is
+  that someone is in there.
+
+**The purge is ordered, and both ends matter.** On quit it runs after
+`disposeAll` and **before** `flushAll`, which sets `closed` — past that point
+`deleteChat` can only forget in memory and the rows would survive to be cleaned
+up a launch late. At startup it clears what a crash or a force-quit left behind,
+before `registerIpc` so the renderer's first `chats:list` cannot race it. It
+skips any chat `lockedElsewhere`: dev and packaged share one database, and
+deleting a row (and its lock) out from under the instance mid-turn on it would
+make that instance's next write fail the `rev` assertion and put the "not being
+saved" banner on a conversation that did nothing wrong. And it writes **no
+tombstone** — a tomb only guards against the legacy `chats/<id>.json` archive
+resurrecting a chat, which a side chat postdates by construction, and nothing
+prunes tombs, so one per side chat per quit would grow `kv` without bound.
+
+No AI title either (a second model call for a tab), though `send`'s derived
+placeholder still lands and is what tells two open side chats apart. No OS
+notification, on both sides: its only action is `openChat`, and a side chat as
+the active chat is a state nothing else in the design allows. The completion
+*cue* still plays — it is on screen, and "your answer is ready" is what it says.
+Drafts stay in memory and never reach `localStorage`, since a draft written under
+an id that is deleted at quit could never be reopened.
+
+`demo/e2e/side-chat.js` pins the part that has no other symptom: it pumps a
+synthetic turn through the real reducer into each transcript and asserts the
+other one's `messages` array comes back at the **same reference** — not merely
+the same length, since a fresh array with identical contents still re-renders the
+whole of the other conversation on every delta.
 
 ### Artifacts (`CLAUDE_CODE_ARTIFACT`)
 

@@ -226,6 +226,54 @@ export interface OpenTab {
   untitled?: boolean
 }
 
+/**
+ * One side chat's transcript: the singular active-chat slice, keyed by chat id.
+ *
+ * The store holds the *main* column's transcript in bare fields (`messages`,
+ * `hiddenBefore`, …) because there is exactly one of it. A side chat is a
+ * second conversation on the same screen, so its four fields have to be keyed —
+ * and keyed by a `Record` rather than a single second slot, because the tab
+ * strip's `+` then costs nothing and two side chats read side by side the way
+ * two canvases do.
+ *
+ * Nothing else about a chat is duplicated here: `statuses`, `permissions`,
+ * `queued`, `backgroundJobs`, `rateLimits` and `fastMode` are already
+ * `Record<chatId, …>`, and the meta stays in `chats` beside every other chat's
+ * (see `visibleChats`).
+ */
+export interface SideChatSlot {
+  messages: ChatMessage[]
+  hiddenBefore: number
+  loadingOlder: boolean
+  contextUsage: ContextUsage | null
+}
+
+const EMPTY_SIDE_SLOT: SideChatSlot = {
+  messages: [],
+  hiddenBefore: 0,
+  loadingOlder: false,
+  contextUsage: null
+}
+
+/**
+ * The live context breakdown for whichever surface draws `chatId` — the main
+ * column's singular `contextUsage`, or the side chat's own. One definition
+ * because the popover that reads it is the same component on both.
+ */
+export function contextUsageFor(s: TranscriptState, chatId: string | null): ContextUsage | null {
+  return chatId ? (surfaceOf(s, chatId)?.contextUsage ?? null) : null
+}
+
+/**
+ * Chats the sidebar, the chat search, ⌘N's project list and the Recents section
+ * may show. `chats` holds side chats too — their metas have to live there or a
+ * title landing, a model change and a turn starting would each need a second
+ * branch in `applyEvent` — so every user-facing list filters through this.
+ */
+export function visibleChats(chats: ChatMeta[]): ChatMeta[] {
+  return chats.filter((c) => !c.ephemeral)
+}
+
 interface AppState {
   chats: ChatMeta[]
   activeId: string | null
@@ -341,6 +389,78 @@ interface AppState {
   pendingCanvasDelete: CanvasSummary | null
   /** Body per open canvas; `null` while its read is in flight. */
   canvasHtml: Record<string, string | null>
+
+  // ---- Side chats ----
+  /** Transcript per open side chat, keyed by chat id. See `SideChatSlot`. */
+  sideChats: Record<string, SideChatSlot>
+  /**
+   * Ids of the side chats open as tabs, in the order they were opened — the
+   * shape `canvasTabs` has, for the same reason: the tab strip draws this array
+   * and `reorderTab` moves within it.
+   */
+  sideChatTabs: string[]
+  /**
+   * Open side chats of every chat that is not the active one, keyed by chat id.
+   *
+   * **A side chat belongs to the conversation it was opened beside**, not to
+   * the project — that is the whole premise of the feature, and it is also what
+   * `openFiles`/`activeTab` already do through `tabsByChat`. Scoped by project
+   * instead, moving between two chats in one folder left a scratch conversation
+   * about the *first* one standing in the strip beside the second, which is
+   * exactly the confusion a second transcript can cause. It is a **stash**
+   * rather than a close: a side chat is a live session that may be mid-turn,
+   * and returning to its chat brings it back where you left it.
+   */
+  sideChatTabsByChat: Record<string, string[]>
+  /**
+   * Opens a side chat beside the active chat and focuses its tab.
+   *
+   * There has to *be* an active chat: a side chat is a companion to a
+   * conversation, so on the home screen there is nothing for it to be beside —
+   * and a tab keyed to no chat would have nowhere to be stashed and would leak
+   * a live session with no way back to it.
+   *
+   * The chat is created up front rather than on the first send: unlike a
+   * project draft — the rule this otherwise follows — there is nothing to
+   * defer. `chats:create` freezes no pair worth protecting here (the pickers
+   * stay live), a side chat never takes a worktree, so no checkout or branch is
+   * made on disk, and the row it does write is invisible and deleted at quit.
+   * Deferring would have bought an empty tab carrying its own pre-creation copy
+   * of the model, effort and permission mode — `NewChat`'s state, per tab, for
+   * a chat that lasts an hour.
+   */
+  openSideChat(): Promise<void>
+  /**
+   * Closes a side chat's **tab**. The conversation survives.
+   *
+   * This deleted the chat at first, and that was the wrong reading of
+   * "temporary": the side chat you close is very often the one you want back
+   * two minutes later, and a scratch conversation worth having had is exactly
+   * the one worth being able to reopen. So ✕ means what it means on a file tab
+   * — the tab goes, the thing stays — and the reopen list in the panel's `+`
+   * menu is where it comes back from. It still disappears at quit, which is the
+   * promise the empty state actually makes.
+   *
+   * The one exception is a side chat that was never used: closing an empty one
+   * deletes it, or `+` → Side chat → close would leave a blank conversation in
+   * the reopen list for the rest of the session. "Empty" has to include *no
+   * turn in flight* — someone who sent a message and closed the tab is waiting
+   * for that answer, not discarding it.
+   */
+  closeSideChat(id: string): Promise<void>
+  /**
+   * Reopens a closed side chat's tab, refetching its transcript from disk.
+   *
+   * Deliberately not held in memory across the close. The slot is the
+   * *renderer's* copy; main keeps the session alive and keeps persisting, so a
+   * retained slot is a second source of truth that drifts — and it would grow
+   * for every side chat closed in a session. `openChat`'s round trip is the
+   * shape this follows, layering anything that streamed in while we awaited.
+   */
+  reopenSideChat(id: string): Promise<void>
+  /** Discards a side chat for good, from the reopen list's ✕. */
+  deleteSideChat(id: string): Promise<void>
+
   defaults: AppDefaults | null
   loading: boolean
   sidebarOpen: boolean
@@ -545,8 +665,18 @@ interface AppState {
   fileContents: Record<string, FileContent>
   /** 'plan', an open file path, or a diff tab id. */
   activeTab: string | null
+  /**
+   * Whether browse mode's own tab is in the strip. It is *opened* state, not a
+   * mode of `activeTab`: derived from `activeTab === 'files'` the tab closed
+   * itself the moment the panel moved to any other tab, so browsing was lost by
+   * looking at the Working Tree — every other tab survives being left.
+   */
+  filesTab: boolean
   /** Saved tab set per chat (keyed by chat id), restored when switching back. */
-  tabsByChat: Record<string, { openFiles: OpenTab[]; activeTab: string | null }>
+  tabsByChat: Record<
+    string,
+    { openFiles: OpenTab[]; activeTab: string | null; filesTab: boolean }
+  >
   /** Panel visibility remembered per chat. */
   panelOpenByChat: Record<string, boolean>
   /**
@@ -680,6 +810,8 @@ interface AppState {
   toggleExplorer(): void
   /** Reveal the in-app file explorer in a file context (Cursor-style). */
   browseFiles(): void
+  /** Close browse mode's tab — the ✕ and ⌘W. */
+  closeFilesTab(): void
   refreshGit(): Promise<void>
   stagePaths(paths: string[]): Promise<void>
   unstagePaths(paths: string[]): Promise<void>
@@ -726,8 +858,8 @@ interface AppState {
   /** Reveal the sub-agent roster in the right panel (see AgentsPanel). */
   openAgentsPanel(): void
   openChat(id: string | null): Promise<void>
-  /** Prepend the next window of older messages to the active chat. */
-  loadOlderMessages(): Promise<void>
+  /** Prepend the next window of older messages to `chatId`'s transcript. */
+  loadOlderMessages(chatId: string): Promise<void>
   newChat(
     cwd: string,
     firstMessage: string,
@@ -746,13 +878,26 @@ interface AppState {
       worktree?: WorktreeTarget
     }
   ): Promise<void>
-  sendMessage(text: string, attachments?: Attachment[], label?: string): Promise<void>
+  /**
+   * Send to `chatId`, queueing if its turn is still running.
+   *
+   * The chat is named rather than resolved from `activeId`, here and on the
+   * five actions below it. There are two conversations on screen now, and the
+   * side chat is never the active one — every one of these would have acted on
+   * the main chat instead, silently and with the right-looking UI.
+   */
+  sendMessage(
+    chatId: string,
+    text: string,
+    attachments?: Attachment[],
+    label?: string
+  ): Promise<void>
   /** Start Codex's native App Server reviewer; unlike messages, reviews are never queued. */
-  startCodexReview(target: CodexReviewTarget): Promise<void>
+  startCodexReview(chatId: string, target: CodexReviewTarget): Promise<void>
   /** Force a queued message through now: interrupt the running turn and send it. */
   sendQueuedNow(chatId: string, id: string): Promise<void>
   removeQueued(chatId: string, id: string): void
-  interrupt(): Promise<void>
+  interrupt(chatId: string): Promise<void>
   stopBackgroundJob(taskId: string): void
   /**
    * `worktree` decides the fate of a worktree chat's directory; default 'keep'.
@@ -805,8 +950,12 @@ interface AppState {
   renameChat(id: string, title: string): Promise<void>
   /** Pin/unpin a chat; pinned chats leave their project group for the Pinned section. */
   setChatPinned(id: string, pinned: boolean): Promise<void>
-  setChatOptions(patch: ChatOptionsPatch): Promise<void>
-  respondPermission(requestId: string, decision: PermissionDecision): Promise<void>
+  setChatOptions(chatId: string, patch: ChatOptionsPatch): Promise<void>
+  respondPermission(
+    chatId: string,
+    requestId: string,
+    decision: PermissionDecision
+  ): Promise<void>
   applyEvent(ev: ChatEvent): void
   /** Replay stream events parked while the window was hidden (see applyEvent). */
   flushHiddenEvents(): void
@@ -864,8 +1013,14 @@ function notifyTurnDone(
   // suppresses the event on an intentional interrupt — so the failure cue only
   // ever fires on a failure the user didn't ask for.
   if (prefs.sound) playCue(failed ? 'error' : 'complete', prefs.pack)
-  if (prefs.finish && !document.hasFocus()) {
-    const chat = s.chats.find((c) => c.id === ev.chatId)
+  const chat = s.chats.find((c) => c.id === ev.chatId)
+  // The cue still fires for a side chat — it is on screen, and "your answer is
+  // ready" is exactly what it says. The *notification* does not: its only action
+  // is `openChat`, and opening a side chat as the active chat is a state nothing
+  // else in the design allows (the sidebar cannot show it, and its tab would
+  // still be sitting in the panel). A notification whose click does the wrong
+  // thing is worse than none. Same reasoning as main's `notifyOnStatus`.
+  if (prefs.finish && !document.hasFocus() && !chat?.ephemeral) {
     const title = chat?.title || PROVIDER_SHORT_LABELS[chat?.provider ?? 'claude']
     const stats = ev.message.stats
     notify(
@@ -1017,15 +1172,169 @@ function homeCwdLeaving(outgoing: ChatMeta | undefined, selectedCwd: string | nu
  * Does not touch `selectedCwd`; callers set the folder separately.
  */
 function chatSwitchPatch(
-  s: Pick<AppState, 'activeId' | 'openFiles' | 'activeTab' | 'tabsByChat'>,
+  s: Pick<
+    AppState,
+    | 'activeId'
+    | 'openFiles'
+    | 'activeTab'
+    | 'filesTab'
+    | 'tabsByChat'
+    | 'sideChatTabs'
+    | 'sideChatTabsByChat'
+  >,
   nextId: string | null
 ): Partial<AppState> {
   const tabsByChat = { ...s.tabsByChat }
   if (s.activeId) {
-    tabsByChat[s.activeId] = { openFiles: s.openFiles, activeTab: s.activeTab }
+    tabsByChat[s.activeId] = {
+      openFiles: s.openFiles,
+      activeTab: s.activeTab,
+      filesTab: s.filesTab
+    }
   }
-  const restored = (nextId ? tabsByChat[nextId] : null) ?? { openFiles: [], activeTab: null }
-  return { tabsByChat, openFiles: restored.openFiles, activeTab: restored.activeTab }
+  const restored = (nextId ? tabsByChat[nextId] : null) ?? {
+    openFiles: [],
+    activeTab: null,
+    filesTab: false
+  }
+  // Side chats ride the same switch, for the same reason the files do: they
+  // belong to the conversation they were opened beside. Kept in their own map
+  // rather than folded into `tabsByChat`'s record, because the two are written
+  // at different moments — a side chat is opened and closed by its own actions,
+  // and merging them would mean every tab change rewrote the side chat list too.
+  const sideChatTabsByChat = { ...s.sideChatTabsByChat }
+  if (s.activeId) {
+    if (s.sideChatTabs.length) sideChatTabsByChat[s.activeId] = s.sideChatTabs
+    else delete sideChatTabsByChat[s.activeId]
+  }
+  const sideChatTabs = (nextId ? sideChatTabsByChat[nextId] : undefined) ?? []
+  if (nextId) delete sideChatTabsByChat[nextId]
+  return {
+    tabsByChat,
+    openFiles: restored.openFiles,
+    activeTab: restored.activeTab,
+    filesTab: restored.filesTab,
+    // `sideChats` itself is deliberately untouched: the slots are keyed by chat
+    // id and hold live transcripts, so a stashed tab keeps accumulating its
+    // turn and paints instantly on return. They are released by
+    // `closeSideChat`, by deleting the owning chat, and by the quit purge.
+    sideChatTabs,
+    sideChatTabsByChat
+  }
+}
+
+/**
+ * Everything the store keys by chat id, for chats that are going away.
+ *
+ * Written out three times before this existed — `deleteChat`, `removeProject`
+ * and `deleteSideChat` — and the third copy had already drifted, missing
+ * `codexGoals`. That is the whole cost of the duplication: the next per-chat
+ * map added to the store lands in some of the lists and not the others, and
+ * nothing fails until a deleted chat's stale entry is read back.
+ */
+function forgetChat(
+  s: Pick<
+    AppState,
+    | 'queued'
+    | 'statuses'
+    | 'titling'
+    | 'permissions'
+    | 'backgroundJobs'
+    | 'rateLimits'
+    | 'fastMode'
+    | 'codexGoals'
+    | 'chatDrafts'
+    | 'projectDrafts'
+  >,
+  ids: string[]
+): Partial<AppState> {
+  return {
+    queued: omit(s.queued, ids),
+    statuses: omit(s.statuses, ids),
+    titling: omit(s.titling, ids),
+    permissions: omit(s.permissions, ids),
+    backgroundJobs: omit(s.backgroundJobs, ids),
+    rateLimits: omit(s.rateLimits, ids),
+    fastMode: omit(s.fastMode, ids),
+    codexGoals: omit(s.codexGoals, ids),
+    ...dropDrafts(s, ids)
+  }
+}
+
+/**
+ * Take a side chat's tab out of the strip and out of every chat's stash, and
+ * hand the panel a neighbouring tab to fall back to. Shared by close and
+ * delete, which differ only in whether the conversation survives.
+ */
+/** Drop `ids` from every owner's stash, and drop owners left with nothing. */
+function stripSideStashes(
+  map: Record<string, string[]>,
+  ids: ReadonlySet<string>
+): Record<string, string[]> {
+  const next: Record<string, string[]> = {}
+  for (const [owner, tabs] of Object.entries(map)) {
+    const kept = tabs.filter((id) => !ids.has(id))
+    if (kept.length) next[owner] = kept
+  }
+  return next
+}
+
+function closeSideTab(
+  s: Pick<AppState, 'sideChatTabs' | 'sideChatTabsByChat' | 'activeTab' | 'planPanel'>,
+  id: string
+): Partial<AppState> {
+  const sideChatTabs = s.sideChatTabs.filter((c) => c !== id)
+  const sideChatTabsByChat = stripSideStashes(s.sideChatTabsByChat, new Set([id]))
+  return {
+    sideChatTabs,
+    sideChatTabsByChat,
+    // Fall back to the neighbouring side chat, the way a closed canvas does —
+    // closing one of several should leave you in the panel.
+    activeTab:
+      s.activeTab === `side:${id}`
+        ? sideChatTabs.length
+          ? `side:${sideChatTabs[sideChatTabs.length - 1]}`
+          : null
+        : s.activeTab,
+    // The plan panel belongs to whichever chat opened it, and a closed side
+    // chat has no surface for one.
+    planPanel: s.planPanel?.chatId === id ? null : s.planPanel
+  }
+}
+
+/**
+ * Side chats belonging to deleted chats: the store patch, plus the ids whose
+ * rows the caller must delete.
+ *
+ * A side chat is anchored to the conversation it was opened beside, so deleting
+ * that conversation has to take it too — otherwise its tab would restore over
+ * whatever chat came next, its slot would sit in `sideChats` for the rest of
+ * the session, and its row would survive on disk until the quit purge. The
+ * owner's *own* id is included so deleting a chat that is itself somehow an
+ * owner and a side chat cannot leave half of it behind.
+ */
+function pruneSideChats(
+  s: Pick<AppState, 'chats' | 'sideChats' | 'sideChatTabs' | 'sideChatTabsByChat'>,
+  chatIds: string[]
+): { patch: Partial<AppState>; removed: string[] } {
+  // Read off `sideOf` rather than off the tab maps: a side chat that is merely
+  // *closed* has no tab anywhere, and keying on the strip would have orphaned
+  // exactly the ones this rule is now most likely to find.
+  const owners = new Set(chatIds)
+  const gone = new Set(s.chats.filter((c) => c.sideOf && owners.has(c.sideOf)).map((c) => c.id))
+  if (gone.size === 0) return { patch: {}, removed: [] }
+  const sideChats = { ...s.sideChats }
+  for (const id of gone) delete sideChats[id]
+  // The owners themselves are going away, so their entries go with them.
+  const sideChatTabsByChat = stripSideStashes(omit(s.sideChatTabsByChat, chatIds), gone)
+  return {
+    patch: {
+      sideChats,
+      sideChatTabs: s.sideChatTabs.filter((id) => !gone.has(id)),
+      sideChatTabsByChat
+    },
+    removed: [...gone]
+  }
 }
 
 /**
@@ -1112,6 +1421,83 @@ function updateAssistant(
   const next = messages.slice()
   next[idx] = update(messages[idx] as AssistantMessage)
   return next
+}
+
+/**
+ * Transcript state shared by the two surfaces that draw one — the main column
+ * and a side chat's tab.
+ */
+type TranscriptState = Pick<
+  AppState,
+  'activeId' | 'messages' | 'hiddenBefore' | 'loadingOlder' | 'contextUsage' | 'sideChats'
+>
+
+/**
+ * Is this chat drawn anywhere right now? The bail every streamed event needs
+ * before it touches `set`.
+ *
+ * A chat that is on neither surface is the common case — a background turn
+ * streaming into the sidebar — and it must stay a *pre-`set`* bail rather than
+ * an empty patch: zustand assigns a fresh state object for `set({})` and runs
+ * every subscriber's selector against it, which for a chat drawing nothing is
+ * pure cost. Same reasoning the `message` and `context-usage` cases already
+ * carry.
+ */
+function onScreen(s: TranscriptState, chatId: string): boolean {
+  return chatId === s.activeId || chatId in s.sideChats
+}
+
+/**
+ * The transcript surface `chatId` is drawn on, as a slot — the main column's
+ * four bare fields adapted to the shape a side chat already has, or the side
+ * chat's own slot, or `null` when it is drawn nowhere.
+ *
+ * Reading through one shape is what stops the two surfaces disagreeing about a
+ * field. It was `messages`-only at first, and the other three fields each grew
+ * their own hand-rolled main-vs-side branch as a result — `context-usage` wrote
+ * one field in twelve lines, `truncate` had the `keep` arithmetic twice, and
+ * `loadOlderMessages` carried a `side` boolean through three of them.
+ *
+ * **Not for zustand selectors**: this allocates on the main path, so a
+ * component subscribing through it would re-render on every event. `ChatView`
+ * keeps a per-field selector for that reason.
+ */
+function surfaceOf(s: TranscriptState, chatId: string): SideChatSlot | null {
+  if (chatId === s.activeId) {
+    return {
+      messages: s.messages,
+      hiddenBefore: s.hiddenBefore,
+      loadingOlder: s.loadingOlder,
+      contextUsage: s.contextUsage
+    }
+  }
+  return s.sideChats[chatId] ?? null
+}
+
+/**
+ * Write part of a transcript back to whichever surface owns it. `null` when the
+ * chat is on neither, so callers `break` rather than calling `set` — an empty
+ * patch would mint a fresh state object and run every subscriber's selector.
+ */
+function patchSurface(
+  s: TranscriptState,
+  chatId: string,
+  patch: Partial<SideChatSlot>
+): Partial<AppState> | null {
+  if (chatId === s.activeId) return patch
+  const slot = s.sideChats[chatId]
+  if (!slot) return null
+  return { sideChats: { ...s.sideChats, [chatId]: { ...slot, ...patch } } }
+}
+
+/** `patchSurface` for the common case: rewrite the message list. */
+function patchTranscript(
+  s: TranscriptState,
+  chatId: string,
+  update: (messages: ChatMessage[]) => ChatMessage[]
+): Partial<AppState> | null {
+  const surface = surfaceOf(s, chatId)
+  return surface && patchSurface(s, chatId, { messages: update(surface.messages) })
 }
 
 /** Shallow copy of a per-chat map with the given ids removed. */
@@ -1245,6 +1631,9 @@ export const useApp = create<AppState>((set, get) => ({
   canvasTabsByProject: {},
   canvasHtml: {},
   pendingCanvasDelete: null,
+  sideChats: {},
+  sideChatTabs: [],
+  sideChatTabsByChat: {},
   defaults: null,
   loading: true,
   sidebarOpen: localStorage.getItem('sidebarOpen') !== 'false',
@@ -1430,7 +1819,16 @@ export const useApp = create<AppState>((set, get) => ({
       const chatDrafts = { ...s.chatDrafts }
       if (isEmptyDraft(draft)) delete chatDrafts[chatId]
       else chatDrafts[chatId] = draft
-      saveDrafts({ chats: chatDrafts, projects: s.projectDrafts })
+      // A side chat's draft lives in memory and never on disk. In memory it is
+      // still needed — the composer unmounts on every tab switch, which is the
+      // bug drafts exist to fix — but persisting it would write a draft under an
+      // id that is deleted at quit, so nothing could ever reopen it. There is no
+      // cap on the `chats` half of the draft store, so those would simply
+      // accumulate; `pruneChatDrafts` only clears them on a *later* launch,
+      // because a side chat is absent from `listChats` by then.
+      if (!s.chats.find((c) => c.id === chatId)?.ephemeral) {
+        saveDrafts({ chats: chatDrafts, projects: s.projectDrafts })
+      }
       return { chatDrafts }
     })
   },
@@ -1845,6 +2243,140 @@ export const useApp = create<AppState>((set, get) => ({
     set((s) => ({ activeTab: 'agents', ...panelPatch(s, true) }))
   },
 
+  // ---- Side chats ----
+
+  async openSideChat() {
+    const s = get()
+    // The chat this one is opened *beside*, and the folder it runs in. No
+    // active chat means the home screen, where a side chat has nothing to be
+    // beside and nowhere to be stashed — so there is none to open.
+    const openedFor = s.activeId
+    const parent = s.chats.find((c) => c.id === openedFor)
+    if (!openedFor || !parent) return
+    const defaults = s.defaults
+    const meta = await window.api.createChat({
+      cwd: parent.cwd,
+      ephemeral: true,
+      sideOf: openedFor,
+      // The app defaults, exactly as a new chat gets them — asking a cheap
+      // question beside an expensive turn should be one click, not a trip
+      // through the pickers. They are then the *chat's* and go no further:
+      // both `chats:create` and `setChatOptions` refuse to remember a side
+      // chat's picks.
+      provider: defaults?.modelProvider,
+      model: defaults?.model,
+      effort: defaults?.effort,
+      permissionMode: defaults?.permissionMode
+    })
+    set((st) => {
+      const base = {
+        // The meta joins `chats` like any other chat's; `visibleChats` is what
+        // keeps it out of the sidebar. Held there, a title landing, a model
+        // change and a turn starting all patch it through the existing paths —
+        // and it is what the reopen list reads, since a closed side chat has no
+        // tab to be found by.
+        chats: [...st.chats, meta],
+        sideChats: { ...st.sideChats, [meta.id]: EMPTY_SIDE_SLOT }
+      }
+      // The user moved to another chat inside the `createChat` round trip —
+      // `openChat`'s `if (get().activeId === id)` guard in the other shape.
+      // File the tab under the chat it was opened beside, so returning there
+      // finds it, and leave the chat now on screen exactly as they left it.
+      if (st.activeId !== openedFor) {
+        return {
+          ...base,
+          sideChatTabsByChat: {
+            ...st.sideChatTabsByChat,
+            [openedFor]: [...(st.sideChatTabsByChat[openedFor] ?? []), meta.id]
+          }
+        }
+      }
+      return {
+        ...base,
+        sideChatTabs: [...st.sideChatTabs, meta.id],
+        activeTab: `side:${meta.id}`,
+        ...panelPatch(st, true)
+      }
+    })
+  },
+
+  async closeSideChat(id) {
+    const s = get()
+    const slot = s.sideChats[id]
+    // Never used and nothing in flight: there is nothing to come back to, and
+    // keeping it would put a blank row in the reopen list for the session. The
+    // status test is the load-bearing half — a message sent a second ago has an
+    // empty transcript and an answer already on its way.
+    const unused =
+      !!slot &&
+      slot.messages.length === 0 &&
+      slot.hiddenBefore === 0 &&
+      (s.statuses[id] ?? 'idle') === 'idle'
+    if (unused) {
+      await get().deleteSideChat(id)
+      return
+    }
+    set((st) => ({
+      ...closeSideTab(st, id),
+      // The slot goes with the tab. It is the renderer's copy of a transcript
+      // main is still persisting, so holding it across the close would be a
+      // second source of truth that drifts — and would grow for every side chat
+      // closed in a session. `reopenSideChat` refetches.
+      sideChats: omit(st.sideChats, [id])
+    }))
+  },
+
+  async reopenSideChat(id) {
+    const s = get()
+    if (s.sideChatTabs.includes(id)) {
+      set({ activeTab: `side:${id}` })
+      return
+    }
+    // Only from the chat it belongs to: its tools run in that chat's folder,
+    // and the reopen list is drawn from the active chat's own side chats.
+    if (s.chats.find((c) => c.id === id)?.sideOf !== s.activeId) return
+    // The tab opens first, on an empty slot, so the click lands immediately —
+    // and so events streaming in during the round trip have somewhere to go,
+    // since `onScreen` keys on the slot existing.
+    set((st) => ({
+      sideChats: { ...st.sideChats, [id]: EMPTY_SIDE_SLOT },
+      sideChatTabs: [...st.sideChatTabs, id],
+      activeTab: `side:${id}`,
+      ...panelPatch(st, true)
+    }))
+    const view = await window.api.getChat(id)
+    if (!view) return
+    set((st) => {
+      const current = st.sideChats[id]
+      // Closed again while we awaited, or its chat is gone.
+      if (!current || !st.sideChatTabs.includes(id)) return {}
+      // Layer whatever streamed in during the round trip over the snapshot from
+      // disk, which can be up to a debounce behind — `openChat`'s rule.
+      const messages = current.messages.reduce(upsertMessage, view.chat.messages)
+      return {
+        sideChats: {
+          ...st.sideChats,
+          [id]: { ...current, messages, hiddenBefore: view.hiddenBefore }
+        }
+      }
+    })
+  },
+
+  async deleteSideChat(id) {
+    set((st) => ({
+      ...closeSideTab(st, id),
+      // Drop the slot, the meta and every per-chat map keyed by it. This one is
+      // gone rather than closed, so leaving these behind would keep a status, a
+      // permission prompt and a queue alive for a chat that no longer exists —
+      // and `statuses` in particular feeds the "is anything running" reads all
+      // over the app.
+      sideChats: omit(st.sideChats, [id]),
+      chats: st.chats.filter((c) => c.id !== id),
+      ...forgetChat(st, [id])
+    }))
+    await window.api.deleteChat(id)
+  },
+
   // ---- Files ----
 
   panelOpen: false,
@@ -1860,6 +2392,7 @@ export const useApp = create<AppState>((set, get) => ({
   untitledSeq: 0,
   fileContents: {},
   activeTab: null,
+  filesTab: false,
   tabsByChat: {},
   panelOpenByChat: (() => {
     try {
@@ -2018,6 +2551,13 @@ export const useApp = create<AppState>((set, get) => ({
         if (t === -1) return s
         const next = moveItem(s.canvasTabs, c, t, side)
         return next === s.canvasTabs ? s : { canvasTabs: next as string[] }
+      }
+      const sc = s.sideChatTabs.indexOf(id)
+      if (sc !== -1) {
+        const t = s.sideChatTabs.indexOf(target)
+        if (t === -1) return s
+        const next = moveItem(s.sideChatTabs, sc, t, side)
+        return next === s.sideChatTabs ? s : { sideChatTabs: next as string[] }
       }
       const term = s.terminals.findIndex((x) => x.id === id)
       if (term !== -1) {
@@ -2437,10 +2977,25 @@ export const useApp = create<AppState>((set, get) => ({
       !s.previews.some((p) => p.id === s.activeTab) &&
       !s.terminals.some((t) => t.id === s.activeTab) &&
       s.openFiles.some((f) => f.path === s.activeTab)
+    // Already browsing is also already showing the tree. Now that the Files tab
+    // outlives the files opened from it, this state is ordinary — Files
+    // selected with a file open beside it — and without the guard, picking
+    // Files again would jump the panel onto that file.
+    const onFilesTab = s.activeTab === 'files' && s.filesTab
     const lastFile = [...s.openFiles].reverse().find((f) => !f.path.startsWith('changes:'))
-    const activeTab = onFileEditor ? s.activeTab : (lastFile?.path ?? 'files')
-    set((st) => ({ activeTab, ...panelPatch(st, true) }))
+    const activeTab = onFileEditor || onFilesTab ? s.activeTab : (lastFile?.path ?? 'files')
+    set((st) => ({
+      activeTab,
+      // Browse mode is a tab that was opened, so it stays in the strip until it
+      // is closed — the file editors it leads to don't take it with them.
+      filesTab: st.filesTab || activeTab === 'files',
+      ...panelPatch(st, true)
+    }))
     s.setExplorerOpen(true)
+  },
+
+  closeFilesTab() {
+    set((s) => ({ filesTab: false, activeTab: s.activeTab === 'files' ? null : s.activeTab }))
   },
 
   async refreshGit() {
@@ -2544,7 +3099,10 @@ export const useApp = create<AppState>((set, get) => ({
     const prompt = gitActionPrompt(id, { commitScope })
     // Show the action as a compact chip in the chat, not the verbose prompt.
     const label = gitAction(id).label
-    if (get().activeId) await get().sendMessage(prompt, undefined, label)
+    // A git action is always the *main* chat's — the ladder it comes from lives
+    // in the review panel, which follows the active chat.
+    const active = get().activeId
+    if (active) await get().sendMessage(active, prompt, undefined, label)
     else await get().newChat(cwd, prompt, { label })
   },
 
@@ -2864,19 +3422,29 @@ export const useApp = create<AppState>((set, get) => ({
     }
   },
 
-  async loadOlderMessages() {
-    const id = get().activeId
-    const before = get().hiddenBefore
-    if (!id || before <= 0 || get().loadingOlder) return
-    set({ loadingOlder: true })
+  async loadOlderMessages(id) {
+    const before = surfaceOf(get(), id)
+    if (!before || before.hiddenBefore <= 0 || before.loadingOlder) return
+    const setLoading = (loadingOlder: boolean): void =>
+      set((s) => patchSurface(s, id, { loadingOlder }) ?? {})
+    setLoading(true)
     try {
-      const older = await window.api.loadOlderMessages(id, before)
-      // A chat switch (or another load landing first) while we awaited: the
-      // window we fetched belongs to a view that no longer exists.
-      if (!older || get().activeId !== id || get().hiddenBefore !== before) return
-      set((s) => ({ messages: [...older.messages, ...s.messages], hiddenBefore: older.from }))
+      const older = await window.api.loadOlderMessages(id, before.hiddenBefore)
+      if (!older) return
+      set((s) => {
+        // A chat switch, a closed tab, or another load landing first: the window
+        // we fetched belongs to a view that no longer exists.
+        const now = surfaceOf(s, id)
+        if (!now || now.hiddenBefore !== before.hiddenBefore) return {}
+        return (
+          patchSurface(s, id, {
+            messages: [...older.messages, ...now.messages],
+            hiddenBefore: older.from
+          }) ?? {}
+        )
+      })
     } finally {
-      set({ loadingOlder: false })
+      setLoading(false)
     }
   },
 
@@ -3016,8 +3584,7 @@ export const useApp = create<AppState>((set, get) => ({
     else if (!setupCommand) set({ worktreeNotice: { chatId, kind: 'setup-missing' } })
   },
 
-  async sendMessage(text, attachments, label) {
-    const id = get().activeId
+  async sendMessage(id, text, attachments, label) {
     if (!id) return
     // Mid-turn sends wait in a queue until the chat goes idle, like Cursor.
     if ((get().statuses[id] ?? 'idle') !== 'idle') {
@@ -3028,8 +3595,7 @@ export const useApp = create<AppState>((set, get) => ({
     await window.api.send(id, text, attachments, label)
   },
 
-  async startCodexReview(target) {
-    const id = get().activeId
+  async startCodexReview(id, target) {
     if (!id) return
     if ((get().statuses[id] ?? 'idle') !== 'idle') {
       throw new Error('Wait for the current turn to finish before starting a review.')
@@ -3084,8 +3650,7 @@ export const useApp = create<AppState>((set, get) => ({
     }))
   },
 
-  async interrupt() {
-    const id = get().activeId
+  async interrupt(id) {
     if (!id) return
     await window.api.interrupt(id)
   },
@@ -3204,28 +3769,28 @@ export const useApp = create<AppState>((set, get) => ({
     // and is handed back so the caller can surface it (gitError would only show
     // inside GitPanel, which the user may not have open).
     const res = await window.api.deleteChat(id, worktree)
+    // Its side chats went with it: `chats:delete` cascades them in main, which
+    // is the layer that owns the rows. This only has to drop them from the
+    // store — a second `deleteChat` per side chat would be an IPC round trip
+    // and a table scan each, for rows that are already gone.
+    const side = pruneSideChats(get(), [id])
     set((s) => {
       const wasActive = s.activeId === id
+      const dead = new Set([id, ...side.removed])
       return {
-        chats: s.chats.filter((c) => c.id !== id),
+        ...side.patch,
+        chats: s.chats.filter((c) => !dead.has(c.id)),
         activeId: wasActive ? null : s.activeId,
         messages: wasActive ? [] : s.messages,
         // Deleting the active chat drops to the draft/home state — clear its tabs.
-        planPanel: wasActive ? null : s.planPanel,
         openFiles: wasActive ? [] : s.openFiles,
         activeTab: wasActive ? null : s.activeTab,
-        queued: omit(s.queued, [id]),
-        statuses: omit(s.statuses, [id]),
-        titling: omit(s.titling, [id]),
-        permissions: omit(s.permissions, [id]),
-        backgroundJobs: omit(s.backgroundJobs, [id]),
-        rateLimits: omit(s.rateLimits, [id]),
-        fastMode: omit(s.fastMode, [id]),
-        codexGoals: omit(s.codexGoals, [id]),
+        ...forgetChat(s, [...dead]),
+        planPanel:
+          s.planPanel && dead.has(s.planPanel.chatId) ? null : wasActive ? null : s.planPanel,
         panelOpenByChat: prunePanelState(s, [id]),
         tabsByChat: pruneTabsByChat(s, [id]),
-        ...pruneTerminals(s, [id]),
-        ...dropDrafts(s, [id])
+        ...pruneTerminals(s, [id])
       }
     })
     return res
@@ -3237,9 +3802,13 @@ export const useApp = create<AppState>((set, get) => ({
     // 'remove' never forces: a worktree with uncommitted work survives the
     // project being dropped from the sidebar rather than being destroyed.
     await Promise.all(ids.map((id) => window.api.deleteChat(id, 'remove')))
+    // Side chats opened beside any of them went with their parent, cascaded in
+    // main by each `chats:delete` above. Dropped from the store only.
+    const side = pruneSideChats(get(), ids)
     await window.api.forgetDir(cwd)
     set((s) => {
-      const chats = s.chats.filter((c) => !inProject(c))
+      const dead = new Set([...ids, ...side.removed])
+      const chats = s.chats.filter((c) => !inProject(c) && !dead.has(c.id))
       const wasActive = s.activeId !== null && ids.includes(s.activeId)
       const recentDirs = s.defaults?.recentDirs.filter((d) => d !== cwd) ?? []
       // Drop any stale hidden flag so re-adding the folder later isn't hidden.
@@ -3250,6 +3819,7 @@ export const useApp = create<AppState>((set, get) => ({
         localStorage.setItem('hiddenProjects', JSON.stringify(hiddenProjects))
       }
       return {
+        ...side.patch,
         // If the removed folder was selected, fall back to another one.
         selectedCwd: s.selectedCwd === cwd ? homeCwd(chats, recentDirs) : s.selectedCwd,
         chats,
@@ -3260,17 +3830,12 @@ export const useApp = create<AppState>((set, get) => ({
         // Removing the active chat's project drops to the draft state — clear tabs.
         openFiles: wasActive ? [] : s.openFiles,
         activeTab: wasActive ? null : s.activeTab,
-        queued: omit(s.queued, ids),
-        statuses: omit(s.statuses, ids),
-        titling: omit(s.titling, ids),
-        permissions: omit(s.permissions, ids),
-        backgroundJobs: omit(s.backgroundJobs, ids),
-        rateLimits: omit(s.rateLimits, ids),
-        fastMode: omit(s.fastMode, ids),
-        codexGoals: omit(s.codexGoals, ids),
+        ...forgetChat(s, ids),
         panelOpenByChat: prunePanelState(s, ids),
         tabsByChat: pruneTabsByChat(s, ids),
         ...pruneTerminals(s, ids),
+        // After `forgetChat`, which drops the chat drafts: this also forgets
+        // the *project's* draft, which only this path retires.
         ...dropDrafts(s, ids, [cwd]),
         defaults: s.defaults ? { ...s.defaults, recentDirs } : s.defaults
       }
@@ -3292,13 +3857,18 @@ export const useApp = create<AppState>((set, get) => ({
     await window.api.setChatPinned(id, pinned)
   },
 
-  async setChatOptions(patch) {
-    const id = get().activeId
+  async setChatOptions(id, patch) {
     if (!id) return
     await window.api.setChatOptions(id, patch)
     // Mirror the new defaults locally so the next New-chat screen uses them —
     // skipping the same corrections main leaves out of `rememberOptions`.
     if (patch.remember === false) return
+    // A side chat's picks are its own. Main already refuses to remember them
+    // (`chats:create` skips `rememberOptions` for an ephemeral chat); mirroring
+    // them here would put the throwaway model back into the next New-chat
+    // screen from the renderer's side, which is the same bug with a shorter
+    // life. The two halves have to agree or the defaults flip on relaunch.
+    if (get().chats.find((c) => c.id === id)?.ephemeral) return
     set((s) => {
       if (!s.defaults) return {}
       // Effort is also remembered per-model (keyed by the model the change
@@ -3334,8 +3904,7 @@ export const useApp = create<AppState>((set, get) => ({
     })
   },
 
-  async respondPermission(requestId, decision) {
-    const id = get().activeId
+  async respondPermission(id, requestId, decision) {
     if (!id) return
     await window.api.respondPermission(id, requestId, decision)
   },
@@ -3369,7 +3938,11 @@ export const useApp = create<AppState>((set, get) => ({
         ev.type === 'part' ||
         ev.type === 'part-delta' ||
         ev.type === 'tool-update') &&
-      ev.chatId === s.activeId
+      // A side chat is on screen too, so its stream parks and replays exactly
+      // like the main column's. Gated on `activeId` alone, a side chat's turn
+      // would apply *live* into a hidden window — cheap, but out of order with
+      // the main chat's parked deltas once both replay.
+      onScreen(s, ev.chatId)
     ) {
       parkHiddenEvent(ev)
       // The turn-finished chime/notification still fires in real time — a
@@ -3400,16 +3973,21 @@ export const useApp = create<AppState>((set, get) => ({
         // crosses a boundary.
         const now = Date.now()
         const row = s.chats.find((c) => c.id === ev.chatId)
-        const redraws = !!row && !sameDisplayedTime(row.updatedAt, now)
-        const isActive = ev.chatId === s.activeId
+        // A side chat draws no row anywhere — it is filtered out of every list
+        // by `visibleChats` — so bumping its `updatedAt` would re-render the
+        // sidebar for a chat the sidebar does not contain.
+        const redraws = !!row && !row.ephemeral && !sameDisplayedTime(row.updatedAt, now)
+        const drawn = onScreen(s, ev.chatId)
         // A background chat whose row would draw exactly as it already does has
         // nothing to write, and `set({})` is not the way to say so: zustand
         // assigns a fresh state object for it and runs every subscriber's
         // selector against it. Same reason `context-usage` below bails before
         // `set` rather than returning an empty patch.
-        if (isActive || redraws) {
+        if (drawn || redraws) {
           set((st) => ({
-            ...(isActive ? { messages: upsertMessage(st.messages, ev.message) } : {}),
+            ...(drawn
+              ? patchTranscript(st, ev.chatId, (msgs) => upsertMessage(msgs, ev.message))
+              : {}),
             ...(redraws
               ? {
                   chats: st.chats.map((c) => (c.id === ev.chatId ? { ...c, updatedAt: now } : c))
@@ -3424,54 +4002,64 @@ export const useApp = create<AppState>((set, get) => ({
       }
 
       case 'part': {
-        if (ev.chatId !== s.activeId) break
-        set({
-          messages: updateAssistant(s.messages, ev.messageId, (m) => {
-            const parts = m.parts.slice()
-            parts[ev.partIndex] = ev.part
-            return { ...m, parts }
-          })
-        })
+        if (!onScreen(s, ev.chatId)) break
+        set(
+          (st) =>
+            patchTranscript(st, ev.chatId, (msgs) =>
+              updateAssistant(msgs, ev.messageId, (m) => {
+                const parts = m.parts.slice()
+                parts[ev.partIndex] = ev.part
+                return { ...m, parts }
+              })
+            ) ?? {}
+        )
         break
       }
 
       case 'part-delta': {
-        if (ev.chatId !== s.activeId) break
-        set({
-          messages: updateAssistant(s.messages, ev.messageId, (m) => {
-            const parts = m.parts.slice()
-            const part = parts[ev.partIndex]
-            if (part && (part.type === 'text' || part.type === 'thinking')) {
-              parts[ev.partIndex] = { ...part, text: part.text + ev.delta }
-            }
-            return { ...m, parts }
-          })
-        })
+        if (!onScreen(s, ev.chatId)) break
+        set(
+          (st) =>
+            patchTranscript(st, ev.chatId, (msgs) =>
+              updateAssistant(msgs, ev.messageId, (m) => {
+                const parts = m.parts.slice()
+                const part = parts[ev.partIndex]
+                if (part && (part.type === 'text' || part.type === 'thinking')) {
+                  parts[ev.partIndex] = { ...part, text: part.text + ev.delta }
+                }
+                return { ...m, parts }
+              })
+            ) ?? {}
+        )
         break
       }
 
       case 'tool-update': {
-        if (ev.chatId !== s.activeId) break
-        set({
-          messages: updateAssistant(s.messages, ev.messageId, (m) => {
-            const parts = m.parts.map((p) =>
-              // Streamed parts arrays can be sparse — guard the holes.
-              p && p.type === 'tool' && p.toolUseId === ev.toolUseId ? { ...p, ...ev.patch } : p
-            )
-            return { ...m, parts }
-          })
-        })
+        if (!onScreen(s, ev.chatId)) break
+        set(
+          (st) =>
+            patchTranscript(st, ev.chatId, (msgs) =>
+              updateAssistant(msgs, ev.messageId, (m) => {
+                const parts = m.parts.map((p) =>
+                  // Streamed parts arrays can be sparse — guard the holes.
+                  p && p.type === 'tool' && p.toolUseId === ev.toolUseId ? { ...p, ...ev.patch } : p
+                )
+                return { ...m, parts }
+              })
+            ) ?? {}
+        )
         break
       }
 
       case 'context-usage': {
-        // Only the chat on screen: this feeds one popover, and a map keyed by
-        // chat would retain a breakdown per background chat that is stale as
-        // soon as its next turn runs. Bail before `set` rather than returning
-        // `{}` — a fresh object fails zustand's identity check and would notify
-        // every subscriber for a background chat that changed nothing.
-        if (ev.chatId !== get().activeId) break
-        set({ contextUsage: ev.usage })
+        // Only a chat on screen: this feeds one popover per transcript, and a
+        // map keyed by chat would retain a breakdown per background chat that is
+        // stale as soon as its next turn runs. Bail before `set` rather than
+        // returning `{}` — a fresh object fails zustand's identity check and
+        // would notify every subscriber for a background chat that changed
+        // nothing.
+        const patch = patchSurface(get(), ev.chatId, { contextUsage: ev.usage })
+        if (patch) set(patch)
         break
       }
       case 'meta': {
@@ -3552,11 +4140,13 @@ export const useApp = create<AppState>((set, get) => ({
       // window this store actually holds — main truncates to a loaded message,
       // so the result is never negative and never touches the hidden prefix.
       case 'truncate': {
+        if (!onScreen(s, ev.chatId)) break
         set((st) => {
-          if (st.activeId !== ev.chatId) return {}
-          const keep = Math.max(0, ev.keep - st.hiddenBefore)
-          if (keep >= st.messages.length) return {}
-          return { messages: st.messages.slice(0, keep) }
+          const surface = surfaceOf(st, ev.chatId)
+          if (!surface) return {}
+          const keep = Math.max(0, ev.keep - surface.hiddenBefore)
+          if (keep >= surface.messages.length) return {}
+          return patchSurface(st, ev.chatId, { messages: surface.messages.slice(0, keep) }) ?? {}
         })
         break
       }
@@ -3599,7 +4189,19 @@ export const useApp = create<AppState>((set, get) => ({
           void get().refreshChatBranches()
           // Refresh the tree, open files and git status for the active chat so
           // the agent's edits show up.
-          if (ev.chatId === s.activeId) {
+          //
+          // A **side chat in the same folder** counts as the active chat here:
+          // it has just edited the very files the tree, the diff chip and the
+          // open editors are showing, and it is on screen while it does it. The
+          // cwd test is what keeps that honest — a side chat left open from
+          // another project is a background turn like any other, and refreshing
+          // for it would re-read a tree it did not touch. `refreshFiles`
+          // reconciles by mtime rather than re-reading, so a dirty buffer
+          // survives this.
+          const sideHere =
+            !!s.sideChats[ev.chatId] &&
+            s.chats.find((c) => c.id === ev.chatId)?.cwd === s.selectedCwd
+          if (ev.chatId === s.activeId || sideHere) {
             // Invalidate once for the visible chat. Background turns are handled
             // when that chat is opened, avoiding needless multi-megabyte image
             // re-reads in an unrelated foreground conversation.

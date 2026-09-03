@@ -49,7 +49,7 @@ import {
   canonicalModelId,
   rememberedEffortForModel
 } from '@/lib/models'
-import { useApp } from '@/store'
+import { contextUsageFor, useApp } from '@/store'
 import { Button } from '@/components/ui/button'
 import { CompactSelect } from '@/components/ui/select'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -300,13 +300,18 @@ function fmtContextWindow(n: number): string {
 function ContextDetail({
   used,
   window: win,
-  name
+  name,
+  chatId
 }: {
   used: number
   window: number
   name: string
+  chatId: string | null
 }): React.JSX.Element {
-  const usage = useApp((s) => s.contextUsage)
+  // Whichever surface draws this chat. Read from `contextUsage` unconditionally,
+  // a side chat's popover showed the *main* chat's breakdown — the same numbers
+  // under a different conversation, which is worse than showing none.
+  const usage = useApp((s) => contextUsageFor(s, chatId))
   const pct = Math.min(1, used / win)
   const rows = usage?.overhead ?? []
   const shown = rows.slice(0, 5)
@@ -380,11 +385,13 @@ function ContextDetail({
 function ContextRing({
   used,
   window: win,
-  provider
+  provider,
+  chatId
 }: {
   used: number
   window: number
   provider: Provider
+  chatId: string | null
 }): React.JSX.Element {
   const name = PROVIDER_SHORT_LABELS[provider]
   const pct = Math.min(1, used / win)
@@ -415,7 +422,7 @@ function ContextRing({
         <span className="text-[10px] tabular-nums">{Math.round(pct * 100)}%</span>
       </PopoverTrigger>
       <PopoverContent side="top" align="end" className="w-64">
-        <ContextDetail used={used} window={win} name={name} />
+        <ContextDetail used={used} window={win} name={name} chatId={chatId} />
       </PopoverContent>
     </Popover>
   )
@@ -693,6 +700,7 @@ export function Composer({
   contextTokens,
   contextWindow,
   provider = 'claude',
+  chatId = null,
   cwd = null,
   commands = [],
   disabled = false,
@@ -723,6 +731,17 @@ export function Composer({
   contextWindow?: number
   /** Which agent backs this chat; switches the pickers/labels to its reality. */
   provider?: Provider
+  /**
+   * The chat this composer belongs to. Null on the home screen, where no chat
+   * exists yet.
+   *
+   * Everything else here arrives as a prop, which is what made this component
+   * reusable for a side chat almost unchanged — but three reads went to the
+   * store for the *active* chat's answer, and a side chat is never the active
+   * one. Passing the id is what keeps a side chat's Fast reading, its context
+   * breakdown and the attachment inbox pointing at the right conversation.
+   */
+  chatId?: string | null
   /** Project folder used for @-file mentions; null disables them. */
   cwd?: string | null
   /** Slash commands available in this project, for the / autocomplete. */
@@ -867,7 +886,7 @@ export function Composer({
   // may not allow the extra usage it bills to, or a rate limit may have paused
   // it. The live session answers the second one; until it has, say nothing.
   // Codex never answers it — its SDK surfaces no equivalent field.
-  const fastStatus = useApp((s) => (s.activeId ? s.fastMode[s.activeId] : undefined))
+  const fastStatus = useApp((s) => (chatId ? s.fastMode[chatId] : undefined))
   const fastNote = serviceTierValue === 'fast' ? fastModeNote(fastStatus) : null
 
   // New-chat can switch providers with an effort already selected, and a model
@@ -890,8 +909,15 @@ export function Composer({
     : 'default'
   const selectedPermissionAppearance = permissionAppearance(permissionValue, isCodex)
 
+  // The inbox is app-global — one queue fed by the editor's "Add to chat" pill,
+  // the canvas list and the browser's element picker — so with two composers
+  // mounted the first effect to run would consume whatever was in it. It goes
+  // to the **main** composer: every gesture that fills it is made in the main
+  // column or in the panel beside it, about the work that column is doing.
+  const isMainComposer = useApp((s) => !!chatId && s.activeId === chatId)
   const inbox = useApp((s) => s.attachmentInbox)
   React.useEffect(() => {
+    if (!isMainComposer) return
     if (inbox.length === 0) return
     setAttachments((prev) => {
       // Dedupe on path as well as id: the same file can be sent here more than
@@ -915,7 +941,7 @@ export function Composer({
     })
     useApp.getState().clearAttachmentInbox()
     ref.current?.focus()
-  }, [inbox])
+  }, [isMainComposer, inbox])
   const [dragOver, setDragOver] = React.useState(false)
   const dragDepth = React.useRef(0)
   const ref = React.useRef<HTMLTextAreaElement>(null)
@@ -1348,7 +1374,12 @@ export function Composer({
         </div>
         <SessionPanel />
         {contextTokens != null && contextTokens > 0 && (
-          <ContextRing used={contextTokens} window={contextWindow ?? 200_000} provider={provider} />
+          <ContextRing
+            used={contextTokens}
+            window={contextWindow ?? 200_000}
+            provider={provider}
+            chatId={chatId}
+          />
         )}
         {streaming && onStop ? (
           <WithTooltip label="Stop generating">
