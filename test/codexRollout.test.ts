@@ -1,6 +1,114 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { parseCodexRolloutRecord } from '../src/main/codexRollout.ts'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import {
+  codexChildSession,
+  createCodexRolloutWatcher,
+  type CodexRolloutEvent,
+  parseCodexRolloutRecord
+} from '../src/main/codexRollout.ts'
+
+test('recognizes a multi-agent v2 child from its session metadata', () => {
+  assert.deepEqual(
+    codexChildSession(
+      {
+        type: 'session_meta',
+        payload: {
+          id: 'child-thread',
+          parent_thread_id: 'parent-thread',
+          agent_path: '/root/review_codex',
+          source: {
+            subagent: {
+              thread_spawn: {
+                parent_thread_id: 'parent-thread',
+                agent_path: '/root/review_codex'
+              }
+            }
+          },
+          multi_agent_version: 'v2'
+        }
+      },
+      'parent-thread'
+    ),
+    { threadId: 'child-thread', name: 'review codex' }
+  )
+
+  // A v2 child rollout also contains the inherited parent's session metadata.
+  // It must not be rediscovered as its own child.
+  assert.equal(
+    codexChildSession(
+      {
+        type: 'session_meta',
+        payload: { id: 'parent-thread', parent_thread_id: null, source: 'vscode' }
+      },
+      'parent-thread'
+    ),
+    null
+  )
+})
+
+test('the rollout watcher discovers and tails a multi-agent v2 child', async (t) => {
+  const codexHome = await mkdtemp(join(tmpdir(), 'carbon-codex-rollout-'))
+  t.after(() => rm(codexHome, { recursive: true, force: true }))
+  const day = join(codexHome, 'sessions', '2026', '09', '04')
+  await mkdir(day, { recursive: true })
+  const timestamp = new Date().toISOString()
+  const line = (record: unknown): string => `${JSON.stringify(record)}\n`
+  await writeFile(
+    join(day, 'rollout-parent-thread.jsonl'),
+    line({ timestamp, type: 'session_meta', payload: { id: 'parent-thread' } })
+  )
+  await writeFile(
+    join(day, 'rollout-child-thread.jsonl'),
+    [
+      {
+        timestamp,
+        type: 'session_meta',
+        payload: {
+          id: 'child-thread',
+          parent_thread_id: 'parent-thread',
+          agent_path: '/root/review_codex',
+          multi_agent_version: 'v2'
+        }
+      },
+      {
+        timestamp,
+        type: 'event_msg',
+        payload: { type: 'agent_message', message: 'Reviewing Codex.' }
+      },
+      {
+        timestamp,
+        type: 'event_msg',
+        payload: { type: 'task_complete', last_agent_message: 'Codex reviewed.' }
+      }
+    ]
+      .map(line)
+      .join('')
+  )
+
+  const events: CodexRolloutEvent[] = []
+  const watcher = createCodexRolloutWatcher((event) => events.push(event), codexHome)
+  watcher.start('parent-thread', Date.now() - 1_000)
+  await watcher.flush()
+
+  assert.deepEqual(events, [
+    {
+      type: 'agent-start',
+      threadId: 'child-thread',
+      callId: 'session-child-thread',
+      name: 'review codex'
+    },
+    { type: 'agent-text', threadId: 'child-thread', text: 'Reviewing Codex.' },
+    {
+      type: 'agent-complete',
+      threadId: 'child-thread',
+      result: 'Codex reviewed.',
+      failed: false
+    }
+  ])
+})
 
 test('parses a Codex sub_agent_activity spawn from the parent rollout', () => {
   assert.deepEqual(

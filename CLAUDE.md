@@ -1356,6 +1356,18 @@ the part instead of in a live-only map:
   types on a read that is happening anyway (`agent-usage`). `total_token_usage`
   is a running total, so it replaces; `last_token_usage` is the call that just
   finished and summing that instead counts every earlier call again.
+  **The v2 runtime stopped announcing its children.** A `sub_agent_activity`
+  record in the parent rollout used to name each spawn; v2 emits none, and the
+  only link is the child's *own* first `session_meta` line
+  (`parent_thread_id`, or `source.subagent.thread_spawn`). So the watcher keeps
+  scanning the parent's own directory on the `FILE_SCAN_MS` cadence *after* the
+  parent tail is found — a child file can appear at any point in the turn,
+  where the old event arrived on a stream already being read — and reads only
+  each candidate's first line (`SESSION_META_BYTES`) rather than tailing a
+  large, still-growing file to decide whether it is one. The `callId` is
+  synthesized from the thread id because there is no parent-side call to hang
+  it on, and the inherited parent `session_meta` a child file also carries is
+  refused by id, or every turn would discover itself.
 - **Grok** reports neither: ACP carries no nested traffic for a sub-agent and no
   per-agent usage, so a Grok row is a description, a status and a clock. It is
   drawn *missing* rather than filled in from the parent chat's model — a

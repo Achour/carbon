@@ -1,6 +1,6 @@
 import { open, readdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 
 // The watcher exists only to surface sub-agent activity; a plain turn has none.
@@ -10,6 +10,7 @@ const POLL_MS = 1_500
 const FILE_SCAN_MS = 1_000
 const INITIAL_TAIL_BYTES = 1024 * 1024
 const MAX_READ_BYTES = 2 * 1024 * 1024
+const SESSION_META_BYTES = 256 * 1024
 const OUTPUT_CAP = 100_000
 
 export type CodexAgentStatus =
@@ -92,13 +93,21 @@ export interface CodexRolloutWatcher {
 }
 
 export type CodexRolloutWatcherFactory = (
-  onEvent: (event: CodexRolloutEvent) => void
+  onEvent: (event: CodexRolloutEvent) => void,
+  codexHome?: string
 ) => CodexRolloutWatcher
 
 interface RolloutRecord {
   timestamp?: string
   type?: string
   payload?: Record<string, unknown>
+}
+
+interface DiscoveredChildRollout {
+  threadId: string
+  name: string
+  path: string
+  timestamp: number
 }
 
 interface TailState {
@@ -168,6 +177,30 @@ function failedOutput(text: string | undefined): boolean {
 function friendlyAgentName(path: string): string {
   const leaf = path.split('/').filter(Boolean).at(-1) ?? 'Codex agent'
   return leaf.replace(/[_-]+/g, ' ')
+}
+
+/**
+ * The v2 multi-agent runtime no longer emits `sub_agent_activity` into the
+ * parent's rollout. Instead each child starts a sibling rollout whose first
+ * `session_meta` record names both sides of the relationship. Read that link
+ * without depending on the rest of the (large, still-growing) child file.
+ */
+export function codexChildSession(
+  record: RolloutRecord,
+  parentThreadId: string
+): { threadId: string; name: string } | null {
+  if (record.type !== 'session_meta') return null
+  const payload = record.payload
+  if (!payload) return null
+  const source = object(payload.source)
+  const subagent = object(source?.subagent)
+  const spawn = object(subagent?.thread_spawn)
+  const parentId = string(payload.parent_thread_id) ?? string(spawn?.parent_thread_id)
+  if (parentId !== parentThreadId) return null
+  const threadId = string(payload.id)
+  if (!threadId || threadId === parentThreadId) return null
+  const agentPath = string(payload.agent_path) ?? string(spawn?.agent_path) ?? threadId
+  return { threadId, name: friendlyAgentName(agentPath) }
 }
 
 /**
@@ -359,6 +392,72 @@ async function findRolloutFiles(root: string, threadIds: Set<string>): Promise<M
   return found
 }
 
+async function firstRolloutRecord(path: string): Promise<RolloutRecord | null> {
+  let file: Awaited<ReturnType<typeof open>> | null = null
+  try {
+    file = await open(path, 'r')
+    const size = (await file.stat()).size
+    const count = Math.min(size, SESSION_META_BYTES)
+    if (count <= 0) return null
+    const buffer = Buffer.allocUnsafe(count)
+    const { bytesRead } = await file.read(buffer, 0, count, 0)
+    const text = buffer.subarray(0, bytesRead).toString('utf8')
+    const newline = text.indexOf('\n')
+    if (newline < 0) return null
+    return JSON.parse(text.slice(0, newline)) as RolloutRecord
+  } catch {
+    return null
+  } finally {
+    await file?.close().catch(() => undefined)
+  }
+}
+
+/** Find v2 child rollouts created during this turn, linked by session metadata. */
+async function findChildRolloutFiles(
+  root: string,
+  parentThreadId: string,
+  sinceMs: number,
+  known: ReadonlySet<string>
+): Promise<DiscoveredChildRollout[]> {
+  const found: DiscoveredChildRollout[] = []
+  const visit = async (dir: string, depth: number): Promise<void> => {
+    if (depth > 4) return
+    let entries
+    try {
+      entries = await readdir(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      const path = join(dir, entry.name)
+      if (entry.isDirectory()) {
+        await visit(path, depth + 1)
+        continue
+      }
+      if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue
+      let modified = 0
+      try {
+        modified = (await stat(path)).mtimeMs
+      } catch {
+        continue
+      }
+      if (modified < sinceMs - 2_000) continue
+      const record = await firstRolloutRecord(path)
+      if (!record) continue
+      const child = codexChildSession(record, parentThreadId)
+      if (!child || known.has(child.threadId)) continue
+      const timestamp = record.timestamp ? Date.parse(record.timestamp) : NaN
+      found.push({
+        ...child,
+        path,
+        timestamp: Number.isFinite(timestamp) ? timestamp : modified
+      })
+    }
+  }
+  await visit(root, 0)
+  return found.sort((a, b) => a.timestamp - b.timestamp)
+}
+
 async function tailState(path: string, fromStart: boolean): Promise<TailState> {
   let size = 0
   try {
@@ -474,10 +573,8 @@ class RolloutWatcher implements CodexRolloutWatcher {
     const missing = new Set<string>()
     if (!this.parent) missing.add(parentThreadId)
     for (const [threadId, tail] of this.children) if (!tail) missing.add(threadId)
-    if (
-      missing.size > 0 &&
-      (forceFileScan || Date.now() - this.lastFileScan >= FILE_SCAN_MS)
-    ) {
+    const scanFiles = forceFileScan || Date.now() - this.lastFileScan >= FILE_SCAN_MS
+    if (missing.size > 0 && scanFiles) {
       this.lastFileScan = Date.now()
       const paths = await findRolloutFiles(this.sessionsRoot, missing)
       if (this.parentThreadId !== parentThreadId) return
@@ -487,6 +584,31 @@ class RolloutWatcher implements CodexRolloutWatcher {
         if (threadId !== parentThreadId && this.children.get(threadId) === null) {
           this.children.set(threadId, await tailState(path, true))
         }
+      }
+    }
+
+    // Multi-agent v2 records the relationship only in each child's first
+    // `session_meta` line. Keep looking beside the parent while the turn runs;
+    // unlike the old `sub_agent_activity` event, a child file may appear at any
+    // point after the parent tail has already been found.
+    if (this.parent && scanFiles) {
+      this.lastFileScan = Date.now()
+      const found = await findChildRolloutFiles(
+        dirname(this.parent.path),
+        parentThreadId,
+        this.sinceMs,
+        new Set(this.children.keys())
+      )
+      if (this.parentThreadId !== parentThreadId) return
+      for (const child of found) {
+        if (this.children.has(child.threadId)) continue
+        this.children.set(child.threadId, await tailState(child.path, true))
+        this.onEvent({
+          type: 'agent-start',
+          threadId: child.threadId,
+          callId: `session-${child.threadId}`,
+          name: child.name
+        })
       }
     }
 
@@ -531,5 +653,5 @@ class RolloutWatcher implements CodexRolloutWatcher {
   }
 }
 
-export const createCodexRolloutWatcher: CodexRolloutWatcherFactory = (onEvent) =>
-  new RolloutWatcher(onEvent)
+export const createCodexRolloutWatcher: CodexRolloutWatcherFactory = (onEvent, codexHome) =>
+  new RolloutWatcher(onEvent, codexHome)
