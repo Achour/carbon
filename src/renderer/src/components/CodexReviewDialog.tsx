@@ -6,7 +6,8 @@ import {
   GitCompare,
   LoaderCircle,
   PenLine,
-  Search
+  Search,
+  X
 } from 'lucide-react'
 import type { BranchRef, CodexReviewTarget, ReviewCommit } from '@shared/types'
 import { cn } from '@/lib/utils'
@@ -106,7 +107,14 @@ export function CodexReviewMenu({
   React.useEffect(() => {
     if (!open) return undefined
     const closeOnOutsidePointer = (event: PointerEvent): void => {
-      if (!submitting && !menuRef.current?.contains(event.target as Node)) onOpenChange(false)
+      if (submitting) return
+      const target = event.target as Node
+      if (menuRef.current?.contains(target)) return
+      // The prompt dock is a sibling in this same composer box, so an Allow or
+      // a Deny answered while the picker is open is "outside" it — and closing
+      // the picker on that click makes one press do two things.
+      if (target instanceof Element && target.closest('[data-prompt-dock]')) return
+      onOpenChange(false)
     }
     const closeOnEscape = (event: KeyboardEvent): void => {
       if (event.key === 'Escape' && !submitting) {
@@ -209,12 +217,22 @@ export function CodexReviewMenu({
   if (!open) return <></>
 
   return (
+    // Docked inside the composer's own bordered box, not floating above it.
+    // A popover with its own border, its own radius and a 2xl shadow, held two
+    // pixels clear of the input it belongs to, reads as a thing that landed on
+    // the window; this picker *is* the composer, for one gesture — it is opened
+    // by typing `/review` into it and it decides what the next turn will be. So
+    // it takes `TaskDock`'s arrangement, which exists for the same reason: one
+    // outline around one object, and the composer's border is the one that
+    // moves (ring on focus, primary on a file drag), so a second box drawn
+    // beside it would visibly disagree at exactly the moments the user is
+    // acting.
     <div
       ref={menuRef}
       role="dialog"
       aria-modal="false"
       aria-label="Codex review presets"
-      className="absolute bottom-full left-3 z-40 mb-2 max-h-[min(34rem,calc(100vh-6rem))] w-[500px] max-w-[calc(100%-1.5rem)] overflow-y-auto rounded-xl border border-border bg-popover p-4 shadow-2xl animate-enter"
+      className="max-h-[min(34rem,46vh)] animate-enter overflow-y-auto border-b border-border px-3.5 py-3"
     >
         <div className="flex items-start gap-2">
           {screen !== 'presets' && (
@@ -223,8 +241,8 @@ export function CodexReviewMenu({
               onClick={() => enterScreen('presets')}
             />
           )}
-          <div>
-            <h2 className="text-sm font-semibold">
+          <div className="min-w-0 flex-1">
+            <h2 className="text-[13px] font-semibold">
               {screen === 'presets'
                 ? 'Select a review preset'
                 : screen === 'branch'
@@ -243,6 +261,17 @@ export function CodexReviewMenu({
                     : 'Tell Codex exactly what the native reviewer should inspect.'}
             </p>
           </div>
+          {/* Docked, there is no backdrop to click away — the picker has to
+              carry its own way out. Escape still closes it. */}
+          <button
+            type="button"
+            onClick={() => onOpenChange(false)}
+            disabled={submitting}
+            aria-label="Close review picker"
+            className="shrink-0 rounded-md p-1 text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+          >
+            <X className="size-4" />
+          </button>
         </div>
 
         {screen === 'presets' && (

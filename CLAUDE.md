@@ -826,6 +826,20 @@ one color in a message and another in the file it came from.
 Click an image in a message and it opens full-window, sized in real pixels
 inside a scroller so panning is the browser's own job.
 
+- **Every image in a message opens it, and for a long time only one kind did.**
+  The lightbox was keyed on a filesystem *path*, so the only clickable image was
+  the one that has one — a markdown `![](/abs/file.png)` the agent wrote
+  (`LocalImage`). A tool's returned screenshot (`ToolOutputImages`), a `data:` or
+  `http(s)` image in prose and a prompt's own attachment were plain `<img>` tags
+  with no handler at all, which is exactly backwards: the tool-result capture is
+  the **common** case, since the session rules tell the agent an image block
+  already satisfies "show me a screenshot" and not to write the markdown
+  duplicate. The symptom was a screenshot that opened on Tuesday and not on
+  Wednesday, decided by which path the agent happened to take. `LightboxTarget`
+  is therefore `{kind:'file'}` | `{kind:'data'}`, and the one asymmetry it keeps
+  is the header's **Open as a tab**: a data image has no file to open, so that
+  button belongs to the kind rather than to the viewer. `ImageView` itself
+  already took a `src` and needed no change.
 - **Scale is device pixels, not CSS pixels.** Nearly every image here is a
   Retina screenshot, where a CSS-pixel 100% is *twice* the size the capture was
   taken at — so a window filled edge to edge reported **43%**, a number that
@@ -1252,12 +1266,13 @@ where the output already lived.
   on one click.
 - **Enter allows and Esc denies a permission prompt**, on the oldest plain one
   (a question has several answers and a plan has its own review, so neither
-  takes keys), and the card that owns the keys says so beside its buttons. The
-  listener rides the window in the bubble phase, and `keyMayAnswer` is what
+  takes keys), and the prompt that owns the keys says so in its own header band.
+  The listener rides the window in the bubble phase, and `keyMayAnswer` is what
   keeps it honest: nothing focused, or the composer with nothing typed — read
   off the DOM, since the composer keeps its text out of zustand on purpose. A
   non-empty composer is a message being written, and any other input is a
-  dialog.
+  dialog. The prompt itself no longer lives in the transcript at all; see **What
+  the agent asks you** below.
 
 **`summarizeActivity` is the part that carries information rather than style.**
 A mixed run said `Workspace activity · 7 actions` — a count of the one thing the
@@ -1517,6 +1532,108 @@ call fetching them. That row is not hidden: hiding a step the model actually
 took is the same mistake as the silent checklist. It says which tools came back
 (see `tool_reference` under Session flow) and groups with the other lookups —
 including, now, the checklist calls themselves.
+
+### What the agent asks you (`PromptDock`, `CodexReviewDialog`)
+
+A permission request, a question, a plan waiting for review — and the Codex
+review picker, which is the one the *user* opens. All four now ride the
+composer's own bordered box (`Composer`'s `header`, beside `TaskDock` and
+`CodexGoalBar`) instead of standing as their own boxes in the transcript and
+floating above it.
+
+**A pending request is state, not an event**, which is the argument `TaskDock`
+and `AgentActivityBar` already make and the reason the transcript was the wrong
+home for it. It has exactly one current value, it *blocks the turn*, and drawn
+as the last thing in the message list it was on screen only for as long as the
+reader left the scroller pinned — so glancing up at the very work the agent was
+asking about took the question off screen, with nothing anywhere left to say the
+turn was waiting. It is now glued to the input the answer would be typed into.
+
+- **The answered prompt leaves no record, deliberately.** The tool row is the
+  record: a call that ran shows its result, a denied one keeps its own glyph and
+  destructive text (`ToolCard`). A "you allowed npm test" card would be the
+  second telling of a thing already told — the bookkeeping the checklist section
+  records *deleting*.
+- **One frame for the three kinds.** They were three near-identical boxes for one
+  moment — `border-warning/40 bg-warning/8`, `border-primary/30 bg-primary/4` and
+  `border-primary/30 bg-primary/5` — and two boxes that nearly agree read worse
+  than one that does, which is the rule the table frame is built on.
+  `PromptFrame` is the one definition: a tinted band naming who is waiting and
+  what for, the body, then the answer row.
+- **The tint is a band, not a flood.** This app carries state in a glyph and a
+  bar at the row's outer edge (`DiffView`) and narrates in muted rows
+  (`ToolCard`), so a fully tinted card was the loudest object on a screen
+  designed around not having one. Position does the work the flood was doing.
+  Amber for a permission, because caution is what that one means; neutral
+  `--primary` for a question and a plan, which are not warnings.
+- **Naming the provider in the band fixed a real bug.** `PermissionCard` took no
+  `provider` and fell back to `` `Claude wants to use ${…}` ``, which Grok reaches
+  whenever the closing ACP payload carries no title (see "Only the first payload
+  of a tool call identifies it"). The band says
+  `${PROVIDER_SHORT_LABELS[provider]} needs permission` and the body carries the
+  subject alone, so there is nowhere left for a backend to be hardcoded.
+- **Prompts are last in the header**, which is to say adjacent to the textarea.
+  The checklist and the goal bar grow and collapse on their own, and above the
+  prompt their movement never pushes the question away from the keys that answer
+  it.
+- **One prompt is open at a time, and the rest are one-line rows.** Capping the
+  stack and scrolling it was the first answer and it was wrong in a way only the
+  crowded case shows: four parallel calls drew four identical "Claude needs
+  permission" bands and twelve buttons, clipped the fourth mid-row, and gave the
+  composer 56% of the window to say one thing four times. They are answered one
+  at a time whatever the box does, so the box says so — `ToolGroup`'s grammar.
+  It is also what makes the keyboard binding honest: four mounted cards meant
+  four window listeners on one keypress with nothing on screen saying which one
+  answered, and `ChatView` no longer computes a `keyboardId` at all because the
+  open prompt *is* the answer. The open one is held **by id, not index** —
+  answering removes a request from the array, and an index would then point at
+  whichever prompt shuffled into that slot; a missing id falls back to the
+  first, which is what promotes the next one.
+- **A queued row shows its own subject, not the band's line.** Repeated, "Claude
+  needs permission" distinguishes nothing, and a queue whose rows are identical
+  is a queue you cannot choose from. A question's row is the question itself.
+- **The cap moved from the dock onto the body**, which is the fix for the other
+  crowded shape. `AskUserQuestion` may carry four blocks of options; capped at
+  the dock, the whole prompt scrolled and **Submit went below the fold with
+  nothing on screen to say it existed** — a question you cannot submit looks
+  exactly like one that is broken. Scrolling the body alone keeps the answer row
+  where the answer is given, and the band carries `2 of 4 answered`, without
+  which a disabled Submit is a question about options that may be off screen.
+  Measured on four of each: the dock went 383px → 254px and stopped scrolling,
+  and the composer's share of the window 56% → 41%.
+- **The `side` guard splits.** `TaskDock` and `CodexGoalBar` stay nulled in a side
+  chat because they are structurally dead there — the side variant publishes into
+  neither `taskListStore` nor `agentsStore`. Permissions are the opposite:
+  `permissions` is keyed by chat id and a side chat raises its own, so nulling
+  them would leave its turn blocked on a question with nowhere on screen to ask
+  it.
+- **The foot had to start speaking.** `showActivity` was
+  `busy && permissions.length === 0` — correct while the prompt was *in* the
+  transcript, where the label would have been a second voice under it. With the
+  prompt gone the foot fell silent at exactly the moment the reader is looking at
+  it and nothing anywhere is moving, which reads as a finished turn that is in
+  fact waiting. It says "Waiting for your answer…", and says it *immediately*:
+  `QUIET_MS` exists to tell a lull from the pause between two steps, and there is
+  nothing to disambiguate once the agent has stopped to ask.
+
+**The review picker is the same move for the user's own gesture.** It was
+`absolute bottom-full … bg-popover shadow-2xl`, held two pixels clear of the
+input — a thing that landed on the window rather than part of it. It is opened by
+typing `/review` into the composer and it decides what the next turn will be, so
+it *is* the composer for one gesture, and it takes the same arrangement for the
+same reason: one outline around one object, and the composer's border is the one
+that moves (ring on focus, primary on a file drag), so a second box beside it
+would visibly disagree at the moments the user is acting. Two things follow:
+
+- **It carries its own ✕.** Floating, it was dismissed by clicking the backdrop;
+  docked, there is no backdrop, and Escape alone is not an affordance.
+- **`keyMayAnswer` had to stop matching on `closest('[data-composer]')`.** The
+  picker's custom-instructions textarea is inside that box now, and an empty one
+  — the state it is in while you are deciding what to type — satisfied the old
+  test, so Enter would have allowed the permission sitting under it. The
+  composer's own input is marked `data-composer-input` and matched by name. That
+  is the general hazard in moving anything into the composer: every rule that
+  said "inside the composer" silently widened.
 
 ### Canvas (`canvasTools.ts`, `canvasStore.ts`, `CanvasPanel`)
 

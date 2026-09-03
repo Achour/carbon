@@ -1294,6 +1294,12 @@ export function Composer({
             submit()
           }
         }}
+        // Named, because "the composer's input" stopped being answerable by
+        // `closest('[data-composer]')` the moment the review picker moved
+        // inside this box: its custom-instructions textarea is in there too,
+        // and `keyMayAnswer` would have read an empty one as an empty message
+        // and let Enter allow the permission underneath it.
+        data-composer-input
         onPaste={(e) => {
           if (e.clipboardData.files.length > 0) {
             e.preventDefault()

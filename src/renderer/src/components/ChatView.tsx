@@ -70,8 +70,7 @@ import {
   ToolCard,
   ToolGroup
 } from '@/components/messages/ToolCard'
-import { PermissionCard } from '@/components/messages/PermissionCard'
-import { QuestionCard } from '@/components/messages/QuestionCard'
+import { PromptDock } from '@/components/PromptDock'
 import { BackgroundJobs } from '@/components/BackgroundJobs'
 import { TasksCard } from '@/components/messages/TasksCard'
 import { TurnChangesCard } from '@/components/messages/TurnChangesCard'
@@ -607,15 +606,23 @@ export function ChatView({
   // or a result, where a silent transcript would otherwise read as a hang. A
   // gap shorter than that between two calls shows nothing, which is what keeps
   // a run from blinking a label per call.
-  const showActivity = busy && permissions.length === 0
+  // The prompts moved onto the composer, so the transcript no longer holds the
+  // one thing that said the turn was blocked. Gating the slot on
+  // `permissions.length === 0` would now leave the foot empty at exactly the
+  // moment the reader is looking at it and nothing anywhere is moving — a
+  // finished-looking turn that is in fact waiting. It says so instead, and
+  // *immediately*: `QUIET_MS` exists to tell a lull from a pause between two
+  // steps, and there is nothing to disambiguate when the agent has stopped to
+  // ask.
+  const awaitingAnswer = permissions.length > 0
+  const showActivity = busy
   // "Thinking…" until the model has produced something this turn; "Working…" after.
-  const activityLabel = producedSomething ? 'Working…' : 'Thinking…'
+  const activityLabel = awaitingAnswer
+    ? 'Waiting for your answer…'
+    : producedSomething
+      ? 'Working…'
+      : 'Thinking…'
 
-  // The one prompt Enter/Esc answer: the oldest plain permission. A question
-  // has several answers and a plan has its own review, so neither takes keys.
-  const keyboardPermission = permissions.find(
-    (r) => r.toolName !== 'AskUserQuestion' && r.toolName !== 'ExitPlanMode'
-  )?.id
   const pendingPlanRequest = permissions.find((r) => r.toolName === 'ExitPlanMode')
   const pendingPlan = (pendingPlanRequest?.input as { plan?: unknown } | null)?.plan
   const displayedMessages = React.useMemo(
@@ -810,7 +817,8 @@ export function ChatView({
     const t = setTimeout(() => setQuiet(true), QUIET_MS)
     return () => clearTimeout(t)
   }, [drawn, busy])
-  const showActivityLabel = showActivity && (!producedSomething || (quiet && !tailMoving))
+  const showActivityLabel =
+    showActivity && (awaitingAnswer || !producedSomething || (quiet && !tailMoving))
   // The most recent switch divider renders live ("writing handoff brief…")
   // exactly while main reports the handoff in flight; the busy gate means a
   // crash or restart can never leave a divider shimmering forever.
@@ -1063,47 +1071,6 @@ export function ChatView({
                 the two are separate children and the array is its own implicit
                 fragment, which puts the live node in a different parent again. */}
             {liveNode ? [...historyNodes, liveNode] : historyNodes}
-            {permissions.map((request) => {
-              if (request.toolName === 'AskUserQuestion')
-                return (
-                  <QuestionCard
-                    key={request.id}
-                    request={request}
-                    chatId={chat.id}
-                    provider={chat.provider}
-                  />
-                )
-              if (request.toolName === 'ExitPlanMode')
-                return (
-                  <div
-                    key={request.id}
-                    className="flex animate-enter items-center gap-2.5 rounded-xl border border-primary/30 bg-primary/5 px-3.5 py-2.5"
-                  >
-                    <span className="text-[13px]">
-                      {PROVIDER_SHORT_LABELS[chat.provider]} prepared a plan for your review.
-                    </span>
-                    <div className="flex-1" />
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      onClick={() => {
-                        const plan = (request.input as { plan?: string } | null)?.plan
-                        if (typeof plan === 'string') openPlan(plan)
-                      }}
-                    >
-                      Review plan
-                    </Button>
-                  </div>
-                )
-              return (
-                <PermissionCard
-                  key={request.id}
-                  request={request}
-                  chatId={chat.id}
-                  keyboard={request.id === keyboardPermission}
-                />
-              )
-            })}
             {showActivity && (
               <div className="min-h-7">
                 <StreamingIndicator label={activityLabel} visible={showActivityLabel} />
@@ -1195,34 +1162,51 @@ export function ChatView({
                 ))}
               </div>
             )}
-            <div className="relative">
-              <CodexReviewMenu
-                open={reviewOpen}
-                onOpenChange={setReviewOpen}
-                cwd={chat.cwd}
-                currentBranch={git?.branch}
-                defaultBranch={git?.defaultBranch}
-                onStart={(target) => startCodexReview(chat.id, target)}
-              />
-              <Composer
-              // The checklist rides the composer's own box rather than sitting
-              // above it, so the two read as one object however the border moves.
+            <Composer
+              // Everything that belongs to the input rides the composer's own
+              // box rather than sitting above it, so the stack reads as one
+              // object however the border moves.
+              //
+              // Order is by what is waiting on whom, and the prompts come last
+              // because last is *adjacent to the textarea*: the checklist and
+              // the goal bar grow and collapse on their own, and above the
+              // prompt their movement never pushes the question you have to
+              // answer away from the keys that answer it.
+              //
+              // The `side` guard covers the two main-column surfaces and
+              // deliberately not the other two. The dock and the goal bar are
+              // structurally dead in a side chat — the side variant publishes
+              // into neither `taskListStore` nor `agentsStore`, so they could
+              // only ever draw nothing, and mounting UI that cannot render is
+              // worse than not offering it. Permissions are the opposite:
+              // `permissions` is keyed by chat id and a side chat raises its
+              // own, so nulling them here would leave its turn blocked on a
+              // question with nowhere on screen to ask it.
               header={
-                side ? null : (
-                  <>
-                    {chat.provider === 'codex' && (
-                      <CodexGoalBar chatId={chat.id} threadId={chat.sessionId} working={busy} />
-                    )}
-                    {/* Both belong to the main column. The dock in particular
-                        would be *structurally* dead here: the side variant does
-                        not publish into `taskListStore`, so it could only ever
-                        draw nothing. Mounting UI that cannot render is worse
-                        than not offering it — a side chat's checklist being
-                        invisible is a stated tradeoff, an empty box that looks
-                        like a broken one is not. */}
-                    <TaskDock chatId={chat.id} />
-                  </>
-                )
+                <>
+                  {!side && (
+                    <>
+                      {chat.provider === 'codex' && (
+                        <CodexGoalBar chatId={chat.id} threadId={chat.sessionId} working={busy} />
+                      )}
+                      <TaskDock chatId={chat.id} />
+                    </>
+                  )}
+                  <CodexReviewMenu
+                    open={reviewOpen}
+                    onOpenChange={setReviewOpen}
+                    cwd={chat.cwd}
+                    currentBranch={git?.branch}
+                    defaultBranch={git?.defaultBranch}
+                    onStart={(target) => startCodexReview(chat.id, target)}
+                  />
+                  <PromptDock
+                    chatId={chat.id}
+                    provider={chat.provider}
+                    requests={permissions}
+                    onReviewPlan={openPlan}
+                  />
+                </>
               }
               // Returned, not voided: the composer needs the promise so a failed
               // send restores the draft instead of discarding it.
@@ -1272,8 +1256,7 @@ export function ChatView({
                   ? undefined
                   : `Ask ${PROVIDER_SHORT_LABELS[composerProvider]} anything…`
               }
-              />
-            </div>
+            />
           </div>
         </div>
       </div>
