@@ -571,6 +571,15 @@ export function normalizeAppServerItem(item: NativeItem): ThreadItem | null {
         type: 'codex_image_view',
         path: String(item.path ?? '')
       } as unknown as ThreadItem
+    case 'exitedReviewMode':
+      // Current App Server review turns carry their authoritative final text on
+      // this terminal marker. Older releases also emitted an agentMessage,
+      // which hid the omission here until that duplicate output disappeared.
+      return {
+        id: item.id,
+        type: 'agent_message',
+        text: String(item.review ?? '')
+      }
     case 'contextCompaction':
       return {
         id: item.id,

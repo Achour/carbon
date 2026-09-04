@@ -43,6 +43,29 @@ test('App Server MCP results retain text, images, structured content and metadat
   })
 })
 
+test('App Server exposes the terminal review-mode text as an assistant message', () => {
+  assert.equal(
+    normalizeAppServerItem({
+      id: 'review-turn',
+      type: 'enteredReviewMode',
+      review: 'current changes'
+    }),
+    null
+  )
+  assert.deepEqual(
+    normalizeAppServerItem({
+      id: 'review-turn',
+      type: 'exitedReviewMode',
+      review: 'Found one correctness issue.'
+    }),
+    {
+      id: 'review-turn',
+      type: 'agent_message',
+      text: 'Found one correctness issue.'
+    }
+  )
+})
+
 test('thread overlay keeps service-tier keys and layers extra MCP config', () => {
   const overlay = threadOverlayConfig({
     serviceTier: 'fast',
@@ -335,7 +358,7 @@ test('native review/start attaches and streams the returned review turn', async 
   notify.handleNotification('item/completed', {
     threadId: 'thread-1',
     turnId: 'review-turn',
-    item: { id: 'finding', type: 'agentMessage', text: 'No findings.' }
+    item: { id: 'review-turn', type: 'exitedReviewMode', review: 'No findings.' }
   })
   notify.handleNotification('turn/completed', {
     threadId: 'thread-1',
@@ -362,6 +385,11 @@ test('native review/start attaches and streams the returned review turn', async 
     events.map((event) => event.type),
     ['turn.started', 'item.completed', 'turn.completed']
   )
+  const review = events.find((event) => event.type === 'item.completed')
+  assert.deepEqual(review, {
+    type: 'item.completed',
+    item: { id: 'review-turn', type: 'agent_message', text: 'No findings.' }
+  })
   client.dispose()
 })
 
