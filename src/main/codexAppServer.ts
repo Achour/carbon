@@ -338,6 +338,8 @@ class AppServerTurn {
   usage: CodexTurnUsage | null = null
   model: string | null
   planSeen = false
+  review = false
+  reviewFinalSeen = false
   fatalErrorEmitted = false
   retryErrorCount = 0
 
@@ -572,9 +574,9 @@ export function normalizeAppServerItem(item: NativeItem): ThreadItem | null {
         path: String(item.path ?? '')
       } as unknown as ThreadItem
     case 'exitedReviewMode':
-      // Current App Server review turns carry their authoritative final text on
-      // this terminal marker. Older releases also emitted an agentMessage,
-      // which hid the omission here until that duplicate output disappeared.
+      // This is the authoritative final review. The transport reconciles it
+      // into the streamed agent-message slot because current App Server builds
+      // also emit a second, identical agentMessage after this marker.
       return {
         id: item.id,
         type: 'agent_message',
@@ -872,8 +874,8 @@ export class CodexAppServerClient implements CodexClientLike {
   >()
   private readonly turns = new Map<string, AppServerTurn>()
   private readonly buffered = new Map<string, BufferedNotification[]>()
-  /** A turn/started notification can beat its turn/start response. Keep those
-   * notifications buffered so they are not mistaken for autonomous work. */
+  /** A turn/started notification can beat its turn/start response. Track the
+   * request so that notification is not mistaken for autonomous work. */
   private readonly expectedTurnStarts = new Map<string, number>()
   private readonly serverRequests = new Map<
     string,
@@ -945,6 +947,13 @@ export class CodexAppServerClient implements CodexClientLike {
     for (const value of values) this.handleTurnNotification(run, value.method, value.params)
   }
 
+  private hasActiveReview(threadId: string): boolean {
+    for (const run of this.turns.values()) {
+      if (run.threadId === threadId && run.review) return true
+    }
+    return false
+  }
+
   async runReview(
     threadId: string,
     target: CodexReviewTarget,
@@ -968,6 +977,7 @@ export class CodexAppServerClient implements CodexClientLike {
     }
     const reviewThreadId = response.reviewThreadId || threadId
     const run = this.attachTurn(reviewThreadId, response.turn.id, options.model ?? null)
+    run.review = true
     run.queue.push({ type: 'turn.started' })
     this.drainBuffered(run)
     this.finishExpectedTurnStart(threadId)
@@ -1319,24 +1329,26 @@ export class CodexAppServerClient implements CodexClientLike {
     if (!threadId || !turnId) return
     const key = this.turnKey(threadId, turnId)
     let run = this.turns.get(key)
-    if (
-      !run &&
-      method === 'turn/started' &&
-      !this.expectedTurnStarts.has(threadId) &&
-      this.callbacks.onUnsolicitedTurn
-    ) {
-      run = this.attachTurn(threadId, turnId, null)
-      run.queue.push({ type: 'turn.started' })
-      this.drainBuffered(run)
-      this.callbacks.onUnsolicitedTurn({
-        threadId,
-        turnId,
-        events: run.queue.iterate(),
-        interrupt: () => {
-          void this.request('turn/interrupt', { threadId, turnId }).catch(() => {})
-        }
-      })
-      return
+    if (!run && method === 'turn/started') {
+      // Carbon creates the stream from the request response and synthesizes its
+      // turn.started event. Codex 0.153 can additionally emit a late
+      // turn/started for an internal review turn id that is never used again;
+      // treating that as autonomous work leaves a phantom stream running.
+      if (this.expectedTurnStarts.has(threadId) || this.hasActiveReview(threadId)) return
+      if (this.callbacks.onUnsolicitedTurn) {
+        run = this.attachTurn(threadId, turnId, null)
+        run.queue.push({ type: 'turn.started' })
+        this.drainBuffered(run)
+        this.callbacks.onUnsolicitedTurn({
+          threadId,
+          turnId,
+          events: run.queue.iterate(),
+          interrupt: () => {
+            void this.request('turn/interrupt', { threadId, turnId }).catch(() => {})
+          }
+        })
+        return
+      }
     }
     if (run) this.handleTurnNotification(run, method, params)
     else {
@@ -1355,6 +1367,28 @@ export class CodexAppServerClient implements CodexClientLike {
       const item = params.item as NativeItem | undefined
       if (!item?.id) return
       run.items.set(item.id, item)
+
+      if (run.review && item.type === 'exitedReviewMode') {
+        // item/started contains the same final text as item/completed. Wait for
+        // completion, then replace the last streamed review message in place.
+        if (method === 'item/started') return
+        const streamed = [...run.items.values()]
+          .reverse()
+          .find((value) => value.type === 'agentMessage')
+        const normalized = normalizeAppServerItem(item)
+        run.reviewFinalSeen = true
+        if (normalized) {
+          run.queue.push({
+            type: 'item.completed',
+            item: { ...normalized, id: streamed?.id ?? normalized.id }
+          })
+        }
+        return
+      }
+
+      // Current App Server builds persist the authoritative exitedReviewMode
+      // text once more as an agentMessage. It is not another review finding.
+      if (run.review && run.reviewFinalSeen && item.type === 'agentMessage') return
       const normalized = normalizeAppServerItem(item)
       if (normalized) {
         run.queue.push({
@@ -1374,6 +1408,7 @@ export class CodexAppServerClient implements CodexClientLike {
       const itemId = String(params.itemId ?? '')
       const item = run.items.get(itemId)
       if (!item) return
+      if (run.review && run.reviewFinalSeen && item.type === 'agentMessage') return
       updateItemFromDelta(item, method, params)
       const normalized = normalizeAppServerItem(item)
       if (normalized) run.queue.push({ type: 'item.updated', item: normalized })

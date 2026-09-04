@@ -330,14 +330,15 @@ test('a racing turn/started for a Carbon-requested turn is not treated as autono
   })
 
   assert.equal(autonomous.length, 0)
-  const run = client.attachTurn('thread-1', 'requested-turn', 'gpt-test')
-  client.drainBuffered(run)
   client.finishExpectedTurnStart('thread-1')
   client.dispose()
 })
 
-test('native review/start attaches and streams the returned review turn', async () => {
-  const client = new CodexAppServerClient()
+test('native review/start tolerates Codex 0.153 turn ids and emits one final review', async () => {
+  const autonomous: NativeTurnStream[] = []
+  const client = new CodexAppServerClient({
+    onUnsolicitedTurn: (turn) => autonomous.push(turn)
+  })
   const calls: { method: string; params: unknown }[] = []
   ;(client as unknown as { request(method: string, params: unknown): Promise<unknown> }).request =
     async (method, params) => {
@@ -355,10 +356,44 @@ test('native review/start attaches and streams the returned review turn', async 
   const notify = client as unknown as {
     handleNotification(method: string, params: unknown): void
   }
+  // Codex 0.153 emits this after review/start returns, with a turn id that none
+  // of the review item or completion notifications use.
+  notify.handleNotification('turn/started', {
+    threadId: 'thread-1',
+    turn: { id: 'internal-review-turn', status: 'inProgress' }
+  })
+  notify.handleNotification('item/started', {
+    threadId: 'thread-1',
+    turnId: 'review-turn',
+    item: { id: 'streamed-review', type: 'agentMessage', text: '' }
+  })
+  notify.handleNotification('item/agentMessage/delta', {
+    threadId: 'thread-1',
+    turnId: 'review-turn',
+    itemId: 'streamed-review',
+    delta: 'No findings.'
+  })
+  notify.handleNotification('item/started', {
+    threadId: 'thread-1',
+    turnId: 'review-turn',
+    item: { id: 'review-marker', type: 'exitedReviewMode', review: 'No findings.' }
+  })
   notify.handleNotification('item/completed', {
     threadId: 'thread-1',
     turnId: 'review-turn',
-    item: { id: 'review-turn', type: 'exitedReviewMode', review: 'No findings.' }
+    item: { id: 'review-marker', type: 'exitedReviewMode', review: 'No findings.' }
+  })
+  // The final agentMessage is a persistence copy of exitedReviewMode, not a
+  // second message for the transcript.
+  notify.handleNotification('item/started', {
+    threadId: 'thread-1',
+    turnId: 'review-turn',
+    item: { id: 'persisted-review', type: 'agentMessage', text: 'No findings.' }
+  })
+  notify.handleNotification('item/completed', {
+    threadId: 'thread-1',
+    turnId: 'review-turn',
+    item: { id: 'persisted-review', type: 'agentMessage', text: 'No findings.' }
   })
   notify.handleNotification('turn/completed', {
     threadId: 'thread-1',
@@ -383,13 +418,34 @@ test('native review/start attaches and streams the returned review turn', async 
   ])
   assert.deepEqual(
     events.map((event) => event.type),
-    ['turn.started', 'item.completed', 'turn.completed']
+    ['turn.started', 'item.started', 'item.updated', 'item.completed', 'turn.completed']
   )
-  const review = events.find((event) => event.type === 'item.completed')
-  assert.deepEqual(review, {
-    type: 'item.completed',
-    item: { id: 'review-turn', type: 'agent_message', text: 'No findings.' }
-  })
+  assert.equal(autonomous.length, 0)
+  assert.deepEqual(
+    events
+      .filter(
+        (event) =>
+          (event.type === 'item.started' ||
+            event.type === 'item.updated' ||
+            event.type === 'item.completed') &&
+          event.item.type === 'agent_message'
+      )
+      .map((event) => ({ type: event.type, item: event.item })),
+    [
+      {
+        type: 'item.started',
+        item: { id: 'streamed-review', type: 'agent_message', text: '' }
+      },
+      {
+        type: 'item.updated',
+        item: { id: 'streamed-review', type: 'agent_message', text: 'No findings.' }
+      },
+      {
+        type: 'item.completed',
+        item: { id: 'streamed-review', type: 'agent_message', text: 'No findings.' }
+      }
+    ]
+  )
   client.dispose()
 })
 
