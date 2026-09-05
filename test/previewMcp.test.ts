@@ -233,6 +233,70 @@ test('the bridge routes canvas calls, and defaults to preview without a server f
   }
 })
 
+test('the bridge carries an edit\'s strings through to the tool', async () => {
+  // Claude's canvas server runs in-process and never touches this bridge, so
+  // an argument the bridge forgets to forward is a tool that works on Claude
+  // and silently does nothing on Codex and Grok.
+  let html = '<h1>Old</h1><p>body</p>'
+  const canvas = {
+    list: () => [],
+    get: () => ({
+      id: 'canvas-1',
+      project: '/repo',
+      chatId: null,
+      title: 'Report',
+      html,
+      createdAt: 1,
+      updatedAt: 1
+    }),
+    save: (input: { title: string; html: string }) => {
+      html = input.html
+      return {
+        id: 'canvas-1',
+        project: '/repo',
+        chatId: null,
+        title: input.title,
+        createdAt: 1,
+        updatedAt: 2
+      }
+    }
+  }
+  const preview: PreviewToolHost = {
+    state: (cwd) => ({ cwd, status: 'stopped' }),
+    startAndWait: async (cwd) => ({ cwd, status: 'stopped' }),
+    stop: (cwd) => ({ cwd, status: 'stopped' }),
+    navigate: async () => ({ ok: true }),
+    screenshot: async () => null,
+    recentConsole: () => ''
+  }
+  const bridge = await startPreviewBridge(preview, canvas)
+  try {
+    const res = await callCanvasBridge(
+      bridge.url,
+      bridge.token,
+      { project: '/repo', chatId: 'chat-1' },
+      'edit',
+      { id: 'canvas-1', old_string: '<h1>Old</h1>', new_string: '<h1>New</h1>' }
+    )
+    assert.equal(res.ok, true)
+    assert.equal(html, '<h1>New</h1><p>body</p>')
+
+    // `replace_all` is a boolean, the one canvas argument that is not a string.
+    html = '<td>1</td><td>1</td>'
+    const all = await callCanvasBridge(
+      bridge.url,
+      bridge.token,
+      { project: '/repo' },
+      'edit',
+      { id: 'canvas-1', old_string: '<td>1</td>', new_string: '<td>2</td>', replace_all: true }
+    )
+    assert.equal(all.ok, true)
+    assert.equal(html, '<td>2</td><td>2</td>')
+  } finally {
+    bridge.close()
+  }
+})
+
 test('the bridge refuses a canvas call it has no host for, and an unknown tool', async () => {
   const preview: PreviewToolHost = {
     state: (cwd) => ({ cwd, status: 'stopped' }),

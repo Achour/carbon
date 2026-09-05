@@ -62,6 +62,7 @@ function summary(row: Row): CanvasSummary {
 export class CanvasStore {
   private selList: StatementSync
   private selOne: StatementSync
+  private selMeta: StatementSync
   private upsert: StatementSync
   private del: StatementSync
   /**
@@ -80,6 +81,13 @@ export class CanvasStore {
       'SELECT id, project, chat_id, title, created_at, updated_at FROM canvases WHERE project = ? ORDER BY updated_at DESC'
     )
     this.selOne = this.db.prepare('SELECT * FROM canvases WHERE id = ?')
+    // `save` wants only the fields a revision preserves, and reading the body
+    // to discard it is the whole document decoded into a string for nothing —
+    // 0.5 ms and ~8 MB of transient string at the 4 MB cap, synchronously, on
+    // the thread feeding `chat:event`. Every `edit` goes through here.
+    this.selMeta = this.db.prepare(
+      'SELECT id, project, chat_id, title, created_at, updated_at FROM canvases WHERE id = ?'
+    )
     this.upsert = this.db.prepare(
       `INSERT INTO canvases (id, project, chat_id, title, html, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -101,6 +109,12 @@ export class CanvasStore {
     return row ? { ...summary(row), html: row.html } : null
   }
 
+  /** What a revision needs to preserve, without reading the document. */
+  private meta(id: string): CanvasSummary | null {
+    const row = this.selMeta.get(id) as Row | undefined
+    return row ? summary(row) : null
+  }
+
   /**
    * Create or replace. An `id` that names an existing canvas updates it in
    * place — keeping `created_at` and `project`, which is what makes "revise the
@@ -120,7 +134,7 @@ export class CanvasStore {
       )
     }
     const now = Date.now()
-    const existing = input.id ? this.get(input.id) : null
+    const existing = input.id ? this.meta(input.id) : null
     const id = existing?.id ?? input.id ?? randomUUID()
     const title = input.title.trim() || 'Untitled canvas'
     const row: CanvasSummary = {

@@ -323,7 +323,7 @@ function agentStatus(status: string): ToolStatus {
 
 /**
  * How often a running command's accumulated output is re-shipped to the
- * renderer. The same grain as Claude's `PARTIAL_INPUT_MS`, for the same reason:
+ * renderer. The grain Claude's `PARTIAL_INPUT_MS` starts at, for the same reason:
  * each emit is a full-part IPC, and output is read rather than watched.
  */
 const OUTPUT_MS = 120

@@ -1,5 +1,9 @@
 import { PREVIEW_TOOL_INFO, PREVIEW_TOOL_NAMES, previewPlanBlock } from './previewTools.ts'
-import { CANVAS_TOOL_INFO, CANVAS_TOOL_NAMES } from './canvasTools.ts'
+import {
+  CANVAS_TOOL_INFO,
+  CANVAS_TOOL_NAMES,
+  type CanvasToolInput
+} from './canvasTools.ts'
 import { callCanvasBridge, callPreviewBridge, type PreviewBridgeResponse } from './previewBridge.ts'
 
 /**
@@ -27,7 +31,7 @@ interface JsonRpcResponse {
 const PROTOCOL = '2024-11-05'
 
 /** The union of both tool tables' arguments — the child only forwards them. */
-export type ToolArgs = { url?: string; title?: string; html?: string; id?: string }
+export type ToolArgs = CanvasToolInput & { url?: string }
 
 export function previewToolList(): Array<{
   name: string
@@ -55,9 +59,10 @@ export function previewToolList(): Array<{
 }
 
 /**
- * The canvas tools' wire schema. `html` is a plain string parameter — the whole
- * document travels as one argument, which is why the bridge's canvas cap is
- * megabytes rather than the preview path's kilobytes.
+ * The canvas tools' wire schema, derived from `CANVAS_TOOL_INFO`'s parameter
+ * table rather than written out again. `html` is a plain string parameter — the
+ * whole document travels as one argument, which is why the bridge's canvas cap
+ * is megabytes rather than the preview path's kilobytes.
  */
 export function canvasToolList(): Array<{
   name: string
@@ -65,31 +70,17 @@ export function canvasToolList(): Array<{
   inputSchema: Record<string, unknown>
 }> {
   return CANVAS_TOOL_NAMES.map((name) => {
-    const properties: Record<string, unknown> = {}
-    const required: string[] = []
-    if (name === 'write') {
-      properties.title = { type: 'string', description: 'Short title for the canvas.' }
-      properties.html = {
-        type: 'string',
-        description:
-          'A complete, self-contained HTML document. Inline any CSS and JS; do not reference project files.'
-      }
-      properties.id = {
-        type: 'string',
-        description: 'Id of an existing canvas to replace. Omit to create a new one.'
-      }
-      required.push('title', 'html')
-    }
-    if (name === 'read') {
-      properties.id = { type: 'string', description: 'The canvas id.' }
-      required.push('id')
-    }
+    const info = CANVAS_TOOL_INFO[name]
+    const entries = Object.entries(info.params)
+    const required = entries.filter(([, p]) => p.required).map(([key]) => key)
     return {
       name,
-      description: CANVAS_TOOL_INFO[name].description,
+      description: info.description,
       inputSchema: {
         type: 'object',
-        properties,
+        properties: Object.fromEntries(
+          entries.map(([key, p]) => [key, { type: p.type, description: p.description }])
+        ),
         ...(required.length ? { required } : {})
       }
     }

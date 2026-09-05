@@ -13,7 +13,7 @@ import {
   type SDKMessage,
   type SDKUserMessage
 } from '@anthropic-ai/claude-agent-sdk'
-import { z } from 'zod'
+import { z, type ZodRawShape } from 'zod'
 import type {
   AccountInfo,
   AgentInfo,
@@ -72,7 +72,13 @@ import type { PreviewManager } from './preview'
 import { runPreviewTool } from './previewTools.ts'
 import { projectRoot } from '../shared/types.ts'
 import type { CanvasManager } from './canvas.ts'
-import { CANVAS_SESSION_RULES, CANVAS_TOOL_INFO, runCanvasTool } from './canvasTools.ts'
+import {
+  CANVAS_SESSION_RULES,
+  CANVAS_TOOL_INFO,
+  CANVAS_TOOL_NAMES,
+  runCanvasTool,
+  type CanvasToolInput
+} from './canvasTools.ts'
 import { CodexSession, fetchCodexModels, generateCodexText } from './codex'
 import { CodexAppServerClient } from './codexAppServer'
 import { fetchGrokModels, forkGrokBefore, generateGrokText, GrokSession } from './grok'
@@ -187,35 +193,24 @@ function buildCanvasServer(
   return createSdkMcpServer({
     name: 'canvas',
     version: '1.0.0',
-    tools: [
-      tool(
-        'write',
-        CANVAS_TOOL_INFO.write.description,
-        {
-          title: z.string().describe('Short title for the canvas.'),
-          html: z
-            .string()
-            .describe(
-              'A complete, self-contained HTML document. Inline any CSS and JS; do not reference project files.'
-            ),
-          id: z
-            .string()
-            .optional()
-            .describe('Id of an existing canvas to replace. Omit to create a new one.')
-        },
-        async ({ title, html, id }) =>
-          text(runCanvasTool(canvas, ctx, 'write', { title, html, id }).text)
-      ),
-      tool('list', CANVAS_TOOL_INFO.list.description, {}, async () =>
-        text(runCanvasTool(canvas, ctx, 'list').text)
-      ),
-      tool(
-        'read',
-        CANVAS_TOOL_INFO.read.description,
-        { id: z.string().describe('The canvas id.') },
-        async ({ id }) => text(runCanvasTool(canvas, ctx, 'read', { id }).text)
+    // Built from `CANVAS_TOOL_INFO`'s parameter table, the same table the stdio
+    // child's JSON Schema is built from, so Claude and the other two providers
+    // cannot be told different things about one argument. Written out by hand
+    // they already had been.
+    tools: CANVAS_TOOL_NAMES.map((name) => {
+      const info = CANVAS_TOOL_INFO[name]
+      const shape: ZodRawShape = Object.fromEntries(
+        Object.entries(info.params).map(([key, p]) => {
+          const base = p.type === 'boolean' ? z.boolean() : z.string()
+          return [key, (p.required ? base : base.optional()).describe(p.description)]
+        })
       )
-    ]
+      // The handler's argument type is the table's, which the compiler cannot
+      // infer from a value — and `runCanvasTool` validates every field anyway.
+      return tool(name, info.description, shape, async (args) =>
+        text(runCanvasTool(canvas, ctx, name, args as CanvasToolInput).text)
+      )
+    })
   })
 }
 
@@ -262,10 +257,44 @@ function toolResultText(content: unknown): string {
 // the 80ms text coalescer: a command or a path is read, not watched, and each
 // emit is a full-part IPC plus a parse of the whole prefix.
 const PARTIAL_INPUT_MS = 120
+// …and how much of one may be shipped per millisecond of that window, plus the
+// ceiling on the window itself. See `partialInputDelay`.
+const PARTIAL_INPUT_BYTES_PER_MS = 100
+const PARTIAL_INPUT_MAX_MS = 5000
 // How often a redacted thought's running token estimate is shipped. Nothing
 // draws it, so once a second is already generous.
 const THINKING_PING_MS = 1000
 const ADVISOR_TOOL = 'advisor'
+
+/**
+ * How long to wait before shipping the next partial input, given how much of it
+ * has already arrived.
+ *
+ * Each emit re-parses the *whole* accumulated prefix and structured-clones the
+ * whole part to a renderer that re-renders on it, so a fixed window makes
+ * streaming one call quadratic in the size of its input. Measured on this
+ * repo's own chats, an 80 KB canvas write streams for ~280 s: at a flat 120 ms
+ * that is ~2,300 emits carrying ~190 MB between them, and a `saveChatSoon` on
+ * each — the app going sluggish for the whole of a long write, for a row whose
+ * label settled in the first few hundred bytes.
+ *
+ * Scaling the window with the prefix keeps the total work linear while the row
+ * still fills in as it streams, which a hard cap would have taken away: the
+ * progressive `Edit` diff is drawn from exactly these partial inputs.
+ *
+ * The ceiling is above `saveChatSoon`'s 5 s cap, not below it, and that is the
+ * one number here with a wrong answer next to it. The debounce is *trailing*:
+ * while emits land inside its 1.5 s window they keep resetting it and only the
+ * cap ever fires, so a ceiling between the two (2 s, say) would make every emit
+ * miss the window and persist — more writes than the flat window it replaced,
+ * on exactly the large inputs this exists for.
+ */
+function partialInputDelay(length: number): number {
+  return Math.min(
+    PARTIAL_INPUT_MAX_MS,
+    Math.max(PARTIAL_INPUT_MS, length / PARTIAL_INPUT_BYTES_PER_MS)
+  )
+}
 
 /**
  * The advisor's answer, as the CLI's own UI states it.
@@ -1745,7 +1774,8 @@ class ClaudeSession implements AgentSession {
           }
           if (delta.thinking) this.deltas.queue(message.id, index, delta.thinking)
         } else if (delta.type === 'input_json_delta') {
-          this.jsonAcc.set(index, (this.jsonAcc.get(index) ?? '') + (delta.partial_json ?? ''))
+          const acc = (this.jsonAcc.get(index) ?? '') + (delta.partial_json ?? '')
+          this.jsonAcc.set(index, acc)
           if (part.type === 'tool' && !this.partialTimers.has(index)) {
             this.partialTimers.set(
               index,
@@ -1760,7 +1790,7 @@ class ClaudeSession implements AgentSession {
                 part.input = parsed
                 part.partial = true
                 this.emitPart(message, index)
-              }, PARTIAL_INPUT_MS)
+              }, partialInputDelay(acc.length))
             )
           }
         }

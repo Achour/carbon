@@ -122,6 +122,18 @@ Path aliases: `@` → `src/renderer/src`, `@shared` → `src/shared` (renderer a
   leaves a part claiming more is coming. Before the first parseable prefix
   lands, `ToolCard` pulses a placeholder in the summary's slot rather than
   drawing the label alone: a row that is forming should look like one.
+  **The window widens with the prefix** (`partialInputDelay`): every emit
+  re-parses the whole accumulated prefix *and* structured-clones the whole
+  part, so a fixed window makes streaming one call quadratic in the size of its
+  input — an 80 KB canvas write streaming for ~280 s is ~2,300 emits carrying
+  ~190 MB between them, which is the app going sluggish for the whole of a long
+  write. Scaling it keeps the total linear, where a hard cap would have cost the
+  progressive `Edit` diff: that is drawn from exactly these partial inputs.
+  `PARTIAL_INPUT_MAX_MS` sits **above** `saveChatSoon`'s 5 s cap and not below
+  it: that debounce is trailing, so while emits land inside its 1.5 s window
+  they keep resetting it and only the cap ever fires — a ceiling between the two
+  would make every emit miss the window and persist, i.e. more writes than the
+  flat window it replaced, on exactly the inputs this exists for.
 - **Two more emitters are throttled at the same grain, for the same reason.** A
   redacted thought's `estimated_tokens` pings went out as a full-part IPC each,
   several a second for the whole of a long thought, re-rendering the transcript
@@ -1686,6 +1698,51 @@ what makes the Recents list one indexed query rather than a directory scan.
   the same title instead of a new version of the first. `save` keyed by that id
   preserves `createdAt` and refuses to move a canvas between projects, since the
   id is the identity and a caller passing a different cwd is a worktree.
+- **A revision is an `edit`, and for a long time there was no such thing.**
+  `write` takes the whole document, so it is O(document) in *output tokens* —
+  and output tokens are generated at ~80/s, which nothing about the transport,
+  the bridge or SQLite can change. Measured on this repo's own chats
+  (`ToolPart.startedAt` between successive calls): a canvas that grew 80,449 →
+  80,506 bytes — **57 bytes changed** — took **281 seconds**, which is exactly
+  the generation time for the ~22k tokens the unchanged 80 KB costs. Every
+  revision in that chat lands between 271 s and 388 s regardless of how much
+  actually moved. Files never had this problem because they have `Edit`; the
+  canvas had only its `Write`. `edit` is that tool, `Edit`'s contract down to
+  the wording of "not found" and "appears N times" so the model already knows
+  how to recover, and the same change is now ~50 output tokens. `write` is left
+  for creating a canvas or rewriting one wholesale.
+  - **`CANVAS_SESSION_RULES` is half the fix**, and was previously half the
+    bug: it *instructed* the slow path — "call `read` … then `write` with the
+    SAME id". A tool the rules do not name is a tool the model does not reach
+    for.
+  - **A rename is an edit with no strings.** Re-sending 80 KB to change five
+    characters of a title is the same defect at its most absurd, so `title`
+    alone is a valid edit.
+  - **The replacement is spliced by index, never through `String.replace`**,
+    where `$&` and `$1` are substitution patterns — and a canvas is a document
+    full of CSS and script that can contain either.
+  - **Naming the row took two answers, because an edit carries an id and
+    nothing else** — not re-sending the document *or its metadata* is the
+    point of it. `CanvasLink` resolves the name out of the project's own
+    canvas list while the call runs (so the row says which document is being
+    edited from its first frame, where a write cannot know its id until the
+    result lands), and the result prose repeats the title so a chat reopened
+    after the list has moved on still reads correctly. `resolveCanvasTitle`
+    sits beside `resolveCanvasId` rather than in the component, because
+    resolving is that module's job and it is the half `node --test` can reach.
+    `meta.summary` is *not* where a canvas row is drawn — `CanvasLink` owns
+    that slot in `ToolCard`, so a label put there looks right and renders
+    nowhere, which is what the first attempt did; it is still read by
+    `ToolGroup` for the trailing text on a folded running run, which is why it
+    stays. `demo/e2e/canvas-edit.js` pins the rendering, since no unit test in
+    this repo renders.
+  - **One argument is described once** (`CANVAS_TOOL_INFO.params`). It is
+    spelled three ways downstream — zod for Claude's in-process server, JSON
+    Schema for the stdio child Codex and Grok read, a field pick in the
+    bridge — and hand-copying them drifted within the commit that added
+    `edit`: `id` was described two different ways and `old_string`'s "omit only
+    when renaming" reached Claude alone. All three are now derived, so the next
+    argument cannot arrive on one provider and not the others.
 - **Nothing is gated.** A canvas tool writes only Carbon's own database — no
   file, no process, nothing outside the app — so `mcp__canvas__` is auto-allowed
   beside `mcp__preview__`, in plan mode included: a plan that produces a

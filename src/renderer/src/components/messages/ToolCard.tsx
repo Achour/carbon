@@ -42,6 +42,7 @@ import {
   canvasInRun,
   canvasWrite,
   resolveCanvasId,
+  resolveCanvasTitle,
   type CanvasRef
 } from '@/lib/canvasRef'
 import { useAgents } from '@/agentsStore'
@@ -65,12 +66,15 @@ function str(v: unknown): string | undefined {
   return typeof v === 'string' && v.length > 0 ? v : undefined
 }
 
-/** The row for a canvas write, whichever provider spelled the call. */
+/** The row for a canvas write or edit, whichever provider spelled the call. */
 function canvasMeta(part: ToolPart): ToolMeta {
   const written = canvasWrite(part)
   return {
     icon: PenLine,
     label: 'Canvas',
+    // `CanvasLink` owns this slot in `ToolCard`, but `ToolGroup` reads it for
+    // the trailing text on a *folded running* run — so this is the title again
+    // there, and blank for an edit, which has none until its result lands.
     summary: written?.title,
     // A row with no resolvable canvas still reads correctly; it just has
     // nowhere to go, which is the honest outcome rather than a dead link.
@@ -159,10 +163,14 @@ function browserMeta(name: string, input: Record<string, unknown>): ToolMeta {
 }
 
 function toolMeta(part: ToolPart, cwd: string): ToolMeta {
-  // Ahead of the switch: Grok wraps every deferred MCP tool in `use_tool`, so a
-  // canvas write reaches here under a name the switch cannot match, and the card
-  // would read `use_tool` with no way into the document it just wrote.
-  if (canvasWrite(part) && part.name !== 'mcp__canvas__write') return canvasMeta(part)
+  // Ahead of the switch, and asking the recognizer rather than a name: Grok
+  // wraps every deferred MCP tool in `use_tool`, so a canvas mutation reaches
+  // here under a name no case can match and the card would read `use_tool` with
+  // no way into the document it just wrote. `canvasWrite` already answers "is
+  // this a canvas mutation, in any provider's spelling" — spelled as a name
+  // test instead, this is a third list of the same verbs, and it was wrong
+  // twice already: "not the write tool" swallowed `edit` when it arrived.
+  if (canvasWrite(part)) return canvasMeta(part)
 
   const input = (part.input ?? {}) as Record<string, unknown>
   const rel = (p?: string): string | undefined =>
@@ -330,9 +338,8 @@ function toolMeta(part: ToolPart, cwd: string): ToolMeta {
     // The canvas tools take `Preview`'s shape: one label for the server, the
     // call's own subject as the summary. `PenLine` rather than `Shapes`, which
     // is `Artifact`'s — the two are different destinations and a shared glyph
-    // would say they are the same one.
-    case 'mcp__canvas__write':
-      return canvasMeta(part)
+    // would say they are the same one. The two mutations are answered by the
+    // recognizer above.
     case 'mcp__canvas__list':
       return { icon: PenLine, label: 'Canvas', summary: 'List canvases' }
     case 'mcp__canvas__read':
@@ -416,15 +423,22 @@ function openWrittenCanvas(written: CanvasRef): void {
  * happened, then the document.
  */
 function CanvasLink({ canvas }: { canvas: CanvasRef }): React.JSX.Element {
+  // An edit names its canvas by id and never by title — not re-sending the
+  // document or its metadata is the whole point of the tool — so the row would
+  // read a bare "Open canvas" for the whole of a running edit and learn the
+  // document's name only from the result. The project's own list already holds
+  // it, keyed by exactly the id the call carries. A primitive is selected
+  // rather than the row, so the subscription settles on a string compare.
+  const name = useApp((s) => resolveCanvasTitle(canvas, s.canvases))
   return (
     <RowAction
       title="Open this canvas"
-      ariaLabel={`Open canvas ${canvas.title ?? ''}`}
+      ariaLabel={`Open canvas ${name ?? ''}`}
       className="flex min-w-0 shrink cursor-pointer items-center gap-1 text-[13px] text-foreground/80 underline decoration-foreground/25 underline-offset-2 hover:text-foreground hover:decoration-foreground"
       onActivate={() => openWrittenCanvas(canvas)}
     >
       <PenLine className="size-3.5 shrink-0" />
-      <span className="truncate">{canvas.title ?? 'Open canvas'}</span>
+      <span className="truncate">{name ?? 'Open canvas'}</span>
     </RowAction>
   )
 }

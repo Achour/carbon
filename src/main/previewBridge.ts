@@ -6,7 +6,12 @@ import {
   type PreviewToolHost,
   type PreviewToolResult
 } from './previewTools.ts'
-import { isCanvasToolName, runCanvasTool, type CanvasToolHost } from './canvasTools.ts'
+import {
+  isCanvasToolName,
+  runCanvasTool,
+  type CanvasToolHost,
+  type CanvasToolInput
+} from './canvasTools.ts'
 
 /**
  * Per-server body caps, not one global.
@@ -89,7 +94,15 @@ async function handleRequest(
       cwd?: unknown
       project?: unknown
       chatId?: unknown
-      input?: { url?: unknown; title?: unknown; html?: unknown; id?: unknown }
+      input?: {
+        url?: unknown
+        title?: unknown
+        html?: unknown
+        id?: unknown
+        old_string?: unknown
+        new_string?: unknown
+        replace_all?: unknown
+      }
     }
     const name = typeof body.name === 'string' ? body.name : ''
     // Defaulted, so an existing preview client that sends no `server` field
@@ -118,7 +131,10 @@ async function handleRequest(
       const input = {
         title: typeof body.input?.title === 'string' ? body.input.title : undefined,
         html: typeof body.input?.html === 'string' ? body.input.html : undefined,
-        id: typeof body.input?.id === 'string' ? body.input.id : undefined
+        id: typeof body.input?.id === 'string' ? body.input.id : undefined,
+        old_string: typeof body.input?.old_string === 'string' ? body.input.old_string : undefined,
+        new_string: typeof body.input?.new_string === 'string' ? body.input.new_string : undefined,
+        replace_all: body.input?.replace_all === true
       }
       json(res, 200, { ok: true, ...runCanvasTool(canvas, { project, chatId }, name, input) })
       return
@@ -198,7 +214,7 @@ export async function callCanvasBridge(
   token: string,
   ctx: { project: string; chatId?: string | null },
   name: string,
-  input: { title?: string; html?: string; id?: string } = {}
+  input: CanvasToolInput = {}
 ): Promise<PreviewBridgeResponse> {
   const res = await fetch(`${url.replace(/\/$/, '')}/tool`, {
     method: 'POST',

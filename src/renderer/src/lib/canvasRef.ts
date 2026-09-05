@@ -34,6 +34,9 @@ function record(v: unknown): Record<string, unknown> {
   return v && typeof v === 'object' ? (v as Record<string, unknown>) : {}
 }
 
+/** The id shape both result scrapes anchor on. */
+const CANVAS_ID = '[0-9a-fA-F-]{36}'
+
 /**
  * The `(id: …)` a canvas write answers with.
  *
@@ -42,22 +45,48 @@ function record(v: unknown): Record<string, unknown> {
  * is written to yield nothing rather than to trust a shape.
  */
 export function canvasIdFromOutput(output: string | undefined): string | undefined {
-  return /\(id: ([0-9a-fA-F-]{36})\)/.exec(output ?? '')?.[1]
+  return new RegExp(`\\(id: (${CANVAS_ID})\\)`).exec(output ?? '')?.[1]
 }
 
-/** The canvas a call wrote, or null if it is not a canvas write at all. */
+/**
+ * The title a canvas mutation answers with.
+ *
+ * `write` is told its title by the model, so it needs no scrape; `edit` is
+ * not — the whole point of that tool is that it does not re-send the document
+ * or its metadata — so the result prose is the only place the title appears.
+ * Read out of the same sentence as the id, off the same id pattern, so the two
+ * cannot stop agreeing about what a result looks like.
+ */
+export function canvasTitleFromOutput(output: string | undefined): string | undefined {
+  return new RegExp(`canvas "([^"]*)" \\(id: ${CANVAS_ID}\\)`).exec(output ?? '')?.[1] || undefined
+}
+
+/**
+ * The calls that produce a canvas — an edit is as much a way in as a write.
+ * One list, so the direct names and Grok's namespaced spellings cannot come to
+ * disagree about which verbs count.
+ */
+const CANVAS_VERBS = ['write', 'edit'] as const
+const CANVAS_MUTATORS = new Set(CANVAS_VERBS.map((verb) => `mcp__canvas__${verb}`))
+const GROK_MUTATOR = new RegExp(`canvas__(?:${CANVAS_VERBS.join('|')})$`)
+
+/** The canvas a call wrote, or null if it is not a canvas mutation at all. */
 export function canvasWrite(part: CanvasCallLike): CanvasRef | null {
   const input = record(part.input)
-  if (part.name === 'mcp__canvas__write') {
-    return { id: canvasIdFromOutput(part.output), title: str(input.title) }
+  // Grok defers MCP tools behind `use_tool`: the real name and arguments sit in
+  // the input. A suffix match rather than equality because the CLI namespaces
+  // the tool (`canvas__write`) and has spelled it more than one way.
+  const wrapped = part.name === 'use_tool' && GROK_MUTATOR.test(String(input.tool_name ?? ''))
+  if (!wrapped && !CANVAS_MUTATORS.has(part.name)) return null
+  const args = wrapped ? record(input.tool_input) : input
+  return {
+    // An edit always names its canvas in its input, so the row has somewhere to
+    // go while the call is still running; a create only learns the id from the
+    // result, which is why the scrape stays the fallback rather than the other
+    // way round.
+    id: str(args.id) ?? canvasIdFromOutput(part.output),
+    title: str(args.title) ?? canvasTitleFromOutput(part.output)
   }
-  // Grok's wrapper. The suffix match rather than equality because the CLI
-  // namespaces the tool (`canvas__write`) and has spelled it more than one way.
-  if (part.name === 'use_tool' && /canvas__write$/.test(String(input.tool_name ?? ''))) {
-    const args = record(input.tool_input)
-    return { id: str(args.id) ?? canvasIdFromOutput(part.output), title: str(args.title) }
-  }
-  return null
 }
 
 /** The first canvas a run wrote, so a collapsed group still has a way in. */
@@ -83,4 +112,21 @@ export function resolveCanvasId(
   if (ref.id) return ref.id
   if (!ref.title) return undefined
   return canvases.find((c) => c.title === ref.title)?.id
+}
+
+/**
+ * The name to show for a canvas a call names only by id.
+ *
+ * `resolveCanvasId`'s mirror, and here for the same reason: recognizing and
+ * resolving are this module's job, and it is the half `node --test` can reach.
+ * An edit carries an id and no title, so without this the row reads a bare
+ * "Open canvas" for as long as the call runs.
+ */
+export function resolveCanvasTitle(
+  ref: CanvasRef,
+  canvases: readonly { id: string; title: string }[]
+): string | undefined {
+  if (ref.title) return ref.title
+  if (!ref.id) return undefined
+  return canvases.find((c) => c.id === ref.id)?.title
 }
