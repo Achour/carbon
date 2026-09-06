@@ -534,6 +534,16 @@ export function BrowserPane({
       wv.removeEventListener('did-stop-loading', onStop)
       wv.removeEventListener('did-fail-load', onFail)
       wv.removeEventListener('console-message', onConsole)
+      // **The guest is ours to remove.** React unmounts the host div, but a
+      // cleanup that runs *without* one — StrictMode's mount → cleanup → mount
+      // in dev, or a Fast Refresh — leaves this webview in the host and the
+      // next run appends a second beside it. Both fill the pane, so the dead
+      // one sits on top: every click, and the address bar's own navigation,
+      // goes to a guest with no listeners and no picker injected, while the
+      // live one is pushed a pane's height below the fold. That is the element
+      // picker "doing nothing" — the crosshair and the highlight are in the
+      // copy nobody can see.
+      wv.remove()
       unregisterPreview(id)
       clearTimeout(pickedTimer.current)
       wvRef.current = null
