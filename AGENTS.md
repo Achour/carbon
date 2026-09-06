@@ -1,8 +1,9 @@
 # AGENTS.md
 
 This file provides guidance to Codex when working with code in this repository.
-`CLAUDE.md` is the long-form version of the same notes; where this file is
-terse, that one carries the reasoning.
+`CLAUDE.md` is the long-form version of the same notes and `docs/` holds each
+surface's own reasoning (`docs/transcript.md`, `docs/editor.md`, `docs/canvas.md`,
+…); where this file is terse, those carry the reasoning.
 
 ## What this is
 
