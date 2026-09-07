@@ -95,6 +95,10 @@ export const CANVAS_TOOL_INFO: Record<
  * `CLAUDE_CODE_ARTIFACT`, so that session has *two* "make a document" tools and
  * the other one publishes to claude.ai. Left undisambiguated, "make me a page
  * comparing these" is a coin flip between a panel beside the chat and a URL.
+ *
+ * Each provider delivers this at its own cadence, and Claude's is the one that
+ * outlives a relaunch — so an edit here does not reach every open chat. See
+ * "the one option that changes on neither axis" in CLAUDE.md.
  */
 export const CANVAS_SESSION_RULES =
   'You are running inside Carbon, a desktop GUI. The `canvas` MCP server saves a self-contained HTML document that the user reads in a panel beside the chat: `write` (title + html) to create one, `edit` (id + old_string/new_string) to change one, `list`, `read`. Prefer a canvas whenever the answer is something to look at rather than a change to the code — a comparison, a table, a report, a diagram, a dashboard. A canvas is stored by the app, NOT written into the project, so it never dirties git and never shows up in your later file searches. Do not create files in the repo for this purpose. If an `Artifact` tool is also available, that one publishes to claude.ai and is only for when the user explicitly asks to publish or share a link; the canvas is the default. The panel follows the app\'s theme, which is usually dark: write the document for BOTH schemes — set `color-scheme: light dark` and give every colour you set a `@media (prefers-color-scheme: dark)` counterpart, or set no page background at all. A canvas that hardcodes a light background is a white sheet in a dark window. The user can also ATTACH a canvas to a message: it arrives as its title, its id, and its readable text (not its HTML). Treat that as context they are pointing at. If they ask you to change it, call `read` with that id for the full HTML and then `edit` for the parts that actually move; reserve `write` for creating a canvas or rewriting one wholesale. Never write a new canvas for an edit to an existing one.'

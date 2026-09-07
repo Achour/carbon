@@ -110,6 +110,10 @@ import {
  * Appended to the claude_code preset. The GUI renders ```mermaid fenced blocks
  * as diagrams (in chat replies and in plan documents), so we nudge the agent to
  * reach for Mermaid instead of ASCII art when a picture would help.
+ *
+ * Recorded per conversation (`snapshot` in the query options below), so an edit
+ * here reaches a chat only once it starts or compacts — a relaunch is not
+ * enough. See "the one option that changes on neither axis" in CLAUDE.md.
  */
 const GUI_SYSTEM_APPEND = `You are running inside a desktop GUI (not a terminal). The GUI renders any \`\`\`mermaid fenced code block as a real rendered diagram — this applies to your chat replies AND to plan documents you write for ExitPlanMode. When a diagram would make an explanation or a plan clearer (flows, sequences, architecture, state), draw it with a Mermaid fenced block (e.g. flowchart, sequenceDiagram) rather than ASCII art or box-drawing characters. Keep diagrams valid and reasonably small; label nodes clearly.\n\n${CANVAS_SESSION_RULES}`
 
@@ -659,7 +663,20 @@ class ClaudeSession implements AgentSession {
         // tree back to any prompt (see rewindFiles). Checkpoints live in the CLI
         // process, so they only cover messages sent since this session started.
         enableFileCheckpointing: true,
-        systemPrompt: { type: 'preset', preset: 'claude_code', append: GUI_SYSTEM_APPEND },
+        // The SDK stops recording the rendered system prompt the moment an
+        // `append` is passed — which Carbon always does — so the preset's
+        // dynamic sections re-rendered on every request and relaunch, moving
+        // the prompt-cache prefix under a live conversation. `snapshot` puts
+        // recording back; the SDK's own docs carry the rest. What is Carbon's
+        // is that GUI_SYSTEM_APPEND is a module constant, so the "a later
+        // launch's different append is ignored" hazard can only bite across a
+        // release — see CLAUDE.md, Session flow.
+        systemPrompt: {
+          type: 'preset',
+          preset: 'claude_code',
+          append: GUI_SYSTEM_APPEND,
+          snapshot: true
+        },
         settingSources: ['user', 'project', 'local'],
         // Claude in Chrome is wired by the CLI as an MCP server, and its gate
         // (`shouldEnableClaudeInChrome`) bails on `!isInteractive()` *before* it

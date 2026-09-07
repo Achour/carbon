@@ -145,6 +145,19 @@ Path aliases: `@` → `src/renderer/src`, `@shared` → `src/shared` (renderer a
   trailing timer per item and the terminal update flushes it.
 - Permissions: the SDK's `canUseTool` callback returns a Promise held in a `pending` map until the renderer answers via `chat:respond-permission`. "Always allow" uses the SDK's permission `suggestions`.
 - Changing **effort** has no live SDK setter — `setOptions` disposes the session and the next send resumes it in a fresh process. Model and permission mode change live.
+- **The system prompt is the one option that changes on neither axis.** Carbon
+  passes an `append` (`GUI_SYSTEM_APPEND`, which carries the Mermaid nudge and
+  `CANVAS_SESSION_RULES`), and the SDK stops *recording* the rendered prompt the
+  moment one is passed — so the preset re-rendered its dynamic sections on every
+  request and every relaunch, moving the prompt-cache prefix underneath a
+  conversation and, with extended thinking, discarding the reasoning already in
+  it. `systemPrompt.snapshot: true` restores recording. The cost is that the
+  record then lives in the session transcript and survives `resume`: an edit to
+  either constant reaches a chat only once it starts or compacts, not merely on
+  the next launch. Codex re-sends its equivalent (`developerInstructions`) on
+  every `turn/start`, and Grok's rides `_meta.rules` on `session/new` /
+  `session/load`, so both pick a constant up at their next turn or spawn — the
+  asymmetry is deliberate and lives at the definition sites.
 - Sub-agent traffic never becomes a top-level message, but it is no longer *dropped*: only a
   `stream_event` carrying a `parent_tool_use_id` breaks: its `assistant` and `user` messages
   are routed onto the spawning tool card (`handleSubAgentAssistant` /
