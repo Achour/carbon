@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { createPortal } from 'react-dom'
-import ReactMarkdown from 'react-markdown'
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkBreaks from 'remark-breaks'
 import rehypeHighlight from 'rehype-highlight'
@@ -17,6 +17,7 @@ import {
   remarkHighlightLang
 } from '@/lib/highlight'
 import { splitHighlightedLines } from '@/lib/highlightLines'
+import { fileLinkPath, isBareFileLineRef } from '@/lib/fileLink'
 import { needsWholeParse, splitMarkdownStream, type OpenFence } from '@/lib/markdownStream'
 import {
   explicitMarkdownImageTargets,
@@ -395,30 +396,24 @@ function lookupOnce(cwd: string, name: string): Promise<string | null> {
   return pending
 }
 
-function InlineCode({
-  children,
-  className,
-  ...props
-}: React.HTMLAttributes<HTMLElement>): React.JSX.Element {
+/**
+ * A path named in a message, resolved to a file in the project — or null while
+ * it is being looked up, and for good if it names nothing.
+ *
+ * `clean` is a path with any `:line` suffix and leading `./` already off, which
+ * is what both callers have: inline code (`counter.ts`) and a Markdown link
+ * (`[counter.ts](/abs/counter.ts:1)`, which is how Codex cites a file — see
+ * `lib/fileLink.ts`). Sharing the resolution is what makes the two click the
+ * same, and the caches above are module-level, so a transcript naming one file
+ * both ways still costs one round trip.
+ */
+function useResolvedFile(clean: string | null): string | null {
   const cwd = React.useContext(MarkdownCwd)
-  const text =
-    typeof children === 'string'
-      ? children
-      : Array.isArray(children) && children.every((c) => typeof c === 'string')
-        ? children.join('')
-        : null
-  // Fenced blocks carry a language class and multi-line text — skip those.
-  const candidate =
-    text && !className?.includes('language-') && !text.includes('\n') && text.length < 240 && PATHISH.test(text)
-      ? text
-      : null
-
   const [target, setTarget] = React.useState<string | null>(null)
 
   React.useEffect(() => {
     setTarget(null)
-    if (!candidate) return undefined
-    const clean = candidate.replace(/:\d+(?::\d+)?$/, '').replace(/^\.\//, '')
+    if (!clean) return undefined
     const abs = clean.startsWith('/') ? clean : cwd ? `${cwd}/${clean}` : null
     if (!abs) return undefined
     let alive = true
@@ -435,7 +430,34 @@ function InlineCode({
     return () => {
       alive = false
     }
-  }, [candidate, cwd])
+  }, [clean, cwd])
+
+  return target
+}
+
+function InlineCode({
+  children,
+  className,
+  ...props
+}: React.HTMLAttributes<HTMLElement>): React.JSX.Element {
+  const text =
+    typeof children === 'string'
+      ? children
+      : Array.isArray(children) && children.every((c) => typeof c === 'string')
+        ? children.join('')
+        : null
+  // Fenced blocks carry a language class and multi-line text — skip those.
+  const candidate =
+    text && !className?.includes('language-') && !text.includes('\n') && text.length < 240 && PATHISH.test(text)
+      ? text
+      : null
+
+  const target = useResolvedFile(
+    React.useMemo(
+      () => (candidate ? candidate.replace(/:\d+(?::\d+)?$/, '').replace(/^\.\//, '') : null),
+      [candidate]
+    )
+  )
 
   if (target) {
     return (
@@ -575,12 +597,17 @@ const components = {
     // renders as the image itself, with the link kept as the fallback. If an
     // explicit image already displays this exact file, keep this as a normal
     // link — upgrading both is how one screenshot became two identical rows.
-    if (
-      h &&
+    const isImage =
+      !!h &&
       !/^https?:\/\//i.test(h) &&
       IMAGE_EXT.test(h.split(/[?#]/)[0]) &&
       !explicitImages.has(normalizeMarkdownImageTarget(h))
-    ) {
+    // Every other local-file destination opens the file, the way the same path
+    // does in inline code. This is how a Codex citation becomes clickable.
+    const target = useResolvedFile(
+      React.useMemo(() => (isImage ? null : fileLinkPath(h)), [h, isImage])
+    )
+    if (isImage) {
       return (
         <LocalImage
           src={h}
@@ -591,6 +618,22 @@ const components = {
             </a>
           }
         />
+      )
+    }
+    if (target) {
+      // Deliberately no `href`: it is a tab in this window, not a destination.
+      // A path left in `href` navigates the whole renderer away on a middle
+      // click — the app replaced by a file — and `preventDefault` on `onClick`
+      // never sees that gesture.
+      return (
+        <a
+          {...props}
+          className={cn(props.className, 'cursor-pointer')}
+          title={`Open ${target}`}
+          onClick={() => void useApp.getState().openFile(target, { preview: true })}
+        >
+          {children}
+        </a>
       )
     }
     return (
@@ -623,6 +666,14 @@ const REHYPE_PLUGINS: React.ComponentProps<typeof ReactMarkdown>['rehypePlugins'
   [rehypeHighlight, { ignoreMissing: true, detect: false, languages: HLJS_LANGUAGES }]
 ]
 
+/**
+ * The default sanitizer, plus the one destination it blanks that names a file:
+ * a root-level `counter.ts:12` reads as the scheme `counter.ts` to it. See
+ * `isBareFileLineRef` — nothing else is added back.
+ */
+const URL_TRANSFORM: React.ComponentProps<typeof ReactMarkdown>['urlTransform'] = (url) =>
+  defaultUrlTransform(url) || (isBareFileLineRef(url) ? url : '')
+
 /** One parsed markdown fragment, no wrapper — chunks share a single wrapper div. */
 const MarkdownBody = React.memo(function MarkdownBody({
   text,
@@ -635,6 +686,7 @@ const MarkdownBody = React.memo(function MarkdownBody({
     <ReactMarkdown
       remarkPlugins={breaks ? REMARK_PLUGINS_BREAKS : REMARK_PLUGINS}
       rehypePlugins={REHYPE_PLUGINS}
+      urlTransform={URL_TRANSFORM}
       components={components}
     >
       {text}

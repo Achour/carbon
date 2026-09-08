@@ -275,8 +275,9 @@ it guards**, and put new reasoning in that file rather than back in this one.
   (`TurnChangesCard`, `lib/turnChanges.ts`).
 - **`docs/chat-layout.md`** — the one reading column (`lib/chatColumn.ts`),
   tables in a message (`.markdown table`, `Markdown.tsx`), type in the chrome
-  (`--ui-row`, `--code-font-size`, and why there is no text-size setting) and
-  file icons (`lib/fileIcon.tsx`, `--icon-*`).
+  (`--ui-row`, `--code-font-size`, and why there is no text-size setting), file
+  icons (`lib/fileIcon.tsx`, `--icon-*`) and the clickable file references each
+  provider writes in its own syntax (`lib/fileLink.ts`).
 - **`docs/editor.md`** — the file editor (`CodeEditor.tsx`,
   `lib/editorBuffers.ts`, `lib/frontmatter.ts`), code selections
   (`lib/codeSelection.ts`), the panel's tabs (`RightPanel.tsx`,

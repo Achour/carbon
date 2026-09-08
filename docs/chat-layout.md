@@ -1,4 +1,4 @@
-# The chat column, tables, type and file icons
+# The chat column, tables, type, file icons and file references
 
 *Part of Carbon's design notes. The contract, the session flow and the provider
 seams are in `CLAUDE.md`; the other surfaces are the neighbouring files in this
@@ -155,3 +155,42 @@ file that is amber in one list and green in the other is worse than no color at
 all), and a **collapsed** folder holding changes gets an amber dot — the one
 place a change would otherwise be invisible. Repo-relative paths are joined onto
 the tree root exactly as `openDiff` does it.
+
+### Clickable file references (`lib/fileLink.ts`, `Markdown.tsx`)
+
+A file the agent names in its answer opens in the panel, and the two providers
+name one in **different syntax** — so both have to be recognised or the same
+reference is live under one and dead under the other.
+
+- **Claude names a file in inline code** (`` `counter.ts` ``, `` `src/a.ts:12` ``).
+  `InlineCode` gates on `PATHISH`: no spaces, an extension, an optional
+  `:line(:col)`.
+- **Codex names it as a link** — `[counter.ts](/Users/me/orbit/counter.ts:1)`.
+  That reached the `a` renderer, which sent it out as `<a target="_blank">`, and
+  Electron's `setWindowOpenHandler` drops anything that isn't `http(s)`: the
+  click did nothing at all. `fileLinkPath` is the decoder — strip `file://`,
+  cut the `:line` suffix **before** testing for a scheme (a bare `counter.ts:1`
+  otherwise reads as the scheme `counter.ts`), undo the percent-encoding
+  `mdast-util-to-hast` applies to every href, and require the last segment to
+  carry an extension.
+
+React Markdown's own sanitizer gets one narrow amendment (`URL_TRANSFORM`,
+`isBareFileLineRef`): `defaultUrlTransform` reads everything before the first
+colon as a scheme unless a `/`, `?` or `#` comes first, so `src/a.ts:12`
+survives it and a root-level `counter.ts:12` is blanked to `''` before any
+renderer sees the destination. That one shape — a filename with an extension
+and a line number, no slash — is added back, and nothing else is; an unknown
+scheme still goes.
+
+Both then go through **one** `useResolvedFile`: stat the path against the chat's
+cwd, and for a bare basename that isn't at the root fall back to the file index,
+linking only when exactly one file carries that name — opening the wrong
+`index.ts` is worse than leaving it unlinked. `statOnce` / `lookupOnce` are
+module caches, so a transcript naming one file both ways costs one round trip.
+
+The resolved link renders **without an `href`**: it is a tab in this window, not
+a destination, and a path left in `href` navigates the whole renderer away on a
+middle click — a gesture `preventDefault` on `onClick` never sees. Local *image*
+links keep their existing branch above this one, so `[shot](x.png)` still draws
+inline. The `:line` suffix is parsed and discarded by both paths; neither jumps
+to the line.
