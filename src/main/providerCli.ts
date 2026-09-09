@@ -103,6 +103,16 @@ export function providerEnabled(provider: Provider): boolean {
 }
 
 /**
+ * The user's capability switches for a provider, sparse: a key is present only
+ * where they actually chose. `providerFeatures.ts` owns what the gaps mean —
+ * this is only the read, kept here because this module is where the injected
+ * settings live.
+ */
+export function providerFeatureConfig(provider: Provider): Record<string, boolean> | undefined {
+  return config[provider]?.features
+}
+
+/**
  * Exported because binary discovery is shared with `lsp.ts`, which resolves
  * language servers the same way. One implementation: the day a Windows `.cmd`
  * suffix or a symlink tweak lands, it must not reach only half the app.

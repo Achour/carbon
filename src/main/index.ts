@@ -32,6 +32,7 @@ import type {
   Provider,
   ProviderCli,
   ProviderCliConfig,
+  ProviderFeatureState,
   ChatOptionsPatch,
   CodexGoalStatus,
   CodexReviewTarget,
@@ -835,6 +836,24 @@ function registerIpc(): void {
       // returned here already reflects a path the user just pinned.
       configureProviderClis(store.getProviderClis())
       return providerClis(true)
+    }
+  )
+
+  ipcMain.handle('providers:features', (_e, provider: Provider) => manager.providerFeatures(provider))
+  ipcMain.handle(
+    'providers:set-feature',
+    (_e, provider: Provider, id: string, enabled: boolean): Promise<ProviderFeatureState[]> => {
+      // Merged here rather than in the renderer: `setProviderCli`'s patch is a
+      // shallow spread, so sending a whole `features` record from the UI would
+      // drop any key that UI didn't know about — which is every flag Carbon
+      // does not surface.
+      const features = { ...(store.getProviderClis()[provider]?.features ?? {}), [id]: enabled }
+      store.setProviderCli(provider, { features })
+      configureProviderClis(store.getProviderClis())
+      // Both providers read capabilities at spawn, so a live process is still
+      // running under the old answer until it is replaced.
+      manager.refreshProviderFeatures(provider)
+      return manager.providerFeatures(provider)
     }
   )
 

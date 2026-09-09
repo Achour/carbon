@@ -43,7 +43,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { ProviderAvatar } from '@/components/ui/provider-mark'
 import { WithTooltip } from '@/components/ui/tooltip'
-import { PROVIDER_LABELS, type ProviderCli } from '@shared/types'
+import { PROVIDER_LABELS, type Provider, type ProviderCli } from '@shared/types'
 
 const SECTIONS = [
   { id: 'appearance', label: 'Appearance', icon: Palette },
@@ -266,6 +266,100 @@ function Toggle({
 }
 
 /**
+ * Just the pill, for the two places that need one without `Toggle`'s row: the
+ * provider's own switch, which sits inline beside its name and version, and a
+ * capability switch, which needs a `disabled` state `Toggle` has no notion of.
+ */
+function SwitchPill({
+  on,
+  disabled,
+  label,
+  onChange
+}: {
+  on: boolean
+  disabled?: boolean
+  label: string
+  onChange: () => void
+}): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      aria-label={label}
+      disabled={disabled}
+      onClick={onChange}
+      className={cn(
+        'relative h-[18px] w-8 shrink-0 rounded-full transition-colors',
+        on && !disabled ? 'bg-primary' : 'bg-secondary',
+        disabled && 'cursor-not-allowed opacity-40'
+      )}
+    >
+      <span
+        className={cn(
+          'absolute top-[2px] left-[2px] size-3.5 rounded-full bg-background shadow-sm transition-transform',
+          on && !disabled && 'translate-x-[14px]'
+        )}
+      />
+    </button>
+  )
+}
+
+/**
+ * A provider's capability switches.
+ *
+ * Fetched on mount rather than with the CLI list, because Codex's costs an
+ * app-server spawn and the great majority of visits to this page are about
+ * something else. Nothing renders while the answer is outstanding and nothing
+ * renders when it comes back empty — Grok has no such API, and neither does a
+ * provider that isn't installed, so an empty row is the correct amount of
+ * chrome for "there is nothing to configure here".
+ */
+function ProviderFeatures({ provider }: { provider: Provider }): React.JSX.Element | null {
+  const features = useApp((s) => s.providerFeatures[provider])
+  const loadProviderFeatures = useApp((s) => s.loadProviderFeatures)
+  const setProviderFeature = useApp((s) => s.setProviderFeature)
+
+  React.useEffect(() => {
+    void loadProviderFeatures(provider)
+  }, [loadProviderFeatures, provider])
+
+  if (!features?.length) return null
+
+  return (
+    <div className="mt-3 space-y-2.5 border-t border-border pt-3">
+      {features.map((f) => (
+        <div key={f.id} className="flex items-start gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="text-xs font-medium">{f.label}</div>
+            <div className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
+              {f.description}
+            </div>
+            {/* An environment variable the user set themselves outranks this
+                switch — see `resolveFeature`. Saying so beats a control that
+                silently does nothing. */}
+            {f.overriddenBy && (
+              <div className="mt-1 font-mono text-[10px] text-warning">
+                Set by {f.overriddenBy} in your environment
+              </div>
+            )}
+          </div>
+          <SwitchPill
+            on={f.enabled}
+            disabled={!!f.overriddenBy}
+            label={f.label}
+            onChange={() => void setProviderFeature(provider, f.id, !f.enabled)}
+          />
+        </div>
+      ))}
+      <div className="text-[11px] text-muted-foreground">
+        Applies to new sessions. A chat that is mid-turn finishes under the old settings.
+      </div>
+    </div>
+  )
+}
+
+/**
  * One provider's CLI: whether it's there, which binary, which version.
  *
  * Carbon drives the providers' real command-line tools and runs the ones the
@@ -320,26 +414,12 @@ function ProviderRow({ cli }: { cli: ProviderCli }): React.JSX.Element {
             )}
           </div>
         </div>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={cli.enabled}
-          aria-label={`Use ${label}`}
+        <SwitchPill
+          on={cli.enabled}
           disabled={missing}
-          onClick={() => void setProviderCli(cli.provider, { enabled: !cli.enabled })}
-          className={cn(
-            'relative h-[18px] w-8 shrink-0 rounded-full transition-colors',
-            cli.enabled && !missing ? 'bg-primary' : 'bg-secondary',
-            missing && 'cursor-not-allowed opacity-40'
-          )}
-        >
-          <span
-            className={cn(
-              'absolute top-[2px] left-[2px] size-3.5 rounded-full bg-background shadow-sm transition-transform',
-              cli.enabled && !missing && 'translate-x-[14px]'
-            )}
-          />
-        </button>
+          label={`Use ${label}`}
+          onChange={() => void setProviderCli(cli.provider, { enabled: !cli.enabled })}
+        />
       </div>
 
       {/* The install command, shown only when it's the thing to do next — so
@@ -368,6 +448,10 @@ function ProviderRow({ cli }: { cli: ProviderCli }): React.JSX.Element {
         </div>
       )}
 
+      {/* Only for a provider that can actually run: the switches below are
+          about what a session may do, and there are no sessions without a
+          binary. `providerFeatures` answers `[]` for one anyway. */}
+      {!missing && cli.enabled && <ProviderFeatures provider={cli.provider} />}
     </div>
   )
 }

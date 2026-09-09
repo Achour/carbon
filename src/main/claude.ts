@@ -40,6 +40,7 @@ import type {
   PermissionDecision,
   PermissionModeId,
   Provider,
+  ProviderFeatureState,
   EditMessageResult,
   EventMessage,
   RewindResult,
@@ -79,10 +80,11 @@ import {
   runCanvasTool,
   type CanvasToolInput
 } from './canvasTools.ts'
-import { CodexSession, fetchCodexModels, generateCodexText } from './codex'
+import { CodexSession, fetchCodexFeatures, fetchCodexModels, generateCodexText } from './codex'
 import { CodexAppServerClient } from './codexAppServer'
 import { fetchGrokModels, forkGrokBefore, generateGrokText, GrokSession } from './grok'
 import { cliAvailable, cliPath, requireCliPath } from './providerCli.ts'
+import { claudeFeatureEnv, claudeFeatureStates, codexFeatureStates } from './providerFeatures.ts'
 import {
   composePrompt,
   withTimeout,
@@ -738,12 +740,13 @@ class ClaudeSession implements AgentSession {
         // half: the account gate (`tengu_cobalt_plinth`, plus a Pro/Max-shaped
         // plan) sits above the env var and cannot be forced from here, so a
         // login without artifacts in the terminal has none here either.
-        env: {
-          ...process.env,
-          CLAUDE_CODE_ENABLE_CFC: process.env.CLAUDE_CODE_ENABLE_CFC ?? '1',
-          CLAUDE_CODE_ENABLE_TODO_TOOLS: process.env.CLAUDE_CODE_ENABLE_TODO_TOOLS ?? '1',
-          CLAUDE_CODE_ARTIFACT: process.env.CLAUDE_CODE_ARTIFACT ?? '1'
-        },
+        // All three now come from Settings → Providers (`claudeFeatureEnv`),
+        // which defaults each to on and hands a variable the user set
+        // themselves straight back — so the documented `=0` opt-out is
+        // unchanged and the switches are a second way to reach it. Read at
+        // spawn, so a toggle lands on the next session: `ChatManager` disposes
+        // idle sessions when one changes, the way an effort change does.
+        env: { ...process.env, ...claudeFeatureEnv() },
         mcpServers: {
           preview: buildPreviewServer(chat.cwd, preview),
           canvas: buildCanvasServer(
@@ -2860,6 +2863,53 @@ export class ChatManager {
       } catch {
         // already closed
       }
+    }
+  }
+
+  /**
+   * A provider's capability switches with their current state.
+   *
+   * Claude's are a static catalog, so this is free. Codex's are discovered, so
+   * it costs an app-server spawn — the same throwaway-and-dispose shape as
+   * `warmCodexModels`, and for the same reason: the answer belongs to the CLI,
+   * not to us. Grok has no equivalent API and answers `[]`, which is also what
+   * a provider whose CLI is missing answers: there is nothing to configure on a
+   * backend that cannot run.
+   */
+  async providerFeatures(provider: Provider): Promise<ProviderFeatureState[]> {
+    if (!cliAvailable(provider)) return []
+    if (provider === 'claude') return claudeFeatureStates()
+    if (provider === 'grok') return []
+    const client = new CodexAppServerClient({})
+    try {
+      return codexFeatureStates(await fetchCodexFeatures(client))
+    } catch {
+      return []
+    } finally {
+      client.dispose()
+    }
+  }
+
+  /**
+   * Drop idle sessions of a provider whose capabilities just changed, so the
+   * next send picks the new ones up.
+   *
+   * Both providers read them at spawn — Claude from its environment block,
+   * Codex from `-c features.…` on the app server's command line — so a live
+   * process is running under the old answer and nothing short of a restart
+   * moves it. This is the effort-change path with a wider net: **a session with
+   * a turn in flight is left alone** rather than interrupted, because a
+   * settings toggle is not a reason to kill work the user is watching. That one
+   * keeps running under the old capabilities until it ends and something later
+   * disposes it, which is the honest trade and is what the Settings copy says.
+   */
+  refreshProviderFeatures(provider: Provider): void {
+    for (const [id, session] of [...this.sessions.entries()]) {
+      if (!session.idle) continue
+      const chat = this.store.getChat(id)
+      if (!chat || chat.provider !== provider) continue
+      session.dispose()
+      this.sessions.delete(id)
     }
   }
 

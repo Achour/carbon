@@ -160,6 +160,9 @@ const api: Api = {
   providerClis: (refresh?: boolean) => invoke('providers:list', refresh),
   setProviderCli: (provider: Provider, patch: ProviderCliConfig) =>
     invoke('providers:set', provider, patch),
+  providerFeatures: (provider: Provider) => invoke('providers:features', provider),
+  setProviderFeature: (provider: Provider, id: string, enabled: boolean) =>
+    invoke('providers:set-feature', provider, id, enabled),
   forgetDir: (dir: string) => invoke('app:forget-dir', dir),
   revealPath: (path: string) => invoke('app:reveal-path', path),
   focusWindow: () => invoke('app:focus-window'),

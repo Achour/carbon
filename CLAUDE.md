@@ -203,7 +203,7 @@ Path aliases: `@` → `src/renderer/src`, `@shared` → `src/shared` (renderer a
   - **A `tool_result` block is not always text.** `ToolSearch` — which Claude Code now calls ahead of every deferred tool — answers in `tool_reference` blocks carrying a tool *name* and no `text` at all, so a mapper reading `text` alone rendered the whole card empty. `toolResultText` is the one decoder, shared by the main-agent and sub-agent result paths so they cannot drift.
   - **`advisor` is a *server-side* tool.** The call arrives as a `server_tool_use` block and its answer as an `advisor_tool_result` block — never as a `tool_result` on a following user message, the only completion path `handleToolResults` knows. Unhandled, the card spun for the rest of the chat. Two paths have to settle it, and both are load-bearing: `handleStreamEvent` (mid-turn, so the card settles while the user is watching) and `reconcileAssistant` (a replay, or `includePartialMessages` off, reaches reconcile with the card still `running` and nothing else would ever settle it). The result is its own assistant message, *after* the one holding the call, which is why the reconcile branch falls back to `settleServerTool`'s `toolLoc` lookup rather than searching the parts it is building — and why the block is handled **above** `ensureCurrent`, which would otherwise open a message for a block that belongs to an earlier one. The content is normally `advisor_redacted_result`: encrypted for the model, with no text to show, so the honest line is the CLI's own — that it was consulted and the feedback is being applied. It goes on the *collapsed* row rather than one expand away, because the outcome is the only thing this call has to say. **An advisor call can also simply never be answered** — the turn ends with the consult still open and the CLI strips the pair out of the history it resends — so `terminalizeRunning` says that instead of leaving a green tick over an empty body.
   - **Thinking now ships with its text withheld.** The block arrives as `thinking: ""` plus a signature, and the only thing that streams is an `estimated_tokens` on each delta — itself a *delta*, which the CLI's own handler calls `estimatedTokensDelta`, so it accumulates. The last one is `null`, and that is where the corrected total arrives instead, on the `thinking_tokens` system message; `setThinkingTokens` applies it upward-only, because the count restarts at ~50 per thought and a reading landing before its block opened would otherwise overwrite the finished thought above it. **The count is kept and deliberately not drawn.** It was a row for a while — the reasoning it replaced is invisible, and a silent twenty-second pause reads as a hang — but the row was the wrong answer twice over: "Thought · 450 tokens" is a number the reader can act on in no way, and one lands between *every* pair of tool calls, so a ten-call sequence rendered as ten cards with a token tally wedged between each pair, the run-grouping broken by the very thing that had nothing to say. The turn's own **"Thinking…" / "Working…"** indicator at the foot of the transcript already covers the live case, for exactly as long as the turn runs, so a withheld thought now draws nothing at all and leaves no trace in history. That makes it blank *everywhere* — `isBlankMsg`, `isGroupableMsg` (transparent to it, so a `[thinking, tool]` message still joins the run) and `AssistantBlock`; a filter that kept it in one of the three would put the row back. `ThinkingPart.tokens` stays on the contract because main already accumulates it correctly and it is the only handle a redacted thought has, should one be wanted.
-- **Claude in Chrome needs `CLAUDE_CODE_ENABLE_CFC`, and it is the CLI that decides.** `shouldEnableClaudeInChrome` bails on `!isInteractive()` *before* it reads `claudeInChromeDefaultEnabled`, so the browser tools a user paired in the terminal reach no session the SDK spawns — the setting they flipped is never consulted. That env var is the one check sitting above the bail (the `--chrome` flag, which the SDK cannot pass, is the other), so Carbon sets it unless the user already has: `=0` is then their opt-out, since the CLI reads it as a boolean. `env` **replaces** the subprocess environment rather than merging it, hence the `process.env` spread — and that spread is what carries the PATH `shellEnv` hydrated. The tools arrive as an MCP server named `claude-in-chrome` and go through the ordinary permission prompt; only `mcp__preview__*` is auto-allowed. Wiring it also makes the CLI rewrite `~/.claude/chrome/chrome-native-host` to point at whichever binary wired it last — Carbon's bundled one here, the user's `~/.local/share/claude/versions/…` after their next interactive run. It is one global file the two rewrite back and forth, and each repair is a session start, so the failure mode is self-healing rather than sticky.
+- **Claude in Chrome needs `CLAUDE_CODE_ENABLE_CFC`, and it is the CLI that decides.** `shouldEnableClaudeInChrome` bails on `!isInteractive()` *before* it reads `claudeInChromeDefaultEnabled`, so the browser tools a user paired in the terminal reach no session the SDK spawns — the setting they flipped is never consulted. That env var is the one check sitting above the bail (the `--chrome` flag, which the SDK cannot pass, is the other), so Carbon sets it — from **Settings → Providers** now rather than unconditionally (see "Per-provider capabilities"), defaulting to on. `=0` in the environment is still the opt-out, since the CLI reads it as a boolean. `env` **replaces** the subprocess environment rather than merging it, hence the `process.env` spread — and that spread is what carries the PATH `shellEnv` hydrated. The tools arrive as an MCP server named `claude-in-chrome` and go through the ordinary permission prompt; only `mcp__preview__*` is auto-allowed. Wiring it also makes the CLI rewrite `~/.claude/chrome/chrome-native-host` to point at whichever binary wired it last — Carbon's bundled one here, the user's `~/.local/share/claude/versions/…` after their next interactive run. It is one global file the two rewrite back and forth, and each repair is a session start, so the failure mode is self-healing rather than sticky.
 
 ### Grok Build (`src/main/grokAcp.ts`, `grok.ts`)
 
@@ -408,6 +408,56 @@ version floor, and an honest "not installed" answer.
   Claude and Codex as required and exclude Grok. Requiring a provider that isn't
   installed retries a probe that is correctly returning nothing, forever.
 
+### Per-provider capabilities (`src/main/providerFeatures.ts`)
+
+Each provider row in Settings → Providers carries switches for what a session
+of that backend is *allowed to do* — browser use, computer use, the task
+checklist, Artifacts. The two providers that have any arrive at the shape from
+opposite directions, and normalizing them into one `ProviderFeatureState` is
+what lets one row render either.
+
+- **Claude's three are static, because nothing lists them.** They are the
+  env-gated features above (`CLAUDE_CODE_ENABLE_CFC`,
+  `CLAUDE_CODE_ENABLE_TODO_TOOLS`, `CLAUDE_CODE_ARTIFACT`), and the catalog
+  lives in `CLAUDE_FEATURES` — so Carbon is wrong about it the day the CLI
+  renames one. `claudeFeatureEnv` writes **every** entry including the `0`s: an
+  absent variable means "fall back to the CLI's own gate", which is not the same
+  as off.
+- **Codex's are discovered, so they cannot go stale.**
+  `experimentalFeature/list` answers with a name, a stage, and both `enabled`
+  and `defaultEnabled`. Of the ~138 flags it reports, the ones at stage `beta`
+  carry a `displayName` and a `description` the CLI wrote for its own
+  experimental-features UI and come through on its say-so; the handful that
+  matter and are stage `stable` carry no copy at all, so they appear only if
+  `CODEX_FEATURE_LABELS` names them. The rest is internal plumbing
+  (`content_item_kinds`, `unbounded_connection_retries`) that a settings page
+  offering would be a footgun. A name the CLI stops reporting simply vanishes
+  from its answer, so the curated half fails by *omitting a row* rather than by
+  wiring a switch to nothing.
+- **The transport is the command line, not the runtime request.**
+  `experimentalFeature/enablement/set` exists and works, but it is explicitly
+  *process-wide runtime* state that dies with the app server — and Carbon
+  disposes those freely, since every throwaway probe spawns one. `-c
+  features.<name>=<bool>` at spawn is the durable spelling, the same one the
+  CLI's own `--enable`/`--disable` compile to. Only keys the user touched are
+  emitted, so a flag Carbon never surfaces reaches the CLI untouched.
+- **Only a `0` in the environment overrides a switch.** These variables are
+  documented above as opt-*outs*, and Carbon's own answer is on, so a `1` asks
+  for nothing the switch would not already do. Reading a `1` as an override was
+  actively wrong: Claude Code exports all three to every subprocess it spawns,
+  so a Carbon launched from a terminal *inside a session* — which is how Carbon
+  is developed — inherited three `1`s nobody chose and greyed out all three
+  switches permanently. A `0` still wins and still names itself on the row,
+  because that one is a deliberate instruction and is the escape hatch for a UI
+  that is wrong.
+- **Both are read at spawn**, so a toggle lands on the next session:
+  `refreshProviderFeatures` disposes *idle* sessions of that provider the way an
+  effort change does, and deliberately leaves a running turn alone — a settings
+  toggle is not a reason to kill work the user is watching, and the row says so.
+
+Grok has no equivalent API and contributes no switches, which is the same
+answer a provider whose CLI is missing gives.
+
 Settings → Providers renders `ProviderCli[]` and re-probes on open, since the
 usual reason to be there is having just installed something in the terminal
 next to the app. Settings live in `settings.json` under `providers`, coerced
@@ -485,8 +535,9 @@ its `…/code/artifact/<uuid>` link; the CLI's own `isEnabled` bails when
 `CLAUDE_CODE_ENTRYPOINT` is `sdk-ts` / `sdk-py` / `sdk-cli`, `mcp` or the GitHub
 action — every way the SDK spawns it — unless `CLAUDE_CODE_ARTIFACT` is truthy.
 So the same login that published an artifact from the terminal answered "I
-can't" in Carbon and wrote a local `.html` instead. Set unless the user already
-set it, `=0` their opt-out, landing at spawn like the other two.
+can't" in Carbon and wrote a local `.html` instead. Set from Settings →
+Providers like the other two, `=0` in the environment their opt-out, landing at
+spawn.
 
 **The env var lifts one half of the gate and cannot lift the other.** Above the
 entrypoint bail sits an account check — a rollout flag (`tengu_cobalt_plinth`)

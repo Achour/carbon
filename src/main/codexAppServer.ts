@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { requireCliPath } from './providerCli.ts'
+import { codexFeatureArgs } from './providerFeatures.ts'
 import type {
   Input,
   ThreadEvent,
@@ -1029,7 +1030,12 @@ export class CodexAppServerClient implements CodexClientLike {
       ...process.env,
       CODEX_INTERNAL_ORIGINATOR_OVERRIDE: 'carbon'
     }
-    const child = spawn(executablePath, ['app-server'], {
+    // Feature choices ride the command line rather than the runtime
+    // `experimentalFeature/enablement/set` request: that one is process-wide
+    // state which dies with this child, and Carbon disposes app servers freely
+    // (every throwaway probe spawns one). `-c features.<name>=<bool>` is the
+    // durable spelling — the same one `--enable`/`--disable` compile to.
+    const child = spawn(executablePath, ['app-server', ...codexFeatureArgs()], {
       env,
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true

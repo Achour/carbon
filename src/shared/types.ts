@@ -1071,6 +1071,133 @@ export type CanvasSummary = Omit<Canvas, 'html'>
  */
 export interface ProviderCliConfig {
   enabled?: boolean
+  /**
+   * Per-provider capability switches, keyed by `ProviderFeature.id`. Absent
+   * means "whatever the provider does on its own" — which is not the same as
+   * `false`, and is why this is a sparse record rather than a filled one: a
+   * feature Carbon has never been told about must reach the CLI untouched.
+   */
+  features?: Record<string, boolean>
+}
+
+/**
+ * One switch on a provider's row in Settings → Providers.
+ *
+ * The two providers that have any arrive at this shape from opposite
+ * directions, which is the whole reason it exists. **Claude's are static**:
+ * three features the CLI hides behind environment variables, with no API that
+ * lists them, so Carbon carries the catalog (`CLAUDE_FEATURES`) and is wrong
+ * about it the day the CLI renames one. **Codex's are discovered**:
+ * `experimentalFeature/list` answers with a name, a stage, whether it is on and
+ * whether it is on by default, so the list is read off the running CLI and
+ * cannot go stale. Normalizing both into one type is what lets the Settings row
+ * render them without knowing which kind it has.
+ */
+export interface ProviderFeature {
+  /** Stable key. Claude: Carbon's own id. Codex: the CLI's feature name. */
+  id: string
+  label: string
+  description: string
+  /** What the provider does when Carbon says nothing. */
+  defaultEnabled: boolean
+  /**
+   * Present only for a discovered feature. `beta` is the CLI's own signal that
+   * it wrote user-facing copy for it; everything Carbon surfaces beyond that is
+   * a `stable` flag it names itself.
+   */
+  stage?: 'beta' | 'stable'
+}
+
+/**
+ * A feature as the Settings row draws it: the catalog entry plus the answer to
+ * "is it on right now", resolved in main against the user's setting, the
+ * environment, and the provider's own default. Resolving in main rather than
+ * handing the renderer three inputs and the precedence rule is what keeps one
+ * copy of that rule — the session builders read it from the same place.
+ */
+export interface ProviderFeatureState extends ProviderFeature {
+  enabled: boolean
+  /**
+   * The user's switch is being overridden by an environment variable they set
+   * themselves, and the row has to say so rather than showing a control that
+   * does nothing. Names the variable.
+   */
+  overriddenBy?: string
+}
+
+/**
+ * Claude's three env-gated features.
+ *
+ * Each is a capability the CLI switches off for a session the SDK spawned, and
+ * each is an environment variable Carbon sets to `1` to switch back on — see
+ * "Session flow" and "Artifacts" in CLAUDE.md for why each gate exists. Turning
+ * one off here sends `0` instead, which is exactly what a user typing
+ * `CLAUDE_CODE_ARTIFACT=0` in a shell has always been able to do; the variable
+ * still outranks this setting, so that opt-out keeps working.
+ */
+export const CLAUDE_FEATURES: (ProviderFeature & { env: string })[] = [
+  {
+    id: 'browser',
+    env: 'CLAUDE_CODE_ENABLE_CFC',
+    label: 'Browser use',
+    description:
+      'Claude in Chrome — read and drive pages in your own browser. Needs the Chrome extension paired; without it the tools simply never appear.',
+    defaultEnabled: true
+  },
+  {
+    id: 'tasks',
+    env: 'CLAUDE_CODE_ENABLE_TODO_TOOLS',
+    label: 'Task checklist',
+    description:
+      "The checklist Carbon draws while a turn runs. Off, the CLI stops registering the task tools and the card has nothing to draw.",
+    defaultEnabled: true
+  },
+  {
+    id: 'artifacts',
+    env: 'CLAUDE_CODE_ARTIFACT',
+    label: 'Artifacts',
+    description:
+      'Lets the CLI offer Artifacts if your plan includes them. The account check sits above this switch and cannot be lifted from here, so on a plan without them this changes nothing.',
+    defaultEnabled: true
+  }
+]
+
+/**
+ * The Codex feature flags Carbon puts on the row.
+ *
+ * The CLI reports ~138, nearly all of them internal plumbing
+ * (`content_item_kinds`, `unbounded_connection_retries`) that a settings page
+ * has no business offering. Its own user-facing signal is a `displayName`, and
+ * only the handful at stage `beta` carry one — so those come through
+ * automatically, and this list is the *stable* flags worth a switch, named by
+ * Carbon because the CLI supplies no copy for them.
+ *
+ * A curated list normally goes stale, and this one is written so that it can't
+ * do damage when it does: a name the CLI stops reporting is simply absent from
+ * its answer, so the row disappears rather than showing a switch wired to
+ * nothing. That is the same shape as `fetchGrokModels` returning `[]`.
+ */
+export const CODEX_FEATURE_LABELS: Record<string, { label: string; description: string }> = {
+  browser_use: {
+    label: 'Browser use',
+    description: 'Let Codex open and drive a browser to check its own work.'
+  },
+  in_app_browser: {
+    label: 'In-app browser',
+    description: "Use Codex's own embedded browser rather than launching one of yours."
+  },
+  computer_use: {
+    label: 'Computer use',
+    description: 'Let Codex control the desktop — click, type, and read the screen.'
+  },
+  image_generation: {
+    label: 'Image generation',
+    description: 'Let Codex generate images. Carbon shows them inline in the transcript.'
+  },
+  memories: {
+    label: 'Memories',
+    description: 'Let Codex keep notes across threads. Off by default in the CLI.'
+  }
 }
 
 /** Where a resolved provider binary was found. */
@@ -1976,6 +2103,24 @@ export interface Api {
   providerClis(refresh?: boolean): Promise<ProviderCli[]>
   /** Toggle a provider or pin its binary; returns the re-probed list. */
   setProviderCli(provider: Provider, patch: ProviderCliConfig): Promise<ProviderCli[]>
+  /**
+   * A provider's capability switches with their current state. Claude answers
+   * from a static catalog; Codex asks its CLI, so this spawns an app server and
+   * can be slow the first time; Grok has none and answers `[]`. A provider
+   * whose CLI is missing also answers `[]` — there is nothing to configure on a
+   * backend that cannot run, and probing it would be a subprocess per visit to
+   * the page.
+   */
+  providerFeatures(provider: Provider): Promise<ProviderFeatureState[]>
+  /**
+   * Flip one capability. Returns the provider's re-resolved list, so a switch
+   * the environment overrides visibly snaps back instead of appearing to take.
+   */
+  setProviderFeature(
+    provider: Provider,
+    id: string,
+    enabled: boolean
+  ): Promise<ProviderFeatureState[]>
   forgetDir(dir: string): Promise<void>
   /** Show a file or folder in the OS file manager, selected in its parent. */
   revealPath(path: string): Promise<void>

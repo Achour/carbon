@@ -77,6 +77,19 @@ const ACTIVITIES: Record<string, Activity> = {
   Preview: { rank: 8, past: '', gerund: '', one: 'preview action', many: 'preview actions' },
   'Find tools': { rank: 9, past: 'Found', gerund: 'Finding', one: 'tool', many: 'tools' },
   Agent: { rank: 10, past: '', gerund: '', one: 'agent', many: 'agents' },
+  // Talking to *other sessions*, which the CLI can do natively — `ListAgents`
+  // and `SendMessage` need no MCP server and reach a session the SDK spawned
+  // like any other. `ToolCard` has drawn both for a while; without these two
+  // entries a run of them fell to the unknown-label branch and read
+  // "Message ×2", which is the one phrasing that says less than the tool name.
+  //
+  // Kept apart from `Agent` on purpose, at the same rank. Spawning a subagent
+  // and messaging a peer are both delegation, so they belong together in the
+  // ordering, but merging them would count a message as an agent — and the
+  // roster check is a *lookup*, so it is verb-less like the searches rather
+  // than claiming an act.
+  Message: { rank: 10, past: 'Sent', gerund: 'Sending', one: 'message', many: 'messages' },
+  Agents: { rank: 10, past: '', gerund: '', one: 'agent check', many: 'agent checks' },
   // Last, and verb-less. The checklist is neither the turn's method nor its
   // result — it is the agent keeping its own notes, and the list it wrote is on
   // screen above the composer either way. "Updated 3 tasks" would also read as

@@ -90,6 +90,7 @@ import type {
   ChatOptionsPatch,
   Provider,
   ProviderCli,
+  ProviderFeatureState,
   ProviderCliConfig,
   RateLimitState,
   EditMessageResult,
@@ -356,6 +357,16 @@ interface AppState {
    * static list — and what Settings → Providers renders.
    */
   providerClis: ProviderCli[]
+  /**
+   * Each provider's capability switches, once fetched. Keyed by provider and
+   * absent until Settings asks: Codex's list costs an app-server spawn, so it
+   * is not part of the startup fan-out that `providerClis` rides.
+   */
+  providerFeatures: Partial<Record<Provider, ProviderFeatureState[]>>
+  /** Fetch a provider's capability switches. */
+  loadProviderFeatures(provider: Provider): Promise<void>
+  /** Flip one, and take main's re-resolved answer as the new truth. */
+  setProviderFeature(provider: Provider, id: string, enabled: boolean): Promise<void>
   /** `refresh` re-probes the disk, for the Providers section's Recheck. */
   loadProviderClis(refresh?: boolean): Promise<void>
   /** Toggle a provider or pin its binary; refetches the model catalog after. */
@@ -1668,6 +1679,7 @@ export const useApp = create<AppState>((set, get) => ({
   models: [],
   codexConfigModel: undefined,
   providerClis: [],
+  providerFeatures: {},
   permissions: {},
   queued: {},
   planPanel: null,
@@ -3787,6 +3799,26 @@ export const useApp = create<AppState>((set, get) => ({
     } catch {
       // Leave the last good answer. An empty list would empty every model
       // picker, which is a far worse failure than a stale install status.
+    }
+  },
+
+  async loadProviderFeatures(provider) {
+    try {
+      const features = await window.api.providerFeatures(provider)
+      set((s) => ({ providerFeatures: { ...s.providerFeatures, [provider]: features } }))
+    } catch {
+      // Leave whatever was there. An empty list would read as "this provider
+      // has no settings", which is a different and wrong statement.
+    }
+  },
+
+  async setProviderFeature(provider, id, enabled) {
+    try {
+      const features = await window.api.setProviderFeature(provider, id, enabled)
+      set((s) => ({ providerFeatures: { ...s.providerFeatures, [provider]: features } }))
+    } catch {
+      // The switch snaps back on the next load rather than lying about a
+      // choice that never reached disk.
     }
   },
 

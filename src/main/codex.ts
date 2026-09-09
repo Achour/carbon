@@ -12,7 +12,7 @@ import {
   type UserInput,
   type Usage
 } from '@openai/codex-sdk'
-import { CODEX_DEFAULT_MODEL, MODEL_OPTIONS } from '../shared/types.ts'
+import { CODEX_DEFAULT_MODEL, CODEX_FEATURE_LABELS, MODEL_OPTIONS } from '../shared/types.ts'
 import { requireCliPath } from './providerCli.ts'
 import type {
   AccountInfo,
@@ -35,6 +35,7 @@ import type {
   PermissionDecision,
   PermissionModeId,
   PersistedPlanReview,
+  ProviderFeature,
   RewindResult,
   ServiceTier,
   ToolPart,
@@ -223,6 +224,76 @@ export async function fetchCodexModels(client: CodexClientLike): Promise<ModelOp
     cursor = page.nextCursor ?? null
   } while (cursor)
   return codexModelOptions(raw)
+}
+
+/** One row of `experimentalFeature/list`, as the CLI reports it. */
+interface RawCodexFeature {
+  name: string
+  stage: 'beta' | 'underDevelopment' | 'stable' | 'deprecated' | 'removed'
+  displayName: string | null
+  description: string | null
+  enabled: boolean
+  defaultEnabled: boolean
+}
+
+/**
+ * The Codex capability switches worth putting in Settings, read off the running
+ * CLI.
+ *
+ * Two filters, and the difference between them is who wrote the copy. A `beta`
+ * feature carries a `displayName` and a `description` the CLI wrote for its own
+ * experimental-features UI, so it comes through on the CLI's say-so and needs
+ * nothing from Carbon. Everything else that matters — browser use, computer
+ * use, image generation — is stage `stable` with **no copy at all**, so it
+ * appears only if `CODEX_FEATURE_LABELS` names it. The ~130 remaining flags are
+ * internal plumbing (`content_item_kinds`, `unbounded_connection_retries`) and
+ * a settings page offering them would be a footgun, not a feature.
+ *
+ * `deprecated` and `removed` are dropped whatever the label table says: a
+ * switch wired to a flag the CLI has stopped honoring is worse than no switch.
+ */
+export async function fetchCodexFeatures(client: CodexClientLike): Promise<ProviderFeature[]> {
+  if (!client.request) return []
+  const raw: RawCodexFeature[] = []
+  let cursor: string | null = null
+  do {
+    const page = (await client.request('experimentalFeature/list', { cursor, limit: 200 })) as {
+      data?: RawCodexFeature[]
+      nextCursor?: string | null
+    }
+    raw.push(...(page.data ?? []))
+    cursor = page.nextCursor ?? null
+  } while (cursor)
+
+  const out: ProviderFeature[] = []
+  for (const f of raw) {
+    if (f.stage === 'beta' && f.displayName) {
+      out.push({
+        id: f.name,
+        label: f.displayName,
+        description: f.description ?? '',
+        defaultEnabled: f.defaultEnabled,
+        stage: 'beta'
+      })
+    } else if (f.stage === 'stable') {
+      const named = CODEX_FEATURE_LABELS[f.name]
+      if (named) {
+        out.push({ id: f.name, ...named, defaultEnabled: f.defaultEnabled, stage: 'stable' })
+      }
+    }
+  }
+  // Carbon's own order, not the CLI's: its list is roughly chronological by when
+  // each flag was added, which puts browser use in the middle of the plumbing.
+  const rank = Object.keys(CODEX_FEATURE_LABELS)
+  return out.sort((a, b) => {
+    const ai = rank.indexOf(a.id)
+    const bi = rank.indexOf(b.id)
+    // Named flags first, in table order; the CLI's own beta rows follow.
+    if (ai === -1 && bi === -1) return a.label.localeCompare(b.label)
+    if (ai === -1) return 1
+    if (bi === -1) return -1
+    return ai - bi
+  })
 }
 
 interface PendingTurn {
