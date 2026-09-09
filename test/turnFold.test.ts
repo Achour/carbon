@@ -140,3 +140,95 @@ test('assistant messages before the first prompt belong to no turn', () => {
   assert.equal(folds.size, 1)
   assert.ok(folds.has('u1'))
 })
+
+test('a turn the CLI closed mid-way folds up to its last continuation', () => {
+  // `/simplify`: four review agents are spawned in the background, the model
+  // says it will wait, and the CLI ends the turn. Each agent's notification
+  // then starts a continuation under the *same* prompt, with a `result` — and
+  // so a stats row — of its own.
+  const event = (id: string): ChatMessage => ({
+    id,
+    role: 'event',
+    kind: 'turn',
+    text: '',
+    ts: (clock += 1000)
+  })
+  const folds = foldTurns([
+    user('u1'),
+    assistant('a1', [tool('t1', { name: 'Agent' })]),
+    assistant('a2', [text('four agents are running, I will apply what they find')]),
+    event('e1'),
+    assistant('a3', [text('reuse review is in, waiting on three')]),
+    event('e2'),
+    assistant('a4', [text('all in; here is the result')]),
+    event('e3')
+  ])
+  const fold = folds.get('u1')
+  // The prose before an interim result is what the turn said *then*, not the
+  // answer it arrived at: the answer starts after the last interim row.
+  assert.deepEqual(fold?.answerFrom, { messageId: 'a4', partIndex: 0 })
+  assert.equal(fold?.collapsible, true)
+  // The interim stats rows fold with the work; the row that closes the turn
+  // is not work and stays.
+  assert.deepEqual([...(fold?.workEvents ?? [])].sort(), ['e1', 'e2'])
+})
+
+test('a turn closed once has no work events, whatever follows its last reply', () => {
+  const folds = foldTurns([
+    user('u1'),
+    assistant('a1', [tool('t1'), text('done')]),
+    { id: 'e1', role: 'event', kind: 'turn', text: '', ts: (clock += 1000) },
+    user('u2')
+  ])
+  assert.equal(folds.get('u1')?.workEvents.size, 0)
+  assert.deepEqual(folds.get('u1')?.answerFrom, { messageId: 'a1', partIndex: 1 })
+})
+
+test('an interim result followed only by work leaves no answer and folds whole', () => {
+  const folds = foldTurns([
+    user('u1'),
+    assistant('a1', [text('waiting on the agent')]),
+    { id: 'e1', role: 'event', kind: 'turn', text: '', ts: (clock += 1000) },
+    assistant('a2', [tool('t1')])
+  ])
+  assert.equal(folds.get('u1')?.answerFrom, null)
+  assert.equal(folds.get('u1')?.collapsible, true)
+  assert.ok(folds.get('u1')?.workEvents.has('e1'))
+})
+
+test('a turn is closed once a result has landed, and not before', () => {
+  const folds = foldTurns([
+    user('u1'),
+    assistant('a1', [text('started')]),
+    { id: 'e1', role: 'event', kind: 'turn', text: '', ts: (clock += 1000) },
+    user('u2'),
+    assistant('a2', [tool('t1', { status: 'running' })])
+  ])
+  assert.equal(folds.get('u1')?.closed, true)
+  assert.equal(folds.get('u2')?.closed, false)
+})
+
+test('only a turn row is a mid-turn close; a switch or an error keeps drawing', () => {
+  const folds = foldTurns([
+    user('u1'),
+    { id: 'sw', role: 'event', kind: 'switch', text: 'a → b', ts: (clock += 1000) },
+    assistant('a1', [text('hello from the new model')]),
+    { id: 'e1', role: 'event', kind: 'turn', text: '', ts: (clock += 1000) }
+  ])
+  const fold = folds.get('u1')
+  // The divider is not work: a switched turn that only talked still hides nothing.
+  assert.equal(fold?.collapsible, false)
+  assert.equal(fold?.workEvents.size, 0)
+  assert.deepEqual(fold?.answerFrom, { messageId: 'a1', partIndex: 0 })
+
+  const failed = foldTurns([
+    user('u1'),
+    assistant('a1', [tool('t1')]),
+    { id: 'err', role: 'event', kind: 'error', text: 'boom', ts: (clock += 1000) },
+    assistant('a2', [text('woken; recovered')])
+  ])
+  // The error row drew a turn end, so what follows is a continuation — and the
+  // row itself is never folded away.
+  assert.equal(failed.get('u1')?.closed, true)
+  assert.equal(failed.get('u1')?.workEvents.size, 0)
+})

@@ -34,7 +34,13 @@ export const TurnHeader = React.memo(function TurnHeader({
   /** `ts` of the turn's last message; ignored while live. */
   endTs: number
   live: boolean
-  /** False when folding would hide nothing: a turn that only talked. */
+  /**
+   * Whether the row is the fold's control. False for a turn that only talked
+   * (folding would hide nothing) and for a live turn that has never folded;
+   * true for a settled turn and for a live *continuation* of one that has
+   * (`renderMessages` decides which — the label and the control are
+   * independent, so a folded turn can tick "Working for" and still open).
+   */
   collapsible: boolean
   expanded: boolean
   onToggle: (userMessageId: string) => void
@@ -68,10 +74,9 @@ export const TurnHeader = React.memo(function TurnHeader({
   // row is quiet, not small.
   return (
     <div className="flex flex-col gap-2">
-      {live || !collapsible ? (
-        // No affordance while the turn runs (it is never folded), and none on a
-        // turn with nothing to hide — a chevron over an inert row is a control
-        // that answers a click with nothing.
+      {!collapsible ? (
+        // No affordance on a row that would answer a click with nothing: a
+        // turn still doing its first run of work, or one with nothing to hide.
         <span className="text-muted-foreground">{label}</span>
       ) : (
         <button

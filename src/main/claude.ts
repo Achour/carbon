@@ -564,6 +564,35 @@ class ClaudeSession implements AgentSession {
   // of tools that never resolve (e.g. an interrupted turn's 'running' parts).
   private static readonly MAX_TOOL_LOC = 2000
   private toolLoc = new Map<string, { message: AssistantMessage; index: number }>()
+  /**
+   * Calls whose work outlives their result, keyed by `tool_use_id` → `task_id`.
+   *
+   * A backgrounded agent's `tool_result` is a placeholder — "Async agent
+   * launched successfully" — that lands a few ms after the spawn, and the real
+   * end arrives as a `task_notification` system message, possibly minutes
+   * later. Everything about the call has to be read against that: its part
+   * stays `running` through the placeholder (`handleToolResults`), its
+   * `toolLoc` entry survives it so the agent's own messages — which do stream,
+   * with `parent_tool_use_id` — still find their card, and the notification
+   * is what settles it, with the agent's report as the output. Without this the
+   * placeholder marked the card done at spawn and deleted the routing entry,
+   * so every child that followed was dropped and the transcript showed four
+   * review agents "finishing" in ten seconds with nothing inside them.
+   *
+   * `local_bash` is deliberately not tracked. A backgrounded shell is very
+   * often a dev server that runs until killed, and a call held `running` for
+   * that long would keep its whole turn open (`TurnFold.running`) for the rest
+   * of the session; Claude Code's own UI settles the shell row at spawn too.
+   * The cost is that a backgrounded shell that *does* finish still costs one
+   * fold-and-unfold when its notification wakes the model.
+   */
+  private backgroundCalls = new Map<string, string>()
+  /**
+   * `task_id` → `tool_use_id` for every task that named its call, foreground
+   * included: a `task_updated` carrying `is_backgrounded: true` (a foreground
+   * agent moved to the background mid-flight) names only the task.
+   */
+  private taskCalls = new Map<string, string>()
   // Sub-agent tool calls live inside a parent Task tool's `children`, not a
   // message's parts — so they need their own location map for result matching.
   private childToolLoc = new Map<string, { parent: ToolPart; index: number }>()
@@ -915,7 +944,11 @@ class ClaudeSession implements AgentSession {
     } catch (err) {
       console.error('interrupt failed:', err)
     }
-    this.terminalizeRunning('error')
+    // An interrupt aborts the turn, not the tasks it backgrounded: those keep
+    // running and will still notify, so their calls are left to settle then.
+    // Should the CLI take them down with the turn, the empty job set it sends
+    // settles them through `emitBackgroundJobs` instead.
+    this.terminalizeRunning('error', { keepBackground: true })
     this.setStatus('idle')
   }
 
@@ -1384,13 +1417,25 @@ class ClaudeSession implements AgentSession {
           // Full live set on every change (REPLACE semantics) — the renderer
           // swaps its list wholesale.
           const tasks = (msg as unknown as {
-            tasks: Array<{ task_id: string; task_type: string; description: string }>
+            tasks: Array<{
+              task_id: string
+              task_type: string
+              description: string
+              ambient?: boolean
+            }>
           }).tasks
-          const jobs: BackgroundJob[] = tasks.map((t) => ({
-            id: t.task_id,
-            type: t.task_type,
-            description: t.description
-          }))
+          // An ambient task — a live-update watcher, housekeeping — is not
+          // activity, and the SDK says so per entry. Counted, one would hold
+          // `backgroundJobCount` above zero for the rest of the session: the
+          // pill would say "1 running" forever, `idle` would never be true, and
+          // the turn's `result` would skip `terminalizeRunning` every time.
+          const jobs: BackgroundJob[] = tasks
+            .filter((t) => !t.ambient)
+            .map((t) => ({
+              id: t.task_id,
+              type: t.task_type,
+              description: t.description
+            }))
           this.emitBackgroundJobs(jobs)
         } else if (msg.subtype === 'status' && 'permissionMode' in msg && msg.permissionMode) {
           const mode = msg.permissionMode
@@ -1416,6 +1461,52 @@ class ClaudeSession implements AgentSession {
           // doesn't send this, which is why that path isn't simply removed.
           const total = (msg as unknown as { estimated_tokens?: number }).estimated_tokens
           if (typeof total === 'number' && total > 0) this.setThinkingTokens(total)
+        } else if (msg.subtype === 'task_started') {
+          // Arrives *before* the spawning call's placeholder result (measured
+          // against the CLI, not assumed), which is what lets `handleToolResults`
+          // know to hold the part open rather than settling it.
+          const started = msg as unknown as {
+            task_id: string
+            tool_use_id?: string
+            task_type?: string
+            is_backgrounded?: boolean
+            ambient?: boolean
+            skip_transcript?: boolean
+          }
+          if (started.tool_use_id) {
+            this.taskCalls.set(started.task_id, started.tool_use_id)
+            this.capMap(this.taskCalls)
+            if (
+              started.is_backgrounded &&
+              !started.ambient &&
+              !started.skip_transcript &&
+              started.task_type !== 'local_bash'
+            ) {
+              this.trackBackgroundCall(started.tool_use_id, started.task_id)
+            }
+          }
+        } else if (msg.subtype === 'task_updated') {
+          // A foreground call moved to the background mid-flight: its pending
+          // result will now be the placeholder, so it is tracked from here.
+          const updated = msg as unknown as {
+            task_id: string
+            patch?: { is_backgrounded?: boolean }
+          }
+          const toolUseId = this.taskCalls.get(updated.task_id)
+          if (updated.patch?.is_backgrounded && toolUseId) {
+            this.trackBackgroundCall(toolUseId, updated.task_id)
+          }
+        } else if (msg.subtype === 'task_notification') {
+          const done = msg as unknown as {
+            task_id: string
+            tool_use_id?: string
+            status: 'completed' | 'failed' | 'stopped'
+            summary?: string
+            usage?: { total_tokens?: number }
+          }
+          const toolUseId = done.tool_use_id ?? this.taskCalls.get(done.task_id)
+          if (toolUseId) this.settleBackgroundCall(toolUseId, done)
+          this.taskCalls.delete(done.task_id)
         }
         break
 
@@ -1586,10 +1677,100 @@ class ClaudeSession implements AgentSession {
     this.store.saveChatSoon(this.chat.id)
   }
 
-  /** Ensure interrupted/disposed turns never leave infinite tool spinners behind. */
-  private terminalizeRunning(status: 'success' | 'error'): void {
+  /**
+   * Hold a call open past its placeholder result — see `backgroundCalls`.
+   *
+   * Normally the `task_started` precedes the result and this only records the
+   * pair. A call whose result already landed (a task backgrounded after the
+   * fact) is reopened: the tick it earned at spawn was for work it had not done.
+   */
+  private trackBackgroundCall(toolUseId: string, taskId: string): void {
+    this.backgroundCalls.set(toolUseId, taskId)
+    this.capMap(this.backgroundCalls)
+    const loc = this.toolLoc.get(toolUseId)
+    const part = loc?.message.parts[loc.index]
+    if (!loc || part?.type !== 'tool' || part.denied) return
+    if (part.status === 'running' || part.status === 'pending') return
+    part.status = 'running'
+    if (part.agent) delete part.agent.endedAt
+    this.emit({
+      type: 'tool-update',
+      chatId: this.chat.id,
+      messageId: loc.message.id,
+      toolUseId,
+      patch: { status: 'running', ...(part.agent ? { agent: { ...part.agent } } : {}) }
+    })
+    this.flagBuriedMutation(loc.message.id)
+    this.store.saveChatSoon(this.chat.id)
+  }
+
+  /**
+   * The real end of a backgrounded call: its `task_notification`.
+   *
+   * Resolved through `toolLoc` rather than `backgroundCalls`, and the status is
+   * applied whatever the part says now. The CLI sends its empty job set in the
+   * same tick as the notification and *ahead* of it, and between continuations
+   * the chat is idle — so `emitBackgroundJobs` has usually just settled this
+   * part as a success by the time the notification says `failed`. This is the
+   * authoritative word, and the summary is the agent's own report.
+   */
+  private settleBackgroundCall(
+    toolUseId: string,
+    done: { status: 'completed' | 'failed' | 'stopped'; summary?: string; usage?: { total_tokens?: number } }
+  ): void {
+    this.backgroundCalls.delete(toolUseId)
+    const loc = this.toolLoc.get(toolUseId)
+    if (!loc) return
+    const part = loc.message.parts[loc.index]
+    if (part?.type !== 'tool') return
+    if (!part.denied) part.status = done.status === 'completed' ? 'success' : 'error'
+    const summary = done.summary?.trim()
+    if (summary) {
+      part.output = summary.length > 100_000 ? `${summary.slice(0, 100_000)}\n… (truncated)` : summary
+    } else if (done.status === 'stopped' && !part.output) {
+      part.output = 'Stopped before it finished'
+    }
+    if (part.agent) {
+      part.agent.endedAt = Date.now()
+      // The notification's total is the CLI's own accounting for the whole
+      // run; the per-step sum from the agent's messages can only be short of it.
+      const total = done.usage?.total_tokens
+      if (typeof total === 'number' && total > (part.agent.tokens ?? 0)) part.agent.tokens = total
+    }
+    this.deltas.flush()
+    this.emit({
+      type: 'tool-update',
+      chatId: this.chat.id,
+      messageId: loc.message.id,
+      toolUseId,
+      patch: {
+        status: part.status,
+        output: part.output,
+        ...(part.agent ? { agent: { ...part.agent } } : {})
+      }
+    })
+    this.flagBuriedMutation(loc.message.id)
+    this.store.saveChatSoon(this.chat.id)
+    this.toolLoc.delete(toolUseId)
+  }
+
+  /**
+   * Ensure interrupted/disposed turns never leave infinite tool spinners behind.
+   *
+   * `keepBackground` leaves the calls in `backgroundCalls` alone — an interrupt
+   * stops the turn and not the tasks it spawned. Every other caller is a moment
+   * the tasks are known to be gone (the process died, the job set emptied, a
+   * result landed with none live), so the tracking is dropped with them; a
+   * notification that still arrives finds its part through `toolLoc`.
+   */
+  private terminalizeRunning(
+    status: 'success' | 'error',
+    { keepBackground = false }: { keepBackground?: boolean } = {}
+  ): void {
+    if (!keepBackground) this.backgroundCalls.clear()
     const settle = (part: ToolPart): boolean => {
       let changed = false
+      if (keepBackground && this.backgroundCalls.has(part.toolUseId)) return false
       if (part.partial) {
         // A block cut off mid-stream: whatever prefix was parsed is what there
         // is, and a flag saying more is coming would never be cleared.
@@ -2078,6 +2259,25 @@ class ClaudeSession implements AgentSession {
       if (!loc) continue
       const part = loc.message.parts[loc.index]
       if (part?.type !== 'tool') continue
+      if (this.backgroundCalls.has(block.tool_use_id) && !block.is_error && !part.denied) {
+        // The placeholder for a backgrounded call — see `backgroundCalls`. The
+        // work has only started: the part stays running, its routing entry
+        // stays so the agent's own traffic keeps landing on it, and the text
+        // ("Async agent launched successfully … internal metadata") is not the
+        // output, the notification's summary is. A refused or failed spawn
+        // falls through and settles like any other result.
+        part.status = 'running'
+        this.deltas.flush()
+        this.emit({
+          type: 'tool-update',
+          chatId: this.chat.id,
+          messageId: loc.message.id,
+          toolUseId: part.toolUseId,
+          patch: { status: 'running' }
+        })
+        continue
+      }
+      this.backgroundCalls.delete(block.tool_use_id)
       const output = toolResultText(block.content)
       part.output = output.length > 100_000 ? `${output.slice(0, 100_000)}\n… (truncated)` : output
       part.outputImages = extractImages(block.content)

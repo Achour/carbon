@@ -373,6 +373,22 @@ cached input.
   working" is `part.status` **or** a child still moving — one rule, in
   `agentRuns.ts`, so the card and the panel cannot show a tick and a spinner for
   the same agent.
+- **Background agents are settled by their `task_notification`, not by their
+  result.** Measured against the CLI: `task_started` (carrying the
+  `tool_use_id` and `is_backgrounded`) arrives *before* the placeholder
+  `tool_result`, the agent's own messages stream with `parent_tool_use_id`
+  exactly as a foreground agent's do, and the end is a `task_notification` with
+  the agent's report as `summary` and the CLI's own token total. Before this
+  was read, `handleToolResults` marked the card done at spawn and deleted its
+  `toolLoc` entry — the "result arrives once, after all sub-agent traffic" rule,
+  true of a foreground agent and false of a backgrounded one — so every child
+  that followed was dropped: four `/simplify` reviewers "finished" in ten seconds
+  each with nothing inside. `backgroundCalls` in `claude.ts` holds the part
+  `running` through the placeholder and the entry alive until the notification,
+  which is what puts the children, the vitals and the turn's liveness back.
+  Only the notification's status is authoritative: the CLI sends its empty job
+  set in the same tick *ahead* of it, and the empty set already settles running
+  parts as a success, so the notification re-applies whatever it says.
 - **The fold is published to `agentsStore`, not threaded through props.** Agent
   vitals churn harder than anything else in a turn, and the transcript wants
   none of it — the `taskListStore` arrangement, for the `taskListStore` reason.
@@ -597,13 +613,43 @@ images and returns null when nothing else is left), and a folded *run* pushes
 its collected images in place of the group. A browser or preview sequence is
 exactly such a run, and it is all screenshots.
 
-**A turn whose work outlives it neither folds nor offers the control.** A
-backgrounded agent's call returns at spawn while its children keep arriving,
-and `claude.ts` skips `terminalizeRunning` while `backgroundJobCount > 0` — so
-`TurnFold.running` keeps such a turn open and withholds the chevron, the rhythm
+**A turn whose work outlives it is still live.** A backgrounded agent's call
+returns at spawn and its real end arrives minutes later as a `task_notification`
+(see "Background agents" under the roster below), and `claude.ts` skips
+`terminalizeRunning` while `backgroundJobCount > 0` — so `TurnFold.running`
+keeps such a turn open, ticking `Working for`, with no chevron, the rhythm
 `useRunDisclosure` already gives a running group. Folding it would take a card
 that is still moving off screen, and with it the node `AgentsPanel`'s row click
-scrolls to.
+scrolls to. `turnPresentations` is fed the same reading (`settled` in
+`renderMessages`): the changes card and the mutation rows it stands in for must
+not appear at a pause the turn is going to resume from.
+
+**The CLI closes a turn more than once, and the fold has to know.** `/simplify`
+spawns four review agents in the background, says it will apply their findings
+when they report, and the turn *ends* — a `result`, a stats row, status idle.
+Each agent's notification then wakes the model under the same prompt, with a
+`result` of its own; the saved run has five. Read as five turn ends, the
+transcript folded at each one and threw the work open at each continuation —
+the collapse-and-expand this was reported as — and the folded turn kept four
+cost readings stacked over its answer, since event rows never fold. So a turn
+carries `closed` (a `turn` or `error` row has landed) and `workEvents` (every
+`turn` row with more of the turn after it — only those: a switch divider, an
+error or a compaction mark inside a turn is not a turn end and draws as it
+always did), and three things follow. An interim stats row is work and folds. The answer run ends at an interim row — "four agents are
+running, I'll wait" is what the turn said *then*, not what it arrived at. And a
+turn that is live again after closing is a **continuation**: it stays folded
+while the continuation streams under it, with the chevron offered (the label
+and the control are independent in `TurnHeader`), because the alternative is
+the fold opening under the reader once per wake. A turn whose own work is
+still running is not in that state — nothing of it has folded — which is what
+`running` outranking `closed` in `renderMessages` says.
+
+Not every wake is an agent. A backgrounded *shell* is deliberately not held
+open (`backgroundCalls` in `claude.ts` — a dev server would pin the turn for
+the session), so a shell that finishes still closes the turn once before its
+notification; the continuation rule is what keeps that from showing. Scheduled
+wake-ups and comment notifications arrive the same way and get the same
+treatment for free.
 
 **One clock, in both states.** The label is wall clock across the turn's own
 messages, not `TurnStats.durationMs` — the provider's number is the more

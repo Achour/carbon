@@ -9,18 +9,46 @@ import type { BackgroundJob } from '@shared/types'
 // would spin the getSnapshot loop).
 const EMPTY: BackgroundJob[] = []
 
+// The wire spellings are the CLI's `task_type` — `local_bash`, `local_agent`,
+// `mcp_task`, … — which the first version of this switch never saw, so every
+// job drew the generic mark and named itself in snake_case. The friendly
+// spellings stay so a provider that reports them keeps matching.
 function jobIcon(type: string): React.ElementType {
   switch (type) {
     case 'shell':
+    case 'local_bash':
       return SquareTerminal
     case 'subagent':
+    case 'local_agent':
+    case 'remote_agent':
       return Bot
     case 'monitor':
+    case 'local_monitor':
       return Activity
     case 'workflow':
+    case 'local_workflow':
       return Workflow
     default:
       return Boxes
+  }
+}
+
+function jobLabel(type: string): string {
+  switch (type) {
+    case 'local_bash':
+      return 'shell'
+    case 'local_agent':
+      return 'agent'
+    case 'remote_agent':
+      return 'remote agent'
+    case 'local_monitor':
+      return 'monitor'
+    case 'local_workflow':
+      return 'workflow'
+    case 'mcp_task':
+      return 'MCP task'
+    default:
+      return type
   }
 }
 
@@ -71,7 +99,7 @@ export function BackgroundJobs(): React.JSX.Element | null {
                   <div className="truncate text-[13px] leading-snug">
                     {job.description || job.type}
                   </div>
-                  <div className="text-[11px] text-muted-foreground/70">{job.type}</div>
+                  <div className="text-[11px] text-muted-foreground/70">{jobLabel(job.type)}</div>
                 </div>
                 {job.stoppable !== false && (
                   <Button

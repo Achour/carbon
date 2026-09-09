@@ -248,21 +248,27 @@ function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
   const out: React.ReactNode[] = []
   let run: AssistantMessage[] = []
   const messages = all.filter((m) => !isBlankMsg(m) && !isLegacyCodexGoalSummary(m))
-  const presentations = turnPresentations(messages, ctx.cwd, ctx.busy)
   const folds = foldTurns(messages)
   // The live turn is never folded. It is the last one, and only while the chat
   // is busy — the live assistant message itself is not in this slice (it is the
   // live node), so the prompt that opened it is still the last user message
   // here whether or not the reply has started.
-  let liveUserId: string | undefined
-  if (ctx.busy) {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === 'user') {
-        liveUserId = messages[i].id
-        break
-      }
+  let lastFold: TurnFold | undefined
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === 'user') {
+      lastFold = folds.get(messages[i].id)
+      break
     }
   }
+  const liveUserId = ctx.busy ? lastFold?.userId : undefined
+  // The last turn is *settled* only when the chat is idle **and** nothing in
+  // it is still working. A turn whose background agents are still running is
+  // idle between their notifications — the CLI ends the turn, then starts a
+  // continuation under the same prompt when each one reports — and a changes
+  // card drawn at each of those pauses would be taken back at each
+  // continuation, along with the mutation rows it stands in for.
+  const settled = !ctx.busy && !lastFold?.running
+  const presentations = turnPresentations(messages, ctx.cwd, !settled)
 
   /** The turn being walked, and whether its work is folded away. */
   let fold: TurnFold | undefined
@@ -403,14 +409,24 @@ function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
       // moment the message is sent — the send's own acknowledgement, before
       // anything has come back to hang it on.
       fold = folds.get(m.id)
-      const live = !!fold && fold.userId === liveUserId
-      // A turn whose work outlives it (a backgrounded job or agent) is not
-      // settled, so it neither folds itself nor offers the control — the
-      // rhythm `useRunDisclosure` gives a running group, at turn scale. Folding
-      // it would take a card that is still moving off screen, and take with it
-      // the node `AgentsPanel`'s row click scrolls to.
-      const open = live || !!fold?.running
-      folded = !!fold && !open && !ctx.expandedTurns.has(m.id)
+      // A turn whose work outlives it (a backgrounded agent, still running
+      // between the notifications that wake the model) is *live*, not settled,
+      // however idle the chat is between them: its header keeps ticking
+      // "Working for", it neither folds nor offers the control — the rhythm
+      // `useRunDisclosure` gives a running group, at turn scale — and the
+      // continuation lands under a header that never stopped. Folding it would
+      // take a card that is still moving off screen, and take with it the node
+      // `AgentsPanel`'s row click scrolls to.
+      const live = !!fold && (fold.userId === liveUserId || fold.running)
+      // A turn the CLI has already closed once and that is live again is a
+      // *continuation* (`TurnFold.closed`): it folded when it closed, and the
+      // continuation streams under the fold rather than throwing the work open
+      // — otherwise a backgrounded shell's notification, or any wake-up with
+      // no prompt behind it, is the turn expanding and collapsing under the
+      // reader once per wake. A turn whose own work is still running is not in
+      // that state: nothing of it has folded.
+      const continuing = live && !!fold && fold.closed && !fold.running
+      folded = !!fold && (!live || continuing) && !ctx.expandedTurns.has(m.id)
       reachedAnswer = false
       if (fold && (live || fold.replied)) {
         out.push(
@@ -420,7 +436,9 @@ function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
             startTs={fold.startTs}
             endTs={fold.endTs}
             live={live}
-            collapsible={fold.collapsible && !open}
+            // A turn that is folded can always be opened, live or not; one
+            // that is live and has never folded offers nothing.
+            collapsible={fold.collapsible && (!live || continuing)}
             expanded={!folded}
             onToggle={ctx.onToggleTurn}
           />
@@ -437,6 +455,11 @@ function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
       // gate anyway: a turn still running has no answer to copy.
       const closing = lastAssistantId ? presentations.get(lastAssistantId)?.summary : undefined
       const answer = m.kind === 'turn' && closing ? turnAnswerText(closing) : undefined
+      // A stats row the CLI pushed mid-turn — a background task's notification
+      // woke the model and the turn went on under the same prompt — is work,
+      // and folds with it. Only the row that actually closes the turn is an
+      // event row in the "never folded" sense.
+      if (folded && fold?.workEvents.has(m.id)) continue
       out.push(
         <EventRow
           key={m.id}

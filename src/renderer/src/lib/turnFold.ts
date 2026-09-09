@@ -1,4 +1,4 @@
-import type { AssistantMessage, AssistantPart, ChatMessage } from '@shared/types'
+import type { AssistantMessage, AssistantPart, ChatMessage, EventMessage } from '@shared/types'
 
 /**
  * A turn, seen from its header: when it started, when it stopped, and where its
@@ -49,7 +49,33 @@ export interface TurnFold {
   answerFrom: { messageId: string; partIndex: number } | null
   /** True when folding would actually hide something. */
   collapsible: boolean
+  /**
+   * Event rows that fall *inside* the turn's work — a `turn` stats row with
+   * more of the turn after it — and so fold with it.
+   *
+   * The CLI closes a turn more than once when a background task wakes the
+   * model: `/simplify` spawns four review agents, says it will wait, and ends
+   * the turn; each agent's notification then starts a continuation under the
+   * same prompt with a `result` of its own. Every one of those pushes a stats
+   * row, and event rows are otherwise never folded — so a folded `/simplify`
+   * turn stacked four cost readings above its answer. The row that closes the
+   * turn (nothing of the turn after it) is not in here and still survives.
+   */
+  workEvents: ReadonlySet<string>
+  /**
+   * The CLI has ended this turn at least once — a `turn` event has landed.
+   *
+   * A turn that is live again after that is a **continuation**: something
+   * woke the model under the same prompt (a background task's notification, a
+   * scheduled wake-up, a comment) and nothing the user did. Such a turn has
+   * already folded, and streaming the continuation must not throw its work
+   * open again — that is the collapse-and-expand the reader was watching.
+   */
+  closed: boolean
 }
+
+/** The messages a turn is made of, after its prompt. */
+type TurnMessage = AssistantMessage | EventMessage
 
 /** A part that draws nothing: a hole, or text/thinking whose text is withheld. */
 function blank(part: AssistantPart | null | undefined): boolean {
@@ -71,14 +97,38 @@ function blank(part: AssistantPart | null | undefined): boolean {
  * row — work the turn did, not the answer it arrived at — and treating it as
  * answer prose would leave that row hanging above every folded Codex turn.
  * Withheld thoughts (Claude's) draw nothing and so decide nothing.
+ *
+ * **A `turn` row between assistant messages ends it too**, and is work. The
+ * rows after the last assistant message close the turn — the stats row — and
+ * decide nothing; one *between* two of them is a turn boundary the CLI drew
+ * mid-turn (see `workEvents`), and the prose above it is what the turn said
+ * *then* — "four agents are running, I'll apply the findings when they report"
+ * — not the answer it arrived at. Kept, that line would sit over every folded
+ * `/simplify` turn with a cost row under it and the real answer under that.
  */
-function answerBoundary(assistants: AssistantMessage[]): {
+function answerBoundary(turn: TurnMessage[]): {
   answerFrom: TurnFold['answerFrom']
   collapsible: boolean
+  workEvents: Set<string>
 } {
   let answerFrom: TurnFold['answerFrom'] = null
-  for (let mi = assistants.length - 1; mi >= 0; mi--) {
-    const message = assistants[mi]
+  // Every event with any of the turn's replies after it is interim — decided
+  // up front rather than inside the walk below, which stops at the first work
+  // it meets and would leave an earlier row unmarked behind it.
+  // Only `turn` rows: a switch divider, an error, a compaction mark inside a
+  // turn are not turn ends, decide nothing here, and keep drawing as before.
+  const workEvents = new Set<string>()
+  const lastReply = turn.findLastIndex((message) => message.role === 'assistant')
+  for (let i = 0; i < lastReply; i++) {
+    const message = turn[i]
+    if (message.role === 'event' && message.kind === 'turn') workEvents.add(message.id)
+  }
+  for (let mi = turn.length - 1; mi >= 0; mi--) {
+    const message = turn[mi]
+    if (message.role === 'event') {
+      if (mi > lastReply || message.kind !== 'turn') continue
+      return { answerFrom, collapsible: true, workEvents }
+    }
     for (let pi = message.parts.length - 1; pi >= 0; pi--) {
       const part = message.parts[pi]
       if (blank(part)) continue
@@ -88,12 +138,12 @@ function answerBoundary(assistants: AssistantMessage[]): {
       }
       // Work. Everything from here back is what the fold hides — including,
       // when nothing has been marked as answer yet, the whole turn.
-      return { answerFrom, collapsible: true }
+      return { answerFrom, collapsible: true, workEvents }
     }
   }
   // A turn that never did anything but talk. The boundary still points at its
   // first drawn part so the renderer takes one path, and nothing folds.
-  return { answerFrom, collapsible: false }
+  return { answerFrom, collapsible: false, workEvents }
 }
 
 /**
@@ -144,12 +194,12 @@ function lastStamp(message: ChatMessage): number {
 export function foldTurns(messages: ChatMessage[]): Map<string, TurnFold> {
   const folds = new Map<string, TurnFold>()
   let current: TurnFold | null = null
-  let assistants: AssistantMessage[] = []
+  let turn: TurnMessage[] = []
 
   const close = (): void => {
-    if (current) Object.assign(current, answerBoundary(assistants))
+    if (current) Object.assign(current, answerBoundary(turn))
     current = null
-    assistants = []
+    turn = []
   }
 
   for (const message of messages) {
@@ -162,20 +212,27 @@ export function foldTurns(messages: ChatMessage[]): Map<string, TurnFold> {
         replied: false,
         running: false,
         answerFrom: null,
-        collapsible: false
+        collapsible: false,
+        workEvents: new Set(),
+        closed: false
       }
       folds.set(message.id, current)
       continue
     }
     if (!current) continue
     current.replied = true
+    // An error row is a turn end too: a failed result pushes one *instead of*
+    // a stats row, and a notification can wake the model after it just the same.
+    if (message.role === 'event' && (message.kind === 'turn' || message.kind === 'error')) {
+      current.closed = true
+    }
     // `ts` is stamped by main when the message is created and never restamped,
     // so this is monotonic in practice; the max is what keeps a clock that
     // cannot run backwards out of the "one source" rule below.
     current.endTs = Math.max(current.endTs, lastStamp(message))
-    if (message.role === 'assistant') {
-      assistants.push(message)
-      if (!current.running && messageRunning(message)) current.running = true
+    turn.push(message)
+    if (message.role === 'assistant' && !current.running && messageRunning(message)) {
+      current.running = true
     }
   }
   close()
