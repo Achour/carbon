@@ -642,6 +642,13 @@ class ClaudeSession implements AgentSession {
   // turn's `result` both emitting 'idle') collapse to one — consumers get a
   // clean level-triggered stream and don't each need to edge-detect.
   private lastEmittedStatus: ChatStatus | null = null
+  // Uuid of the most recent prompt handed to the CLI. Every result echoes the
+  // uuid of the send it answers, so this is what tells an aborted turn's late
+  // result apart from the live turn's — see the `result` case.
+  private turnUuid: string | undefined
+  // Where an interrupted turn's streamed parts live, from the interrupt until
+  // the CLI's truncated copy of that message arrives — see `reconcileAssistant`.
+  private abortedCurrent: AssistantMessage | null = null
   private backgroundJobCount = 0
   // Guards the one-shot AI title: set the first time we try, so later turns in
   // this run never re-title. `titledResumed` skips chats that already had a turn
@@ -774,6 +781,22 @@ class ClaudeSession implements AgentSession {
       }
     })
     void this.pump()
+  }
+
+  /**
+   * True when this result answers a send that is no longer the current turn —
+   * i.e. a turn interrupted and immediately replaced (force-sending a queued
+   * message). Both uuid fields are optional, so an absent one means "can't
+   * tell", never "stale".
+   */
+  private isStaleResult(msg: SDKMessage & { type: 'result' }): boolean {
+    if (!this.turnUuid) return false
+    // Several sends can merge into one turn; `user_message_uuids` lists every
+    // prompt it consumed, so ours being anywhere in it makes the result ours.
+    const all = 'user_message_uuids' in msg ? msg.user_message_uuids : undefined
+    if (all?.length) return !all.includes(this.turnUuid)
+    const one = 'user_message_uuid' in msg ? msg.user_message_uuid : undefined
+    return one != null && one !== this.turnUuid
   }
 
   private setStatus(status: ChatStatus): void {
@@ -921,6 +944,7 @@ class ClaudeSession implements AgentSession {
         prompt = `${prompt ? `${prompt}\n\n` : ''}${elementBlocks.join('\n\n')}`
       }
       if (prompt || content.length === 0) content.push({ type: 'text', text: prompt })
+      this.turnUuid = messageId
       this.input.push({
         type: 'user',
         message: { role: 'user', content },
@@ -949,6 +973,12 @@ class ClaudeSession implements AgentSession {
     // Should the CLI take them down with the turn, the empty job set it sends
     // settles them through `emitBackgroundJobs` instead.
     this.terminalizeRunning('error', { keepBackground: true })
+    // The aborted turn's message ends here — it used to be closed by that turn's
+    // result, which no longer runs the turn-end path (see `result`). Kept aside
+    // rather than dropped: the CLI still owes this message a truncated final
+    // copy, and that copy has nowhere else to land (see `reconcileAssistant`).
+    this.abortedCurrent = this.current
+    this.current = null
     this.setStatus('idle')
   }
 
@@ -1563,6 +1593,29 @@ class ClaudeSession implements AgentSession {
         break
 
       case 'result': {
+        // **A result answers one send, and says which.** Force-sending a queued
+        // message interrupts the running turn and starts the next one — and the
+        // SDK writes the interrupt receipt *before* the aborted turn's result,
+        // so `interrupt()` resolves, the renderer's drain sends, and only then
+        // does the dead turn's result land. Run the turn-end path for it and a
+        // live turn is declared idle: the transcript stops, and because the real
+        // end then dedups against that idle, the turn's genuine completion emits
+        // nothing at all — no queue drain, no refresh. The chat looks stopped
+        // until the next send happens to move the status again.
+        //
+        // `user_message_uuid` is the CLI echoing back the uuid `send` stamped on
+        // the prompt, so the two turns are told apart by name rather than by
+        // timing. A stale result settles only its own flags: everything else it
+        // would touch (`current`, the running tools, the status) belongs to the
+        // turn now running, and `interrupt()` has already dealt with the dead
+        // one. Silence on those fields — an older CLI, a synthetic turn — is
+        // read as "this turn", which is the behaviour that was here before.
+        if (this.isStaleResult(msg)) {
+          this.lastAssistantError = undefined
+          this.interruptedTurn = false
+          this.abortedCurrent = null
+          break
+        }
         // Covers valid itemless/silent turns and failures before assistant output.
         void this.maybeGenerateTitle()
         this.turnActive = false
@@ -1639,6 +1692,8 @@ class ClaudeSession implements AgentSession {
         }
         this.lastAssistantError = undefined
         this.interruptedTurn = false
+        // Nothing more is owed to a turn that has reported its result.
+        this.abortedCurrent = null
         // Background tasks can legitimately outlive the parent turn. Keep
         // their tool cards live until the SDK reports the job set empty.
         if (this.backgroundJobCount === 0) {
@@ -2096,7 +2151,17 @@ class ClaudeSession implements AgentSession {
     const model = (msg.message as { model?: string }).model
     if (typeof model === 'string' && model) this.lastTurnModel = model
     this.updateContext((msg.message as { usage?: unknown }).usage)
-    const message = this.ensureCurrent()
+    // **An interrupt's final message arrives after the interrupt.** The CLI
+    // ships the cut-off message one more time, `aborted` and ending mid-word,
+    // ~20ms behind the receipt — so after `interrupt()` has closed the turn and,
+    // when a queued message was force-sent, after the next turn has opened.
+    // `ensureCurrent` would give it a fresh bubble and print the aborted text a
+    // second time *below the new user message*. The flag says whose it is, and
+    // `abortedCurrent` is where that turn's streamed parts are still sitting.
+    const orphan =
+      (msg as { aborted?: true }).aborted === true ? this.abortedCurrent : null
+    const message = orphan ?? this.ensureCurrent()
+    if (orphan) this.abortedCurrent = null
     // The chain uuid this entry has in the CLI's own transcript. `current` is
     // cleared at the end of this method, so our AssistantMessages map 1:1 onto
     // the SDK's and this is never the wrong turn's id. It is the sole anchor
@@ -2229,7 +2294,9 @@ class ClaudeSession implements AgentSession {
     }
     this.chat.updatedAt = Date.now()
     this.store.saveChatSoon(this.chat.id)
-    this.current = null
+    // Only when this closed the *live* message. An orphan reconciles a turn that
+    // is already over, and the turn now running owns `current`.
+    if (!orphan) this.current = null
   }
 
   /**

@@ -143,6 +143,39 @@ Path aliases: `@` → `src/renderer/src`, `@shared` → `src/shared` (renderer a
   and went out as the whole part per write to the pipe — O(k²) bytes for a
   chatty command, plus a persist each; `OUTPUT_MS` (`codex.ts`) holds one
   trailing timer per item and the terminal update flushes it.
+- **Force-sending a queued message races the turn it interrupts.** The SDK
+  writes the interrupt receipt *before* the aborted turn's result, so
+  `interrupt()` resolves, the renderer's idle drain sends the queued prompt, a
+  new turn starts — and only then does the dead turn's result land. Run the
+  turn-end path for it and a **live** turn is declared idle: the transcript
+  stops, and because the real end then dedups against that idle, the turn's
+  genuine completion emits nothing at all — no queue drain, no refresh — so the
+  chat looks stopped until the next send happens to move the status again. With
+  nothing to unwind the receipt-to-result gap measured 6 ms against a 8 ms
+  renderer round trip; anything that makes the CLI slower to write the result
+  than the renderer is to answer the idle puts it the other way, which is why it
+  reads as intermittent rather than broken. `isStaleResult` tells the two turns
+  apart by **name** rather than by timing: `send` stamps a uuid on the prompt and
+  the result echoes it back (`user_message_uuid`, or `user_message_uuids` when
+  several sends merged into one turn), and a result naming another send settles
+  only its own flags. Silence on both fields — an older CLI, a synthetic turn —
+  is read as "this turn", so nothing regresses where the CLI says nothing.
+  **Claude is the only provider with this shape**, and it is the cost of the
+  long-lived input stream: the CLI drains it, so main never gets to serialize the
+  two turns. Codex holds idle back for `drain()` while a run is live, and Grok's
+  `sendChain` cannot start the next `runTurn` until the cancelled one's
+  `finishTurn` has returned.
+- **An interrupted message is delivered once more, after the interrupt.** The
+  CLI ships the cut-off assistant message again with `aborted: true`, ending
+  mid-word — measured ~21 ms behind the receipt, and (as the SDK's own ordering
+  promises) just ahead of that turn's result. So it arrives after `interrupt()`
+  has closed the turn, and on a force-send after the *next* turn has opened:
+  `ensureCurrent` gives it a fresh bubble and the aborted text is printed a
+  second time, below the new user message. `interrupt()` therefore parks the
+  message in `abortedCurrent` instead of dropping it, `reconcileAssistant`
+  routes an `aborted` copy there, and the trailing `current = null` is skipped
+  for it — the turn now running owns `current`. The park is released at the
+  turn's result, which the ordering guarantee puts strictly after the copy.
 - Permissions: the SDK's `canUseTool` callback returns a Promise held in a `pending` map until the renderer answers via `chat:respond-permission`. "Always allow" uses the SDK's permission `suggestions`.
 - Changing **effort** has no live SDK setter — `setOptions` disposes the session and the next send resumes it in a fresh process. Model and permission mode change live.
 - **The system prompt is the one option that changes on neither axis.** Carbon
