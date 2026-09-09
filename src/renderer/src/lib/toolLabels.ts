@@ -48,3 +48,38 @@ export function humanizeShellCommand(command: string, cwd: string): HumanizedCom
 
   return { label: 'Terminal', summary: clean }
 }
+
+/**
+ * Grok's `use_tool` wrapper, unwrapped — or undefined when the call is not one.
+ *
+ * The CLI defers its whole MCP catalog behind a single `use_tool`, so a browser
+ * click, a preview screenshot and a canvas read all arrive under *one* name
+ * with the real tool in `tool_name` and its arguments in `tool_input`. Read at
+ * face value that is a row labelled `use_tool` with a wrench beside it — the
+ * same call drawn on Claude and Codex as a browser or a preview — which is
+ * exactly the provider asymmetry the normalizing in `grokAcp.ts` exists to
+ * remove, minus the tools it could not name because they are not Grok's.
+ *
+ * The answer is a *rename into the shape the renderer already knows*
+ * (`mcp__<server>__<tool>`) rather than a case per server: `canvas__write`
+ * becomes `mcp__canvas__write` and matches the case that was already there, and
+ * a server nobody has heard of still lands on the generic MCP row under its own
+ * name instead of under Grok's plumbing. `canvasWrite` keeps its own reading of
+ * the wrapper — it answers "is this a canvas mutation" for grouping and for the
+ * link, which is a question about the call rather than about its name.
+ */
+export function unwrapGrokTool(
+  name: string,
+  input: Record<string, unknown>
+): { name: string; input: Record<string, unknown> } | undefined {
+  if (name !== 'use_tool') return undefined
+  const tool = typeof input.tool_name === 'string' ? input.tool_name.trim() : ''
+  if (!tool) return undefined
+  const args = input.tool_input
+  return {
+    // Already-namespaced spellings pass through: the CLI has spelled this more
+    // than one way, and `mcp__mcp__canvas__write` matches nothing at all.
+    name: tool.startsWith('mcp__') ? tool : `mcp__${tool}`,
+    input: args !== null && typeof args === 'object' ? (args as Record<string, unknown>) : {}
+  }
+}

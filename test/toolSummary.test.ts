@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { summarizeActivity } from '../src/renderer/src/lib/toolSummary.ts'
+import { leadActivityLabel, summarizeActivity } from '../src/renderer/src/lib/toolSummary.ts'
 
 test('names one kind with its verb and count', () => {
   assert.equal(summarizeActivity(['Read']), 'Read 1 file')
@@ -94,4 +94,23 @@ test('the shell file verbs have clauses of their own', () => {
   assert.equal(summarizeActivity(['Create folder']), 'Created 1 folder')
   assert.equal(summarizeActivity(['Read', 'Create folder', 'Remove', 'Remove']), 'Created 1 folder, removed 2 files, read 1 file')
   assert.equal(summarizeActivity(['Copy', 'Move'], true), 'Copying 1 file, moving 1 file')
+})
+
+test('the lead label is the first clause\'s, not the first call\'s', () => {
+  // The group row draws this one's glyph, so it has to be the kind the sentence
+  // opens with — the pen, on a run that read nine files to write one.
+  assert.equal(leadActivityLabel(['Read', 'Read', 'Write', 'Grep']), 'Write')
+  // A merged clause keeps the spelling that opened it: every shell verb counts
+  // as "Ran … commands", and the row should draw the git branch it started on
+  // rather than whichever spelling came last.
+  assert.equal(leadActivityLabel(['Git', 'Terminal', 'Run']), 'Git')
+  // Nothing recognized: the run still has a name, and it is the tool's own.
+  assert.equal(leadActivityLabel(['Skill', 'Skill']), 'Skill')
+  assert.equal(leadActivityLabel([]), undefined)
+})
+
+test('the words and the glyph come off the same pass', () => {
+  const labels = ['Browser', 'Browser', 'Edit', 'Read']
+  assert.equal(summarizeActivity(labels), 'Edited 1 file, read 1 file, 2 browser actions')
+  assert.equal(leadActivityLabel(labels), 'Edit')
 })

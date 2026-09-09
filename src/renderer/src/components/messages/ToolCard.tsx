@@ -1,27 +1,37 @@
 import * as React from 'react'
 import { Collapsible } from '@base-ui/react/collapsible'
 import {
+  AppWindow,
   Bot,
   Check,
   ChevronRight,
   ClipboardList,
   Compass,
+  Copy,
   ExternalLink,
   FilePenLine,
   FileText,
+  Folder,
+  FolderInput,
+  FolderPlus,
+  GitBranch,
   Globe,
   Layers,
+  Link,
   ListChecks,
   Loader2,
   MessageCircleQuestion,
   MousePointerClick,
+  Notebook,
   PackageSearch,
   PenLine,
+  Puzzle,
   Search,
   Shapes,
   ShieldX,
   Sparkles,
   SquareTerminal,
+  Trash2,
   Wrench,
   X
 } from 'lucide-react'
@@ -33,8 +43,8 @@ import {
   summarizeAgentParts
 } from '@shared/agentRuns'
 import { cn } from '@/lib/utils'
-import { humanizeShellCommand } from '@/lib/toolLabels'
-import { summarizeActivity } from '@/lib/toolSummary'
+import { humanizeShellCommand, unwrapGrokTool } from '@/lib/toolLabels'
+import { leadActivityLabel, summarizeActivity } from '@/lib/toolSummary'
 import { lineDiff, type DiffLine } from '@/lib/lineDiff'
 import { Markdown } from '@/components/Markdown'
 import { useApp } from '@/store'
@@ -47,8 +57,42 @@ import {
 } from '@/lib/canvasRef'
 import { useAgents } from '@/agentsStore'
 
+type Glyph = React.ComponentType<{ className?: string }>
+
+/**
+ * The glyph for a *humanized shell label*.
+ *
+ * `humanizeShellCommand` renames the shell's own verbs — `sed -n` is a Read,
+ * `rg` is a Search, `mkdir` is a Create folder — and Codex does most of its
+ * file work through the shell rather than through `Read`/`Write` tools. Keyed
+ * on the tool's *name*, every one of those rows would draw a terminal where
+ * Claude draws a page for the same act: the icon has to follow the label, or
+ * the column of glyphs says the two providers did different things.
+ *
+ * Every search spelling shares one glyph on purpose — grep, glob, `rg` and
+ * `find` are one question asked four ways, which is the reading
+ * `toolSummary.ts` already commits to by counting them as one clause.
+ */
+const SHELL_ICONS: Record<string, Glyph> = {
+  Read: FileText,
+  Search: Search,
+  'Find files': Search,
+  'List files': Search,
+  'Create folder': FolderPlus,
+  Copy: Copy,
+  Move: FolderInput,
+  Remove: Trash2,
+  Git: GitBranch,
+  Run: SquareTerminal,
+  Terminal: SquareTerminal
+}
+
 interface ToolMeta {
-  icon: React.ComponentType<{ className?: string }>
+  /**
+   * The row's leading mark. Drawn on every activity row, so the reader can skip
+   * a run by shape rather than by reading each line.
+   */
+  icon: Glyph
   label: string
   summary?: string
   /**
@@ -173,6 +217,12 @@ function toolMeta(part: ToolPart, cwd: string): ToolMeta {
   if (canvasWrite(part)) return canvasMeta(part)
 
   const input = (part.input ?? {}) as Record<string, unknown>
+  // The same wrapper, for every *other* deferred tool Grok holds behind it: a
+  // browser click, a preview screenshot, a canvas read. Renamed into the
+  // `mcp__server__tool` shape below and read again, so those calls reach the
+  // cases that already draw them rather than a wrench labelled `use_tool`.
+  const unwrapped = unwrapGrokTool(part.name, input)
+  if (unwrapped) return toolMeta({ ...part, ...unwrapped }, cwd)
   const rel = (p?: string): string | undefined =>
     p?.startsWith(cwd + '/') ? p.slice(cwd.length + 1) : p
   // The SDKs report absolute paths, but don't rely on it — a relative one still opens.
@@ -188,13 +238,20 @@ function toolMeta(part: ToolPart, cwd: string): ToolMeta {
     case 'Bash':
       if (str(input.command)) {
         const human = humanizeShellCommand(String(input.command), cwd)
-        return { icon: SquareTerminal, ...human }
+        return { icon: SHELL_ICONS[human.label] ?? SquareTerminal, ...human }
       }
       return { icon: SquareTerminal, label: 'Terminal', summary: str(input.description) }
     case 'BashOutput':
       return { icon: SquareTerminal, label: 'Terminal output' }
+    case 'KillShell':
+    case 'KillBash':
+      return { icon: SquareTerminal, label: 'Terminal', summary: 'Stop a background shell' }
     case 'Read':
       return file(FileText, 'Read', str(input.file_path))
+    // Groupable since before it had a case of its own, which is what made it a
+    // wrench in the middle of a run of pages.
+    case 'NotebookRead':
+      return file(Notebook, 'Read', str(input.notebook_path) ?? str(input.file_path))
     case 'Write':
       return file(FilePenLine, 'Write', str(input.file_path))
     case 'Edit':
@@ -205,13 +262,20 @@ function toolMeta(part: ToolPart, cwd: string): ToolMeta {
       return { icon: Search, label: 'Grep', summary: str(input.pattern) }
     case 'Glob':
       return { icon: Search, label: 'Glob', summary: str(input.pattern) }
+    // `Folder`, not `Search`: listing a directory is not asking where something
+    // is, and the sentence above already calls it "Listed 2 folders".
     case 'ListDir':
-      return file(Search, 'List', str(input.path) ?? str(input.target_directory) ?? str(input.directory))
+      return file(Folder, 'List', str(input.path) ?? str(input.target_directory) ?? str(input.directory))
     case 'Task':
     case 'Agent':
       return { icon: Bot, label: 'Agent', summary: str(input.description) }
+    // Two web calls, two glyphs: a fetch retrieves the one page it names, a
+    // search asks the whole web a question. `Search`'s magnifying glass is
+    // spoken for by the ones that search *this project*, and confusing "where
+    // is it in the repo" with "what does the internet say" is the one mistake
+    // this column can make that costs the reader a click.
     case 'WebFetch':
-      return { icon: Globe, label: 'Fetch', summary: str(input.url) }
+      return { icon: Link, label: 'Fetch', summary: str(input.url) }
     case 'WebSearch':
       return { icon: Globe, label: 'Search', summary: str(input.query) }
     // The checklist itself is drawn above the composer, so these rows say what
@@ -238,7 +302,16 @@ function toolMeta(part: ToolPart, cwd: string): ToolMeta {
       return { icon: ListChecks, label: 'Tasks', summary: 'List tasks' }
     case 'ExitPlanMode':
       return { icon: ClipboardList, label: 'Plan', summary: 'Present plan for approval' }
+    // `grokAcp.ts` normalizes onto this name, and Claude has it behind the
+    // deferred catalog; without a case both drew the plan's *entry* as a wrench
+    // one row above the plan's own card.
+    case 'EnterPlanMode':
+      return { icon: ClipboardList, label: 'Plan', summary: 'Start planning' }
     case 'AskUserQuestion':
+      return { icon: MessageCircleQuestion, label: 'Question' }
+    // Codex's own spelling of the same act (`codex.ts` sets this name when a
+    // server asks the user something), so it takes the same mark.
+    case 'McpElicitation':
       return { icon: MessageCircleQuestion, label: 'Question' }
     // Claude Code defers most of its catalog now — the checklist tools included —
     // so a run that plans anything opens with one of these. Naming the query is
@@ -262,8 +335,11 @@ function toolMeta(part: ToolPart, cwd: string): ToolMeta {
         // drifting.
         summary: str(part.output)?.replace(/^Advisor\s+/, '') ?? 'Consulting a stronger model…'
       }
+    // `Puzzle` rather than `Sparkles`: a skill is a packaged set of instructions
+    // the project installed, and the sparkles a row above belong to the model
+    // consulting a stronger model. Two glyphs because they are two things.
     case 'Skill':
-      return { icon: Sparkles, label: 'Skill', summary: str(input.skill) ?? str(input.name) }
+      return { icon: Puzzle, label: 'Skill', summary: str(input.skill) ?? str(input.name) }
     case 'Workflow':
       return { icon: Layers, label: 'Workflow', summary: str(input.name) ?? str(input.description) }
     case 'ListAgents':
@@ -323,18 +399,21 @@ function toolMeta(part: ToolPart, cwd: string): ToolMeta {
           }
         }
       }
+    // `AppWindow`, not `Globe`: the preview server drives *this project's* dev
+    // server in a panel, which is a window rather than the web. It shared the
+    // globe with `WebFetch` for as long as neither was drawn.
     case 'mcp__preview__status':
-      return { icon: Globe, label: 'Preview', summary: 'Status' }
+      return { icon: AppWindow, label: 'Preview', summary: 'Status' }
     case 'mcp__preview__start':
-      return { icon: Globe, label: 'Preview', summary: 'Start dev server' }
+      return { icon: AppWindow, label: 'Preview', summary: 'Start dev server' }
     case 'mcp__preview__stop':
-      return { icon: Globe, label: 'Preview', summary: 'Stop dev server' }
+      return { icon: AppWindow, label: 'Preview', summary: 'Stop dev server' }
     case 'mcp__preview__navigate':
-      return { icon: Globe, label: 'Preview', summary: str(input.url) }
+      return { icon: AppWindow, label: 'Preview', summary: str(input.url) }
     case 'mcp__preview__screenshot':
-      return { icon: Globe, label: 'Preview', summary: 'Screenshot' }
+      return { icon: AppWindow, label: 'Preview', summary: 'Screenshot' }
     case 'mcp__preview__console':
-      return { icon: Globe, label: 'Preview', summary: 'Console' }
+      return { icon: AppWindow, label: 'Preview', summary: 'Console' }
     // The canvas tools take `Preview`'s shape: one label for the server, the
     // call's own subject as the summary. `PenLine` rather than `Shapes`, which
     // is `Artifact`'s — the two are different destinations and a shared glyph
@@ -437,7 +516,10 @@ function CanvasLink({ canvas }: { canvas: CanvasRef }): React.JSX.Element {
       className="flex min-w-0 shrink cursor-pointer items-center gap-1 text-[13px] text-foreground/80 underline decoration-foreground/25 underline-offset-2 hover:text-foreground hover:decoration-foreground"
       onActivate={() => openWrittenCanvas(canvas)}
     >
-      <PenLine className="size-3.5 shrink-0" />
+      {/* No pen of its own any more. It carried one while the row had no mark at
+          all; now the row leads with the canvas pen and the group row's sentence
+          says "Wrote 2 canvases", so a second pen two words later is a stutter
+          rather than a signal. The underline is what says this is a way in. */}
       <span className="truncate">{name ?? 'Open canvas'}</span>
     </RowAction>
   )
@@ -476,6 +558,15 @@ function openTarget(open: NonNullable<ToolMeta['open']>, cwd: string): void {
  */
 const ACTIVITY_ROW =
   'group -mx-1.5 flex w-[calc(100%+0.75rem)] items-center gap-1.5 rounded-md px-1.5 py-1 text-left outline-none transition-colors hover:bg-accent/40 focus-visible:bg-accent/40'
+
+/**
+ * The row's leading mark.
+ *
+ * Quieter than the label it precedes — a column of glyphs down a transcript is
+ * for skimming past, not for reading — and `size-3.5` so it matches the spinner
+ * and the ✕ at the other end of the same row rather than out-weighing them.
+ */
+const ACTIVITY_ICON = 'size-3.5 shrink-0 text-muted-foreground/60'
 
 /**
  * Space is *reserved* for the chevron and only its opacity moves. Rendering it
@@ -884,6 +975,7 @@ export const ToolCard = React.memo(function ToolCard({
               far edge of a wide transcript, where it no longer reads as belonging
               to this row. */}
           <span className="flex min-w-0 items-center gap-1.5">
+            <Icon className={cn(ACTIVITY_ICON, failed && 'text-destructive')} />
             <span
               className={cn(
                 'shrink-0 text-[13px]',
@@ -1051,10 +1143,15 @@ export const ToolGroup = React.memo(function ToolGroup({
   // one thing the reader can already see, and a name for none of it. Every kind
   // in the run gets a clause and a count instead, which is the same width and
   // actually answers what the turn spent its time on.
-  const title = summarizeActivity(
-    metas.map((m) => m.label),
-    running
-  )
+  const labels = metas.map((m) => m.label)
+  const title = summarizeActivity(labels, running)
+  // The mark is the *first clause's*, off the same grouping pass that ordered
+  // the words — so "Wrote 1 file, read 9 files" draws the pen, and a run is
+  // still skimmable by shape once it is folded to one line. Resolved through
+  // the calls rather than through a second label→icon table, which is how an
+  // MCP tool nothing has a case for still gets the glyph its own row has.
+  const lead = leadActivityLabel(labels)
+  const GroupIcon = metas.find((m) => m.label === lead)?.icon ?? Wrench
   // A run of spawns is the one group whose collapsed row can say something
   // better than "what the last call touched": how many of them are still
   // working and what they have spent between them. Same numbers as the Agents
@@ -1091,6 +1188,7 @@ export const ToolGroup = React.memo(function ToolGroup({
       <Collapsible.Root open={open} onOpenChange={onOpenChange} className="animate-enter">
         <Collapsible.Trigger className={ACTIVITY_ROW}>
           <span className="flex min-w-0 items-center gap-1.5">
+            <GroupIcon className={ACTIVITY_ICON} />
             {/* The summary stays muted even when a call inside failed. A group is
                 a description of several calls, not a call that failed: colouring
                 "Ran 7 commands" red says all seven did, when six succeeded and the

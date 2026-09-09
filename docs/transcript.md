@@ -14,12 +14,44 @@ it stops for is a step nobody needed to check. They are now muted text rows,
 Cursor's shape, and the box is not lost so much as moved one click away, to
 where the output already lived.
 
+- **The mark came back; the box and the tick did not.** Dropping the card took the
+  glyph with it, and that was one thing too many: a column of twenty rows all
+  opening with the same weight of grey word is read linearly, where a column of
+  marks is *skipped* — terminal, terminal, page, globe — until the one that
+  matters. So every activity row leads with `ToolMeta.icon` again, at
+  `size-3.5` and `text-muted-foreground/60`: quieter than the label beside it,
+  the same size as the spinner and the ✕ at the other end of the row, and
+  destructive when the call was. What is not back is the chrome the glyph used
+  to arrive in.
+- **The glyph follows the *label*, never the tool's name.** `Bash` is the case
+  that proves it: `humanizeShellCommand` renames the shell's own verbs, and
+  Codex does most of its file work through them, so a row saying "Read" would
+  have drawn a terminal on Codex and a page on Claude *for the same act*.
+  `SHELL_ICONS` is keyed on the humanized label instead, and every spelling of
+  a search shares one mark — the same reading `toolSummary.ts` commits to by
+  counting grep, glob, `rg` and `find` as one clause.
+- **A group draws its first clause's glyph**, off the same grouping pass that
+  ordered the words (`leadActivityLabel`). Not the most frequent kind and not
+  the first call: the sentence leads with what the turn *changed* rather than
+  how it got there, so a run that read nine files to write one says "Wrote 1
+  file, read 9 files" and draws the pen. Two passes sorting independently would
+  drift the day a rank moved, and a folder glyph over the words "Edited 1 file"
+  is the kind of wrong nobody reports.
+- **Grok's `use_tool` is unwrapped before any of this** (`unwrapGrokTool`). The
+  CLI defers its whole MCP catalog behind that one name, so a browser click, a
+  preview screenshot and a canvas read all arrived as `use_tool` with a wrench —
+  the same calls Claude and Codex draw as a browser and a preview. Renaming the
+  wrapper's `tool_name` into the `mcp__server__tool` shape the switch already
+  reads is what makes the three providers agree, and a server nobody has a case
+  for still lands on the generic MCP row under *its own* name. Grouping still
+  sees `use_tool`, so those calls stay separate rows on Grok.
 - **The label leads and the chevron trails it.** That ordering is the whole
   reason the rows read as prose: a disclosure in front indents every row by its
   own affordance, and a line that narrates has to start on the same column the
-  narration starts on. The chevron's space is *reserved* and only its opacity
-  moves — rendering it on hover reflows the text under the pointer, which reads
-  as the row flinching away from the cursor.
+  narration starts on. A glyph in front does not, because it is the same width
+  on every row and the words still start on one column. The chevron's space is
+  *reserved* and only its opacity moves — rendering it on hover reflows the text
+  under the pointer, which reads as the row flinching away from the cursor.
 - **Success draws nothing.** A green tick on every finished step is a column of
   ticks confirming the unremarkable; the row is written in the past tense, which
   already says it finished. Failure cannot be carried by wording, so an error or

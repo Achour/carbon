@@ -90,19 +90,19 @@ function count(n: number, one: string, many: string): string {
 }
 
 /**
- * One line naming every kind of work in a run.
+ * The run's clauses, in the order they will be spoken.
  *
- * `running` swings the whole row into the present rather than only its last
- * clause: the run is one unit, and a row reading "Editing 1 file, read 3 files"
- * describes two moments in time that the reader then has to reconcile.
+ * Split out of `summarizeActivity` because the row now draws a glyph beside
+ * the sentence and the two must agree: the icon is the *first clause's*, so
+ * both answers have to come off one grouping pass. Two passes that sorted
+ * independently would drift the day a rank moved, and the symptom — a folder
+ * glyph over the words "Edited 1 file" — is exactly the kind nobody reports.
  */
-export function summarizeActivity(labels: string[], running = false): string {
-  if (labels.length === 0) return running ? 'Working' : 'No activity'
-
+function clauses(labels: string[], running: boolean): { text: string; label: string }[] {
   // Anything with no entry above is counted, but keeps its label so a uniform
   // run of one unknown tool can still name it. Only a *mixed* bag of unknowns
   // has to fall back to the word "steps".
-  const known = new Map<string, { activity: Activity; n: number }>()
+  const known = new Map<string, { activity: Activity; label: string; n: number }>()
   const unknown = new Map<string, number>()
   for (const label of labels) {
     const activity = ACTIVITIES[label]
@@ -113,35 +113,64 @@ export function summarizeActivity(labels: string[], running = false): string {
       // Remove all count files at Write's rank, and are three clauses.
       const key = `${activity.past}|${activity.gerund}|${activity.many}`
       const seen = known.get(key)
+      // The label kept is the *first* that fell in the clause, so a merged
+      // clause is iconed by the call that opened it rather than by whichever
+      // spelling the Map happened to key on.
       if (seen) seen.n += 1
-      else known.set(key, { activity, n: 1 })
+      else known.set(key, { activity, label, n: 1 })
     } else {
       unknown.set(label, (unknown.get(label) ?? 0) + 1)
     }
   }
 
-  const clauses = [...known.values()]
+  const out = [...known.values()]
     .sort((a, b) => a.activity.rank - b.activity.rank)
-    .map(({ activity, n }) => {
+    .map(({ activity, label, n }) => {
       const verb = running ? activity.gerund : activity.past
       const noun = count(n, activity.one, activity.many)
-      return verb ? `${verb} ${noun}` : noun
+      return { text: verb ? `${verb} ${noun}` : noun, label }
     })
 
   const unknownTotal = [...unknown.values()].reduce((a, b) => a + b, 0)
   if (unknownTotal > 0) {
+    const first = [...unknown.keys()][0]
     // A run of one unnamed tool says which one — "Skill ×2" beats "2 steps",
     // and it is the only name that tool has anywhere on the collapsed row.
-    clauses.push(
-      unknown.size === 1
-        ? `${[...unknown.keys()][0]} ×${unknownTotal}`
-        : count(unknownTotal, 'step', 'steps')
-    )
+    out.push({
+      text: unknown.size === 1 ? `${first} ×${unknownTotal}` : count(unknownTotal, 'step', 'steps'),
+      label: first
+    })
   }
+  return out
+}
+
+/**
+ * One line naming every kind of work in a run.
+ *
+ * `running` swings the whole row into the present rather than only its last
+ * clause: the run is one unit, and a row reading "Editing 1 file, read 3 files"
+ * describes two moments in time that the reader then has to reconcile.
+ */
+export function summarizeActivity(labels: string[], running = false): string {
+  if (labels.length === 0) return running ? 'Working' : 'No activity'
 
   // Only the first clause is capitalized: the row is one sentence, and a
   // capital on each would read as a list of headings.
-  return clauses
-    .map((clause, i) => (i === 0 ? clause : clause.charAt(0).toLowerCase() + clause.slice(1)))
+  return clauses(labels, running)
+    .map(({ text }, i) => (i === 0 ? text : text.charAt(0).toLowerCase() + text.slice(1)))
     .join(', ')
+}
+
+/**
+ * The label the run's *first clause* is about — what a group row draws its icon
+ * from.
+ *
+ * Not the most frequent kind and not the first call: the sentence leads with
+ * the turn's result rather than its method (`ACTIVITIES`' ranks), so a run that
+ * read nine files to write one says "Wrote 1 file, read 9 files" and must draw
+ * the pen. Picking by frequency would put the magnifying glass over it, and
+ * picking chronologically would put whatever the model happened to do first.
+ */
+export function leadActivityLabel(labels: string[]): string | undefined {
+  return clauses(labels, false)[0]?.label
 }
