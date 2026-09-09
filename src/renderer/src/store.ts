@@ -485,6 +485,27 @@ interface AppState {
   sidebarOpen: boolean
   toggleSidebar(): void
 
+  /**
+   * Turns the reader has opened, by the id of the user message that starts each
+   * one. A settled turn folds down to its header and its answer; this is the
+   * set that says which ones are showing their work again.
+   *
+   * **It lives out here rather than in the header component**, and it has to:
+   * folding is *omission* — `renderMessages` leaves the hidden nodes out of the
+   * flat array it builds — so the answer has to be in hand before that array is
+   * built, one level above any component the header could own. It rides
+   * `RenderCtx`, and `sameHistory` compares it by identity, which is why the
+   * toggle mints a new Set rather than mutating this one: a mutation would
+   * leave the cached history nodes untouched and the click would do nothing.
+   *
+   * Never cleared. A message id is a uuid, so the set is bounded by the turns
+   * one session actually opened, and an expansion survives leaving the chat and
+   * coming back — which is the behaviour a reader who opened a turn to study it
+   * expects.
+   */
+  expandedTurns: ReadonlySet<string>
+  toggleTurnExpanded(userMessageId: string): void
+
   // ---- Updates ----
   /** A release newer than this build, or null. Set by the periodic check. */
   update: UpdateInfo | null
@@ -1661,6 +1682,7 @@ export const useApp = create<AppState>((set, get) => ({
   defaults: null,
   loading: true,
   sidebarOpen: localStorage.getItem('sidebarOpen') !== 'false',
+  expandedTurns: new Set<string>(),
 
   update: null,
   updateDismissed: localStorage.getItem('updateDismissed'),
@@ -1690,6 +1712,14 @@ export const useApp = create<AppState>((set, get) => ({
       const open = !s.sidebarOpen
       localStorage.setItem('sidebarOpen', String(open))
       return { sidebarOpen: open }
+    })
+  },
+
+  toggleTurnExpanded(userMessageId) {
+    set((s) => {
+      const next = new Set(s.expandedTurns)
+      if (!next.delete(userMessageId)) next.add(userMessageId)
+      return { expandedTurns: next }
     })
   },
 

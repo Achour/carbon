@@ -781,7 +781,7 @@ function ToolDetails({ part }: { part: ToolPart }): React.JSX.Element {
  * the end of a turn. Groups render their collected images once below the group;
  * their nested dense ToolCards suppress this copy.
  */
-function ToolOutputImages({
+export function ToolOutputImages({
   images
 }: {
   images: NonNullable<ToolPart['outputImages']>

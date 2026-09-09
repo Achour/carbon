@@ -194,3 +194,58 @@ middle click — a gesture `preventDefault` on `onClick` never sees. Local *imag
 links keep their existing branch above this one, so `[shot](x.png)` still draws
 inline. The `:line` suffix is parsed and discarded by both paths; neither jumps
 to the line.
+
+### Marks in prose (`Markdown.tsx`)
+
+Two small marks ride the text of a message: a language icon on a file name, and
+a site's favicon on an external link. Both answer the same question — *what is
+this thing you just named* — before the reader has to click it.
+
+**The file icon draws only on a file that resolved.** `InlineCode` already
+recognises a path-ish span and resolves it through `useResolvedFile`; the icon
+goes inside the same `<code>`, and only in the branch where a target came back.
+The mark is what promises a click, so putting one on a name that resolves to
+nothing promises a click that does nothing. It is derived from the *resolved*
+path rather than the span's text, so a bare basename found through the file
+index is marked by the file that will actually open.
+
+Both marks are `inline-block` and sized in `em` of the chip they sit in.
+Neither is decorative: Tailwind's preflight sets `img, svg { display: block }`,
+so an untouched mark takes a line of its own mid-paragraph, and `em` is what
+makes them track the chip rather than drift when type scales. Each is glued to
+its text by a word joiner (U+2060) inside a `select-none` span — an atomic
+inline is a UAX #14 contingent break, so a chip landing near the column edge
+could otherwise leave its icon stranded at the end of the line above. Not
+`white-space: nowrap`: the base `overflow-wrap: anywhere` on `code` is
+deliberate, and a long path must still be able to wrap. The joiner is inside
+`select-none` so a copied filename is still just the filename.
+
+**Favicons are fetched in main and cached per origin** (`main/favicons.ts`,
+`main/faviconCache.ts`), never by the page: the fetch is capped and timed out
+in one place, and the site learns nothing about the reader's window. They ride
+only the plain external branch of the `a:` renderer — never a local-file link,
+which opens a tab rather than a destination. The renderer keeps its own
+per-origin promise map beside `statOnce`/`lookupOnce`, nulls included, so a
+transcript citing one site eight times is one round trip. A pending, absent or
+undecodable mark renders the bare link with no gap and no reserved space. They
+draw as `<img src="data:…">`, which works because the app ships no CSP
+anywhere — the same thing `LocalImage` has always relied on.
+
+**A favicon is drawn for the site's background, not for ours**, so it is
+measured before it is trusted. GitHub's `/favicon.ico` is a black Octocat on a
+transparent field: correct on their page, and on Carbon's dark one an invisible
+mark leaving a hole in the sentence. A single-colour glyph on transparency is
+the house style for developer sites, which is most of what an agent cites. So
+each icon is sampled once on a 16×16 canvas (a `data:` URI is same-origin and
+never taints it) and inverted in dark mode only when it is unsaturated, dark,
+*and* genuinely transparent — that last condition is what stops a filled black
+tile, a logo whose square is the design, from being turned into a white one.
+**The saturation test is a mean, not a max**: antialiasing along a curve leaves
+a handful of faintly coloured pixels, and the Octocat peaks at 0.21 that way,
+so a max-based test called the blackest icon on the web "coloured" and left it
+invisible. Averaged over what is drawn it is 0.083, against 0.378 for php.net's
+mark. The alternative — preferring the `<link rel="icon">` a page declares,
+which for GitHub is an SVG that answers `prefers-color-scheme` — costs an HTML
+fetch per origin, when the resolver asks for `/favicon.ico` first precisely so
+most sites cost one request, and it only helps sites that published a dark
+variant at all.

@@ -522,3 +522,90 @@ retyping it. Three things follow from that:
   is complete, so a running turn offers nothing (there is no answer yet), and a
   tool-only turn yields an empty string and renders nothing rather than a button
   with nothing behind it.
+
+### The turn header and its fold (`TurnHeader`, `lib/turnFold.ts`)
+
+Every turn opens with a row of its own: `Working for 17s` while it runs, and
+`Worked for 31s ›` once it lands, with a hairline rule under it and the turn's
+work below. Clicking it folds the turn down to its answer.
+
+**Folding is omission from a flat array, never a wrapper.** `ChatView` renders
+history and the live message as one keyed array in one parent, because a
+message must keep its key, its element type *and* its parent when it crosses
+out of the live slot — that is the whole subject of `useHistoryNodes`, and a
+per-turn container would remount every settled row at the moment the turn
+ended, replaying each one's enter animation. So `TurnHeader` is a keyed sibling
+pushed after the prompt, and a folded turn simply pushes fewer nodes.
+
+**What folds is the work; what survives is the answer** — the trailing run of
+`text` parts, walked back across the turn's assistant messages, ended by
+anything that is not empty-or-text. A *visible* thought ends it too (Codex
+streams its reasoning, so that is a rendered row, i.e. work); a withheld one
+decides nothing, since it draws nothing anywhere. The boundary can fall inside
+a message — Claude ends a turn with a separate text-only message where Codex
+accumulates the whole turn into one — so `AssistantBlock` takes a `fromPart`
+index rather than a show/hide flag, and every key inside it stays the part's
+absolute index so expanding re-renders the answer instead of rebuilding it.
+This is deliberately *not* `turnAnswerText`, which concatenates every text part
+in the turn: that is the rule for "copy the answer", and using it here would
+keep the preamble the fold exists to hide.
+
+Never folded: the prompt, the event rows, the turn's changes card. Folded with
+its anchor: a `TasksCard`, iff the message it hangs off is omitted entirely.
+A turn that ends on work rather than prose folds to the header alone.
+
+**A picture a call produced is a result, not work.** A screenshot arrives as
+`outputImages` on the call that took it, and `ToolOutputImages` already draws
+*outside* the activity row's disclosure precisely so a capture survives that row
+collapsing — the turn fold then took the whole node and the picture with it,
+which is the one thing a reader who asked for a screenshot cannot lose. So both
+fold paths keep the images and drop the rows: a folded message renders at a
+boundary past its last part (`AssistantBlock` surfaces a hidden tool part's
+images and returns null when nothing else is left), and a folded *run* pushes
+its collected images in place of the group. A browser or preview sequence is
+exactly such a run, and it is all screenshots.
+
+**A turn whose work outlives it neither folds nor offers the control.** A
+backgrounded agent's call returns at spawn while its children keep arriving,
+and `claude.ts` skips `terminalizeRunning` while `backgroundJobCount > 0` — so
+`TurnFold.running` keeps such a turn open and withholds the chevron, the rhythm
+`useRunDisclosure` already gives a running group. Folding it would take a card
+that is still moving off screen, and with it the node `AgentsPanel`'s row click
+scrolls to.
+
+**One clock, in both states.** The label is wall clock across the turn's own
+messages, not `TurnStats.durationMs` — the provider's number is the more
+authoritative one and the wrong one here, since it lands a second or two off
+whatever the live row had just ticked to and the label would visibly jump the
+moment the turn ended. It is also the only reading a turn that reported no
+stats has, and interrupted turns report none: Claude closes no event on
+`interruptedTurn`, and Codex stamps its one accumulating message at turn
+*start*, so `endTs` also takes the turn's calls' `startedAt` — a floor under
+the truth rather than a fiction. The trailing stats row consequently dropped
+its duration and keeps the cost and the copy control.
+
+The label carries **no size of its own**. It sits in the same container as the
+prose it introduces, so inheriting is an exact match rather than a number kept
+level with `body`'s 14px by hand: a chrome *colour* on reading-size type. The
+expanded set lives in the renderer store (`expandedTurns`, a new `Set` per
+toggle so `sameHistory`'s identity compare fires) and rides `RenderCtx` —
+folding is decided while the node array is built, which a `useState` inside the
+header could never reach. The live turn is never folded; settled ones start
+folded.
+
+**The fold is animated with a view transition**, for the same reason it is
+omission: there is no element here whose height could animate. Chromium
+snapshots the viewport, so the cost is bounded by what is on screen rather than
+by the length of the transcript, and the app's only target is Chromium.
+`onToggleTurn` `flushSync`es the toggle inside the transition callback and
+corrects `scrollTop` there — before the new state is captured — anchoring on
+the header that was clicked rather than on the bottom of the scroller: folding
+removes height *above* the answer, so without the correction the transcript
+slides out from under the pointer by however much work the turn did. Reduced
+motion skips `startViewTransition` outright.
+
+**`demo/e2e/stream-probe.js` needs re-baselining against this.** It pumps
+synthetic assistant messages with no user message, so all three shapes land in
+one turn that now folds at each `status: idle`; its DOM-identity readings
+measure omission rather than a remount until each shape gets a prompt of its
+own. `foot-probe.js` is unaffected — it only reads the foot label.

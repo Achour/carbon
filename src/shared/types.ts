@@ -1921,6 +1921,12 @@ export interface Api {
   lspRelease(id: string): Promise<void>
   onLspMessage(cb: (id: string, message: string) => void): () => void
   statPath(path: string): Promise<'file' | 'dir' | null>
+  /**
+   * The favicon for an external link's origin, as a `data:` URI, or null when
+   * the site has none we could fetch. Resolved in main so the fetch is capped,
+   * cached and kept off the renderer — see `main/favicons.ts`.
+   */
+  favicon(url: string): Promise<string | null>
   searchFiles(cwd: string, query: string): Promise<{ rel: string; path: string }[]>
   gitStatus(cwd: string): Promise<GitStatus>
   gitDiff(cwd: string, target: GitDiffTarget): Promise<string>

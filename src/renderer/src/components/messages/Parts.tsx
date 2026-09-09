@@ -17,12 +17,18 @@ import {
 import type { AssistantMessage, EventMessage, ToolPart, UserMessage } from '@shared/types'
 import { CHAT_BLEED, CHAT_BLEED_PAD, CHAT_FRAME } from '@/lib/chatColumn'
 import { cn } from '@/lib/utils'
-import { formatCost, formatDuration } from '@/lib/format'
+import { formatCost } from '@/lib/format'
 import { AssistantMarkdown, Markdown, useStreamText } from '@/components/Markdown'
 import { Button } from '@/components/ui/button'
 import { WithTooltip } from '@/components/ui/tooltip'
 import { useApp } from '@/store'
-import { FILE_MUTATION_TOOLS, isGroupableTool, ToolCard, ToolGroup } from './ToolCard'
+import {
+  FILE_MUTATION_TOOLS,
+  isGroupableTool,
+  ToolCard,
+  ToolGroup,
+  ToolOutputImages
+} from './ToolCard'
 
 /**
  * One button in a user message's hover row. Shared so the two actions cannot
@@ -382,7 +388,8 @@ export const AssistantBlock = React.memo(function AssistantBlock({
   cwd,
   streaming,
   onOpenPlan,
-  summarizeEdits = false
+  summarizeEdits = false,
+  fromPart = 0
 }: {
   message: AssistantMessage
   cwd: string
@@ -390,6 +397,18 @@ export const AssistantBlock = React.memo(function AssistantBlock({
   onOpenPlan?: (plan: string) => void
   /** Hide completed edit rows when the turn-level summary represents them. */
   summarizeEdits?: boolean
+  /**
+   * Draw the message from this part onwards.
+   *
+   * A folded turn keeps its answer, and the answer's boundary can fall *inside*
+   * a message: Claude ends a turn with a separate text-only message, but Codex
+   * accumulates the whole turn into one, so show/hide at message granularity
+   * would fold a Codex answer away with the work above it. Every key below is
+   * the part's own absolute index (or its `toolUseId`), so the surviving parts
+   * keep their identity whether the block is whole or cut — expanding a turn
+   * re-renders the answer rather than rebuilding it.
+   */
+  fromPart?: number
 }): React.JSX.Element | null {
   const parts = message.parts
   const lastIndex = parts.length - 1
@@ -400,6 +419,7 @@ export const AssistantBlock = React.memo(function AssistantBlock({
   const items: Array<
     | { kind: 'group'; parts: ToolPart[]; key: string }
     | { kind: 'single'; part: NonNullable<(typeof parts)[number]>; index: number }
+    | { kind: 'images'; part: ToolPart }
   > = []
   let run: { part: NonNullable<(typeof parts)[number]>; index: number }[] = []
   const flushRun = (): void => {
@@ -417,6 +437,20 @@ export const AssistantBlock = React.memo(function AssistantBlock({
   parts.forEach((part, i) => {
     // Streamed arrays can be sparse; persisted ones turn holes into null.
     if (!part) return
+    // Folded away with the rest of the turn — see `fromPart` — except for what
+    // it *produced*. A screenshot arrives as `outputImages` on the call that
+    // took it, and `ToolOutputImages` deliberately draws outside the activity
+    // row's disclosure so a capture survives that row collapsing. Folding the
+    // whole node took the picture with it, which is the one thing a reader who
+    // asked for a screenshot cannot lose: the fold hides *work*, and an image
+    // is a result. The row itself stays folded — only the picture comes back.
+    if (i < fromPart) {
+      if (part.type === 'tool' && part.outputImages?.length) {
+        flushRun()
+        items.push({ kind: 'images', part })
+      }
+      return
+    }
     // A text/thinking part with no text renders nothing. Skip it here rather
     // than returning null from the map below: an item that renders null still
     // occupies a slot in the parent's `gap`, so it would show up as a blank
@@ -448,6 +482,14 @@ export const AssistantBlock = React.memo(function AssistantBlock({
       {items.map((item) => {
         if (item.kind === 'group') {
           return <ToolGroup key={item.key} parts={item.parts} cwd={cwd} />
+        }
+        if (item.kind === 'images') {
+          return (
+            <ToolOutputImages
+              key={`images-${item.part.toolUseId}`}
+              images={item.part.outputImages ?? []}
+            />
+          )
         }
         const { part, index: i } = item
         const isLast = i === lastIndex
@@ -542,23 +584,23 @@ export const EventRow = React.memo(function EventRow({
 }): React.JSX.Element | null {
   switch (message.kind) {
     case 'turn': {
-      const s = message.stats
-      // Stats are the row's usual reason to exist, but no longer its only one:
-      // a turn that reported none still has an answer worth copying, and
-      // returning null there would drop the control on exactly those turns.
-      if (!s && !answer) return null
+      // **The duration is gone from here**, and only from here: the turn's own
+      // header row (`TurnHeader`) now opens every turn with `Worked for 31s`,
+      // so a second reading of the same number at the foot of it was the turn's
+      // length stated twice, two rows apart, in two formats. What is left is
+      // what the header does not carry — the spend, and the control that copies
+      // the answer.
+      //
+      // Subscription turns (Codex on ChatGPT, Claude on a plan) report no
+      // per-turn dollar cost, and a turn may report no stats at all while still
+      // having an answer worth copying — so an empty row is the one case that
+      // returns null, rather than a missing `stats`.
+      const cost = message.stats && message.stats.costUsd > 0 ? message.stats.costUsd : null
+      if (cost === null && !answer) return null
       return (
         <div className="flex items-center justify-end gap-1 pt-0.5 text-[11px] text-muted-foreground/70">
           {answer && <CopyAnswer text={answer} />}
-          {s && <span>{formatDuration(s.durationMs)}</span>}
-          {/* Subscription turns (Codex on ChatGPT, Claude on a plan) report no
-              per-turn dollar cost — show duration only rather than "$0.0000". */}
-          {s && s.costUsd > 0 && (
-            <>
-              <span>·</span>
-              <span>{formatCost(s.costUsd)}</span>
-            </>
-          )}
+          {cost !== null && <span>{formatCost(cost)}</span>}
         </div>
       )
     }

@@ -744,7 +744,30 @@
   animation-play-state: paused !important;
 }
 
+/* The turn fold's animation (`onToggleTurn` in `ChatView`).
+
+   A fold has no element whose height could animate — the nodes that leave are
+   siblings in one flat array, and giving them a parent would remount every
+   settled row when a turn ends — so the disclosure is a view transition over
+   the viewport instead. Only the duration is ours: the default 250ms
+   cross-fade reads as a page swap on a gesture this small, where ~160ms reads
+   as the content resolving. The scroll correction in `onToggleTurn` holds the
+   clicked row still underneath it, so what animates is the content below. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 160ms;
+  animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
 @media (prefers-reduced-motion: reduce) {
+  /* `onToggleTurn` also skips `startViewTransition` outright, which is what
+     actually matters — this covers a transition already in flight when the
+     preference changes. */
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
+  }
   .animate-spin,
   .animate-pulse,
   .animate-pulse-soft,

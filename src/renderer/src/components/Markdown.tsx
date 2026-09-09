@@ -17,6 +17,7 @@ import {
   remarkHighlightLang
 } from '@/lib/highlight'
 import { splitHighlightedLines } from '@/lib/highlightLines'
+import { FileIcon } from '@/lib/fileIcon'
 import { fileLinkPath, isBareFileLineRef } from '@/lib/fileLink'
 import { needsWholeParse, splitMarkdownStream, type OpenFence } from '@/lib/markdownStream'
 import {
@@ -397,6 +398,21 @@ function lookupOnce(cwd: string, name: string): Promise<string | null> {
 }
 
 /**
+ * The **settled** answer for one `cwd` + path pair, as opposed to the caches
+ * above, which hold the round trip.
+ *
+ * Those already spend one request per path, but the hook still resolved through
+ * an effect and a microtask, so a chip mounted for the hundredth time drew
+ * unresolved for a frame and then became resolved. That was invisible while
+ * resolution only changed a cursor and a title; it is a visible jump now that it
+ * puts a mark in front of the text — and "Load earlier messages" mounts dozens
+ * of already-known chips in one go. Answered during render, so anything asked
+ * before paints marked immediately.
+ */
+const resolvedFiles = new Map<string, string | null>()
+const resolvedKey = (cwd: string | null, clean: string): string => `${cwd ?? ''}\0${clean}`
+
+/**
  * A path named in a message, resolved to a file in the project — or null while
  * it is being looked up, and for good if it names nothing.
  *
@@ -409,13 +425,17 @@ function lookupOnce(cwd: string, name: string): Promise<string | null> {
  */
 function useResolvedFile(clean: string | null): string | null {
   const cwd = React.useContext(MarkdownCwd)
+  const key = clean ? resolvedKey(cwd, clean) : null
   const [target, setTarget] = React.useState<string | null>(null)
 
   React.useEffect(() => {
     setTarget(null)
-    if (!clean) return undefined
+    if (!key || !clean || resolvedFiles.has(key)) return undefined
     const abs = clean.startsWith('/') ? clean : cwd ? `${cwd}/${clean}` : null
-    if (!abs) return undefined
+    if (!abs) {
+      resolvedFiles.set(key, null)
+      return undefined
+    }
     let alive = true
     void statOnce(abs)
       .then((kind) => {
@@ -425,14 +445,47 @@ function useResolvedFile(clean: string | null): string | null {
         return null
       })
       .then((found) => {
+        resolvedFiles.set(key, found)
         if (alive && found) setTarget(found)
       })
     return () => {
       alive = false
     }
-  }, [clean, cwd])
+  }, [key, clean, cwd])
 
-  return target
+  const settled = key ? resolvedFiles.get(key) : null
+  return settled !== undefined ? settled : target
+}
+
+/**
+ * A small mark drawn immediately before the text it labels — a file's language
+ * icon inside a resolved `<code>` chip, a site's favicon inside an external
+ * link. Both marks say the same thing ("this one goes somewhere"), so they are
+ * mounted the same way, and two details are load-bearing rather than cosmetic:
+ *
+ * - **Tailwind's preflight makes `svg` and `img` block-level.** A mark left at
+ *   that default takes a line of its own in the middle of a paragraph, so each
+ *   one is put back inline and nudged off the baseline at its call site. Its
+ *   height is in `em`, so it tracks the type it sits in rather than a fixed px
+ *   that only looks right at one zoom.
+ * - **U+2060 WORD JOINER is what keeps the mark glued to the first character.**
+ *   An atomic inline is a UAX#14 *contingent break* (LB20 allows a break either
+ *   side of it), so without the joiner a chip that lands near the column edge
+ *   can leave its icon stranded at the end of the line above with the name
+ *   below it. LB11 prohibits a break on either side of a joiner and outranks
+ *   LB20, which is why one invisible character does the whole job — where
+ *   `white-space: nowrap` would also stop a long path from wrapping at all,
+ *   the thing `overflow-wrap: anywhere` on the base `code` rule exists to allow.
+ *   `select-none` keeps that character out of what the reader copies: a
+ *   filename pasted into a shell has to be the filename.
+ */
+function LeadingMark({ children }: { children: React.ReactNode }): React.JSX.Element {
+  return (
+    <span className="select-none">
+      {children}
+      {'\u2060'}
+    </span>
+  )
 }
 
 function InlineCode({
@@ -467,6 +520,17 @@ function InlineCode({
         title={`Open ${target}`}
         onClick={() => void useApp.getState().openFile(target, { preview: true })}
       >
+        {/* Only on a *resolved* path: the mark is what says this opens, and one
+            on a name that resolves to nothing promises a click that does
+            nothing. Drawn from `target` rather than the span's text, so a bare
+            basename found through the file index is marked by the file it
+            actually opens. */}
+        <LeadingMark>
+          <FileIcon
+            path={target}
+            className="mr-[0.3em] inline-block size-[1.15em] align-[-0.22em]"
+          />
+        </LeadingMark>
         {children}
       </code>
     )
@@ -554,6 +618,170 @@ function LocalImage({
   )
 }
 
+// ---- Site marks on external links ----
+
+/**
+ * The favicon for an external link, cached per **origin** — a transcript citing
+ * github.com eight times must cost one round trip, not eight. Same shape as
+ * `statOnce` / `lookupOnce` above, nulls included: a site with no mark we could
+ * fetch is the ordinary case rather than a miss worth retrying, and re-asking
+ * per link would turn a single mention into one request per citation.
+ *
+ * The fetch itself lives in main (`main/favicons.ts`) and answers a `data:`
+ * URI, so nothing here touches the network and the site learns nothing about
+ * the reader's window. A `data:` image draws in this renderer for free —
+ * there is no CSP anywhere in the app (no `<meta>`, no `onHeadersReceived`),
+ * which is what `LocalImage` above has always relied on.
+ */
+const faviconCache = new Map<string, Promise<string | null>>()
+/** The settled answers, so a re-mounted link draws its mark in the first paint. */
+const faviconSettled = new Map<string, string | null>()
+function faviconOnce(origin: string): Promise<string | null> {
+  let pending = faviconCache.get(origin)
+  if (!pending) {
+    pending = window.api.favicon(origin).catch(() => null)
+    faviconCache.set(origin, pending)
+    void pending.then((uri) => faviconSettled.set(origin, uri))
+  }
+  return pending
+}
+
+/**
+ * The origin of an `http(s)` destination, and null for everything else — a
+ * `mailto:`, a local path that resolved to nothing, a destination the sanitizer
+ * blanked. Keying on the origin rather than the href is the whole point of the
+ * cache: eight links into one site are one lookup.
+ */
+function externalOrigin(href: string): string | null {
+  if (!/^https?:\/\//i.test(href)) return null
+  try {
+    return new URL(href).origin
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Origins whose mark is a dark monochrome glyph on transparency.
+ *
+ * **A favicon is drawn for the site's own background, not for ours.** GitHub's
+ * `/favicon.ico` is a black Octocat on a transparent field — correct on their
+ * white page, and on Carbon's dark one an invisible mark leaving a gap in the
+ * sentence where a mark should be. It is not a rare shape either: a
+ * single-colour glyph on transparency is the house style for developer sites,
+ * which is most of what an agent cites.
+ *
+ * So the mark is *measured* rather than trusted, once per origin, and inverted
+ * only in dark mode and only when all three hold: it is essentially unsaturated
+ * (inverting a colour would be vandalism), it is dark on average, and it has
+ * real transparency. That last one is what keeps a filled black tile — a logo
+ * whose square *is* the design — from being turned into a white one; it stays
+ * as drawn, which is the site's own answer even if it reads quietly here.
+ *
+ * The alternative was to prefer the `<link rel="icon">` the page declares,
+ * which for GitHub is an SVG that answers `prefers-color-scheme`. It costs an
+ * HTML fetch per origin — `main/faviconCache.ts` asks for `/favicon.ico` first
+ * precisely so most sites cost one request — and it only helps sites that
+ * bothered to publish a dark variant. Measuring what we already hold costs one
+ * 16×16 decode and covers every site.
+ */
+const faviconInkDark = new Map<string, boolean>()
+
+function classifyInk(origin: string, uri: string): Promise<boolean> {
+  const known = faviconInkDark.get(origin)
+  if (known !== undefined) return Promise.resolve(known)
+  return new Promise<boolean>((resolve) => {
+    const done = (dark: boolean): void => {
+      faviconInkDark.set(origin, dark)
+      resolve(dark)
+    }
+    const img = new Image()
+    img.onload = () => {
+      try {
+        const n = 16
+        const canvas = document.createElement('canvas')
+        canvas.width = n
+        canvas.height = n
+        const ctx = canvas.getContext('2d', { willReadFrequently: true })
+        if (!ctx) return done(false)
+        ctx.drawImage(img, 0, 0, n, n)
+        // A `data:` URI is same-origin, so this never taints the canvas.
+        const { data } = ctx.getImageData(0, 0, n, n)
+        let visible = 0
+        let clear = 0
+        let luma = 0
+        let saturation = 0
+        for (let i = 0; i < data.length; i += 4) {
+          if (data[i + 3] < 32) {
+            clear++
+            continue
+          }
+          visible++
+          const r = data[i]
+          const g = data[i + 1]
+          const b = data[i + 2]
+          luma += (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255
+          const max = Math.max(r, g, b)
+          const min = Math.min(r, g, b)
+          // **Mean, not max.** The peak saturation of a black glyph is not
+          // zero: antialiasing along a curve leaves a handful of faintly
+          // coloured pixels, and GitHub's Octocat measures 0.21 that way — so
+          // a max-based test called the blackest icon on the web "coloured"
+          // and left it invisible. Averaged over what is actually drawn, the
+          // same mark is ~0.01 and a genuinely coloured one stays far above.
+          saturation += max === 0 ? 0 : (max - min) / max
+        }
+        done(
+          visible > 0 &&
+            clear / (n * n) > 0.15 &&
+            saturation / visible < 0.12 &&
+            luma / visible < 0.35
+        )
+      } catch {
+        done(false)
+      }
+    }
+    img.onerror = () => done(false)
+    img.src = uri
+  })
+}
+
+/**
+ * The site's mark — null while it loads, and for good if the site has none —
+ * and whether it needs inverting to be visible on a dark ground.
+ * A known origin is answered during render (see `resolvedFiles` above for why
+ * one frame matters once resolution draws something).
+ */
+function useFavicon(origin: string | null): { uri: string | null; inkDark: boolean } {
+  const [uri, setUri] = React.useState<string | null>(null)
+  const [, bump] = React.useReducer((n: number) => n + 1, 0)
+  React.useEffect(() => {
+    setUri(null)
+    if (!origin) return undefined
+    let alive = true
+    void faviconOnce(origin).then((u) => {
+      if (!alive) return
+      if (!faviconSettled.has(origin)) setUri(u)
+      // Measured after the fetch settles rather than at draw time: the verdict
+      // decides how the mark is painted, so a link mounting later must have it
+      // in hand for its first paint rather than flashing the wrong one.
+      if (u && faviconInkDark.get(origin) === undefined) {
+        void classifyInk(origin, u).then(() => {
+          if (alive) bump()
+        })
+      }
+    })
+    return () => {
+      alive = false
+    }
+  }, [origin])
+  const settled = origin ? faviconSettled.get(origin) : null
+  return {
+    uri: settled !== undefined ? settled : uri,
+    inkDark: !!origin && faviconInkDark.get(origin) === true
+  }
+}
+
 const components = {
   pre: CodeBlock,
   code: InlineCode,
@@ -607,6 +835,18 @@ const components = {
     const target = useResolvedFile(
       React.useMemo(() => (isImage ? null : fileLinkPath(h)), [h, isImage])
     )
+    // The site's mark, for the plain external branch at the bottom only — a
+    // local file opens a tab rather than a destination, and there is no site to
+    // name. Both hooks run before every return: a link that turns out to be an
+    // image still has to call them, in this order. A link whose whole content
+    // is an image (`[![shot](x.png)](https://…)`) is skipped too — "before the
+    // link text" presumes there is text.
+    const { uri: favicon, inkDark } = useFavicon(
+      nodeText(children).trim() ? externalOrigin(h) : null
+    )
+    // The *URI* that failed to decode, not a flag: a reconciled instance
+    // pointing at another site must not stay blank because the last one did.
+    const [badFavicon, setBadFavicon] = React.useState<string | null>(null)
     if (isImage) {
       return (
         <LocalImage
@@ -638,6 +878,26 @@ const components = {
     }
     return (
       <a {...props} href={href} target="_blank" rel="noreferrer">
+        {/* Nothing at all while it loads, when the site has none, and when the
+            bytes don't decode — an unmarked link is what a link already looks
+            like, so there is no placeholder to leave behind and no gap to
+            close. */}
+        {favicon && favicon !== badFavicon ? (
+          <LeadingMark>
+            <img
+              src={favicon}
+              alt=""
+              aria-hidden
+              onError={() => setBadFavicon(favicon)}
+              className={cn(
+                'mr-[0.3em] inline-block size-[1.05em] rounded-[2px] object-contain align-[-0.18em]',
+                // Dark mode only: on a light ground the mark is already right,
+                // and it is the site's own drawing wherever it can be.
+                inkDark && 'dark:invert'
+              )}
+            />
+          </LeadingMark>
+        ) : null}
         {children}
       </a>
     )

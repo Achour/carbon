@@ -1,4 +1,5 @@
 import * as React from 'react'
+import { flushSync } from 'react-dom'
 import {
   ArrowDown,
   ArrowLeftRight,
@@ -68,13 +69,16 @@ import {
   groupRunning,
   isGroupableTool,
   ToolCard,
-  ToolGroup
+  ToolGroup,
+  ToolOutputImages
 } from '@/components/messages/ToolCard'
 import { PromptDock } from '@/components/PromptDock'
 import { BackgroundJobs } from '@/components/BackgroundJobs'
 import { TasksCard } from '@/components/messages/TasksCard'
 import { TurnChangesCard } from '@/components/messages/TurnChangesCard'
+import { TurnHeader } from '@/components/messages/TurnHeader'
 import { turnPresentations } from '@/lib/turnChanges'
+import { foldTurns, type TurnFold } from '@/lib/turnFold'
 
 const NO_PERMISSIONS: never[] = []
 const NO_QUEUED: never[] = []
@@ -139,6 +143,19 @@ interface RenderCtx {
   taskCompletions?: ReadonlyMap<string, TaskItem[]>
   /** Switch divider currently mid-handoff (brief still generating), if any. */
   switchPendingId?: string
+  /**
+   * Turns the reader has opened, by their user message id. Everything else that
+   * has settled is folded down to its header and its answer.
+   *
+   * It comes from the store rather than from a `useState` inside the header,
+   * because the header cannot reach the decision: folding is *omission* from
+   * the flat array `renderMessages` returns, so the answer is needed one level
+   * above any component the disclosure could own. `sameHistory` compares this
+   * by identity — a toggle that mutated the set in place would leave the cached
+   * history nodes exactly as they were and the click would draw nothing.
+   */
+  expandedTurns: ReadonlySet<string>
+  onToggleTurn: (userMessageId: string) => void
 }
 
 /**
@@ -218,17 +235,67 @@ const groupKey = (firstId: string): string => `grp-${firstId}`
  * (`liveNode` in `ChatView`): a message renders under the *same* key, as the
  * same element type, whether it is the turn's live message or history — that
  * is what lets it cross over without React rebuilding it.
+ *
+ * **A turn also carries a header, and folding one is omission from this
+ * array.** Every prompt is followed by a keyed `TurnHeader` sibling — never a
+ * wrapper around the turn's nodes, which would put those nodes in a parent of
+ * their own and remount every settled row the moment the turn ended. A folded
+ * turn simply pushes fewer nodes: the header, the answer (from `foldTurns`'
+ * boundary, which can fall mid-message), and the things that never fold — the
+ * prompt itself, the event rows, and the turn's changes card.
  */
 function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
   const out: React.ReactNode[] = []
   let run: AssistantMessage[] = []
   const messages = all.filter((m) => !isBlankMsg(m) && !isLegacyCodexGoalSummary(m))
   const presentations = turnPresentations(messages, ctx.cwd, ctx.busy)
+  const folds = foldTurns(messages)
+  // The live turn is never folded. It is the last one, and only while the chat
+  // is busy — the live assistant message itself is not in this slice (it is the
+  // live node), so the prompt that opened it is still the last user message
+  // here whether or not the reply has started.
+  let liveUserId: string | undefined
+  if (ctx.busy) {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'user') {
+        liveUserId = messages[i].id
+        break
+      }
+    }
+  }
+
+  /** The turn being walked, and whether its work is folded away. */
+  let fold: TurnFold | undefined
+  let folded = false
+  /** Within a folded turn: has the walk reached the answer yet? */
+  let reachedAnswer = false
+
+  /**
+   * How much of an assistant message survives the fold — called once per
+   * message, in order, because reaching the answer is what ends the folding.
+   */
+  const foldOf = (m: AssistantMessage): { hidden: boolean; fromPart?: number } => {
+    if (!folded || reachedAnswer) return { hidden: false }
+    const from = fold?.answerFrom
+    if (from && from.messageId === m.id) {
+      reachedAnswer = true
+      return { hidden: false, fromPart: from.partIndex }
+    }
+    return { hidden: true }
+  }
 
   const renderAssistant = (m: AssistantMessage): React.ReactNode => {
     const turn = presentations.get(m.id)
     const showSummary = turn?.summary?.id === m.id
     const finishedTasks = ctx.taskCompletions?.get(m.id)
+    const { hidden, fromPart } = foldOf(m)
+    // A folded message is still *rendered*, at a boundary past its last part:
+    // everything is hidden, but a call that produced a screenshot still shows
+    // the picture (see `AssistantBlock`). It returns null when nothing is left,
+    // so a message with no images costs the same nothing it did before.
+    // The three slots stay positional whatever is drawn: `false` holds a place
+    // where an element would be, so the block at position 0 still meets the
+    // live node's own position 0 when a message crosses out of the live slot.
     return (
       <React.Fragment key={m.id}>
         <AssistantBlock
@@ -237,8 +304,14 @@ function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
           streaming={false}
           onOpenPlan={ctx.onOpenPlan}
           summarizeEdits={turn?.hasChanges ?? false}
+          fromPart={hidden ? m.parts.length : fromPart}
         />
-        {finishedTasks && <TasksCard tasks={finishedTasks} />}
+        {/* A finished checklist hangs off this message, so it folds with it —
+            and stays when the message is only *partly* folded, since the block
+            it belongs to is still on screen. */}
+        {!hidden && finishedTasks && <TasksCard tasks={finishedTasks} />}
+        {/* What a turn changed is the turn's result, not its work: it survives
+            the fold the way the answer does. */}
         {showSummary && turn?.summary && (
           <TurnChangesCard
             message={turn.summary}
@@ -251,25 +324,50 @@ function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
   }
 
   const flush = (): void => {
+    // Called at every non-groupable message, so most calls have nothing in hand.
+    if (run.length === 0) return
     if (run.length >= GROUP_MIN) {
-      const turn = presentations.get(run[0].id)
-      const parts = run.flatMap((m) =>
-        m.parts.filter((p): p is ToolPart => !!p && p.type === 'tool')
-      )
-      const visibleParts = turn?.hasChanges
-        ? parts.filter(
-            (part) => !(part.status === 'success' && FILE_MUTATION_TOOLS.has(part.name))
-          )
-        : parts
-      if (visibleParts.length >= GROUP_MIN) {
-        out.push(<ToolGroup key={groupKey(run[0].id)} parts={visibleParts} cwd={ctx.cwd} />)
-      } else if (visibleParts.length === 1) {
-        out.push(<ToolCard key={visibleParts[0].toolUseId} part={visibleParts[0]} cwd={ctx.cwd} />)
-      }
+      // A run of tool-only messages is work by definition — it can never be the
+      // turn's answer — so a folded turn omits the group and the checklist hung
+      // off its last message, and keeps the changes card, which is the turn's
+      // result rather than its work. The card is pushed under the same key
+      // either way, so folding and unfolding never rebuild it.
+      const hidden = folded && !reachedAnswer
       const last = run[run.length - 1]
-      const finishedTasks = ctx.taskCompletions?.get(last.id)
-      if (finishedTasks) {
-        out.push(<TasksCard key={`tasks-${last.id}`} tasks={finishedTasks} />)
+      if (hidden) {
+        // Same rule as a folded message: the rows go, the pictures stay. A run
+        // of read/search calls rarely carries one, but a browser or preview
+        // sequence is exactly a run, and it is all screenshots.
+        const images = run.flatMap((message) =>
+          message.parts.flatMap((part) =>
+            part && part.type === 'tool' ? (part.outputImages ?? []) : []
+          )
+        )
+        if (images.length) {
+          out.push(<ToolOutputImages key={`images-${run[0].id}`} images={images} />)
+        }
+      }
+      if (!hidden) {
+        const turn = presentations.get(run[0].id)
+        const parts = run.flatMap((m) =>
+          m.parts.filter((p): p is ToolPart => !!p && p.type === 'tool')
+        )
+        const visibleParts = turn?.hasChanges
+          ? parts.filter(
+              (part) => !(part.status === 'success' && FILE_MUTATION_TOOLS.has(part.name))
+            )
+          : parts
+        if (visibleParts.length >= GROUP_MIN) {
+          out.push(<ToolGroup key={groupKey(run[0].id)} parts={visibleParts} cwd={ctx.cwd} />)
+        } else if (visibleParts.length === 1) {
+          out.push(
+            <ToolCard key={visibleParts[0].toolUseId} part={visibleParts[0]} cwd={ctx.cwd} />
+          )
+        }
+        const finishedTasks = ctx.taskCompletions?.get(last.id)
+        if (finishedTasks) {
+          out.push(<TasksCard key={`tasks-${last.id}`} tasks={finishedTasks} />)
+        }
       }
       const lastTurn = presentations.get(last.id)
       if (lastTurn?.summary?.id === last.id) {
@@ -283,6 +381,8 @@ function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
         )
       }
     } else {
+      // Too short to group — these draw as ordinary blocks, which is also where
+      // the fold is applied to them (`renderAssistant` → `foldOf`).
       for (const m of run) out.push(renderAssistant(m))
     }
     run = []
@@ -298,6 +398,34 @@ function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
     flush()
     if (m.role === 'user') {
       out.push(<UserBubble key={m.id} message={m} />)
+      // The turn's header, as a keyed sibling of everything below it. It is
+      // pushed on the prompt rather than on the first reply so it is there the
+      // moment the message is sent — the send's own acknowledgement, before
+      // anything has come back to hang it on.
+      fold = folds.get(m.id)
+      const live = !!fold && fold.userId === liveUserId
+      // A turn whose work outlives it (a backgrounded job or agent) is not
+      // settled, so it neither folds itself nor offers the control — the
+      // rhythm `useRunDisclosure` gives a running group, at turn scale. Folding
+      // it would take a card that is still moving off screen, and take with it
+      // the node `AgentsPanel`'s row click scrolls to.
+      const open = live || !!fold?.running
+      folded = !!fold && !open && !ctx.expandedTurns.has(m.id)
+      reachedAnswer = false
+      if (fold && (live || fold.replied)) {
+        out.push(
+          <TurnHeader
+            key={`turn-${m.id}`}
+            userMessageId={m.id}
+            startTs={fold.startTs}
+            endTs={fold.endTs}
+            live={live}
+            collapsible={fold.collapsible && !open}
+            expanded={!folded}
+            onToggle={ctx.onToggleTurn}
+          />
+        )
+      }
     }
     else if (m.role === 'assistant') out.push(renderAssistant(m))
     else {
@@ -374,10 +502,15 @@ function sameHistory(
   if (
     prev.end !== end ||
     prev.ctx.cwd !== ctx.cwd ||
+    // `busy` is what flips the last turn from live to settled: its header stops
+    // ticking and the turn folds. Left out here, the cached nodes would survive
+    // the turn's end and the header would count upwards forever.
     prev.ctx.busy !== ctx.busy ||
     prev.ctx.onOpenPlan !== ctx.onOpenPlan ||
     prev.ctx.switchPendingId !== ctx.switchPendingId ||
-    prev.ctx.taskCompletions !== ctx.taskCompletions
+    prev.ctx.taskCompletions !== ctx.taskCompletions ||
+    prev.ctx.expandedTurns !== ctx.expandedTurns ||
+    prev.ctx.onToggleTurn !== ctx.onToggleTurn
   ) {
     return false
   }
@@ -459,6 +592,12 @@ export function ChatView({
     chat.pendingModel !== undefined ? (chat.pendingProvider ?? chat.provider) : chat.provider
   const renameChat = useApp((s) => s.renameChat)
   const deleteChat = useApp((s) => s.deleteChat)
+  // Which settled turns are showing their work. A gesture, not a stream: this
+  // changes on a click and nowhere else, so subscribing the transcript to it
+  // costs nothing between clicks — and it has to be read here rather than in
+  // the header, since folding is decided while the node array is built.
+  const expandedTurns = useApp((s) => s.expandedTurns)
+  const toggleTurnExpanded = useApp((s) => s.toggleTurnExpanded)
 
   const scrollRef = React.useRef<HTMLDivElement>(null)
   /** The reading column inside the scroller — what the follow observer measures. */
@@ -542,6 +681,52 @@ export function ChatView({
     setShowJump(false)
     requestAnimationFrame(() => scrollToBottom())
   }, [chat.id, scrollToBottom])
+
+  /**
+   * Fold or unfold a turn, animated, with the row you clicked held still.
+   *
+   * **A view transition rather than a height animation**, because there is
+   * nothing here whose height could animate: a fold is *omission from a flat
+   * keyed array* (see `renderMessages`), so the nodes that leave have no shared
+   * parent, and giving them one is precisely what `useHistoryNodes` forbids —
+   * every settled row in the turn would remount the moment the turn ended.
+   * Chromium snapshots the viewport, so the cost is bounded by what is on
+   * screen rather than by the length of the transcript.
+   *
+   * The scroll correction is not optional and has to run *inside* the
+   * transition callback, before the new state is captured. Folding removes
+   * height above the answer; without it the transcript slides out from under
+   * the pointer by however much work the turn did, which on a long turn throws
+   * the reader somewhere else entirely. Anchoring on the header — the thing
+   * that was clicked — rather than on the bottom of the scroller is what makes
+   * the gesture read as a disclosure: the row stays put and the content below
+   * it moves.
+   */
+  const onToggleTurn = React.useCallback(
+    (userMessageId: string): void => {
+      const el = scrollRef.current
+      const header = el?.querySelector<HTMLElement>(
+        `[data-turn-header="${CSS.escape(userMessageId)}"]`
+      )
+      const before = header?.getBoundingClientRect().top ?? null
+      const apply = (): void => {
+        // Synchronous, so the measurement below sees the folded DOM: React
+        // would otherwise batch this past the end of the callback and the
+        // transition would capture the state it started from.
+        flushSync(() => toggleTurnExpanded(userMessageId))
+        if (el && header && before !== null && header.isConnected) {
+          el.scrollTop += header.getBoundingClientRect().top - before
+        }
+      }
+      const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      if (reduced || typeof document.startViewTransition !== 'function') {
+        apply()
+        return
+      }
+      document.startViewTransition(apply)
+    },
+    [toggleTurnExpanded]
+  )
 
   const loadEarlier = React.useCallback((): void => {
     const el = scrollRef.current
@@ -836,9 +1021,19 @@ export function ChatView({
       busy,
       onOpenPlan: openPlan,
       switchPendingId,
-      taskCompletions: timeline.completions
+      taskCompletions: timeline.completions,
+      expandedTurns,
+      onToggleTurn
     }),
-    [chat.cwd, busy, openPlan, switchPendingId, timeline.completions]
+    [
+      chat.cwd,
+      busy,
+      openPlan,
+      switchPendingId,
+      timeline.completions,
+      expandedTurns,
+      onToggleTurn
+    ]
   )
   const historyNodes = useHistoryNodes(
     displayedMessages,

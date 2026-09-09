@@ -99,6 +99,14 @@ turn, or on every message of every turn.
   `ts title=foo.ts` stream plain and snap to colour at the fence's close (mdast
   hands remark only the first word, hence `languageFromFenceInfo`'s fallback).
 
+**A settled turn's pre-answer nodes remount by design.** Folding a turn is
+omission from `ChatView`'s flat array (see the turn header in
+`docs/transcript.md`), so every node above the answer unmounts the moment the
+turn settles — they are being hidden, so the cost is paid on content that is
+leaving. `sameHistory` comparing `ctx.busy` is what stops the header ticking
+after the turn ends, and comparing `expandedTurns` by identity is what makes a
+toggle reach the cached history nodes at all.
+
 ### Smooth streaming (`lib/streamReveal.ts`, `useStreamText`)
 
 A reply used to arrive in lumps — five or six words at once, eight times a

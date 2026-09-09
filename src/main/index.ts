@@ -56,6 +56,7 @@ import {
   statPath,
   writeFileContent
 } from './files'
+import { siteFavicon } from './favicons'
 import { LspManager } from './lsp'
 import * as gitOps from './git'
 import * as githubOps from './github'
@@ -887,6 +888,8 @@ function registerIpc(): void {
   ipcMain.handle('fs:read', (_e, path: string) => readFileContent(path))
 
   ipcMain.handle('fs:stat', (_e, path: string) => statPath(path))
+
+  ipcMain.handle('net:favicon', (_e, url: string) => siteFavicon(url))
   ipcMain.handle('fs:write', (_e, path: string, content: string, expectedMtimeMs: number | null) =>
     writeFileContent(path, content, expectedMtimeMs)
   )

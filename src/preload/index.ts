@@ -118,6 +118,7 @@ const api: Api = {
   listDir: (dir: string) => invoke('fs:list', dir),
   readFile: (path: string) => invoke('fs:read', path),
   statPath: (path: string) => invoke('fs:stat', path),
+  favicon: (url: string) => invoke('net:favicon', url),
   writeFile: (path: string, content: string, expectedMtimeMs: number | null) =>
     invoke('fs:write', path, content, expectedMtimeMs),
   statFiles: (paths: string[]) => invoke('fs:stat-many', paths),
