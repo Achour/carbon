@@ -84,6 +84,23 @@ test('a cache-write breakdown that disagrees with its total defers to the total'
   assert.equal(s.cacheWrite5m, 50)
 })
 
+test("a fork's replayed lines belong to the transcript that spent them", () => {
+  // Forking rewrites sessionId/uuid/parentUuid, so the replay is otherwise
+  // indistinguishable from the original — and the two files live in separate
+  // per-file reductions, where the messageId dedupe cannot reach across.
+  assert.equal(
+    parseClaudeLine(
+      claudeLine(
+        { output_tokens: 1 },
+        { forkedFrom: { sessionId: 'sess_0', messageUuid: 'uuid_0' } }
+      )
+    ),
+    null
+  )
+  // Null is what an unforked line carries, and it must still be counted.
+  assert.ok(parseClaudeLine(claudeLine({ output_tokens: 1 }, { forkedFrom: null })))
+})
+
 test('a line without both ids carries no dedupe key rather than being dropped', () => {
   const s = parseClaudeLine(claudeLine({ output_tokens: 1 }, { requestId: undefined }))
   assert.ok(s)

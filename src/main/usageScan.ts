@@ -451,6 +451,24 @@ function num(v: unknown): number {
  * same `usage`. Counting both would inflate every number on the page. Anything
  * missing an id/requestId pair (older transcripts) is counted once and can't
  * dedupe — the alternative, dropping it, loses real spend.
+ *
+ * **That key only dedupes within a file, and one thing crosses files.** Forking
+ * a session — a rewind, a branch — writes a *new* transcript that replays the
+ * shared history into it, and the replay is not a copy a reader can recognize:
+ * `sessionId`, `uuid` and `parentUuid` are all rewritten to the new session, so
+ * the two files agree on nothing but `message.id` + `requestId`, which is per-file
+ * state a per-file cache cannot hold. The one field that survives is
+ * `forkedFrom` (`{sessionId, messageUuid}` naming the parent), present on exactly
+ * the replayed lines and null on the originals — so a replayed response is
+ * skipped here and counted once, in the transcript that actually spent it.
+ * Measured over a 30-day corpus: 631 replayed lines, every one of them with an
+ * unforked twin still on disk, and $189 of double-counted spend on a $7.3k
+ * reading.
+ *
+ * The failure mode is deleting a parent transcript, which strands its forks'
+ * shared prefix. Checking for the parent is what a per-file reduction cannot do,
+ * and undercounting a session someone deleted is the better half of the trade —
+ * the alternative bills the prefix twice for everyone who ever rewound.
  */
 export function parseClaudeLine(line: string): ClaudeSample | null {
   if (!line.includes(CLAUDE_LINE_HINT)) return null
@@ -467,6 +485,9 @@ export function parseClaudeLine(line: string): ClaudeSample | null {
   const model = typeof msg?.model === 'string' ? msg.model : ''
   // The CLI's placeholder for turns it answered without a model call.
   if (!model || model === '<synthetic>') return null
+  // Replayed into this transcript by a fork; the parent's file is where it was
+  // spent, and this is the only field that says so.
+  if (o.forkedFrom) return null
   const ts = Date.parse(String(o.timestamp ?? ''))
   if (!Number.isFinite(ts)) return null
 

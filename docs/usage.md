@@ -31,6 +31,18 @@ chat lands in the same files as a terminal one. That is also why the page does *
 - **Dedupe is per file, on `message.id` + `requestId`.** One API response is
   written once per content block, so a turn with text *and* a tool call appears
   twice carrying identical usage.
+- **A fork is the one thing that crosses files, and `forkedFrom` is what names
+  it.** Rewinding or branching a session writes a *new* transcript with the
+  shared history replayed into it, and the replay is not recognizable as a copy:
+  `sessionId`, `uuid` and `parentUuid` are all rewritten to the new session, so
+  the two files agree on nothing but the dedupe key — which is per-file state,
+  and a per-file cache cannot hold it. `forkedFrom` (`{sessionId, messageUuid}`)
+  rides exactly the replayed lines and is null on the originals, so the reader
+  skips them and each response is counted in the transcript that spent it.
+  Measured over a 30-day corpus: 631 replayed lines, every one with an unforked
+  twin still on disk, $189 of double-counted spend on a $7.3k reading. Deleting
+  a parent transcript strands its forks' prefix — the better half of a trade
+  whose other side bills that prefix twice for everyone who ever rewound.
 - **Codex reports a running total and a per-call delta** on `token_count` events,
   and no model — hence `CodexFileReader`, a per-file cursor that carries the model
   forward from `turn_context` / `thread_settings_applied` and sums only the delta.

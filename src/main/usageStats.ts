@@ -48,8 +48,13 @@ const CACHE_FILE = 'usage-cache.json'
  * Grok's own logs are picked up regardless, because they are paths the cache has
  * never seen. Bumping would have forced every user through a cold ~2 GB rescan
  * to arrive at numbers identical to the ones already cached.
+ *
+ * 3 is the inverse case, and the rule reads the same from the other side:
+ * skipping a fork's replayed lines (`forkedFrom`, `usageScan.ts`) moves the
+ * derivation of cells already on disk — the double-counted ones sit in files
+ * that will never be modified again — so only a rescan can correct them.
  */
-const CACHE_VERSION = 2
+const CACHE_VERSION = 3
 /** Don't let the cache grow unbounded as sessions accumulate. */
 const CACHE_MAX_FILES = 20_000
 
