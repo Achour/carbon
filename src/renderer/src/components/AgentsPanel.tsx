@@ -106,6 +106,9 @@ function AgentDetail({
   run?: AgentRunView
 }): React.JSX.Element {
   const selectAgent = useAgents((s) => s.selectAgent)
+  const scrollRef = React.useRef<HTMLDivElement>(null)
+  const columnRef = React.useRef<HTMLDivElement>(null)
+  const pinnedRef = React.useRef(true)
   // The chat's own cwd, not the project's: a chat in a worktree resolves its
   // file links against the worktree. A string, so the selector is stable.
   const cwd = useApp((s) => s.chats.find((c) => c.id === s.activeId)?.cwd ?? '')
@@ -117,6 +120,11 @@ function AgentDetail({
   const type = run?.type ?? (typeof input.subagent_type === 'string' ? input.subagent_type : undefined)
   const children = (part.children ?? []).filter(Boolean)
   const running = run ? run.status === 'running' : part.status === 'running'
+  // Held running gap-free for the agent's whole life — a foreground agent's
+  // result lands once, after all its children; a backgrounded one's is held to
+  // its notification. `running` above cannot stand in: it ORs in
+  // `childrenBusy`, which goes false between two calls.
+  const live = part.status === 'running' || part.status === 'pending'
   const now = useNow(running)
   const startedAt = run?.startedAt ?? part.agent?.startedAt
   const end = running ? now : (run?.endedAt ?? part.agent?.endedAt)
@@ -129,6 +137,41 @@ function AgentDetail({
     tokens ? `${formatAgentTokens(tokens)} tokens` : null,
     elapsed
   ].filter(Boolean) as string[]
+
+  // Follow a working agent, the way the transcript follows a streaming turn —
+  // and for the same reason, since this is that problem one level down: the
+  // step it is on is the answer, and it is at the bottom. Keyed on the column's
+  // *height* rather than on the store, so a group animating open or a late
+  // image counts; `pinnedRef` is the only guard, so scrolling up to read
+  // something stops the follow until you come back. Switching agents re-pins:
+  // arriving at the top of a 42-step stream is arriving at its oldest news.
+  React.useEffect(() => {
+    pinnedRef.current = true
+    // Only a *working* agent opens at its end. A settled one is a document,
+    // and landing on the last line of a document you have not read is the
+    // wrong end of it — its report is a scroll away, where a report goes.
+    const el = scrollRef.current
+    if (el) el.scrollTop = live ? el.scrollHeight : 0
+    // `live` is deliberately not a dependency: this is the *arrival* rule, and
+    // re-running it when the agent finishes would yank the reader to the top of
+    // whatever they were reading.
+  }, [part.toolUseId])
+  React.useEffect(() => {
+    const scroller = scrollRef.current
+    const column = columnRef.current
+    if (!scroller || !column) return
+    const observer = new ResizeObserver(() => {
+      if (pinnedRef.current && live) scroller.scrollTop = scroller.scrollHeight
+    })
+    observer.observe(column)
+    observer.observe(scroller)
+    return () => observer.disconnect()
+  }, [live])
+  // Fires per scroll event, so the pin is a ref and nothing is written.
+  const onScroll = (): void => {
+    const el = scrollRef.current
+    if (el) pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60
+  }
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -156,26 +199,35 @@ function AgentDetail({
           </div>
         )}
       </header>
-      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
-        {children.length > 0 ? (
-          <SubAgentStream parts={children} cwd={cwd} />
-        ) : (
-          <div className="text-[13px] text-muted-foreground">
-            {running ? 'Starting…' : 'No activity recorded.'}
-          </div>
-        )}
-        {/* The agent's report to the model that spawned it — the one thing the
-            roster row cannot carry, and usually the thing being looked for. */}
-        {part.output != null && part.output !== '' && (
-          <div className="mt-3 rounded-lg border border-border bg-code p-2.5">
-            <div className="mb-1 text-[10px] font-medium tracking-wider text-muted-foreground uppercase">
-              Result
+      <div
+        ref={scrollRef}
+        onScroll={onScroll}
+        className="min-h-0 flex-1 overflow-y-auto px-3 py-3"
+      >
+        {/* The measured element is the content, not the scroller: a
+            ResizeObserver on a scroller reports the viewport, which does not
+            move when the stream grows. */}
+        <div ref={columnRef}>
+          {children.length > 0 ? (
+            <SubAgentStream parts={children} cwd={cwd} live={live} />
+          ) : (
+            <div className="text-[13px] text-muted-foreground">
+              {running ? 'Starting…' : 'No activity recorded.'}
             </div>
-            <div className="text-[13px] leading-relaxed">
-              <Markdown text={part.output} cwd={cwd} />
+          )}
+          {/* The agent's report to the model that spawned it — the one thing the
+              roster row cannot carry, and usually the thing being looked for. */}
+          {part.output != null && part.output !== '' && (
+            <div className="mt-3 rounded-lg border border-border bg-code p-2.5">
+              <div className="mb-1 text-[10px] font-medium tracking-wider text-muted-foreground uppercase">
+                Result
+              </div>
+              <div className="text-[13px] leading-relaxed">
+                <Markdown text={part.output} cwd={cwd} />
+              </div>
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
     </div>
   )

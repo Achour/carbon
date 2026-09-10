@@ -433,6 +433,28 @@ cached input.
   That is not a loss worth rebuilding: the card lives inside a settled turn's
   fold and inside a collapsed run row, so for most runs there is no card in the
   DOM to scroll to.
+- **The detail follows a working agent, and lets go when you read.** Two rules
+  the roster never needed, both of which the settled case hides:
+
+  The trailing run takes `live` (`SubAgentStream`), off the *spawning part's*
+  status rather than the roster's. Without it the stream inherits the bug
+  `ChatView`'s `liveRun` exists to prevent — `groupRunning` goes false in the
+  gap between one call returning and the next opening, so a twenty-command
+  agent flickers its run open and shut twenty times. The part is the right
+  source because it is held running gap-free for the agent's whole life
+  (a foreground result lands once, after all children; a backgrounded one is
+  held to its notification), where `AgentRunView.status` ORs in `childrenBusy`
+  — which *is* the gap. Measured on two real fan-outs: the run stayed open
+  across 78 s and ~20 calls.
+
+  And the scroller pins to the bottom while the agent works, on a
+  `ResizeObserver` over the content — the arrangement `ChatView` uses, for its
+  reasons (a group animating open, a late image and revealed text all move the
+  bottom edge without touching the store). Measured on a 53-step agent: opens
+  at the tail of a 6,752px stream in a 727px viewport, follows the next step,
+  and stops following the moment the reader scrolls up. A *settled* agent opens
+  at the top instead — it is a document, and its report is a scroll away where
+  a report goes.
 - **The panel is still never auto-selected.** A spawn mid-read would take the
   file you are looking at off screen. The way in is a click — the activity bar
   above the composer, which exists only while something is running; the tab,

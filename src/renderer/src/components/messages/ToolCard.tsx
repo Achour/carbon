@@ -1237,20 +1237,42 @@ export const ToolGroup = React.memo(function ToolGroup({
  */
 export function SubAgentStream({
   parts,
-  cwd
+  cwd,
+  live = false
 }: {
   parts: AssistantPart[]
   cwd: string
+  /**
+   * The agent is mid-turn, so its **trailing** run is the live block.
+   *
+   * The same thing `ChatView`'s `liveRun` says, for the same reason: a group
+   * keyed on "a call is running" collapses in the gap between one call
+   * returning and the next opening, so a seven-command run flickers seven
+   * times. The sub-agent stream had no groups to flicker before it started
+   * grouping; it does now. The caller reads this off the *spawning part's*
+   * status rather than the roster's, because the part is held running gap-free
+   * for the agent's whole life while the roster's `running` ORs in
+   * `childrenBusy` — which is exactly the gap.
+   */
+  live?: boolean
 }): React.JSX.Element {
   const items = groupToolRuns(parts, {
     isGroupable: (part) => isGroupableTool(part.name),
     skip: (part) => (part.type === 'text' || part.type === 'thinking') && !part.text
   })
+  const lastGroupKey = items.filter((i) => i.kind === 'group').pop()?.key
   return (
     <div className="space-y-2">
       {items.map((item) => {
         if (item.kind === 'group') {
-          return <ToolGroup key={item.key} parts={item.parts} cwd={cwd} />
+          return (
+            <ToolGroup
+              key={item.key}
+              parts={item.parts}
+              cwd={cwd}
+              live={live && item.key === lastGroupKey}
+            />
+          )
         }
         const p = item.part
         if (p.type === 'text') {
