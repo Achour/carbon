@@ -1,13 +1,17 @@
 import * as React from 'react'
-import { Bot } from 'lucide-react'
+import { ArrowLeft, Bot } from 'lucide-react'
 import {
+  findAgentPart,
   formatAgentDuration,
   formatAgentTokens,
   type AgentRunView
 } from '@shared/agentRuns'
+import type { ToolPart } from '@shared/types'
 import { cn } from '@/lib/utils'
 import { useApp } from '@/store'
 import { useAgents } from '@/agentsStore'
+import { Markdown } from '@/components/Markdown'
+import { SubAgentStream } from '@/components/messages/ToolCard'
 
 /**
  * Every sub-agent this chat has spawned, with what it is running on and what it
@@ -29,6 +33,18 @@ import { useAgents } from '@/agentsStore'
 export function AgentsPanel(): React.JSX.Element {
   const runs = useAgents((s) => s.runs)
   const totals = useAgents((s) => s.totals)
+  const selectedId = useAgents((s) => s.selectedId)
+  // The part rather than the view: the roster is a projection, and the work is
+  // in `children`. Selecting the part directly means the detail re-renders when
+  // that agent moves and on nothing else — `applyEvent` replaces a `ToolPart`
+  // wholesale, so an unrelated token elsewhere in the transcript leaves this
+  // reference untouched.
+  const part = useApp((s) => (selectedId ? findAgentPart(s.messages, selectedId) : undefined))
+  const run = selectedId ? runs.find((r) => r.id === selectedId) : undefined
+
+  // A selection naming a run this window no longer holds is not an error state
+  // — see `selectedId`. Falling through to the roster is the whole handling.
+  if (selectedId && part) return <AgentDetail part={part} run={run} />
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -64,6 +80,103 @@ export function AgentsPanel(): React.JSX.Element {
           </span>
         </footer>
       )}
+    </div>
+  )
+}
+
+/**
+ * One agent's own stream, read in the panel.
+ *
+ * This is the half of the roster that used to live in the chat column, and the
+ * move is the whole point: a sub-agent is a *conversation* — it narrates, it
+ * writes tables, it files a report — and nesting one inside a transcript row
+ * put a second scrollable document in a column already holding the first. Five
+ * of them at once is what made it plain. Here it gets the panel's own scroller,
+ * at the panel's own width, with the roster one click behind it.
+ *
+ * The vitals are drawn from the *roster view* where there is one and from the
+ * part otherwise: a run this window still holds but the fold has not caught up
+ * with is a real, if brief, state at the start of a spawn.
+ */
+function AgentDetail({
+  part,
+  run
+}: {
+  part: ToolPart
+  run?: AgentRunView
+}): React.JSX.Element {
+  const selectAgent = useAgents((s) => s.selectAgent)
+  // The chat's own cwd, not the project's: a chat in a worktree resolves its
+  // file links against the worktree. A string, so the selector is stable.
+  const cwd = useApp((s) => s.chats.find((c) => c.id === s.activeId)?.cwd ?? '')
+  const input = (part.input ?? {}) as Record<string, unknown>
+  const description =
+    run?.description ||
+    (typeof input.description === 'string' ? input.description : '') ||
+    'Agent'
+  const type = run?.type ?? (typeof input.subagent_type === 'string' ? input.subagent_type : undefined)
+  const children = (part.children ?? []).filter(Boolean)
+  const running = run ? run.status === 'running' : part.status === 'running'
+  const now = useNow(running)
+  const startedAt = run?.startedAt ?? part.agent?.startedAt
+  const end = running ? now : (run?.endedAt ?? part.agent?.endedAt)
+  const elapsed =
+    startedAt != null && end != null ? formatAgentDuration(end - startedAt) : null
+  const tokens = run?.tokens ?? part.agent?.tokens
+  const identity = [
+    run?.model ?? part.agent?.model,
+    run?.effort ?? part.agent?.effort,
+    tokens ? `${formatAgentTokens(tokens)} tokens` : null,
+    elapsed
+  ].filter(Boolean) as string[]
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <header className="shrink-0 border-b border-border px-3 py-2">
+        <button
+          type="button"
+          onClick={() => selectAgent(null)}
+          className="-mx-1 mb-1.5 flex items-center gap-1.5 rounded-md px-1 py-0.5 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase transition-colors hover:text-foreground"
+        >
+          <ArrowLeft className="size-3.5" />
+          Spawned agents
+        </button>
+        <div className="flex items-baseline gap-2">
+          <span className="min-w-0 flex-1 text-[13px] text-foreground">{description}</span>
+          {type && (
+            <span className="shrink-0 rounded bg-secondary px-1 py-px font-mono text-[10px] text-muted-foreground">
+              {type}
+            </span>
+          )}
+          <StatusDot status={run?.status ?? (running ? 'running' : 'done')} />
+        </div>
+        {identity.length > 0 && (
+          <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground/70">
+            {identity.join(' · ')}
+          </div>
+        )}
+      </header>
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+        {children.length > 0 ? (
+          <SubAgentStream parts={children} cwd={cwd} />
+        ) : (
+          <div className="text-[13px] text-muted-foreground">
+            {running ? 'Starting…' : 'No activity recorded.'}
+          </div>
+        )}
+        {/* The agent's report to the model that spawned it — the one thing the
+            roster row cannot carry, and usually the thing being looked for. */}
+        {part.output != null && part.output !== '' && (
+          <div className="mt-3 rounded-lg border border-border bg-code p-2.5">
+            <div className="mb-1 text-[10px] font-medium tracking-wider text-muted-foreground uppercase">
+              Result
+            </div>
+            <div className="text-[13px] leading-relaxed">
+              <Markdown text={part.output} cwd={cwd} />
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   )
 }
@@ -104,7 +217,7 @@ function useNow(active: boolean): number {
 
 function AgentRow({ run }: { run: AgentRunView }): React.JSX.Element {
   const now = useNow(run.status === 'running')
-  const focusAgent = useAgents((s) => s.focusAgent)
+  const openAgentsPanel = useApp((s) => s.openAgentsPanel)
   // While it runs the clock is against *now*; once settled it is against the
   // agent's last activity — which is not the same as when its spawning call
   // returned, since a backgrounded agent's call returns immediately.
@@ -112,15 +225,10 @@ function AgentRow({ run }: { run: AgentRunView }): React.JSX.Element {
   const elapsed =
     run.startedAt != null && end != null ? formatAgentDuration(end - run.startedAt) : null
 
-  // Scroll the transcript to the card this row describes. The anchor is on the
-  // card itself (`data-agent-run`), the same way the review's next/previous
-  // change walks `[data-diff-hunk]`.
-  const reveal = (): void => {
-    // Naming it opens the card (see agentsStore); scrolling puts it on screen.
-    focusAgent(run.id)
-    const el = document.querySelector(`[data-agent-run="${CSS.escape(run.id)}"]`)
-    el?.scrollIntoView({ block: 'center', behavior: 'smooth' })
-  }
+  // Read this agent's own stream, in place. It used to scroll the transcript to
+  // the spawning card and open it; the card no longer has a body to open, and
+  // its work belongs on this side of the window anyway.
+  const reveal = (): void => openAgentsPanel(run.id)
 
   const meta = [
     run.model,
@@ -196,7 +304,7 @@ export function AgentActivityBar(): React.JSX.Element | null {
   return (
     <button
       type="button"
-      onClick={openAgentsPanel}
+      onClick={() => openAgentsPanel()}
       className="group mb-2 flex w-full animate-enter items-center gap-2 rounded-lg border border-border bg-secondary/40 px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
     >
       <StatusDot status="running" />

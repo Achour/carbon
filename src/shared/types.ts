@@ -727,6 +727,16 @@ export interface BackgroundJob {
   /** Friendly type: 'shell' | 'subagent' | 'monitor' | 'workflow' | … */
   type: string
   description: string
+  /**
+   * The spawning call's `tool_use_id`, for a job that has one.
+   *
+   * A job is keyed by `task_id`, which names nothing the renderer holds — so
+   * an agent listed in the header pill had no way back to the run it *is*.
+   * Main already keeps the mapping (`taskCalls`) to route notifications, and
+   * this is the same answer travelling one layer further: it is what lets the
+   * pill open that agent's stream in the Agents panel.
+   */
+  callId?: string
   /** Defaults to true. False when the provider exposes status but no per-job stop API. */
   stoppable?: boolean
 }

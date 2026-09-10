@@ -20,17 +20,22 @@ interface AgentsStore {
   totals: AgentTotals
   setRuns: (runs: AgentRunView[]) => void
   /**
-   * The run a panel click just asked to see, and a counter beside it.
+   * The run the panel is reading, or null for the roster.
    *
-   * Scrolling the transcript to an agent's card is only half the answer — the
-   * card is collapsed, so the reader arrives at a header. The card opens itself
-   * when this names it. The counter is what makes a *second* click on the same
-   * row work: the id alone has not changed, so nothing would re-fire after the
-   * user collapsed the card again.
+   * An agent's stream used to unfold *inside* its transcript card, which is
+   * where it could not go: the card's body is the agent's whole conversation —
+   * narration, tables, a report — and one of them measured 13,816px in a chat
+   * column with four siblings doing the same thing. So the card became the way
+   * *in* and this is where the work is read, master-detail inside the panel
+   * that already holds the roster.
+   *
+   * Nothing keeps it in step with `runs`. A chat switch, an eviction or a
+   * window that no longer reaches back that far leaves this naming a run the
+   * panel cannot find, and `findAgentPart` answering nothing *is* the rule:
+   * the panel falls back to the roster.
    */
-  focusId: string | null
-  focusTick: number
-  focusAgent: (id: string) => void
+  selectedId: string | null
+  selectAgent: (id: string | null) => void
 }
 
 const EMPTY_TOTALS: AgentTotals = { running: 0, total: 0, tokens: 0 }
@@ -46,7 +51,6 @@ export const useAgents = create<AgentsStore>((set) => ({
       if (s.runs === runs || (s.runs.length === 0 && runs.length === 0)) return s
       return { runs, totals: agentTotals(runs) }
     }),
-  focusId: null,
-  focusTick: 0,
-  focusAgent: (id) => set((s) => ({ focusId: id, focusTick: s.focusTick + 1 }))
+  selectedId: null,
+  selectAgent: (id) => set((s) => (s.selectedId === id ? s : { selectedId: id }))
 }))

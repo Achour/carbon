@@ -144,6 +144,43 @@ export function foldAgentRuns(messages: readonly ChatMessage[]): AgentRunView[] 
   return out
 }
 
+/**
+ * The spawning call behind a run id, anywhere in the loaded window.
+ *
+ * The roster is a projection — description, status, vitals — and the panel now
+ * reads the agent's actual *work* one level down, which only the `ToolPart`
+ * holds (`children`, and the report in `output`). It recurses for the same
+ * reason `collect` does: an agent that spawns agents keeps its children inside
+ * its own part, so a nested run is reachable by no other path.
+ *
+ * Null is a normal answer, not a failure — a chat switch, an eviction or a
+ * window that no longer reaches back that far all leave a selected id naming a
+ * run that is not here. The panel reads null as "show the roster", which is why
+ * nothing tries to keep the selection and the fold in step.
+ */
+export function findAgentPart(
+  messages: readonly ChatMessage[],
+  id: string
+): ToolPart | undefined {
+  const walk = (parts: readonly (AssistantPart | null | undefined)[]): ToolPart | undefined => {
+    for (const part of parts) {
+      if (!part || part.type !== 'tool') continue
+      if (part.toolUseId === id) return part
+      if (part.children) {
+        const hit = walk(part.children)
+        if (hit) return hit
+      }
+    }
+    return undefined
+  }
+  for (const message of messages) {
+    if (message.role !== 'assistant') continue
+    const hit = walk(message.parts)
+    if (hit) return hit
+  }
+  return undefined
+}
+
 function sameRun(a: AgentRunView, b: AgentRunView): boolean {
   return (
     a.id === b.id &&

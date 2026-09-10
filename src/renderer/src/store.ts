@@ -48,6 +48,9 @@ import {
 } from '@/lib/drafts'
 import type { ComposerDraft, ProjectDraft, ProjectDraftOptions } from '@/lib/drafts'
 import { moveItem } from '@/lib/tabOrder'
+// One direction only: the agents store knows nothing of this one, which is
+// what lets the panel's selection be set from every route into it.
+import { useAgents } from '@/agentsStore'
 import {
   CANVAS_ATTACH_MAX_CHARS,
   PROVIDER_SHORT_LABELS,
@@ -907,7 +910,8 @@ interface AppState {
   openLightbox(target: LightboxTarget): void
   closeLightbox(): void
   /** Reveal the sub-agent roster in the right panel (see AgentsPanel). */
-  openAgentsPanel(): void
+  /** Show the Agents tab, reading `runId`'s stream when one is named. */
+  openAgentsPanel(runId?: string): void
   openChat(id: string | null): Promise<void>
   /** Prepend the next window of older messages to `chatId`'s transcript. */
   loadOlderMessages(chatId: string): Promise<void>
@@ -2304,7 +2308,13 @@ export const useApp = create<AppState>((set, get) => ({
 
   // The tab itself is derived from the active chat's runs (RightPanel), so this
   // only has to select it and make sure the panel is showing.
-  openAgentsPanel() {
+  //
+  // `runId` names the agent whose stream to open — the panel is master-detail,
+  // and every way in (a transcript card, a roster row, a background job) is one
+  // call. Omitted, it clears the selection, so the generic routes land on the
+  // roster rather than on whatever was last read.
+  openAgentsPanel(runId) {
+    useAgents.getState().selectAgent(runId ?? null)
     set((s) => ({ activeTab: 'agents', ...panelPatch(s, true) }))
   },
 

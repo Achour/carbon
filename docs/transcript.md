@@ -68,9 +68,9 @@ where the output already lived.
   unreadable. `useRunDisclosure` holds `boolean | null`, and `null` — "nobody has
   said" — is deliberately not `false`: storing a boolean up front would make the
   first auto-close look like a user decision and pin the row shut for the rest of
-  the chat. A click wins from then on. `AgentCard` takes the same rhythm while
-  keeping its own chrome, because a spawned agent is a nested conversation with a
-  model and a spend rather than a step.
+  the chat. A click wins from then on. `AgentCard` is the one activity row with
+  no rhythm at all, because it has no body to open: a spawned agent is a nested
+  *conversation* and it is read in the panel (see the roster below).
 - **What opens it is `live`, not "a call is running"** — and the difference is
   the whole feature working or visibly failing. Between any two calls in a run
   there is a moment when the last has returned and the next has not started, so a
@@ -161,6 +161,18 @@ same shape at smaller scale) and the three `mcp__canvas__*` names move onto it,
 so there is one rule rather than a list and a rule. `isGroupableTool` is now the
 single exported checkable, because `ChatView`'s `isGroupableMsg` and `Parts`'
 run-builder disagreeing about what groups is a run split in half.
+
+**The pass itself is `lib/toolRuns.ts`, and it has two callers.** It was inline
+in `Parts`' `Blocks`, so a *sub-agent's* stream — the same shape of stream, one
+level down — had no grouping at all: eight `Bash` calls the main agent makes are
+one line, and the same eight inside an agent were eight lines of truncated
+shell. Nothing about the stream justified the difference; only where the loop
+happened to live did. The two predicates are injected rather than imported
+(`isGroupableTool` and the transcript's own skips live with the components that
+own them). The subtlety worth naming is the **skip**: a skipped part must not
+*end the run around it*, because Claude ships a withheld `thinking` block
+between every pair of tool calls — flush on one and every run is length 1, which
+is the pass silently doing nothing.
 
 **The label is what makes the folded row worth reading.** These calls landed in
 `toolMeta`'s `default` arm, so each one was named `claude-in-chrome__computer`
@@ -396,13 +408,35 @@ cached input.
   panel's subscribers see nothing when nothing moved. Elapsed time ticks in the
   components (1s, only while something runs); a clock in the store would be a
   state write per second for a value two components read.
-- **The panel is never auto-selected.** A spawn mid-read would take the file you
-  are looking at off screen. The way in is the activity bar above the composer —
-  which exists only while something is running — or the tab, which exists only
-  while the chat has runs. Clicking a row scrolls to that card *and* opens it
-  (`focusId`/`focusTick`; the counter is what makes a second click work after
-  you collapse the card again), because a scroll that lands on a collapsed
-  header answers half the question.
+- **The panel is master and detail, because an agent's work does not fit in a
+  chat column.** It used to: `AgentCard` unfolded the agent's whole stream
+  inside the transcript, one level of nesting below the conversation it was
+  serving. That is fine for a six-step lookup and wrong for what a sub-agent
+  actually is — it narrates, it writes tables, it files a report. Measured on a
+  five-way fan-out, one card came to **13,816px** with four siblings growing
+  beside it, and the thing the reader wanted (*which agent is doing what*) was
+  the one thing off screen. No amount of row-grouping reaches it, because the
+  height was the agent's own prose.
+
+  So the card became a **row** — description, vitals, status, a chevron — and
+  `selectedId` in `agentsStore` picks the run the panel is reading.
+  `findAgentPart` resolves it to the `ToolPart` (recursing into `children`, so a
+  nested spawn is reachable), and a selection the loaded window no longer holds
+  simply falls through to the roster: nothing keeps the two in step, which is
+  what makes a chat switch, an eviction and `loadOlder` all one case. Every way
+  in is `openAgentsPanel(runId?)` — a transcript row, a roster row, an agent in
+  the header's background-jobs pill (`BackgroundJob.callId`, which is main's
+  `taskCalls` mapping travelling one layer further). Omitting the id lands on
+  the roster, which is what the activity bar does.
+
+  The cost is that a roster click no longer scrolls the transcript to the spawn.
+  That is not a loss worth rebuilding: the card lives inside a settled turn's
+  fold and inside a collapsed run row, so for most runs there is no card in the
+  DOM to scroll to.
+- **The panel is still never auto-selected.** A spawn mid-read would take the
+  file you are looking at off screen. The way in is a click — the activity bar
+  above the composer, which exists only while something is running; the tab,
+  which exists only while the chat has runs; or a row in the transcript.
 - **A run of spawns keeps its collapsed group row**, but the row now says what
   the roster says — `3 agents · 2 working · Σ 67.8k tok` — instead of naming
   whatever the last call touched. The collapsed card's own line is deliberately

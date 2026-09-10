@@ -1467,7 +1467,12 @@ class ClaudeSession implements AgentSession {
             .map((t) => ({
               id: t.task_id,
               type: t.task_type,
-              description: t.description
+              description: t.description,
+              // Absent until `task_started` has named the call, which may land
+              // after this. The set is REPLACED on every change, so the next
+              // one carries it — and the renderer's fallback (open the roster
+              // rather than one run) covers the gap without a retry.
+              callId: this.taskCalls.get(t.task_id)
             }))
           this.emitBackgroundJobs(jobs)
         } else if (msg.subtype === 'status' && 'permissionMode' in msg && msg.permissionMode) {

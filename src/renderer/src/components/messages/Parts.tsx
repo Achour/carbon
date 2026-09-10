@@ -16,6 +16,7 @@ import {
 } from 'lucide-react'
 import type { AssistantMessage, EventMessage, ToolPart, UserMessage } from '@shared/types'
 import { CHAT_BLEED, CHAT_BLEED_PAD, CHAT_FRAME } from '@/lib/chatColumn'
+import { groupToolRuns, type PartRun } from '@/lib/toolRuns'
 import { cn } from '@/lib/utils'
 import { formatCost } from '@/lib/format'
 import { AssistantMarkdown, Markdown, useStreamText } from '@/components/Markdown'
@@ -174,9 +175,6 @@ function MessageEditor({
     </div>
   )
 }
-
-/** Group a run of this many consecutive read/search tools into one row. */
-const GROUP_MIN = 2
 
 /**
  * The chips and images a prompt was sent with, drawn inside the box above its
@@ -416,62 +414,37 @@ export const AssistantBlock = React.memo(function AssistantBlock({
   // Coalesce inspection/terminal sequences into one activity row. Short progress
   // narration between calls stays available inside the expanded group instead
   // of breaking the sequence into a wall of cards.
-  const items: Array<
-    | { kind: 'group'; parts: ToolPart[]; key: string }
-    | { kind: 'single'; part: NonNullable<(typeof parts)[number]>; index: number }
-    | { kind: 'images'; part: ToolPart }
-  > = []
-  let run: { part: NonNullable<(typeof parts)[number]>; index: number }[] = []
-  const flushRun = (): void => {
-    if (run.length >= GROUP_MIN) {
-      items.push({
-        kind: 'group',
-        parts: run.map((entry) => entry.part as ToolPart),
-        key: `grp-${run[0].index}`
-      })
-    } else {
-      for (const r of run) items.push({ kind: 'single', part: r.part, index: r.index })
-    }
-    run = []
+  const items: Array<PartRun | { kind: 'images'; part: ToolPart }> = []
+  // Folded away with the rest of the turn — see `fromPart` — except for what
+  // it *produced*. A screenshot arrives as `outputImages` on the call that took
+  // it, and `ToolOutputImages` deliberately draws outside the activity row's
+  // disclosure so a capture survives that row collapsing. Folding the whole
+  // node took the picture with it, which is the one thing a reader who asked
+  // for a screenshot cannot lose: the fold hides *work*, and an image is a
+  // result. The row itself stays folded — only the picture comes back. They all
+  // precede the grouping pass because they all precede `fromPart`.
+  for (let i = 0; i < Math.min(fromPart, parts.length); i++) {
+    const part = parts[i]
+    if (part?.type === 'tool' && part.outputImages?.length) items.push({ kind: 'images', part })
   }
-  parts.forEach((part, i) => {
-    // Streamed arrays can be sparse; persisted ones turn holes into null.
-    if (!part) return
-    // Folded away with the rest of the turn — see `fromPart` — except for what
-    // it *produced*. A screenshot arrives as `outputImages` on the call that
-    // took it, and `ToolOutputImages` deliberately draws outside the activity
-    // row's disclosure so a capture survives that row collapsing. Folding the
-    // whole node took the picture with it, which is the one thing a reader who
-    // asked for a screenshot cannot lose: the fold hides *work*, and an image
-    // is a result. The row itself stays folded — only the picture comes back.
-    if (i < fromPart) {
-      if (part.type === 'tool' && part.outputImages?.length) {
-        flushRun()
-        items.push({ kind: 'images', part })
-      }
-      return
-    }
-    // A text/thinking part with no text renders nothing. Skip it here rather
-    // than returning null from the map below: an item that renders null still
-    // occupies a slot in the parent's `gap`, so it would show up as a blank
-    // band between cards.
-    if ((part.type === 'text' || part.type === 'thinking') && !part.text) return
-    if (
-      part.type === 'tool' &&
-      summarizeEdits &&
-      part.status === 'success' &&
-      FILE_MUTATION_TOOLS.has(part.name)
-    ) {
-      return
-    }
-    if (part.type === 'tool' && isGroupableTool(part.name)) {
-      run.push({ part, index: i })
-    } else {
-      flushRun()
-      items.push({ kind: 'single', part, index: i })
-    }
-  })
-  flushRun()
+  items.push(
+    ...groupToolRuns(parts, {
+      from: fromPart,
+      isGroupable: (part) => isGroupableTool(part.name),
+      // Both of these render nothing, and neither may end the run around it.
+      // A text/thinking part with no text: skipping it here rather than
+      // returning null from the map below matters because an item that renders
+      // null still occupies a slot in the parent's `gap`, so it would show up
+      // as a blank band between cards. And an edit already counted by the
+      // turn's changed-files card.
+      skip: (part) =>
+        ((part.type === 'text' || part.type === 'thinking') && !part.text) ||
+        (part.type === 'tool' &&
+          summarizeEdits &&
+          part.status === 'success' &&
+          FILE_MUTATION_TOOLS.has(part.name))
+    })
+  )
 
   // Nothing to show — the wrapper alone would still be a flex item in the
   // message list and add a message-sized gap where no message is.

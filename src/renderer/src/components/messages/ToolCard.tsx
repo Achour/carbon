@@ -45,6 +45,7 @@ import {
 import { cn } from '@/lib/utils'
 import { humanizeShellCommand, unwrapGrokTool } from '@/lib/toolLabels'
 import { leadActivityLabel, summarizeActivity } from '@/lib/toolSummary'
+import { groupToolRuns } from '@/lib/toolRuns'
 import { lineDiff, type DiffLine } from '@/lib/lineDiff'
 import { Markdown } from '@/components/Markdown'
 import { useApp } from '@/store'
@@ -55,7 +56,6 @@ import {
   resolveCanvasTitle,
   type CanvasRef
 } from '@/lib/canvasRef'
-import { useAgents } from '@/agentsStore'
 
 type Glyph = React.ComponentType<{ className?: string }>
 
@@ -1222,31 +1222,48 @@ export const ToolGroup = React.memo(function ToolGroup({
   )
 })
 
-/** Renders a sub-agent's own stream: its text, thinking and nested tool calls. */
-function SubAgentStream({
+/**
+ * Renders a sub-agent's own stream: its text, thinking and nested tool calls.
+ *
+ * Exported because it is no longer drawn in the transcript at all — `AgentsPanel`
+ * is where an agent's work is read (see `AgentCard`).
+ *
+ * **Grouped by the parent transcript's own rule** (`groupToolRuns`), which it
+ * was not: every child call drew a full activity row, so an agent that ran
+ * eight `Bash` calls to answer one question read as eight lines of truncated
+ * shell where the same eight calls in the main transcript have always been
+ * one. Nothing about the stream justified the difference — it was only that
+ * the grouping pass lived inside the transcript's own `Blocks`.
+ */
+export function SubAgentStream({
   parts,
   cwd
 }: {
   parts: AssistantPart[]
   cwd: string
 }): React.JSX.Element {
+  const items = groupToolRuns(parts, {
+    isGroupable: (part) => isGroupableTool(part.name),
+    skip: (part) => (part.type === 'text' || part.type === 'thinking') && !part.text
+  })
   return (
     <div className="space-y-2">
-      {parts.map((p, i) => {
-        if (!p) return null
+      {items.map((item) => {
+        if (item.kind === 'group') {
+          return <ToolGroup key={item.key} parts={item.parts} cwd={cwd} />
+        }
+        const p = item.part
         if (p.type === 'text') {
-          if (!p.text) return null
           return (
-            <div key={i} className="text-[13px] leading-relaxed">
+            <div key={item.index} className="text-[13px] leading-relaxed">
               <Markdown text={p.text} cwd={cwd} />
             </div>
           )
         }
         if (p.type === 'thinking') {
-          if (!p.text) return null
           return (
             <div
-              key={i}
+              key={item.index}
               className="border-l-2 border-border pl-3 text-[12px] leading-relaxed text-muted-foreground/70 italic whitespace-pre-wrap"
             >
               {p.text}
@@ -1278,8 +1295,21 @@ function useAgentElapsed(agent: ToolPart['agent'], running: boolean): string | n
   return formatAgentDuration(end - agent.startedAt)
 }
 
-/** A spawned sub-agent, with its live activity nested under the parent tool. */
-function AgentCard({ part, cwd }: { part: ToolPart; cwd: string }): React.JSX.Element {
+/**
+ * A spawned sub-agent: one row in the transcript, and the way into its work.
+ *
+ * **It does not unfold here, and that is the point.** The body used to be the
+ * agent's whole conversation nested inside the chat column — narration, the
+ * tables it wrote, its report — which is not a step in a turn but a second
+ * transcript. Measured on a five-way fan-out, one card came to 13,816px with
+ * four siblings growing beside it, so the thing the reader wanted (which agent
+ * is doing what) was the one thing off screen. Clicking opens the stream in
+ * `AgentsPanel`, which is a scroller of its own and already holds the roster.
+ *
+ * The row keeps the vitals it always carried, and `data-agent-run` stays for
+ * the anchor's sake even though nothing scrolls to it any more.
+ */
+function AgentCard({ part }: { part: ToolPart; cwd: string }): React.JSX.Element {
   const input = (part.input ?? {}) as Record<string, unknown>
   const subType = str(input.subagent_type)
   const description = str(input.description) ?? str(input.prompt)
@@ -1287,120 +1317,66 @@ function AgentCard({ part, cwd }: { part: ToolPart; cwd: string }): React.JSX.El
   const steps = children.filter((c) => c.type === 'tool').length
   // The parent Task tool_result can land (status → success) while the sub-agent
   // is still mid-step — and for background agents it lands right at spawn. Treat
-  // the agent as running until its own child steps have all settled, so the card
+  // the agent as running until its own child steps have all settled, so the row
   // never shows a checkmark while the sub-agent is visibly still working.
   const childRunning = children.some(
     (c) => c.type === 'tool' && (c.status === 'running' || c.status === 'pending')
   )
   const running = part.status === 'pending' || part.status === 'running' || childRunning
-
-  // Open while it works, folded once it lands — the rhythm every activity row
-  // now has. An agent keeps its own chrome, because it is a nested conversation
-  // with a model and a spend rather than a step, and the Agents panel scrolls
-  // to it; but there is no reason for it to sit shut while it is the one thing
-  // on screen still moving.
-  const { open, onOpenChange } = useRunDisclosure(running)
-  // A click in the Agents panel opens this card as it scrolls it into view.
-  // Selecting down to a number keeps every other agent card out of the update.
-  const focusTick = useAgents((s) => (s.focusId === part.toolUseId ? s.focusTick : 0))
-  React.useEffect(() => {
-    if (focusTick > 0) onOpenChange(true)
-    // Keyed on the tick alone: `onOpenChange` is a setState function and stable
-    // for the card's lifetime, and listing it would re-run this on every render
-    // that changes `running`.
-  }, [focusTick])
+  const openAgentsPanel = useApp((s) => s.openAgentsPanel)
   const elapsed = useAgentElapsed(part.agent, running)
-  // What the agent has spent, when its provider says. The collapsed row is
-  // deliberately *short* of the panel's line: the description is the thing a
-  // reader is scanning for, and a model id beside it wins the width fight in a
-  // chat column and leaves the card saying "Agent · claude-sonnet-5" with the
-  // task itself truncated away. Identity belongs on the expanded body below,
-  // and in the roster.
+  // What the agent has spent, when its provider says. Deliberately *short* of
+  // the panel's line: the description is the thing a reader is scanning for,
+  // and a model id beside it wins the width fight in a chat column and leaves
+  // the row saying "Agent · claude-sonnet-5" with the task truncated away.
+  // Identity belongs in the panel, which has the width for it.
   const vitals = [
     part.agent?.tokens ? `${formatAgentTokens(part.agent.tokens)} tok` : null,
     steps > 0 ? `${steps} ${steps === 1 ? 'step' : 'steps'}` : null,
     elapsed
   ].filter(Boolean) as string[]
-  // The full identity, for the expanded body.
-  const identity = [
-    part.agent?.model,
-    part.agent?.effort,
-    part.agent?.tokens ? `${formatAgentTokens(part.agent.tokens)} tokens` : null,
-    elapsed
-  ].filter(Boolean) as string[]
 
   return (
-    <Collapsible.Root open={open} onOpenChange={onOpenChange} className="animate-enter">
-      <div
-        // The Agents panel scrolls the transcript to this card, the way the
-        // review's next/previous change walks `[data-diff-hunk]`.
-        data-agent-run={part.toolUseId}
-        className={cn(
-          'overflow-hidden rounded-xl border transition-colors',
-          running ? 'border-warning/40 bg-warning/[0.04]' : 'border-primary/25 bg-primary/[0.03]'
+    <button
+      type="button"
+      data-agent-run={part.toolUseId}
+      onClick={() => openAgentsPanel(part.toolUseId)}
+      className={cn(
+        'group flex w-full animate-enter items-center gap-2.5 rounded-xl border px-3 py-2 text-left outline-none transition-colors',
+        running
+          ? 'border-warning/40 bg-warning/[0.04] hover:bg-warning/[0.08]'
+          : 'border-primary/25 bg-primary/[0.03] hover:bg-primary/[0.07]'
+      )}
+    >
+      <Bot className="size-4 shrink-0 text-primary" />
+      <span className="shrink-0 text-[13px] font-medium">Agent</span>
+      {subType && (
+        <span className="shrink-0 rounded bg-primary/10 px-1.5 py-px font-mono text-[10px] font-medium text-primary">
+          {subType}
+        </span>
+      )}
+      {description ? (
+        <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{description}</span>
+      ) : (
+        <span className="flex-1" />
+      )}
+      {running && <span className="shimmer-text shrink-0 text-[11px] font-medium">Working</span>}
+      {vitals.length > 0 && (
+        <span className="shrink-0 font-mono text-[11px] text-muted-foreground/70 tabular-nums">
+          {vitals.join(' · ')}
+        </span>
+      )}
+      <span className="shrink-0">
+        {running ? (
+          <Loader2 className="size-3.5 animate-spin text-warning" />
+        ) : (
+          <StatusIcon part={part} />
         )}
-      >
-        <Collapsible.Trigger className="group flex w-full items-center gap-2.5 px-3 py-2 text-left outline-none transition-colors hover:bg-primary/[0.06] focus-visible:bg-primary/[0.06]">
-          <ChevronRight className="size-3.5 shrink-0 text-muted-foreground/60 transition-transform duration-200 group-data-[panel-open]:rotate-90" />
-          <Bot className="size-4 shrink-0 text-primary" />
-          <span className="shrink-0 text-[13px] font-medium">Agent</span>
-          {subType && (
-            <span className="shrink-0 rounded bg-primary/10 px-1.5 py-px font-mono text-[10px] font-medium text-primary">
-              {subType}
-            </span>
-          )}
-          {description ? (
-            <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-              {description}
-            </span>
-          ) : (
-            <span className="flex-1" />
-          )}
-          {running && (
-            <span className="shimmer-text shrink-0 text-[11px] font-medium">Working</span>
-          )}
-          {vitals.length > 0 && (
-            <span className="shrink-0 font-mono text-[11px] text-muted-foreground/70 tabular-nums">
-              {vitals.join(' · ')}
-            </span>
-          )}
-          <span className="shrink-0">
-            {running ? (
-              <Loader2 className="size-3.5 animate-spin text-warning" />
-            ) : (
-              <StatusIcon part={part} />
-            )}
-          </span>
-        </Collapsible.Trigger>
-        <Collapsible.Panel className="h-[var(--collapsible-panel-height)] overflow-hidden transition-[height] duration-200 ease-out data-[ending-style]:h-0 data-[starting-style]:h-0">
-          <div className="space-y-3 border-t border-primary/15 px-3 py-3">
-            {identity.length > 0 && (
-              <div className="font-mono text-[11px] text-muted-foreground/70">
-                {identity.join(' · ')}
-              </div>
-            )}
-            {children.length > 0 ? (
-              <div className="border-l-2 border-primary/20 pl-3">
-                <SubAgentStream parts={children} cwd={cwd} />
-              </div>
-            ) : (
-              <div className="text-xs text-muted-foreground">
-                {running ? 'Starting…' : 'No activity recorded.'}
-              </div>
-            )}
-            {part.output != null && part.output !== '' && (
-              <div className="rounded-lg border border-border bg-code p-2.5">
-                <div className="mb-1 text-[10px] font-medium tracking-wider text-muted-foreground uppercase">
-                  Result
-                </div>
-                <div className="text-[13px] leading-relaxed">
-                  <Markdown text={part.output} cwd={cwd} />
-                </div>
-              </div>
-            )}
-          </div>
-        </Collapsible.Panel>
-      </div>
-    </Collapsible.Root>
+      </span>
+      {/* The affordance. A row that opens a panel has to say so, and the chevron
+          is the same one every disclosure in the transcript uses — pointing at
+          the panel rather than down at a body that no longer exists. */}
+      <ChevronRight className="size-3.5 shrink-0 text-muted-foreground/40 transition-colors group-hover:text-muted-foreground" />
+    </button>
   )
 }
