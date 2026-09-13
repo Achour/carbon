@@ -185,6 +185,13 @@ const api: Api = {
   terminalResize: (id: string, cols: number, rows: number) =>
     invoke('terminal:resize', id, cols, rows),
   terminalKill: (id: string) => invoke('terminal:kill', id),
+  terminalAttach: (id: string, cols: number, rows: number) =>
+    invoke('terminal:attach', id, cols, rows),
+  terminalDetach: (id: string) => invoke('terminal:detach', id),
+  chatTerminalStart: (chatId: string, cols: number, rows: number) =>
+    invoke('chat-terminal:start', chatId, cols, rows),
+  chatTerminalRestart: (chatId: string, cols: number, rows: number) =>
+    invoke('chat-terminal:restart', chatId, cols, rows),
   getCommands: (cwd: string, provider?: Provider) =>
     invoke('commands:get', cwd, provider),
   previewDetect: (cwd: string) => invoke('preview:detect', cwd),

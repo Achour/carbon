@@ -290,6 +290,24 @@ export interface ChatMeta {
    * and knowing which conversation a stray row belonged to.
    */
   sideOf?: string
+  /**
+   * A **terminal chat**: your login shell, in a pty, where the transcript and
+   * composer would be. Everything around it is unchanged — the sidebar row, the
+   * header and its menu, the right panel's files, git and diffs — because none
+   * of that reads messages; only the middle column does.
+   *
+   * Carbon starts no CLI in it. You run `claude`, `codex` or `grok` yourself,
+   * and Carbon identifies the session from the processes under the shell; that
+   * id becomes `sessionId` (and its backend `provider`). Reopening the chat
+   * types the resume command into a fresh shell, and the conversation is there
+   * because the CLI kept it. See `docs/terminal-chats.md`.
+   *
+   * A union rather than a boolean: this is *which surface draws the chat*, and
+   * the answer will grow. Absent means the normal transcript, so every chat
+   * ever written stays one, and an older build reading this row sees a chat
+   * with no messages rather than failing.
+   */
+  surface?: 'terminal'
   createdAt: number
   updatedAt: number
 }
@@ -1817,6 +1835,38 @@ export interface TerminalCreateOpts {
    * deleted — tabs themselves stay global, visible from every chat.
    */
   chatId?: string
+  /**
+   * Outlive the pane that spawned it. A tab's shell is killed when its pane
+   * unmounts, which is right for a tab (closing it is the only way to lose one)
+   * and wrong for a **terminal chat**, whose pane unmounts on every chat switch.
+   * A persistent session is reaped by an explicit kill, by deleting its chat, or
+   * by quitting.
+   */
+  persist?: boolean
+}
+
+/**
+ * The pty id for a chat's CLI (see `ChatMeta.surface`). Derived from the chat id
+ * rather than stored, so main and the renderer name the same session without
+ * either having to tell the other, and a stale id cannot outlive its chat.
+ */
+export function chatTerminalId(chatId: string): string {
+  return `chat:${chatId}`
+}
+
+/** Whether a pty id belongs to a terminal chat rather than a panel tab. */
+export function isChatTerminalId(id: string): boolean {
+  return id.startsWith('chat:')
+}
+
+/**
+ * What `terminalAttach` found. `alive` false means there is no such pty and the
+ * caller has to create one; `data` is the bounded replay of everything the live
+ * one has written, which is what puts a reattached pane back where it was.
+ */
+export interface TerminalAttachResult {
+  alive: boolean
+  data: string
 }
 
 export type TerminalEvent =
@@ -1828,6 +1878,14 @@ export type TerminalEvent =
    * a long-lived `npm run dev` is visible without opening the tab.
    */
   | { type: 'busy'; id: string; command: string | null }
+  /**
+   * Something in a terminal chat's pane finished: its CLI's transcript went
+   * quiet after a write — the pty equivalent of a turn ending — or a command
+   * returned to the prompt. `busy` alone cannot say the first: a CLI stays in
+   * front of the shell for its whole session. This is what refreshes the file
+   * tree, the open editors and git status after the agent has edited something.
+   */
+  | { type: 'activity'; id: string; chatId: string }
 
 // ---------- Browser preview / dev server ----------
 
@@ -1939,6 +1997,8 @@ export interface Api {
     ephemeral?: boolean
     /** For a side chat, the chat it is opened beside. See `ChatMeta.sideOf`. */
     sideOf?: string
+    /** Draw this chat as a terminal. See `ChatMeta.surface`. */
+    surface?: 'terminal'
   }): Promise<ChatMeta>
   /** `worktree` decides the fate of a worktree chat's directory; default 'keep'. */
   deleteChat(id: string, worktree?: WorktreeDisposition): Promise<OpResult>
@@ -2179,6 +2239,36 @@ export interface Api {
   terminalWrite(id: string, data: string): Promise<void>
   terminalResize(id: string, cols: number, rows: number): Promise<void>
   terminalKill(id: string): Promise<void>
+  /**
+   * Reattach to a pty that outlived its pane, replaying what it wrote while
+   * nothing was watching. `alive: false` means there is none and the caller
+   * should spawn instead.
+   */
+  terminalAttach(id: string, cols: number, rows: number): Promise<TerminalAttachResult>
+  /**
+   * Stop a persistent pty from streaming to a pane that is no longer there. It
+   * keeps running and keeps recording; the next `terminalAttach` replays what it
+   * wrote. This is what makes the replay exact — nothing is emitted between the
+   * detach and the attach, so there is no window in which a byte could arrive
+   * both live and in the buffer.
+   */
+  terminalDetach(id: string): Promise<void>
+  /**
+   * Bring up a terminal chat's shell, resuming its CLI session in it when the
+   * chat has one the CLI can still find. Returns the pty id to attach to, or an
+   * error to draw in place of the terminal.
+   */
+  chatTerminalStart(
+    chatId: string,
+    cols: number,
+    rows: number
+  ): Promise<{ id: string } | { error: string }>
+  /** Kill and respawn a terminal chat's shell, resuming its session again. */
+  chatTerminalRestart(
+    chatId: string,
+    cols: number,
+    rows: number
+  ): Promise<{ id: string } | { error: string }>
   /** Provider-specific slash commands available for a project folder. */
   getCommands(cwd: string, provider?: Provider): Promise<SlashCommand[]>
   // ---- Browser preview / dev server ----

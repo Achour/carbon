@@ -24,6 +24,7 @@ import {
   Plus,
   Search,
   Settings,
+  SquareTerminal,
   Trash2,
   X
 } from 'lucide-react'
@@ -178,6 +179,25 @@ const sameProjectMenu = (a: RowProjectMenu | null, b: RowProjectMenu | null): bo
   a === b ||
   (!!a && !!b && a.cwd === b.cwd && a.label === b.label && a.archived === b.archived)
 
+/**
+ * Marks a chat the CLI draws itself. Two rows carry it because the sidebar has
+ * two densities, and a chat you cannot type into from the composer has to be
+ * recognizable before you open it — the alternative is clicking a row expecting
+ * a transcript and getting a terminal.
+ */
+function TerminalMark({ active }: { active: boolean }): React.JSX.Element {
+  return (
+    <WithTooltip label="Terminal chat">
+      <SquareTerminal
+        className={cn(
+          'size-3 shrink-0 transition-colors',
+          active ? 'text-sidebar-foreground/70' : 'text-sidebar-foreground/40'
+        )}
+      />
+    </WithTooltip>
+  )
+}
+
 function ChatItemRow({
   chat,
   now,
@@ -259,10 +279,30 @@ function ChatItemRow({
           onClick={onOpen}
           className="flex w-full min-w-0 items-start gap-2 px-2 py-1.5 text-left outline-none"
         >
-          <WithTooltip label={PROVIDER_LABELS[chat.provider]} side="right">
+          <WithTooltip
+            label={
+              chat.surface === 'terminal' && !chat.sessionId
+                ? 'Terminal'
+                : PROVIDER_LABELS[chat.provider]
+            }
+            side="right"
+          >
             {/* Identity, not state — so it keeps its color on every row and the
                 brightness ladder that marks the active chat stays the title's
                 job. Inactive rows only take the edge off it. */}
+            {/* A terminal chat has no provider until a CLI session is found in
+                it — its `provider` is a placeholder, and drawing that mark would
+                claim a backend nobody started. */}
+            {chat.surface === 'terminal' && !chat.sessionId ? (
+              <span
+                className={cn(
+                  'mt-px flex size-[18px] shrink-0 items-center justify-center rounded-full bg-sidebar-foreground/10 text-sidebar-foreground/70 transition-opacity',
+                  !active && 'opacity-75 group-hover:opacity-100'
+                )}
+              >
+                <SquareTerminal className="size-[11px]" />
+              </span>
+            ) : (
             <ProviderAvatar
               provider={chat.provider}
               className={cn(
@@ -270,10 +310,14 @@ function ChatItemRow({
                 !active && 'opacity-75 group-hover:opacity-100'
               )}
             />
+            )}
           </WithTooltip>
           <span className="flex min-w-0 flex-1 flex-col gap-px">
             <span className="flex min-w-0 items-center gap-1.5">
               <span className={titleClass}>{chat.title || 'New chat'}</span>
+              {/* Beside the title only once the avatar shows a provider — before
+                  that the avatar is already the terminal glyph. */}
+              {chat.surface === 'terminal' && chat.sessionId && <TerminalMark active={active} />}
               {trailing}
             </span>
             <span className="flex min-w-0 items-center gap-1.5 text-[11px] leading-tight text-muted-foreground/65">
@@ -310,6 +354,7 @@ function ChatItemRow({
               />
             </WithTooltip>
           )}
+          {chat.surface === 'terminal' && <TerminalMark active={active} />}
           <span className={titleClass}>{chat.title || 'New chat'}</span>
           {trailing}
         </button>

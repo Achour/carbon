@@ -83,6 +83,7 @@ import {
 import { CodexSession, fetchCodexFeatures, fetchCodexModels, generateCodexText } from './codex'
 import { CodexAppServerClient } from './codexAppServer'
 import { fetchGrokModels, forkGrokBefore, generateGrokText, GrokSession } from './grok'
+import { spawnEnv } from './parentEnv.ts'
 import { cliAvailable, cliPath, requireCliPath } from './providerCli.ts'
 import { claudeFeatureEnv, claudeFeatureStates, codexFeatureStates } from './providerFeatures.ts'
 import {
@@ -746,7 +747,10 @@ class ClaudeSession implements AgentSession {
         // unchanged and the switches are a second way to reach it. Read at
         // spawn, so a toggle lands on the next session: `ChatManager` disposes
         // idle sessions when one changes, the way an effort change does.
-        env: { ...process.env, ...claudeFeatureEnv() },
+        // `spawnEnv` rather than `process.env`: see `parentEnv.ts`. A Carbon
+        // launched from inside a CLI session would otherwise pass that
+        // session's markers down to every session it starts.
+        env: spawnEnv(claudeFeatureEnv()),
         mcpServers: {
           preview: buildPreviewServer(chat.cwd, preview),
           canvas: buildCanvasServer(

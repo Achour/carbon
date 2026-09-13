@@ -12,7 +12,7 @@ import {
   Shapes,
   SquareTerminal
 } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { cn, contextPillButton } from '@/lib/utils'
 import { createsWorktree, providerForRememberedModel } from '@shared/types'
 import type {
   Attachment,
@@ -63,6 +63,32 @@ function RailAction({
       <span className="whitespace-nowrap">{label}</span>
       {children}
     </button>
+  )
+}
+
+/**
+ * Opens a terminal chat in the selected folder (and worktree), at once. A
+ * terminal chat has nothing to send and no model to pick — you start the CLI in
+ * it yourself — so there is nothing left to ask before opening it. It sits in
+ * the context strip beside the worktree picker because it is the other answer
+ * to "how will this chat run".
+ */
+function OpenTerminalPill({
+  onOpen,
+  starting,
+  disabled
+}: {
+  onOpen: () => void
+  starting: boolean
+  disabled?: boolean
+}): React.JSX.Element {
+  return (
+    <WithTooltip label="Open a terminal chat here. Start claude, codex or grok in it; Carbon resumes that session when you come back.">
+      <button type="button" onClick={onOpen} disabled={disabled} className={contextPillButton}>
+        {starting ? <Loader2 className="animate-spin" /> : <SquareTerminal />}
+        <span className="whitespace-nowrap">Terminal</span>
+      </button>
+    </WithTooltip>
   )
 }
 
@@ -143,6 +169,7 @@ export function NewChat(): React.JSX.Element {
   const [permissionMode, setPermissionMode] = React.useState<PermissionModeId>(
     draft?.permissionMode ?? defaults?.permissionMode ?? 'default'
   )
+  const [openingTerminal, setOpeningTerminal] = React.useState(false)
   // Scope the worktree choice to the project it was made in — belt and braces
   // now that `App` keys this component by folder, but the guard costs nothing
   // and a bare `target` state carrying project A's worktree into project B is
@@ -247,7 +274,8 @@ export function NewChat(): React.JSX.Element {
   const start = async (
     text: string,
     attachments: Attachment[],
-    reviewTarget?: CodexReviewTarget
+    reviewTarget?: CodexReviewTarget,
+    surface?: 'terminal'
   ): Promise<void> => {
     if (!cwd) return
     // The picker's target decides the chat's directory; an unnamed new worktree
@@ -267,7 +295,8 @@ export function NewChat(): React.JSX.Element {
         permissionMode,
         attachments: attachments.length ? attachments : undefined,
         reviewTarget,
-        worktree: target.kind === 'local' ? undefined : target
+        worktree: target.kind === 'local' ? undefined : target,
+        surface
       })
     } catch (err) {
       // The preload bridge already unwraps Electron's IPC error envelope, so
@@ -346,6 +375,16 @@ export function NewChat(): React.JSX.Element {
                       disabled={starting}
                     />
                   )}
+                  <OpenTerminalPill
+                    starting={openingTerminal}
+                    disabled={starting}
+                    onOpen={() => {
+                      setOpeningTerminal(true)
+                      void start('', [], undefined, 'terminal')
+                        .catch(() => undefined)
+                        .finally(() => setOpeningTerminal(false))
+                    }}
+                  />
                 </ContextStrip>
                 <div className="relative">
                   <CodexReviewMenu

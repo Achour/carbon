@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createInterface } from 'node:readline'
+import { spawnEnv } from './parentEnv.ts'
 import { requireCliPath } from './providerCli.ts'
 import { codexFeatureArgs } from './providerFeatures.ts'
 import type {
@@ -1026,10 +1027,10 @@ export class CodexAppServerClient implements CodexClientLike {
 
   private async start(): Promise<void> {
     const executablePath = resolveCodexBinary()
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
+    // `spawnEnv` rather than `process.env`: see `parentEnv.ts`.
+    const env: NodeJS.ProcessEnv = spawnEnv({
       CODEX_INTERNAL_ORIGINATOR_OVERRIDE: 'carbon'
-    }
+    })
     // Feature choices ride the command line rather than the runtime
     // `experimentalFeature/enablement/set` request: that one is process-wide
     // state which dies with this child, and Carbon disposes app servers freely

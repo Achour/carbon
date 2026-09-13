@@ -70,6 +70,12 @@ function reconcileProvider(meta: ChatMeta): void {
     meta.pendingProvider = undefined
     meta.pendingModel = undefined
   }
+  // `surface` is coerced for the reason `provider` is: this database is shared
+  // between builds, so a branch that adds a third surface writes rows this one
+  // must still open. An unknown value falls back to the transcript, which every
+  // chat has — where drawing it would mean routing to a component that is not
+  // in this build.
+  if (meta.surface !== undefined && meta.surface !== 'terminal') meta.surface = undefined
 }
 
 function parseMeta(json: string): ChatMeta {

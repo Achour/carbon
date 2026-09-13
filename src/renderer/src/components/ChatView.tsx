@@ -543,6 +543,15 @@ function sameHistory(
   return true
 }
 
+/**
+ * A terminal chat's CLI pane. Lazy for the reason the right panel's tabs are:
+ * xterm is ~410 KB and most chats never draw one — and `preloadHeavyChunks`
+ * already fetches this module on idle, so opening one waits on nothing.
+ */
+const ChatTerminal = React.lazy(() =>
+  import('@/components/TerminalPanel').then((m) => ({ default: m.ChatTerminal }))
+)
+
 export function ChatView({
   chat,
   side = false
@@ -561,6 +570,12 @@ export function ChatView({
    */
   side?: boolean
 }): React.JSX.Element {
+  // The CLI draws this chat itself, in a pty, where the transcript and composer
+  // would be. Everything else on screen is unchanged — header, ⋯ menu, right
+  // panel, sidebar row — because none of it reads messages. A side chat is
+  // never one: the flag is only ever set on a chat the sidebar can show.
+  const terminalSurface = chat.surface === 'terminal' && !side
+
   // A side chat's transcript is a keyed slot; the main column's is the store's
   // singular slice. Everything else about a chat is already keyed by id.
   const messages = useApp((s) =>
@@ -1231,6 +1246,27 @@ export function ChatView({
         </div>
       )}
 
+      {terminalSurface ? (
+        <>
+          <React.Suspense fallback={<div className="min-h-0 flex-1" />}>
+            <ChatTerminal chat={chat} />
+          </React.Suspense>
+          {/* The one thing the pane below cannot say for itself. A terminal chat
+              has no turn, so it has no TurnChangesCard and no idle moment to
+              draw one — this is where "what has changed here" lives, and the
+              route to the stacked diff. */}
+          <div className="shrink-0 px-4 pt-2">
+            <ContextStrip
+              cwd={chat.cwd}
+              project={projectRoot(chat)}
+              git={git}
+              onReviewChanges={() => void reviewChanges()}
+              onUpdateFromDefault={() => void runGitAction('update-from-main')}
+            />
+          </div>
+        </>
+      ) : (
+        <>
       {/* Messages */}
       {/* `scrollbar-gutter: stable` so the column does not step sideways the
           moment a chat grows long enough to scroll — and so the gutter the
@@ -1478,6 +1514,8 @@ export function ChatView({
           </div>
         </div>
       </div>
+        </>
+      )}
 
       {/* Rename dialog. All four dialogs below belong to the header's ⋯ menu,
           which the side variant does not draw — so nothing can open them there,

@@ -546,6 +546,14 @@ interface AppState {
   closeTerminal(id: string): void
   /** Records a terminal's foreground process; null clears it back to idle. */
   setTerminalBusy(id: string, command: string | null): void
+  /**
+   * A terminal chat's CLI finished writing to its transcript — the pty
+   * equivalent of a turn ending. Runs the same refresh a turn boundary does, so
+   * the file tree, the open editors and git status catch up with what the agent
+   * just did. A no-op for any chat that isn't the one on screen: a background
+   * one is caught up when it is opened, exactly as a background turn is.
+   */
+  terminalActivity(chatId: string): void
   toggleTerminal(): void
 
   // ---- Browser preview ----
@@ -931,6 +939,11 @@ interface AppState {
       label?: string
       /** Where the chat runs; omitted or `local` means `cwd` itself. */
       worktree?: WorktreeTarget
+      /**
+       * Open a terminal instead of a Carbon transcript — see `ChatMeta.surface`.
+       * Nothing is sent: the CLI is whatever you start in it.
+       */
+      surface?: 'terminal'
     }
   ): Promise<void>
   /**
@@ -1782,6 +1795,15 @@ export const useApp = create<AppState>((set, get) => ({
       if (command === null) return { terminalBusy: omit(s.terminalBusy, [id]) }
       return { terminalBusy: { ...s.terminalBusy, [id]: command } }
     })
+  },
+
+  terminalActivity(chatId) {
+    const s = get()
+    if (chatId !== s.activeId) return
+    invalidateLocalImages()
+    void s.refreshGit()
+    void s.refreshGithub()
+    if (s.panelOpen || s.openFiles.length > 0) void s.refreshFiles({ invalidateImages: false })
   },
 
   toggleTerminal() {
@@ -3183,8 +3205,15 @@ export const useApp = create<AppState>((set, get) => ({
     const label = gitAction(id).label
     // A git action is always the *main* chat's — the ladder it comes from lives
     // in the review panel, which follows the active chat.
+    //
+    // Unless that chat is a terminal one, which has no session to send to: its
+    // conversation belongs to the CLI, and Carbon writing into it would start a
+    // second, invisible one on the same chat row. The ladder still works — it
+    // opens the chat the work lands in, which is what it already does from the
+    // home screen.
     const active = get().activeId
-    if (active) await get().sendMessage(active, prompt, undefined, label)
+    const terminal = get().chats.find((c) => c.id === active)?.surface === 'terminal'
+    if (active && !terminal) await get().sendMessage(active, prompt, undefined, label)
     else await get().newChat(cwd, prompt, { label })
   },
 
@@ -3558,7 +3587,15 @@ export const useApp = create<AppState>((set, get) => ({
         settingsOpen: false,
         usageOpen: false,
         panelMaximized: false,
-        defaults: s.defaults
+        // A terminal chat mirrors only the folder into the defaults — the same
+        // line `chats:create` draws: nobody chose its model, the pickers are
+        // not even drawn for one.
+        defaults: s.defaults && meta.surface === 'terminal'
+          ? {
+              ...s.defaults,
+              recentDirs: [cwd, ...s.defaults.recentDirs.filter((d) => d !== cwd)].slice(0, 8)
+            }
+          : s.defaults
           ? {
               ...s.defaults,
               model: meta.model,
@@ -3585,6 +3622,9 @@ export const useApp = create<AppState>((set, get) => ({
     // run the project's setup script in a visible terminal tab. Deliberately not
     // awaited: the agent starts now and the install races alongside it.
     if (meta.worktree) void get().runWorktreeSetup(meta.id)
+    // A terminal chat has no session to send to — sending would start a second
+    // conversation beside the one you are about to start in the pane.
+    if (meta.surface === 'terminal') return
     if (reviewTarget) await window.api.startReview(meta.id, reviewTarget)
     else await window.api.send(meta.id, firstMessage, attachments, label)
   },
@@ -4253,6 +4293,17 @@ export const useApp = create<AppState>((set, get) => ({
         break
       }
       case 'status': {
+        // A terminal chat has no turn message to chime on — its status is read
+        // off the CLI's title in main (`termTitle.ts`) — so its turn ending is
+        // the status settling.
+        if (
+          ev.status === 'idle' &&
+          (s.statuses[ev.chatId] ?? 'idle') !== 'idle' &&
+          s.notifyPrefs.sound &&
+          s.chats.find((c) => c.id === ev.chatId)?.surface === 'terminal'
+        ) {
+          playCue('complete', s.notifyPrefs.pack)
+        }
         set((st) => ({
           statuses: { ...st.statuses, [ev.chatId]: ev.status },
           // The one moment a chat is allowed to change place: the start of a

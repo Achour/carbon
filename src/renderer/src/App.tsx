@@ -17,6 +17,7 @@ import { preloadHeavyChunks } from '@/lib/preloadHeavy'
 import { warmCues } from '@/lib/sounds'
 import { Settings } from '@/components/Settings'
 import { UsageStats } from '@/components/UsageStats'
+import { isChatTerminalId } from '@shared/types'
 import { useApp } from '@/store'
 import { previewForCwd } from '@/lib/previewRegistry'
 
@@ -65,7 +66,15 @@ export default function App(): React.JSX.Element {
     // updating for tabs whose terminal is hidden or unmounted — that is the case
     // it exists for.
     const offTerminal = window.api.onTerminalEvent((ev) => {
-      if (ev.type === 'busy') useApp.getState().setTerminalBusy(ev.id, ev.command)
+      // A terminal chat's pane is not a panel tab, and its foreground process is
+      // routinely a CLI named after its own version number — left in, the
+      // panel toggle would announce "2.1.270 running" beside every chat.
+      if (ev.type === 'busy') {
+        if (!isChatTerminalId(ev.id)) useApp.getState().setTerminalBusy(ev.id, ev.command)
+      }
+      // Same reason: a terminal chat's agent goes on editing files while its
+      // pane is unmounted, and the refresh belongs to the chat, not the pane.
+      else if (ev.type === 'activity') useApp.getState().terminalActivity(ev.chatId)
     })
     // The agent (via main) asks the renderer to drive the live <webview>:
     // navigate it, or capture a screenshot to see what it built.

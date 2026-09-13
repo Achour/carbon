@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { createInterface } from 'node:readline'
 import type { Attachment, ElementRef, ToolPart, UserQuestion } from '@shared/types'
+import { spawnEnv } from './parentEnv.ts'
 import { cliAvailable, providerCli } from './providerCli.ts'
 import { isPreviewToolName, type PreviewToolName } from './previewTools.ts'
 import { describeCanvas, describeSelection } from './attachmentText.ts'
@@ -306,7 +307,8 @@ export class GrokAcpClient {
     const child = spawn(binary, args, {
       cwd: this.options.cwd,
       env: {
-        ...(this.options.env ?? process.env),
+        // `spawnEnv` rather than `process.env`: see `parentEnv.ts`.
+        ...(this.options.env ?? spawnEnv()),
         GROK_OAUTH2_REFERRER: GROK_OAUTH_REFERRER,
         // A background update swapping the binary mid-session would kill the
         // conversation; Carbon reports updates itself.

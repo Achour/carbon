@@ -46,6 +46,7 @@ import type {
 } from '@shared/types'
 import { effortForProvider, providerForRememberedModel } from '@shared/types'
 import { ChatManager } from './claude'
+import { ChatTerminalManager } from './chatTerminal'
 import { readCodexConfigModel } from './codexConfig'
 import {
   createPath,
@@ -92,6 +93,7 @@ let win: BrowserWindow | null = null
 let store: Store
 let manager: ChatManager
 let terminals: TerminalManager
+let chatTerminals: ChatTerminalManager
 let preview: PreviewManager
 let canvas: CanvasManager
 
@@ -520,6 +522,7 @@ function registerIpc(): void {
         worktree?: WorktreeTarget
         ephemeral?: boolean
         sideOf?: string
+        surface?: 'terminal'
       }
     ) => {
     const now = Date.now()
@@ -566,10 +569,15 @@ function registerIpc(): void {
       worktree,
       ...(opts.ephemeral ? { ephemeral: true as const } : {}),
       ...(opts.sideOf ? { sideOf: opts.sideOf } : {}),
+      ...(opts.surface === 'terminal' ? { surface: 'terminal' as const } : {}),
       createdAt: now,
       updatedAt: now,
       messages: []
     }
+    // A terminal chat has no messages, so nothing downstream will ever title it.
+    // It is "Terminal" until a CLI session is identified in the pane, and then it
+    // wears the name that CLI gave the session (`ChatTerminalManager`).
+    if (chat.surface === 'terminal') chat.title = 'Terminal'
     store.addChat(chat)
     // A side chat leaves no trace in the app's defaults. Both of these calls
     // describe *what the user chose for their next real chat*, and a throwaway
@@ -579,6 +587,11 @@ function registerIpc(): void {
     if (!chat.ephemeral) {
       // Recents track the project the user picked, never the worktree we derived.
       store.rememberDir(worktree?.repoRoot ?? opts.cwd)
+    }
+    // A terminal chat carries whatever the pickers held without anyone having
+    // chosen it — they are not drawn in terminal mode — so it is no statement
+    // about the next chat's model either.
+    if (!chat.ephemeral && chat.surface !== 'terminal') {
       store.rememberOptions({
         model: opts.model ?? '',
         modelProvider: provider,
@@ -613,6 +626,7 @@ function registerIpc(): void {
       // Shells opened by this chat go with it. Their cwd may be the worktree
       // just removed above, and the tab is about to disappear from the UI — a
       // survivor (typically a dev server) would run on with nothing to stop it.
+      chatTerminals.stop(id)
       terminals.killForChat(id)
 
       // Side chats opened beside this one go with it: they are a companion to
@@ -627,6 +641,7 @@ function registerIpc(): void {
       // deleting the row; the four steps that follow are the same for both.
       const forget = (chatId: string): void => {
         manager.disposeChat(chatId)
+        chatTerminals.stop(chatId)
         terminals.killForChat(chatId)
         // A failed worktree cleanup leaves a directory on disk, which is
         // recoverable; a stuck chat row is not.
@@ -679,6 +694,11 @@ function registerIpc(): void {
       if (res.cwd) {
         manager.relocateChat(chatId, res.cwd)
         for (const sideId of store.sideChatIdsOf(chatId)) manager.relocateChat(sideId, res.cwd)
+        // A terminal chat's CLI is a process with a cwd, and `disposeChat` above
+        // does not touch it: left alone it goes on running inside a worktree git
+        // has just removed. Restarted here, in the checkout the chat now lives
+        // in.
+        chatTerminals.relocate(chatId)
       }
       return res.ok ? { ok: true } : { ok: false, error: res.error ?? fallback }
     })
@@ -944,6 +964,17 @@ function registerIpc(): void {
     terminals.resize(id, cols, rows)
   )
   ipcMain.handle('terminal:kill', (_e, id: string) => terminals.kill(id))
+  ipcMain.handle('terminal:attach', (_e, id: string, cols: number, rows: number) =>
+    terminals.attach(id, cols, rows)
+  )
+  ipcMain.handle('terminal:detach', (_e, id: string) => terminals.detach(id))
+
+  ipcMain.handle('chat-terminal:start', (_e, chatId: string, cols: number, rows: number) =>
+    chatTerminals.start(chatId, cols, rows)
+  )
+  ipcMain.handle('chat-terminal:restart', (_e, chatId: string, cols: number, rows: number) =>
+    chatTerminals.restart(chatId, cols, rows)
+  )
 
   ipcMain.handle('commands:get', (_e, cwd: string, provider?: Provider) =>
     manager.getCommands(cwd, provider)
@@ -1048,6 +1079,7 @@ app.whenReady().then(() => {
   preview = new PreviewManager(emitPreview, sendPreviewCommand, canvas)
   manager = new ChatManager(store, emit, preview, canvas)
   terminals = new TerminalManager(emitTerminal)
+  chatTerminals = new ChatTerminalManager(terminals, store, emitTerminal, emit)
   registerIpc()
   buildMenu()
   createWindow()
@@ -1078,6 +1110,7 @@ app.on('before-quit', (event) => {
     return
   }
   manager.disposeAll()
+  chatTerminals.disposeAll()
   terminals.disposeAll()
   preview.disposeAll()
   lsp.disposeAll()

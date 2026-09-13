@@ -325,6 +325,12 @@ it guards**, and put new reasoning in that file rather than back in this one.
 - **`docs/canvas.md`** — the canvas MCP server and its panel (`canvasTools.ts`,
   `canvasStore.ts`, `CanvasPanel`, `previewBridge.ts`, `previewMcp.ts`,
   `shared/canvasText.ts`, `lib/canvasRef.ts`).
+- **`docs/terminal-chats.md`** — a chat that is your shell in a pty, with the
+  CLI session you start in it found and resumed (`ChatMeta.surface`,
+  `main/chatTerminal.ts`, `main/termTitle.ts`, `ChatTerminal` in
+  `TerminalPanel.tsx`, `persist`/`attach`/`detach` in `main/terminal.ts`), and
+  `main/parentEnv.ts` — why every spawn gets the environment a Dock launch
+  would have had.
 - **`docs/side-chats.md`** — a second conversation in a panel tab
   (`ChatMeta.ephemeral`, `ChatMeta.sideOf`, `SideChatSlot`, `openSideChat`,
   `sideChats` in the renderer store).
