@@ -484,29 +484,6 @@ export const AssistantBlock = React.memo(function AssistantBlock({
 })
 
 /**
- * The turn's prose, and only its prose — what "copy the answer" means.
- *
- * **The unit is the turn, not the message, and that is the whole decision.**
- * Claude persists a turn as many assistant messages — a thought, a paragraph, a
- * call, another paragraph — while Codex persists one, so a per-message copy
- * would hand over a fragment on one provider and the answer on the other. It is
- * fed `turnPresentations`' `summary`, whose `parts` are the turn's parts
- * flattened, which is the same anchor `TurnChangesCard` and `TasksCard` use.
- *
- * Tool calls and thoughts are dropped. The reason to reach for this is to hand
- * an answer to another agent, and a transcript of twenty `Read` rows is the
- * noise that makes the paste worse than retyping it.
- */
-export function turnAnswerText(message: AssistantMessage): string {
-  return message.parts
-    // Persisted arrays turn streamed holes into `null`, so this is not only a
-    // type narrowing.
-    .filter((part) => !!part && part.type === 'text' && !!part.text)
-    .map((part) => (part as { text: string }).text)
-    .join('\n\n')
-}
-
-/**
  * Copy the turn's answer, riding the turn's own stats line.
  *
  * It sits beside the duration and cost rather than in a row of its own, and

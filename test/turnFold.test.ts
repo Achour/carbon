@@ -29,9 +29,10 @@ test('the answer is the trailing text run, across messages', () => {
     assistant('a3', [text('done'), text('and here is why')])
   ])
   const fold = folds.get('u1')
-  // The preamble folds away with the call it introduces — `turnAnswerText`
-  // would have kept it, which is the copy rule and not the fold rule.
+  // The preamble folds away with the call it introduces — and is not copied
+  // either: the copy is what the folded turn still shows.
   assert.deepEqual(fold?.answerFrom, { messageId: 'a3', partIndex: 0 })
+  assert.equal(fold?.answer, 'done\n\nand here is why')
   assert.equal(fold?.collapsible, true)
 })
 
@@ -41,6 +42,7 @@ test('the boundary can fall inside one message (Codex accumulates a turn)', () =
     assistant('a1', [text('checking'), tool('t1'), tool('t2'), text('all good')])
   ])
   assert.deepEqual(folds.get('u1')?.answerFrom, { messageId: 'a1', partIndex: 3 })
+  assert.equal(folds.get('u1')?.answer, 'all good')
 })
 
 test('a thought with text ends the answer run, a withheld one does not', () => {
@@ -58,6 +60,7 @@ test('a thought with text ends the answer run, a withheld one does not', () => {
     assistant('a2', [thinking('')])
   ])
   assert.deepEqual(withheld.get('u1')?.answerFrom, { messageId: 'a1', partIndex: 0 })
+  assert.equal(withheld.get('u1')?.answer, 'first\n\nsecond')
   assert.equal(withheld.get('u1')?.collapsible, false)
 })
 
@@ -68,6 +71,7 @@ test('a turn that ends on work has no answer and folds whole', () => {
     assistant('a2', [tool('t1')])
   ])
   assert.equal(folds.get('u1')?.answerFrom, null)
+  assert.equal(folds.get('u1')?.answer, '')
   assert.equal(folds.get('u1')?.collapsible, true)
 })
 
@@ -167,6 +171,7 @@ test('a turn the CLI closed mid-way folds up to its last continuation', () => {
   // The prose before an interim result is what the turn said *then*, not the
   // answer it arrived at: the answer starts after the last interim row.
   assert.deepEqual(fold?.answerFrom, { messageId: 'a4', partIndex: 0 })
+  assert.equal(fold?.answer, 'all in; here is the result')
   assert.equal(fold?.collapsible, true)
   // The interim stats rows fold with the work; the row that closes the turn
   // is not work and stays.

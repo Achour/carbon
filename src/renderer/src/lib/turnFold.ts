@@ -47,6 +47,20 @@ export interface TurnFold {
    * rather than on prose. Everything before it folds away.
    */
   answerFrom: { messageId: string; partIndex: number } | null
+  /**
+   * The answer's prose — the text parts from `answerFrom` on, joined — and so
+   * exactly what "copy the answer" hands over: what a folded turn still shows.
+   *
+   * **The unit is the turn, not the message.** Claude persists a turn as many
+   * assistant messages and Codex as one, so a per-message copy would hand over
+   * a fragment on one provider and the answer on the other. And the boundary
+   * is the fold's, not "every text part in the turn": the reason to copy is to
+   * hand an answer to another agent, and a "let me check" preamble folded away
+   * above twenty `Read` rows is the same noise the rows are.
+   *
+   * Empty when the turn ends on work, which draws no copy control at all.
+   */
+  answer: string
   /** True when folding would actually hide something. */
   collapsible: boolean
   /**
@@ -86,11 +100,9 @@ function blank(part: AssistantPart | null | undefined): boolean {
  * **The answer is the trailing run of `text` parts**, walked back across the
  * turn's assistant messages, and *anything else* ends it.
  *
- * That is deliberately not `turnAnswerText`'s rule, which concatenates every
- * text part in the turn — the right definition for *copying* an answer, and the
- * wrong one for a boundary: a turn that says "let me check" before running six
- * commands would keep that preamble on screen and fold away the work it
- * introduces.
+ * Not every text part in the turn: a turn that says "let me check" before
+ * running six commands would keep that preamble on screen and fold away the
+ * work it introduces. The same run is what gets copied (`TurnFold.answer`).
  *
  * A thought with text ends the run exactly as a tool call does. Codex streams
  * its reasoning visibly, so a `thinking` part is a rendered "Thought process"
@@ -108,10 +120,14 @@ function blank(part: AssistantPart | null | undefined): boolean {
  */
 function answerBoundary(turn: TurnMessage[]): {
   answerFrom: TurnFold['answerFrom']
+  answer: string
   collapsible: boolean
   workEvents: Set<string>
 } {
   let answerFrom: TurnFold['answerFrom'] = null
+  // Collected back to front, as the walk meets them.
+  const prose: string[] = []
+  const answer = (): string => prose.reverse().join('\n\n')
   // Every event with any of the turn's replies after it is interim — decided
   // up front rather than inside the walk below, which stops at the first work
   // it meets and would leave an earlier row unmarked behind it.
@@ -127,23 +143,24 @@ function answerBoundary(turn: TurnMessage[]): {
     const message = turn[mi]
     if (message.role === 'event') {
       if (mi > lastReply || message.kind !== 'turn') continue
-      return { answerFrom, collapsible: true, workEvents }
+      return { answerFrom, answer: answer(), collapsible: true, workEvents }
     }
     for (let pi = message.parts.length - 1; pi >= 0; pi--) {
       const part = message.parts[pi]
       if (blank(part)) continue
       if (part.type === 'text') {
         answerFrom = { messageId: message.id, partIndex: pi }
+        prose.push(part.text)
         continue
       }
       // Work. Everything from here back is what the fold hides — including,
       // when nothing has been marked as answer yet, the whole turn.
-      return { answerFrom, collapsible: true, workEvents }
+      return { answerFrom, answer: answer(), collapsible: true, workEvents }
     }
   }
   // A turn that never did anything but talk. The boundary still points at its
   // first drawn part so the renderer takes one path, and nothing folds.
-  return { answerFrom, collapsible: false, workEvents }
+  return { answerFrom, answer: answer(), collapsible: false, workEvents }
 }
 
 /**
@@ -212,6 +229,7 @@ export function foldTurns(messages: ChatMessage[]): Map<string, TurnFold> {
         replied: false,
         running: false,
         answerFrom: null,
+        answer: '',
         collapsible: false,
         workEvents: new Set(),
         closed: false

@@ -60,7 +60,6 @@ import {
 import {
   AssistantBlock,
   EventRow,
-  turnAnswerText,
   StreamingIndicator,
   UserBubble
 } from '@/components/messages/Parts'
@@ -447,14 +446,19 @@ function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
     }
     else if (m.role === 'assistant') out.push(renderAssistant(m))
     else {
-      // The stats row that closes a turn carries the copy control, so it needs
-      // the turn's own prose. An event message is not in `presentations` —
-      // `turnPresentations` walks users and assistants — so it is resolved
-      // through the last assistant seen, which is the turn this row closes.
-      // `summary` is only set once that turn is complete, which is the right
-      // gate anyway: a turn still running has no answer to copy.
+      // The stats row that closes a turn carries the copy control, and copies
+      // the fold's answer (`TurnFold.answer`) — what the folded turn shows, not
+      // the preamble folded away with the work. The gate is whether the turn is
+      // complete: an event message is not in `presentations` (it walks users
+      // and assistants), so that is read through the last assistant seen, whose
+      // `summary` is only set once the turn has ended — a turn still running has
+      // no answer to copy. An interim stats row (`workEvents`) sits above the
+      // answer, so it does not offer it.
       const closing = lastAssistantId ? presentations.get(lastAssistantId)?.summary : undefined
-      const answer = m.kind === 'turn' && closing ? turnAnswerText(closing) : undefined
+      const answer =
+        m.kind === 'turn' && closing && fold && !fold.workEvents.has(m.id)
+          ? fold.answer
+          : undefined
       // A stats row the CLI pushed mid-turn — a background task's notification
       // woke the model and the turn went on under the same prompt — is work,
       // and folds with it. Only the row that actually closes the turn is an

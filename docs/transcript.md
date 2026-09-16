@@ -600,17 +600,19 @@ second review of its own.
   and it is a popover that *checks first* — the preview round-trip is what lets
   it say how many files it would restore, or why it can't.
 
-**Copying a turn's answer rides the same anchor** (`turnAnswerText`,
-`CopyAnswer`). The reason to want it is to hand an answer to another agent, so
-what it copies is the turn's *prose* — tool calls and thoughts dropped, since a
-transcript of twenty `Read` rows is the noise that makes the paste worse than
-retyping it. Three things follow from that:
+**Copying a turn's answer** (`TurnFold.answer`, `CopyAnswer`). The reason to
+want it is to hand an answer to another agent, so what it copies is the turn's
+*answer* — tool calls and thoughts dropped, since a transcript of twenty `Read`
+rows is the noise that makes the paste worse than retyping it. Three things
+follow from that:
 
-- **The unit is the turn, not the message.** Claude persists a turn as many
-  assistant messages and Codex as one, so a per-message copy hands over a
-  fragment on one provider and the answer on the other. `turnPresentations`
-  already flattens the turn's parts into `summary`, which is why this needed no
-  new grouping — the same anchor `TurnChangesCard` and `TasksCard` hang on.
+- **The unit is the turn, not the message, and the boundary is the fold's.**
+  Claude persists a turn as many assistant messages and Codex as one, so a
+  per-message copy hands over a fragment on one provider and the answer on the
+  other. It used to join *every* text part in the turn, which pasted the "let me
+  check" preambles from inside the folded work ahead of the answer; it now
+  copies exactly the trailing text run a folded turn still shows (see the fold
+  below). An interim stats row inside the work does not offer it.
 - **It rides the turn's stats line rather than a row of its own.** A row per turn
   is ~24px of chrome down the whole transcript for a control most turns never
   need, and the alternative — hiding it until hover — wants a wrapper around the
@@ -622,10 +624,10 @@ retyping it. Three things follow from that:
   stats — a turn that reported none still has an answer worth copying — and
   `renderMessages` resolves the answer through the last assistant message seen,
   since an event message is not itself in `presentations`.
-- **A turn with no prose draws no control.** `summary` is only set once the turn
-  is complete, so a running turn offers nothing (there is no answer yet), and a
-  tool-only turn yields an empty string and renders nothing rather than a button
-  with nothing behind it.
+- **A turn with no answer draws no control.** `summary` is only set once the
+  turn is complete, so a running turn offers nothing (there is no answer yet),
+  and a turn that ends on work yields an empty string and renders nothing rather
+  than a button with nothing behind it.
 
 ### The turn header and its fold (`TurnHeader`, `lib/turnFold.ts`)
 
@@ -650,9 +652,7 @@ a message — Claude ends a turn with a separate text-only message where Codex
 accumulates the whole turn into one — so `AssistantBlock` takes a `fromPart`
 index rather than a show/hide flag, and every key inside it stays the part's
 absolute index so expanding re-renders the answer instead of rebuilding it.
-This is deliberately *not* `turnAnswerText`, which concatenates every text part
-in the turn: that is the rule for "copy the answer", and using it here would
-keep the preamble the fold exists to hide.
+The same run is what the copy control hands over (`TurnFold.answer`).
 
 Never folded: the prompt, the event rows, the turn's changes card. Folded with
 its anchor: a `TasksCard`, iff the message it hangs off is omitted entirely.
