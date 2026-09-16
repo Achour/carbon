@@ -11,11 +11,12 @@ import {
   GitCompare,
   Globe,
   Maximize2,
-  MessageSquare,
   Minimize2,
   PanelLeft,
   PanelRight,
   PenLine,
+  Pin,
+  PinOff,
   Plus,
   Search,
   Shapes,
@@ -25,8 +26,14 @@ import {
 import { cn } from '@/lib/utils'
 import { FileIcon } from '@/lib/fileIcon'
 import { CanvasDoc, CanvasPanel } from '@/components/CanvasPanel'
-import { useApp, type OpenTab } from '@/store'
-import type { ChatMeta } from '@shared/types'
+import {
+  inActiveThread,
+  panelFloats,
+  severalChatsShown,
+  THREAD_COLUMN_MIN_PX,
+  useApp,
+  type OpenTab
+} from '@/store'
 import {
   Dialog,
   DialogContent,
@@ -38,7 +45,7 @@ import { WithTooltip } from '@/components/ui/tooltip'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { PlanContent } from '@/components/PlanPanel'
 import { AgentsPanel } from '@/components/AgentsPanel'
-import { useAgents } from '@/agentsStore'
+import { anyRunning, anyRuns, useAgents } from '@/agentsStore'
 import { FileViewer, MARKDOWN_RE } from '@/components/FileViewer'
 import { FileTree } from '@/components/FileTree'
 import { GitPanel } from '@/components/GitPanel'
@@ -47,7 +54,6 @@ import { MultiDiffView } from '@/components/MultiDiffView'
 import { ReviewBar } from '@/components/ReviewBar'
 import { languageForPath } from '@/lib/highlight'
 import { BrowserPane } from '@/components/BrowserPane'
-import { ChatView } from '@/components/ChatView'
 
 /**
  * xterm is ~410 KB and matters only once a terminal tab exists — which for many
@@ -200,6 +206,11 @@ function Tab({
 // tree can bear, never so wide the chat column becomes unusable.
 const PANEL_MIN_PX = 448
 const CHAT_RESERVED_PX = 480
+/**
+ * How much of the thread a floating panel leaves uncovered at its widest: enough
+ * to see a column's edge and click back into it.
+ */
+const FLOAT_EXPOSED_PX = 160
 const PANEL_TRANSITION_MS = 200
 
 // File-tree dock bounds: never below a readable tree, never so wide the
@@ -238,83 +249,6 @@ function PathBar({ entry, cwd }: { entry: OpenTab; cwd: string | null }): React.
 }
 
 /**
- * Side chats of the active chat with no tab open — where a closed one comes
- * back from. Without this list, ✕ on the tab would be indistinguishable from
- * discarding the conversation.
- *
- * Its own component because it is the only part of the `+` menu that reads
- * per-turn state. In `QuickOpen` itself, `chats` and `statuses` put the whole
- * popover — the seven action objects, their JSX icons, the entire content tree
- * — on the per-message re-render rate *while the menu is closed*. Here that
- * cost exists only while it is open.
- */
-function ClosedSideChats({
-  onReopen,
-  onDelete
-}: {
-  onReopen: (id: string) => void
-  onDelete: (chat: ChatMeta) => void
-}): React.JSX.Element | null {
-  const activeId = useApp((s) => s.activeId)
-  const chats = useApp((s) => s.chats)
-  const sideChatTabs = useApp((s) => s.sideChatTabs)
-  const statuses = useApp((s) => s.statuses)
-  // A side chat carries the chat it belongs to (`sideOf`), which is the only
-  // handle a *closed* one leaves — it has no tab to be found by.
-  //
-  // Sorted on `updatedAt` rather than reversed. Reversing read `chats` position,
-  // which meant "newest last" only for side chats appended by `openSideChat`
-  // this session: ones restored at boot arrive newest-*first*, and `hoistChat`
-  // moves a row on every turn start regardless. So after a relaunch the one you
-  // closed a minute ago sat at the bottom of the list.
-  const closed = React.useMemo(
-    () =>
-      chats
-        .filter((c) => c.sideOf === activeId && !sideChatTabs.includes(c.id))
-        .sort((a, b) => b.updatedAt - a.updatedAt),
-    [chats, activeId, sideChatTabs]
-  )
-  if (closed.length === 0) return null
-  return (
-    <>
-      <div className="mt-1 border-t border-border pt-1.5 pb-1 pl-2 text-[11px] font-medium text-muted-foreground/70">
-        Closed side chats
-      </div>
-      {closed.map((c) => (
-        <div
-          key={c.id}
-          className="group flex w-full items-center gap-2.5 rounded-md pr-1 transition-colors hover:bg-accent"
-        >
-          <button
-            type="button"
-            onClick={() => onReopen(c.id)}
-            className="flex min-w-0 flex-1 items-center gap-2.5 px-2 py-2 text-left text-[13px]"
-          >
-            <span className="text-muted-foreground">
-              <MessageSquare className="size-4" />
-            </span>
-            <span className="min-w-0 flex-1 truncate">{c.title?.trim() || 'Side chat'}</span>
-            {/* A closed side chat mid-turn has no tab to carry the activity dot,
-                so its answer would otherwise land with nothing saying so. */}
-            {(statuses[c.id] ?? 'idle') !== 'idle' && (
-              <span className="size-1.5 shrink-0 rounded-full bg-primary" />
-            )}
-          </button>
-          <button
-            type="button"
-            onClick={() => onDelete(c)}
-            aria-label={`Delete ${c.title?.trim() || 'side chat'}`}
-            className="shrink-0 rounded p-1 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:bg-secondary hover:text-foreground"
-          >
-            <X className="size-3.5" />
-          </button>
-        </div>
-      ))}
-    </>
-  )
-}
-
-/**
  * The "+" button: a Cursor-style quick-open. Type to fuzzy-search files (opens
  * one as a tab), or pick an action — Browser preview, Terminal, Review changes.
  * This is how you open files regardless of which tab is active, so the file tree
@@ -328,11 +262,6 @@ function QuickOpen(): React.JSX.Element {
   const reviewChangesAction = useApp((s) => s.reviewChanges)
   const browseFiles = useApp((s) => s.browseFiles)
   const openCanvas = useApp((s) => s.openCanvas)
-  const openSideChat = useApp((s) => s.openSideChat)
-  const reopenSideChat = useApp((s) => s.reopenSideChat)
-  const confirmSideChatDelete = useApp((s) => s.confirmSideChatDelete)
-  const hasActiveChat = useApp((s) => s.activeId !== null)
-
   const [open, setOpen] = React.useState(false)
   const [query, setQuery] = React.useState('')
   const [results, setResults] = React.useState<{ rel: string; path: string }[]>([])
@@ -400,24 +329,6 @@ function QuickOpen(): React.JSX.Element {
         setOpen(false)
       }
     },
-    // A side chat is a companion to a conversation, so on the home screen there
-    // is nothing for it to sit beside — and `openSideChat` refuses there. A row
-    // that quietly does nothing is worse than one that isn't offered.
-    ...(hasActiveChat
-      ? [
-          {
-            // Above the browser and the terminal: a side chat answers a question
-            // about the work in the main column, which is the reason to reach
-            // for this menu mid-turn far more often than either of those.
-            icon: <MessageSquare className="size-4" />,
-            label: 'Side chat',
-            run: (): void => {
-              void openSideChat()
-              setOpen(false)
-            }
-          }
-        ]
-      : []),
     {
       icon: <Globe className="size-4" />,
       label: 'Browser preview',
@@ -481,10 +392,6 @@ function QuickOpen(): React.JSX.Element {
             className="w-full bg-transparent text-[13px] outline-none placeholder:text-muted-foreground/60"
           />
         </div>
-        {/* Raised from `max-h-72` when the reopen section landed: six actions
-            plus a heading already filled that cap, so the closed side chats —
-            the rows someone opens this menu *for* — were the first thing below
-            the fold. Still capped, and still scrolls past a few of them. */}
         <div className="max-h-96 overflow-y-auto p-1">
           {results.length > 0 ? (
             results.map((r, i) => {
@@ -526,18 +433,6 @@ function QuickOpen(): React.JSX.Element {
                   {a.label}
                 </button>
               ))}
-              <ClosedSideChats
-                onReopen={(id) => {
-                  void reopenSideChat(id)
-                  setOpen(false)
-                }}
-                onDelete={(c) => {
-                  // The menu closes on the click, so the question has to be
-                  // asked somewhere that outlives it — `App` renders the dialog.
-                  setOpen(false)
-                  confirmSideChatDelete(c)
-                }}
-              />
             </>
           )}
         </div>
@@ -633,19 +528,13 @@ function EmptyLauncher(): React.JSX.Element {
   const openTerminal = useApp((s) => s.openTerminal)
   const browseFiles = useApp((s) => s.browseFiles)
   const openCanvas = useApp((s) => s.openCanvas)
-  const openSideChat = useApp((s) => s.openSideChat)
-  const hasActiveChat = useApp((s) => s.activeId !== null)
 
   const items = [
     { icon: <GitBranch />, label: 'Changes', run: () => void reviewChanges() },
     { icon: <Globe />, label: 'Browser', run: () => openPreview() },
     { icon: <SquareTerminal />, label: 'Terminal', run: () => openTerminal() },
     { icon: <FolderTree />, label: 'Files', run: () => browseFiles() },
-    { icon: <Shapes />, label: 'Canvas', run: () => void openCanvas(null) },
-    // Only beside a conversation — see the + menu.
-    ...(hasActiveChat
-      ? [{ icon: <MessageSquare />, label: 'Side chat', run: () => void openSideChat() }]
-      : [])
+    { icon: <Shapes />, label: 'Canvas', run: () => void openCanvas(null) }
   ]
   return (
     // One column until two tiles fit side by side (`@container` measures the
@@ -767,68 +656,9 @@ function UntitledView({ tabPath }: { tabPath: string }): React.JSX.Element {
   )
 }
 
-/**
- * A side chat's tab. Its own component so the *panel* subscribes to neither
- * `chats` nor `statuses`.
- *
- * Read in the parent, those two put `RightPanel` on the per-turn event rate:
- * `statuses` is replaced wholesale on every status transition of any chat, and
- * a `meta` patch lands on every assistant message's usage block — which on
- * Claude is every tool call. Neither `RightPanel` nor `ChatView` is memoized,
- * so each tick re-rendered the whole panel subtree *including every mounted
- * side transcript*, while the user was looking at a file. Per id, a side chat
- * re-renders only for its own chat's events: a `meta` patch replaces just the
- * patched chat's object, so every other row's selector is identity-stable, and
- * the status selector returns a primitive.
- */
-function SideChatTab({
-  id,
-  active,
-  onSelect,
-  onReorder,
-  onClose
-}: {
-  id: string
-  active: boolean
-  onSelect: () => void
-  onReorder: (from: string, side: 'before' | 'after') => void
-  onClose: () => void
-}): React.JSX.Element {
-  // The chat's own derived title once it has one. A side chat gets no *AI*
-  // title — that would be a second model call for a tab — but `send` still
-  // stamps the placeholder derived from the first message, which is what tells
-  // two open side chats apart.
-  const title = useApp((s) => s.chats.find((c) => c.id === id)?.title?.trim())
-  const busy = useApp((s) => (s.statuses[id] ?? 'idle') !== 'idle')
-  return (
-    <Tab
-      icon={<MessageSquare className="size-3.5" />}
-      label={title || 'Side chat'}
-      active={active}
-      busy={busy ? 'Working' : undefined}
-      dragId={id}
-      onReorder={onReorder}
-      onSelect={onSelect}
-      onClose={onClose}
-    />
-  )
-}
-
-/** A side chat's transcript, mounted for as long as its tab exists. */
-function SideChatPane({ id, active }: { id: string; active: boolean }): React.JSX.Element | null {
-  const chat = useApp((s) => s.chats.find((c) => c.id === id))
-  if (!chat) return null
-  return (
-    <div className={cn('absolute inset-0 bg-background', !active && 'invisible pointer-events-none')}>
-      <ChatView chat={chat} side />
-    </div>
-  )
-}
-
 export function RightPanel(): React.JSX.Element | null {
   const panelOpen = useApp((s) => s.panelOpen)
   const planPanel = useApp((s) => s.planPanel)
-  const activeId = useApp((s) => s.activeId)
   const openFiles = useApp((s) => s.openFiles)
   const fileContents = useApp((s) => s.fileContents)
   const activeTab = useApp((s) => s.activeTab)
@@ -864,6 +694,16 @@ export function RightPanel(): React.JSX.Element | null {
   const sidebarOpen = useApp((s) => s.sidebarOpen)
   const toggleSidebar = useApp((s) => s.toggleSidebar)
   const togglePanel = useApp((s) => s.togglePanel)
+  const togglePanelFloating = useApp((s) => s.togglePanelFloating)
+  // Floating is for several chats on screen, where docking takes the width two
+  // of them need. One conversation on screen — a single chat, or one column
+  // expanded — has that width to spare, so the panel docks beside it whatever
+  // the setting says, and the pin that would float it is not offered.
+  const severalChats = useApp(severalChatsShown)
+  const floating = useApp(panelFloats)
+  // Docked, the panel leaves the thread room for its chats: one column's worth
+  // for one conversation, two side by side for several.
+  const chatReserve = severalChats ? 2 * THREAD_COLUMN_MIN_PX : CHAT_RESERVED_PX
   const hasSuggestions = useApp((s) => {
     if (!s.planPanel?.requestId) return false
     return (s.permissions[s.planPanel.chatId] ?? []).some(
@@ -947,13 +787,12 @@ export function RightPanel(): React.JSX.Element | null {
 
   const onHandlePointerMove = (e: React.PointerEvent<HTMLDivElement>): void => {
     if (!draggingRef.current) return
-    // Reserve space for the chat column measured from where it actually
-    // starts — the sidebar may be open to its left.
     const panel = e.currentTarget.closest<HTMLElement>('[data-right-panel]')
-    const chatLeft = panel?.previousElementSibling?.getBoundingClientRect().left ?? 0
-    const maxW = Math.round(window.innerWidth - chatLeft - CHAT_RESERVED_PX)
-    const next = Math.round(window.innerWidth - e.clientX)
-    setWidth(Math.max(PANEL_MIN_PX, Math.min(next, maxW)))
+    const rect = panel?.getBoundingClientRect()
+    const next = Math.round((rect?.right ?? window.innerWidth) - e.clientX)
+    // The same cap the render applies (`room`), so a drag stops exactly where
+    // the panel would be clamped anyway.
+    setWidth(Math.max(PANEL_MIN_PX, Math.min(next, room ?? Infinity)))
   }
 
   const onHandlePointerUp = (): void => {
@@ -973,20 +812,18 @@ export function RightPanel(): React.JSX.Element | null {
     localStorage.removeItem('rightPanelWidth')
   }
 
-  // The plan belongs to whichever transcript opened it. Gated on `activeId`
-  // alone, a side chat entering plan mode set `activeTab: 'plan'` for a tab the
-  // strip refused to show — so `current` fell through, the side tab deselected,
-  // and the plan appeared nowhere.
-  const sideChatTabs = useApp((s) => s.sideChatTabs)
-  const showPlan =
-    planPanel !== null &&
-    (planPanel.chatId === activeId || sideChatTabs.includes(planPanel.chatId))
+  // The plan belongs to whichever column opened it. Gated on `activeId` alone,
+  // a side chat entering plan mode set `activeTab: 'plan'` for a tab the strip
+  // refused to show — so the plan appeared nowhere.
+  const showPlan = useApp((s) => s.planPanel !== null && inActiveThread(s, s.planPanel.chatId))
   // The Agents tab is a property of the chat: it exists exactly while the chat
   // has spawned something. It is never auto-selected — a spawn mid-read would
   // otherwise take the file you are looking at off screen — so the way in is the
   // activity bar above the composer, or the tab itself.
-  const showAgents = useAgents((s) => s.runs.length > 0)
-  const agentsRunning = useAgents((s) => s.totals.running > 0)
+  // Any chat in the thread: the tab is the way into every column's roster, and
+  // which one it shows is `AgentsPanel`'s question.
+  const showAgents = useAgents(anyRuns)
+  const agentsRunning = useAgents(anyRunning)
   // Browse mode's tab: opened state, so it survives being left. See `filesTab`.
   const filesTab = useApp((s) => s.filesTab)
   const closeFilesTab = useApp((s) => s.closeFilesTab)
@@ -1001,11 +838,6 @@ export function RightPanel(): React.JSX.Element | null {
   const canvasList = useApp((s) => s.canvases)
   const closeCanvas = useApp((s) => s.closeCanvas)
   const showCanvas = activeTab === 'canvas'
-  // Side chats: `side:<id>` per open conversation. Like canvas tabs and unlike
-  // the plan/agents/files tabs, each one is a thing that was opened rather than
-  // derived state, so it has its own array and its own close. (`sideChatTabs`
-  // is read above, where `showPlan` needs it.)
-  const closeSideChat = useApp((s) => s.closeSideChat)
   const current =
     activeTab === 'files' && filesTab
       ? 'files'
@@ -1020,8 +852,6 @@ export function RightPanel(): React.JSX.Element | null {
           : activeTab === 'canvas' && showCanvas
           ? 'canvas'
           : canvasTabs.some((id) => `canvas:${id}` === activeTab)
-          ? activeTab!
-          : sideChatTabs.some((id) => `side:${id}` === activeTab)
           ? activeTab!
           : openFiles.some((f) => f.path === activeTab)
             ? activeTab!
@@ -1044,9 +874,6 @@ export function RightPanel(): React.JSX.Element | null {
   // list, because two canvases are read side by side.
   const currentCanvasId =
     typeof current === 'string' && current.startsWith('canvas:') ? current.slice(7) : null
-  /** `side:<id>` — the side chat being read, if the panel is on one. */
-  const currentSideChatId =
-    typeof current === 'string' && current.startsWith('side:') ? current.slice(5) : null
   const activeEntry = openFiles.find((f) => f.path === current)
   // A diff tab can open its own folds — same re-fetch the stacked review uses.
   const diffMeta = activeEntry?.diff
@@ -1074,7 +901,6 @@ export function RightPanel(): React.JSX.Element | null {
     !currentIsAgents &&
     !currentIsCanvas &&
     !currentCanvasId &&
-    !currentSideChatId &&
     !currentIsTerminal &&
     !currentIsPreview &&
     !currentIsChanges &&
@@ -1100,10 +926,6 @@ export function RightPanel(): React.JSX.Element | null {
     else if (current === 'canvas') setActiveTab(null)
     else if (current === 'plan') closePlanPanel()
     else if (currentCanvasId) closeCanvas(currentCanvasId)
-    // ⌘W on a side chat closes its tab and keeps the conversation, exactly as
-    // it does on a file — the `+` menu's "Closed side chats" section is where
-    // it comes back from. `closeSideChat` discards one that was never used.
-    else if (currentSideChatId) void closeSideChat(currentSideChatId)
     else if (currentIsTerminal) closeTerminal(current)
     else if (currentIsPreview) closePreview(current)
     else if (activeEntry) requestCloseFile(current)
@@ -1116,7 +938,8 @@ export function RightPanel(): React.JSX.Element | null {
   }, [closeTabTick])
 
   // How wide the panel may be without pushing past the window: the content
-  // pane's width less the chat column's reservation. Measured off the parent
+  // pane's width (`avail`), less what the chats keep (`reserve`). Measured off
+  // the parent
   // rather than written as `100vw - reserved`, which forgot the sidebar to the
   // chat's left — at a 1008px window the cap came out *wider* than the space
   // it was capping, the chat held its own minimum, and the panel's right half
@@ -1126,8 +949,7 @@ export function RightPanel(): React.JSX.Element | null {
   React.useLayoutEffect(() => {
     const parent = asideRef.current?.parentElement
     if (!parent) return
-    const measure = (): void =>
-      setAvail(Math.max(0, Math.round(parent.getBoundingClientRect().width - CHAT_RESERVED_PX)))
+    const measure = (): void => setAvail(Math.round(parent.getBoundingClientRect().width))
     measure()
     const ro = new ResizeObserver(measure)
     ro.observe(parent)
@@ -1135,26 +957,42 @@ export function RightPanel(): React.JSX.Element | null {
   }, [])
   // The floor yields before the window does: a panel narrower than its
   // minimum is still a panel, where one that overflows the window is not.
-  const minPx = avail === null ? PANEL_MIN_PX : Math.min(PANEL_MIN_PX, avail)
-  const cap = avail === null ? `calc(100vw - ${CHAT_RESERVED_PX}px)` : `${avail}px`
+  // Docked, the chat column's reservation comes off the top; floating, only a
+  // strip of the chats has to stay visible beside it.
+  const reserve = floating ? FLOAT_EXPOSED_PX : chatReserve
+  const room = avail === null ? null : Math.max(0, avail - reserve)
+  const minPx = room === null ? PANEL_MIN_PX : Math.min(PANEL_MIN_PX, room)
+  const cap = room === null ? `calc(100vw - ${reserve}px)` : `${room}px`
+  // Same default either way: floating and docked are one panel in two places,
+  // and pinning should not change its size.
   const targetWidth = width ? `min(${width}px, ${cap})` : `min(52%, ${cap})`
 
   return (
     <aside
       ref={asideRef}
       data-right-panel
+      data-floating={floating || undefined}
       aria-hidden={!panelOpen}
       style={
         panelMaximized
           ? undefined
-          : {
-              width: panelOpen ? targetWidth : 0,
-              minWidth: panelOpen ? `${minPx}px` : 0
+          : // A floating panel slides out at full width; a docked one collapses.
+            {
+              width: floating || panelOpen ? targetWidth : 0,
+              minWidth: floating || panelOpen ? `${minPx}px` : 0
             }
       }
       className={cn(
-        'relative h-full overflow-hidden bg-background',
-        !dragging && 'transition-[width,min-width] duration-200 ease-out',
+        floating
+          ? // The docked panel's own geometry laid over the chats: it slides
+            // rather than growing, so the chats beneath never reflow.
+            'absolute inset-y-0 right-0 z-30 overflow-hidden bg-background shadow-2xl shadow-black/30 dark:shadow-black/70'
+          : 'relative h-full overflow-hidden bg-background',
+        !dragging &&
+          (floating
+            ? 'transition-[translate,opacity] duration-200 ease-out motion-reduce:transition-none'
+            : 'transition-[width,min-width] duration-200 ease-out'),
+        floating && !panelOpen && 'translate-x-[calc(100%+2rem)] opacity-0',
         !panelOpen && 'pointer-events-none',
         // Not shrink-0: when space runs out the panel yields before the chat
         // column (which has its own min-width) gets crushed.
@@ -1180,7 +1018,7 @@ export function RightPanel(): React.JSX.Element | null {
           onPointerUp={onHandlePointerUp}
           onLostPointerCapture={onHandlePointerUp}
           onDoubleClick={resetWidth}
-          className="no-drag absolute inset-y-0 -left-[3px] z-20 w-1.5 cursor-col-resize transition-colors hover:bg-primary/40 active:bg-primary/60"
+          className="no-drag absolute inset-y-0 left-0 z-20 w-1.5 cursor-col-resize transition-colors hover:bg-primary/40 active:bg-primary/60"
         />
       )}
       {/* Tab strip */}
@@ -1262,16 +1100,6 @@ export function RightPanel(): React.JSX.Element | null {
               onClose={() => closeCanvas(id)}
             />
           ))}
-          {sideChatTabs.map((id) => (
-            <SideChatTab
-              key={id}
-              id={id}
-              active={current === `side:${id}`}
-              onReorder={(from, side) => reorderTab(from, id, side)}
-              onSelect={() => setActiveTab(`side:${id}`)}
-              onClose={() => void closeSideChat(id)}
-            />
-          ))}
           {openFiles.map((file) => (
             <Tab
               key={file.path}
@@ -1325,6 +1153,22 @@ export function RightPanel(): React.JSX.Element | null {
         {/* Pushes the panel controls to the far right; collapses to 0 when the
             tab strip fills the width, so "+" pins beside these controls. */}
         <div className="min-w-2 flex-1" />
+        {/* Only where there is a choice: beside one conversation the panel
+            always docks, and a toggle there would do nothing. */}
+        {!panelMaximized && severalChats && (
+          <WithTooltip label={floating ? 'Pin beside the chats' : 'Float over the chats'}>
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              className="no-drag shrink-0"
+              aria-label={floating ? 'Pin panel beside the chats' : 'Float panel over the chats'}
+              aria-pressed={!floating}
+              onClick={togglePanelFloating}
+            >
+              {floating ? <Pin /> : <PinOff />}
+            </Button>
+          </WithTooltip>
+        )}
         <WithTooltip label={panelMaximized ? 'Restore panel' : 'Maximize panel'}>
           <Button
             size="icon-sm"
@@ -1401,7 +1245,7 @@ export function RightPanel(): React.JSX.Element | null {
             id="editor-find-scope"
             className={cn(
               'min-h-0 flex-1',
-              (currentIsTerminal || currentIsPreview || currentSideChatId) && 'hidden'
+              (currentIsTerminal || currentIsPreview) && 'hidden'
             )}
           >
             {current === 'plan' && planPanel ? (
@@ -1439,17 +1283,6 @@ export function RightPanel(): React.JSX.Element | null {
               </div>
             )}
           </div>
-          {/* Side chats take the terminal's treatment — mounted for as long as
-              the tab exists, hidden rather than unmounted — and need it more:
-              a side chat is routinely left running while you read a file, and
-              unmounting would restart the stream reveal, drop the scroll
-              position and replay every settled tool row's enter animation on
-              return. They sit outside `editor-find-scope` deliberately, so ⌘F
-              still means "search this file" rather than silently searching a
-              conversation. */}
-          {sideChatTabs.map((id) => (
-            <SideChatPane key={id} id={id} active={current === `side:${id}`} />
-          ))}
           {/* Each terminal stays mounted while its tab exists so scrollback
               survives switching tabs; hidden (not unmounted) when not active. */}
           {terminals.map((t) => (
@@ -1482,7 +1315,6 @@ export function RightPanel(): React.JSX.Element | null {
           !currentIsAgents &&
           !currentIsCanvas &&
           !currentCanvasId &&
-          !currentSideChatId &&
           !currentIsTerminal &&
           !currentIsPreview && (
         <div

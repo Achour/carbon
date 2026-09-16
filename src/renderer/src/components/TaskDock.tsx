@@ -34,9 +34,9 @@ const NO_TASKS: TaskItem[] = []
  * composer's room on a chat you only came back to type in.
  */
 export function TaskDock({ chatId }: { chatId: string }): React.JSX.Element | null {
-  // Never the previous chat's plan: the publish happens in an effect, so this
-  // store trails a chat switch by a frame. See `taskListStore`.
-  const tasks = useTaskList((s) => (s.chatId === chatId ? s.tasks : NO_TASKS))
+  // Keyed by chat, so a dock never draws another column's plan — nor the
+  // previous chat's, since the entry is removed when its `ChatView` unmounts.
+  const tasks = useTaskList((s) => s.byChat[chatId] ?? NO_TASKS)
   const [open, setOpen] = React.useState(false)
 
   if (tasks.length === 0) return null

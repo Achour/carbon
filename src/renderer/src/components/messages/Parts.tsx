@@ -91,9 +91,11 @@ const PROMPT_BOX = `${CHAT_BLEED} ${CHAT_BLEED_PAD} ${CHAT_FRAME} min-w-0`
  */
 function MessageEditor({
   message,
+  chatId,
   onClose
 }: {
   message: UserMessage
+  chatId: string
   onClose: () => void
 }): React.JSX.Element {
   const [text, setText] = React.useState(message.text)
@@ -127,7 +129,7 @@ function MessageEditor({
     }
     setBusy(true)
     setError(null)
-    const res = await useApp.getState().editMessage(message.id, next)
+    const res = await useApp.getState().editMessage(chatId, message.id, next)
     setBusy(false)
     if (res.ok) onClose()
     else setError(res.error ?? 'The message could not be edited.')
@@ -254,9 +256,12 @@ function PromptAttachments({ message }: { message: UserMessage }): React.JSX.Ele
 }
 
 export const UserBubble = React.memo(function UserBubble({
-  message
+  message,
+  chatId
 }: {
   message: UserMessage
+  /** The chat this bubble is in — an edit resends into it, whichever column it is. */
+  chatId: string
 }): React.JSX.Element {
   const [editing, setEditing] = React.useState(false)
   const [copied, setCopied] = React.useState(false)
@@ -299,7 +304,7 @@ export const UserBubble = React.memo(function UserBubble({
   return (
     <div className="group relative flex animate-enter flex-col">
       {editing ? (
-        <MessageEditor message={message} onClose={() => setEditing(false)} />
+        <MessageEditor message={message} chatId={chatId} onClose={() => setEditing(false)} />
       ) : (
         hasBody && (
           <>

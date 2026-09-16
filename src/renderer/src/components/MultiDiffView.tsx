@@ -2,8 +2,8 @@ import * as React from 'react'
 import { Check, ChevronRight, ExternalLink, Minus, Plus } from 'lucide-react'
 import type { GitFileChange } from '@shared/types'
 import { cn } from '@/lib/utils'
-import { useStableChanges } from '@/lib/useStableChanges'
-import { scopedChanges, useApp } from '@/store'
+import { useScopedChanges } from '@/lib/useScopedChanges'
+import { useApp } from '@/store'
 import { Button } from '@/components/ui/button'
 import { WithTooltip } from '@/components/ui/tooltip'
 import { DiffTable, FULL_CONTEXT, MAX_ROWS, type ExpandDiff } from '@/components/DiffView'
@@ -22,7 +22,6 @@ const STATUS_COLORS: Record<string, string> = {
   U: 'text-orange-500'
 }
 
-const NO_CHANGES: GitFileChange[] = []
 export const keyOf = (c: GitFileChange): string => `${c.staged ? 's' : 'w'}:${c.path}`
 
 /** How far outside the scroller a file's body is still worth having in the DOM.
@@ -145,9 +144,6 @@ export function MultiDiffView({ cwd }: { cwd: string }): React.JSX.Element {
   const git = useApp((s) => s.git)
   const changeScope = useApp((s) => s.changeScope)
   const branchChanges = useApp((s) => s.branchChanges)
-  const activeId = useApp((s) => s.activeId)
-  const chats = useApp((s) => s.chats)
-  const messages = useApp((s) => s.messages)
   const stagePaths = useApp((s) => s.stagePaths)
   const unstagePaths = useApp((s) => s.unstagePaths)
   const openDiff = useApp((s) => s.openDiff)
@@ -158,12 +154,7 @@ export function MultiDiffView({ cwd }: { cwd: string }): React.JSX.Element {
 
   const isBranch = changeScope === 'branch'
   const branchBase = isBranch ? (branchChanges?.base ?? undefined) : undefined
-  const rawChanges = React.useMemo(
-    () =>
-      scopedChanges({ changeScope, git, branchChanges, activeId, chats, messages }, cwd) ?? NO_CHANGES,
-    [changeScope, git, branchChanges, activeId, chats, messages, cwd]
-  )
-  const changes = useStableChanges(rawChanges)
+  const changes = useScopedChanges(cwd)
   const branchLoading = isBranch && !branchChanges
   const emptyLabel =
     changeScope === 'last-turn'

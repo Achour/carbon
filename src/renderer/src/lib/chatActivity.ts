@@ -21,35 +21,44 @@ function inputLabel(requests: PermissionRequestPayload[]): string {
 }
 
 /**
+ * Which state matters most, without building the label: user action wins over
+ * background activity, which wins over generic foreground work. The allocation-
+ * free half of `chatActivity`, for selectors that run on every streamed delta
+ * and only branch on the kind.
+ */
+export function chatActivityKind(
+  status: ChatStatus | undefined,
+  jobs: BackgroundJob[] | undefined,
+  requests: PermissionRequestPayload[] | undefined
+): ChatActivity['kind'] {
+  if (status === 'waiting-permission' || requests?.length) return 'needs-input'
+  if (jobs?.length) return 'background'
+  if (status === 'starting' || status === 'streaming') return 'working'
+  return 'idle'
+}
+
+/**
  * Reduce the provider-neutral live signals to the one state that matters most
- * in the sidebar. User action wins over background activity, which wins over
- * generic foreground work.
+ * in the sidebar, with the words for it.
  */
 export function chatActivity(
   status: ChatStatus | undefined,
   jobs: BackgroundJob[] | undefined,
   requests: PermissionRequestPayload[] | undefined
 ): ChatActivity {
-  if (status === 'waiting-permission' || requests?.length) {
-    return {
-      kind: 'needs-input',
-      label: requests?.length ? inputLabel(requests) : 'Needs your input'
-    }
+  switch (chatActivityKind(status, jobs, requests)) {
+    case 'needs-input':
+      return {
+        kind: 'needs-input',
+        label: requests?.length ? inputLabel(requests) : 'Needs your input'
+      }
+    case 'background':
+      return { kind: 'background', label: 'Background jobs running', count: jobs?.length ?? 0 }
+    case 'working':
+      return { kind: 'working', label: 'Working' }
+    default:
+      return { kind: 'idle', label: 'Idle' }
   }
-
-  if (jobs?.length) {
-    return {
-      kind: 'background',
-      label: 'Background jobs running',
-      count: jobs.length
-    }
-  }
-
-  if (status === 'starting' || status === 'streaming') {
-    return { kind: 'working', label: 'Working' }
-  }
-
-  return { kind: 'idle', label: 'Idle' }
 }
 
 /** Highest-priority activity for a collapsed project row. */

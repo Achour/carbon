@@ -11,10 +11,9 @@ import {
   RefreshCw,
   WrapText,
 } from "lucide-react";
-import type { GitFileChange } from "@shared/types";
 import { cn } from "@/lib/utils";
-import { useStableChanges } from "@/lib/useStableChanges";
-import { scopedChanges, useApp, type ChangeScope } from "@/store";
+import { useScopedChanges } from "@/lib/useScopedChanges";
+import { useApp, type ChangeScope } from "@/store";
 import { Button } from "@/components/ui/button";
 import { WithTooltip } from "@/components/ui/tooltip";
 import {
@@ -40,7 +39,6 @@ const SCOPES: { id: ChangeScope; label: string; hint: string }[] = [
   },
 ];
 
-const NO_CHANGES: GitFileChange[] = [];
 
 /** Clearance for the sticky file header when a jump lands on a hunk. */
 const HUNK_SCROLL_MARGIN = 56;
@@ -67,9 +65,6 @@ export function ReviewBar({ cwd }: { cwd: string }): React.JSX.Element {
   const changeScope = useApp((s) => s.changeScope);
   const setChangeScope = useApp((s) => s.setChangeScope);
   const branchChanges = useApp((s) => s.branchChanges);
-  const activeId = useApp((s) => s.activeId);
-  const chats = useApp((s) => s.chats);
-  const messages = useApp((s) => s.messages);
   const fetchRemote = useApp((s) => s.fetchRemote);
   const diffWrap = useApp((s) => s.diffWrap);
   const toggleDiffWrap = useApp((s) => s.toggleDiffWrap);
@@ -81,15 +76,7 @@ export function ReviewBar({ cwd }: { cwd: string }): React.JSX.Element {
   const [refreshing, setRefreshing] = React.useState(false);
 
   const isBranch = changeScope === "branch";
-  const rawChanges = React.useMemo(
-    () =>
-      scopedChanges(
-        { changeScope, git, branchChanges, activeId, chats, messages },
-        cwd,
-      ) ?? NO_CHANGES,
-    [changeScope, git, branchChanges, activeId, chats, messages, cwd],
-  );
-  const changes = useStableChanges(rawChanges);
+  const changes = useScopedChanges(cwd);
   const scopeMeta = SCOPES.find((s) => s.id === changeScope) ?? SCOPES[1];
   const totalAdd = changes.reduce((n, c) => n + (c.additions ?? 0), 0);
   const totalDel = changes.reduce((n, c) => n + (c.deletions ?? 0), 0);

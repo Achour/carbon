@@ -45,3 +45,10 @@ export const contextPillAction = cn(
  * kinds of control rather than two of the same.
  */
 export const contextPillButton = cn(contextPillAction, 'no-drag [&>svg]:size-3 [&>svg]:shrink-0')
+
+/** Shallow copy of a per-chat map with the given ids removed. */
+export function omit<T>(map: Record<string, T>, ids: string[]): Record<string, T> {
+  const next = { ...map }
+  for (const id of ids) delete next[id]
+  return next
+}

@@ -440,6 +440,7 @@ function ModelSettingsPicker({
   serviceTiers,
   fastNote,
   disabled,
+  compact = false,
   open: controlledOpen,
   onOpenChange
 }: {
@@ -455,6 +456,11 @@ function ModelSettingsPicker({
   /** Why the provider isn't serving Fast, when it says so; null when it is. */
   fastNote?: string | null
   disabled?: boolean
+  /**
+   * The model's name alone — for the folded composer, where the chip shares one
+   * line with the input. The effort and Fast stay one click away in the popover.
+   */
+  compact?: boolean
   /** Controlled by Composer so `/model` can open the existing native picker. */
   open?: boolean
   onOpenChange?: (open: boolean) => void
@@ -498,21 +504,27 @@ function ModelSettingsPicker({
         aria-label={`${selectedName}, ${selectedEffort?.label ?? effort}${
           serviceTier === 'fast' ? (fastNote ? `, Fast unavailable: ${fastNote}` : ', Fast') : ''
         }`}
-        className="no-drag inline-flex h-7 min-w-0 max-w-full select-none items-center gap-1 rounded-md px-2 text-xs font-medium text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[popup-open]:bg-accent data-[popup-open]:text-foreground disabled:opacity-50"
+        className="no-drag inline-flex h-7 min-w-0 max-w-full select-none items-center gap-1 overflow-hidden rounded-md px-2 text-xs font-medium text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[popup-open]:bg-accent data-[popup-open]:text-foreground disabled:opacity-50"
       >
         <Sparkles className="size-3 shrink-0" />
         <span className="max-w-32 truncate">{selectedName}</span>
-        <span className="shrink-0 text-muted-foreground/50">·</span>
-        <span className="shrink-0">{selectedEffort?.label ?? effort}</span>
-        {serviceTier === 'fast' && (
+        {/* The effort is the first thing a narrow column gives up: the model
+            name says which backend answers, and the popover still shows both. */}
+        {!compact && (
           <>
-            <span className="shrink-0 text-muted-foreground/50">·</span>
+            <span className="shrink-0 text-muted-foreground/50 @max-[400px]:hidden">·</span>
+            <span className="shrink-0 @max-[400px]:hidden">{selectedEffort?.label ?? effort}</span>
+          </>
+        )}
+        {serviceTier === 'fast' && !compact && (
+          <>
+            <span className="shrink-0 text-muted-foreground/50 @max-[400px]:hidden">·</span>
             {/* Struck through, not hidden: Fast is still what's selected — the
                 provider just isn't serving it, and silently showing Standard
                 would make the picker look broken. */}
             <span
               className={cn(
-                'shrink-0',
+                'shrink-0 @max-[400px]:hidden',
                 fastNote ? 'text-muted-foreground/60 line-through' : 'text-violet-400'
               )}
             >
@@ -710,7 +722,8 @@ export function Composer({
   draft,
   onDraftChange,
   clearToken = 0,
-  header
+  header,
+  collapsible = false
 }: {
   /** May be async; if it rejects, the composer restores the draft. */
   onSend: (text: string, attachments: Attachment[]) => void | Promise<void>
@@ -779,6 +792,12 @@ export function Composer({
    * (that would take the slash/@ popovers with it).
    */
   header?: React.ReactNode
+  /**
+   * Fold down to its input line while nothing is being written here: several
+   * chats share the screen, and four composers at full height took a third of
+   * each column. See `collapsed` below for what counts as writing.
+   */
+  collapsible?: boolean
 }): React.JSX.Element {
   const [text, setText] = React.useState(() => draft?.text ?? '')
   const [attachments, setAttachments] = React.useState<Attachment[]>(() => draft?.attachments ?? [])
@@ -910,14 +929,15 @@ export function Composer({
   const selectedPermissionAppearance = permissionAppearance(permissionValue, isCodex)
 
   // The inbox is app-global — one queue fed by the editor's "Add to chat" pill,
-  // the canvas list and the browser's element picker — so with two composers
-  // mounted the first effect to run would consume whatever was in it. It goes
-  // to the **main** composer: every gesture that fills it is made in the main
-  // column or in the panel beside it, about the work that column is doing.
-  const isMainComposer = useApp((s) => !!chatId && s.activeId === chatId)
+  // the canvas list and the browser's element picker — so with several
+  // composers mounted the first effect to run would consume whatever was in it.
+  // It goes to the **focused** column's composer: the panel those gestures are
+  // made in is shared by the whole thread, and the column you were last in is
+  // the one you are adding context to.
+  const isFocusedComposer = useApp((s) => !!chatId && s.focusedChatId === chatId)
   const inbox = useApp((s) => s.attachmentInbox)
   React.useEffect(() => {
-    if (!isMainComposer) return
+    if (!isFocusedComposer) return
     if (inbox.length === 0) return
     setAttachments((prev) => {
       // Dedupe on path as well as id: the same file can be sent here more than
@@ -941,7 +961,7 @@ export function Composer({
     })
     useApp.getState().clearAttachmentInbox()
     ref.current?.focus()
-  }, [isMainComposer, inbox])
+  }, [isFocusedComposer, inbox])
   const [dragOver, setDragOver] = React.useState(false)
   const dragDepth = React.useRef(0)
   const ref = React.useRef<HTMLTextAreaElement>(null)
@@ -1054,13 +1074,6 @@ export function Composer({
     })
   }
 
-  React.useLayoutEffect(() => {
-    const el = ref.current
-    if (!el) return
-    el.style.height = 'auto'
-    el.style.height = `${Math.min(el.scrollHeight, 220)}px`
-  }, [text])
-
   React.useEffect(() => {
     if (autoFocus) ref.current?.focus()
   }, [autoFocus])
@@ -1100,316 +1113,445 @@ export function Composer({
   const hasFileDrag = (e: React.DragEvent): boolean =>
     Array.from(e.dataTransfer.types).includes('Files')
 
+  // ---- Collapsing ----
+  // Folded, the composer is one line: the input, and beside it the model and
+  // permission pickers, attach, context and send. Engaged (the full composer)
+  // from the moment the *input* takes focus or a click, until focus or a click
+  // lands outside the composer; a popup it opened portals out of it, so a click
+  // in one still counts as inside. Only the input engages it: the pickers and
+  // buttons work folded, so using them must not move them under the pointer.
+  // Folded only while there is nothing to lose sight of: no text, no
+  // attachments, no slash or mention menu.
+  const rootRef = React.useRef<HTMLDivElement>(null)
+  const [engaged, setEngaged] = React.useState(false)
+  React.useEffect(() => {
+    if (!collapsible || !engaged) return
+    const leave = (e: Event): void => {
+      const target = e.target instanceof Element ? e.target : null
+      if (!target || rootRef.current?.contains(target)) return
+      if (target.closest('[role="dialog"], [role="menu"], [role="listbox"]')) return
+      setEngaged(false)
+    }
+    document.addEventListener('pointerdown', leave, true)
+    document.addEventListener('focusin', leave, true)
+    return () => {
+      document.removeEventListener('pointerdown', leave, true)
+      document.removeEventListener('focusin', leave, true)
+    }
+  }, [collapsible, engaged])
+  const collapsed =
+    collapsible &&
+    !engaged &&
+    !dragOver &&
+    text.trim() === '' &&
+    attachments.length === 0 &&
+    slashQuery === null &&
+    mention === null
+  const engage = collapsible ? () => setEngaged(true) : undefined
+
+  React.useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${Math.min(el.scrollHeight, 220)}px`
+    // Folding changes the input's padding and wrapping, so its height is
+    // measured again rather than kept from the other shape.
+  }, [text, collapsed])
+
+  // The fold is one frame changing shape — a line becoming a textarea over a
+  // toolbar — which no CSS transition can interpolate. So the frame's height
+  // is animated from what it was to what it now is (the previous render's
+  // height is recorded by the effect below it), clipped while it moves, and the
+  // toolbar fades into its new place.
+  const frameRef = React.useRef<HTMLDivElement>(null)
+  const barRef = React.useRef<HTMLDivElement>(null)
+  const lastHeight = React.useRef<number | null>(null)
+  React.useLayoutEffect(() => {
+    const el = frameRef.current
+    const from = lastHeight.current
+    if (!el || from === null || !collapsible) return
+    const to = el.getBoundingClientRect().height
+    if (Math.abs(to - from) < 1) return
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+    el.style.overflow = 'hidden'
+    const grow = el.animate([{ height: `${from}px` }, { height: `${to}px` }], {
+      duration: 220,
+      easing: 'cubic-bezier(0.16, 1, 0.3, 1)'
+    })
+    barRef.current?.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 220, easing: 'ease-out' })
+    const release = (): void => {
+      el.style.overflow = ''
+    }
+    grow.onfinish = release
+    grow.oncancel = release
+    // `collapsible` is read, not a trigger: only the fold itself animates.
+  }, [collapsed])
+  React.useLayoutEffect(() => {
+    lastHeight.current = frameRef.current?.getBoundingClientRect().height ?? null
+  })
+
+  const fileInput = (
+    <input
+      ref={fileInputRef}
+      type="file"
+      multiple
+      className="hidden"
+      onChange={(e) => {
+        if (e.target.files?.length) void addFiles(e.target.files)
+        e.target.value = ''
+      }}
+    />
+  )
+  const attachButton = (
+    <WithTooltip label="Attach images or files">
+      <Button
+        size="icon-sm"
+        variant="ghost"
+        // Folded, attach moves after the pickers, beside send, as one cluster.
+        className={cn('shrink-0 text-muted-foreground', collapsed && 'order-1')}
+        onClick={() => fileInputRef.current?.click()}
+        disabled={locked}
+        aria-label="Attach files"
+      >
+        <Paperclip />
+      </Button>
+    </WithTooltip>
+  )
+  // Model owns its related inference controls; permissions remains a separate
+  // safety decision. This keeps the footer compact.
+  const pickers = (
+    <>
+      <ModelSettingsPicker
+        model={selectedModel}
+        onModelChange={handleModelChange}
+        models={modelOptions}
+        effort={effortValue}
+        onEffortChange={onEffortChange}
+        efforts={effortOptions}
+        serviceTier={serviceTierValue}
+        onServiceTierChange={onServiceTierChange}
+        serviceTiers={serviceTierOptions}
+        fastNote={fastNote}
+        disabled={locked}
+        compact={collapsed}
+        open={modelSettingsOpen}
+        onOpenChange={setModelSettingsOpen}
+      />
+      <CompactSelect
+        value={permissionValue}
+        onValueChange={(v) => onPermissionModeChange(v as PermissionModeId)}
+        options={permissionOptions.map((m) => {
+          const appearance = permissionAppearance(m.id, isCodex)
+          return {
+            value: m.id,
+            label: m.label,
+            description: m.description,
+            icon: <appearance.Icon className={cn('size-3.5', appearance.iconClassName)} />
+          }
+        })}
+        icon={<selectedPermissionAppearance.Icon className="size-3.5" />}
+        // Icon only in a narrow column: its colour already says how much the
+        // agent may do, and the label is one click away.
+        className={cn(
+          'min-w-0 shrink-0 @max-[400px]:[&>span]:hidden',
+          // Folded, the input shares the line, so the words go sooner.
+          collapsed && '@max-[520px]:[&>span]:hidden',
+          selectedPermissionAppearance.triggerClassName
+        )}
+        open={permissionOpen}
+        onOpenChange={setPermissionOpen}
+      />
+    </>
+  )
+  const contextRing =
+    contextTokens != null && contextTokens > 0 ? (
+      <div className={cn('flex shrink-0', collapsed && 'order-1')}>
+        <ContextRing
+          used={contextTokens}
+          window={contextWindow ?? 200_000}
+          provider={provider}
+          chatId={chatId}
+        />
+      </div>
+    ) : null
+  const sendButton =
+    streaming && onStop ? (
+      <WithTooltip label="Stop generating">
+        <Button
+          size="icon"
+          variant="destructive"
+          onClick={onStop}
+          className={cn('shrink-0 rounded-full [&_svg]:size-3', collapsed && 'order-2')}
+          aria-label="Stop generating"
+        >
+          <Square className="fill-current" />
+        </Button>
+      </WithTooltip>
+    ) : (
+      <Button
+        size="icon"
+        onClick={submit}
+        disabled={!canSend}
+        className={cn('shrink-0 rounded-full', collapsed && 'order-2')}
+        aria-label="Send message"
+      >
+        <ArrowUp className="size-4" strokeWidth={2.5} />
+      </Button>
+    )
+
   return (
-    <div
-      data-composer
-      onDragEnter={(e) => {
-        if (!hasFileDrag(e)) return
-        e.preventDefault()
-        dragDepth.current += 1
-        setDragOver(true)
-      }}
-      onDragOver={(e) => {
-        if (hasFileDrag(e)) e.preventDefault()
-      }}
-      onDragLeave={() => {
-        dragDepth.current = Math.max(0, dragDepth.current - 1)
-        if (dragDepth.current === 0) setDragOver(false)
-      }}
-      onDrop={(e) => {
-        if (!hasFileDrag(e)) return
-        e.preventDefault()
-        dragDepth.current = 0
-        setDragOver(false)
-        void addFiles(e.dataTransfer.files)
-      }}
-      className={cn(
-        // The frame is shared with the sent prompt above it (`CHAT_FRAME`);
-        // what is added here is only what is true of the composer alone.
-        CHAT_FRAME,
-        'relative transition-colors focus-within:border-ring/60',
-        dragOver && 'border-primary/60 ring-2 ring-primary/25',
-        locked && 'opacity-60'
-      )}
-    >
-      {header}
-      {/* /-slash command picker */}
-      {slashQuery !== null && slashResults.length > 0 && (
-        <div
-          data-slash-popover
-          className="absolute bottom-full left-3 z-30 mb-2 max-h-80 w-[440px] max-w-[calc(100%-1.5rem)] overflow-y-auto rounded-xl border border-border bg-popover p-1 shadow-xl"
-        >
-          <div className="px-2 pt-1 pb-0.5 text-[10px] font-semibold tracking-wider text-muted-foreground/50 uppercase">
-            Commands
-          </div>
-          {slashResults.map((c, i) => (
-            <button
-              key={c.name}
-              type="button"
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => pickSlash(c)}
-              onMouseEnter={() => setSlashIdx(i)}
-              className={cn(
-                'flex w-full items-baseline gap-2 rounded-lg px-2 py-1.5 text-left transition-colors',
-                i === slashIdx ? 'bg-accent' : undefined
-              )}
-            >
-              <span
-                className={cn(
-                  'shrink-0 font-mono text-[13px]',
-                  i === slashIdx ? 'text-primary' : 'text-foreground'
-                )}
-              >
-                /{c.name}
-              </span>
-              {c.argumentHint && (
-                <span className="shrink-0 font-mono text-[11px] text-muted-foreground/50">
-                  {c.argumentHint}
-                </span>
-              )}
-              {c.description && (
-                <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground/80">
-                  {c.description}
-                </span>
-              )}
-            </button>
-          ))}
-        </div>
-      )}
-      {/* @-mention file picker */}
-      {mention && mentionResults.length > 0 && (
-        <div
-          data-mention-popover
-          className="absolute bottom-full left-3 z-30 mb-2 max-h-64 w-96 max-w-[calc(100%-1.5rem)] overflow-y-auto rounded-xl border border-border bg-popover p-1 shadow-xl"
-        >
-          {mentionResults.map((r, i) => {
-            const name = r.rel.split('/').pop() ?? r.rel
-            const dir = r.rel.slice(0, r.rel.length - name.length).replace(/\/$/, '')
-            return (
+    <div ref={rootRef}>
+      {fileInput}
+      <div
+        ref={frameRef}
+        data-composer
+        data-collapsed={collapsed || undefined}
+        onDragEnter={(e) => {
+          if (!hasFileDrag(e)) return
+          e.preventDefault()
+          dragDepth.current += 1
+          setDragOver(true)
+        }}
+        onDragOver={(e) => {
+          if (hasFileDrag(e)) e.preventDefault()
+        }}
+        onDragLeave={() => {
+          dragDepth.current = Math.max(0, dragDepth.current - 1)
+          if (dragDepth.current === 0) setDragOver(false)
+        }}
+        onDrop={(e) => {
+          if (!hasFileDrag(e)) return
+          e.preventDefault()
+          dragDepth.current = 0
+          setDragOver(false)
+          void addFiles(e.dataTransfer.files)
+        }}
+        className={cn(
+          // The frame is shared with the sent prompt above it (`CHAT_FRAME`);
+          // what is added here is only what is true of the composer alone.
+          CHAT_FRAME,
+          // A wrapping row, so folding is only a change of basis: folded, the
+          // input and the toolbar share one line; open, each takes its own.
+          // The container is the frame, since a content-sized toolbar cannot
+          // be one (inline-size containment would collapse it to nothing).
+          '@container relative flex flex-wrap items-center transition-colors focus-within:border-ring/60',
+          dragOver && 'border-primary/60 ring-2 ring-primary/25',
+          locked && 'opacity-60'
+        )}
+      >
+        {header !== undefined && <div className="min-w-0 basis-full">{header}</div>}
+        {/* /-slash command picker */}
+        {slashQuery !== null && slashResults.length > 0 && (
+          <div
+            data-slash-popover
+            className="absolute bottom-full left-3 z-30 mb-2 max-h-80 w-[440px] max-w-[calc(100%-1.5rem)] overflow-y-auto rounded-xl border border-border bg-popover p-1 shadow-xl"
+          >
+            <div className="px-2 pt-1 pb-0.5 text-[10px] font-semibold tracking-wider text-muted-foreground/50 uppercase">
+              Commands
+            </div>
+            {slashResults.map((c, i) => (
               <button
-                key={r.path}
+                key={c.name}
                 type="button"
                 onMouseDown={(e) => e.preventDefault()}
-                onClick={() => pickMention(r)}
-                onMouseEnter={() => setMentionIdx(i)}
+                onClick={() => pickSlash(c)}
+                onMouseEnter={() => setSlashIdx(i)}
                 className={cn(
-                  'flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors',
-                  i === mentionIdx ? 'bg-accent' : undefined
+                  'flex w-full items-baseline gap-2 rounded-lg px-2 py-1.5 text-left transition-colors',
+                  i === slashIdx ? 'bg-accent' : undefined
                 )}
               >
-                <FileIcon path={r.rel} />
-                <span className="min-w-0 truncate text-xs">
-                  <span className="text-foreground">{name}</span>
-                  {dir && <span className="ml-1.5 text-muted-foreground/70">{dir}</span>}
+                <span
+                  className={cn(
+                    'shrink-0 font-mono text-[13px]',
+                    i === slashIdx ? 'text-primary' : 'text-foreground'
+                  )}
+                >
+                  /{c.name}
                 </span>
+                {c.argumentHint && (
+                  <span className="shrink-0 font-mono text-[11px] text-muted-foreground/50">
+                    {c.argumentHint}
+                  </span>
+                )}
+                {c.description && (
+                  <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground/80">
+                    {c.description}
+                  </span>
+                )}
               </button>
-            )
-          })}
-        </div>
-      )}
-      {attachments.length > 0 && (
-        <div className={cn('flex flex-wrap items-center gap-2 pt-3', CHAT_BLEED_PAD)}>
-          {attachments.map((att) => (
-            <AttachmentChip
-              key={att.id}
-              att={att}
-              onRemove={() => setAttachments((prev) => prev.filter((a) => a.id !== att.id))}
-            />
-          ))}
-        </div>
-      )}
-      {attachError && (
-        <div className={cn('pt-2 text-[11px] text-warning', CHAT_BLEED_PAD)}>{attachError}</div>
-      )}
-      <textarea
-        ref={ref}
-        value={text}
-        onChange={(e) => {
-          setText(e.target.value)
-          const caret = e.target.selectionStart ?? e.target.value.length
-          updateMention(e.target.value, caret)
-          updateSlash(e.target.value, caret)
-        }}
-        onSelect={(e) => {
-          const el = e.currentTarget
-          const caret = el.selectionStart ?? el.value.length
-          updateMention(el.value, caret)
-          updateSlash(el.value, caret)
-        }}
-        onBlur={() =>
-          setTimeout(() => {
-            setMention(null)
-            setSlashQuery(null)
-          }, 200)
-        }
-        onKeyDown={(e) => {
-          if (slashQuery !== null && slashResults.length > 0) {
-            if (e.key === 'ArrowDown') {
-              e.preventDefault()
-              setSlashIdx((i) => (i + 1) % slashResults.length)
-              return
-            }
-            if (e.key === 'ArrowUp') {
-              e.preventDefault()
-              setSlashIdx((i) => (i - 1 + slashResults.length) % slashResults.length)
-              return
-            }
-            if (e.key === 'Enter' || e.key === 'Tab') {
-              e.preventDefault()
-              // slashIdx can lag behind a shrunk result list (commands load
-              // async while the menu is open) — clamp to a real entry.
-              pickSlash(slashResults[slashIdx] ?? slashResults[0])
-              return
-            }
-            if (e.key === 'Escape') {
-              e.preventDefault()
-              setSlashQuery(null)
-              return
-            }
-          }
-          if (mention && mentionResults.length > 0) {
-            if (e.key === 'ArrowDown') {
-              e.preventDefault()
-              setMentionIdx((i) => (i + 1) % mentionResults.length)
-              return
-            }
-            if (e.key === 'ArrowUp') {
-              e.preventDefault()
-              setMentionIdx((i) => (i - 1 + mentionResults.length) % mentionResults.length)
-              return
-            }
-            if (e.key === 'Enter' || e.key === 'Tab') {
-              e.preventDefault()
-              pickMention(mentionResults[mentionIdx])
-              return
-            }
-            if (e.key === 'Escape') {
-              e.preventDefault()
-              setMention(null)
-              return
-            }
-          }
-          if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-            e.preventDefault()
-            submit()
-          }
-        }}
-        // Named, because "the composer's input" stopped being answerable by
-        // `closest('[data-composer]')` the moment the review picker moved
-        // inside this box: its custom-instructions textarea is in there too,
-        // and `keyMayAnswer` would have read an empty one as an empty message
-        // and let Enter allow the permission underneath it.
-        data-composer-input
-        onPaste={(e) => {
-          if (e.clipboardData.files.length > 0) {
-            e.preventDefault()
-            void addFiles(e.clipboardData.files)
-          }
-        }}
-        placeholder={
-          switchingNote ?? (streaming ? 'Queue a message for when this turn ends…' : placeholder)
-        }
-        disabled={locked}
-        rows={1}
-        className={cn(
-          // The horizontal padding is the composer's bleed, so the placeholder
-          // and the prompt land on the same column as every assistant
-          // paragraph. Anything else here and the text misses it.
-          CHAT_BLEED_PAD,
-          'no-drag block max-h-[220px] w-full resize-none bg-transparent pt-3.5 pb-1 text-[14px] leading-relaxed outline-none select-text placeholder:text-muted-foreground/60'
+            ))}
+          </div>
         )}
-      />
-      <div className="flex items-center gap-1 px-2.5 pb-2.5">
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          className="hidden"
-          onChange={(e) => {
-            if (e.target.files?.length) void addFiles(e.target.files)
-            e.target.value = ''
-          }}
-        />
-        <WithTooltip label="Attach images or files">
-          <Button
-            size="icon-sm"
-            variant="ghost"
-            className="shrink-0 text-muted-foreground"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={locked}
-            aria-label="Attach files"
+        {/* @-mention file picker */}
+        {mention && mentionResults.length > 0 && (
+          <div
+            data-mention-popover
+            className="absolute bottom-full left-3 z-30 mb-2 max-h-64 w-96 max-w-[calc(100%-1.5rem)] overflow-y-auto rounded-xl border border-border bg-popover p-1 shadow-xl"
           >
-            <Paperclip />
-          </Button>
-        </WithTooltip>
-        {/* Model owns its related inference controls; permissions remains a
-            separate safety decision. This keeps the footer compact. */}
-        <div className="flex min-w-0 flex-1 items-center gap-1">
-          <ModelSettingsPicker
-            model={selectedModel}
-            onModelChange={handleModelChange}
-            models={modelOptions}
-            effort={effortValue}
-            onEffortChange={onEffortChange}
-            efforts={effortOptions}
-            serviceTier={serviceTierValue}
-            onServiceTierChange={onServiceTierChange}
-            serviceTiers={serviceTierOptions}
-            fastNote={fastNote}
-            disabled={locked}
-            open={modelSettingsOpen}
-            onOpenChange={setModelSettingsOpen}
-          />
-          <CompactSelect
-            value={permissionValue}
-            onValueChange={(v) => onPermissionModeChange(v as PermissionModeId)}
-            options={permissionOptions.map((m) => {
-              const appearance = permissionAppearance(m.id, isCodex)
-              return {
-                value: m.id,
-                label: m.label,
-                description: m.description,
-                icon: <appearance.Icon className={cn('size-3.5', appearance.iconClassName)} />
-              }
+            {mentionResults.map((r, i) => {
+              const name = r.rel.split('/').pop() ?? r.rel
+              const dir = r.rel.slice(0, r.rel.length - name.length).replace(/\/$/, '')
+              return (
+                <button
+                  key={r.path}
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => pickMention(r)}
+                  onMouseEnter={() => setMentionIdx(i)}
+                  className={cn(
+                    'flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors',
+                    i === mentionIdx ? 'bg-accent' : undefined
+                  )}
+                >
+                  <FileIcon path={r.rel} />
+                  <span className="min-w-0 truncate text-xs">
+                    <span className="text-foreground">{name}</span>
+                    {dir && <span className="ml-1.5 text-muted-foreground/70">{dir}</span>}
+                  </span>
+                </button>
+              )
             })}
-            icon={<selectedPermissionAppearance.Icon className="size-3.5" />}
-            className={cn('min-w-0', selectedPermissionAppearance.triggerClassName)}
-            open={permissionOpen}
-            onOpenChange={setPermissionOpen}
-          />
+          </div>
+        )}
+        {attachments.length > 0 && (
+          <div className={cn('flex basis-full flex-wrap items-center gap-2 pt-3', CHAT_BLEED_PAD)}>
+            {attachments.map((att) => (
+              <AttachmentChip
+                key={att.id}
+                att={att}
+                onRemove={() => setAttachments((prev) => prev.filter((a) => a.id !== att.id))}
+              />
+            ))}
+          </div>
+        )}
+        {attachError && (
+          <div className={cn('basis-full pt-2 text-[11px] text-warning', CHAT_BLEED_PAD)}>{attachError}</div>
+        )}
+        <textarea
+          ref={ref}
+          onFocus={engage}
+          onPointerDown={engage}
+          value={text}
+          onChange={(e) => {
+            setText(e.target.value)
+            const caret = e.target.selectionStart ?? e.target.value.length
+            updateMention(e.target.value, caret)
+            updateSlash(e.target.value, caret)
+          }}
+          onSelect={(e) => {
+            const el = e.currentTarget
+            const caret = el.selectionStart ?? el.value.length
+            updateMention(el.value, caret)
+            updateSlash(el.value, caret)
+          }}
+          onBlur={() =>
+            setTimeout(() => {
+              setMention(null)
+              setSlashQuery(null)
+            }, 200)
+          }
+          onKeyDown={(e) => {
+            if (slashQuery !== null && slashResults.length > 0) {
+              if (e.key === 'ArrowDown') {
+                e.preventDefault()
+                setSlashIdx((i) => (i + 1) % slashResults.length)
+                return
+              }
+              if (e.key === 'ArrowUp') {
+                e.preventDefault()
+                setSlashIdx((i) => (i - 1 + slashResults.length) % slashResults.length)
+                return
+              }
+              if (e.key === 'Enter' || e.key === 'Tab') {
+                e.preventDefault()
+                // slashIdx can lag behind a shrunk result list (commands load
+                // async while the menu is open) — clamp to a real entry.
+                pickSlash(slashResults[slashIdx] ?? slashResults[0])
+                return
+              }
+              if (e.key === 'Escape') {
+                e.preventDefault()
+                setSlashQuery(null)
+                return
+              }
+            }
+            if (mention && mentionResults.length > 0) {
+              if (e.key === 'ArrowDown') {
+                e.preventDefault()
+                setMentionIdx((i) => (i + 1) % mentionResults.length)
+                return
+              }
+              if (e.key === 'ArrowUp') {
+                e.preventDefault()
+                setMentionIdx((i) => (i - 1 + mentionResults.length) % mentionResults.length)
+                return
+              }
+              if (e.key === 'Enter' || e.key === 'Tab') {
+                e.preventDefault()
+                pickMention(mentionResults[mentionIdx])
+                return
+              }
+              if (e.key === 'Escape') {
+                e.preventDefault()
+                setMention(null)
+                return
+              }
+            }
+            if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+              e.preventDefault()
+              submit()
+            }
+          }}
+          // Named, because "the composer's input" stopped being answerable by
+          // `closest('[data-composer]')` the moment the review picker moved
+          // inside this box: its custom-instructions textarea is in there too,
+          // and `keyMayAnswer` would have read an empty one as an empty message
+          // and let Enter allow the permission underneath it.
+          data-composer-input
+          onPaste={(e) => {
+            if (e.clipboardData.files.length > 0) {
+              e.preventDefault()
+              void addFiles(e.clipboardData.files)
+            }
+          }}
+          placeholder={
+            switchingNote ?? (streaming ? 'Queue a message for when this turn ends…' : placeholder)
+          }
+          disabled={locked}
+          rows={1}
+          className={cn(
+            // The horizontal padding is the composer's bleed, so the placeholder
+            // and the prompt land on the same column as every assistant
+            // paragraph. Anything else here and the text misses it.
+            CHAT_BLEED_PAD,
+            'no-drag block max-h-[220px] w-full resize-none bg-transparent text-[14px] leading-relaxed outline-none select-text placeholder:text-muted-foreground/60',
+            // Folded, the placeholder stays on one line: a column-width input
+            // wrapped "Queue a message for when this turn ends…" onto a second.
+            collapsed
+              ? 'min-w-0 flex-1 basis-0 overflow-hidden py-3 whitespace-nowrap placeholder:text-ellipsis'
+              : 'basis-full pt-3.5 pb-1'
+          )}
+        />
+        {/* One toolbar in both shapes, so nothing remounts when the composer
+            folds: open, a row of its own under the input; folded, sized to its
+            content at the end of the input's line. */}
+        <div
+          ref={barRef}
+          data-composer-bar
+          className={cn(
+            'flex items-center gap-1',
+            collapsed ? 'flex-none pr-2' : 'basis-full px-2.5 pb-2.5'
+          )}
+        >
+          {attachButton}
+          <div className={cn('flex min-w-0 items-center gap-1', collapsed ? 'flex-none' : 'flex-1')}>
+            {pickers}
+          </div>
+          <SessionPanel chatId={chatId ?? null} />
+          {contextRing}
+          {sendButton}
         </div>
-        <SessionPanel />
-        {contextTokens != null && contextTokens > 0 && (
-          <ContextRing
-            used={contextTokens}
-            window={contextWindow ?? 200_000}
-            provider={provider}
-            chatId={chatId}
-          />
-        )}
-        {streaming && onStop ? (
-          <WithTooltip label="Stop generating">
-            <Button
-              size="icon"
-              variant="destructive"
-              onClick={onStop}
-              className="shrink-0 rounded-full [&_svg]:size-3"
-              aria-label="Stop generating"
-            >
-              <Square className="fill-current" />
-            </Button>
-          </WithTooltip>
-        ) : (
-          <Button
-            size="icon"
-            onClick={submit}
-            disabled={!canSend}
-            className="shrink-0 rounded-full"
-            aria-label="Send message"
-          >
-            <ArrowUp className="size-4" strokeWidth={2.5} />
-          </Button>
-        )}
       </div>
     </div>
   )

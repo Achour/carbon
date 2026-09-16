@@ -61,10 +61,13 @@ function FileRow({
 export const TurnChangesCard = React.memo(function TurnChangesCard({
   message,
   cwd,
+  chatId,
   userMessageId
 }: {
   message: AssistantMessage
   cwd: string
+  /** The chat whose checkpoint an undo rewinds to — not necessarily the thread's first. */
+  chatId: string
   userMessageId: string
 }): React.JSX.Element | null {
   const git = useApp((state) => state.git)
@@ -93,7 +96,7 @@ export const TurnChangesCard = React.memo(function TurnChangesCard({
     }
     let alive = true
     setBusy(true)
-    void rewindFiles(userMessageId, true).then((result) => {
+    void rewindFiles(chatId, userMessageId, true).then((result) => {
       if (alive) {
         setPreview(result)
         setBusy(false)
@@ -102,7 +105,7 @@ export const TurnChangesCard = React.memo(function TurnChangesCard({
     return () => {
       alive = false
     }
-  }, [undoOpen, rewindFiles, userMessageId])
+  }, [undoOpen, rewindFiles, chatId, userMessageId])
 
   // A row opens that file's diff while the change is still in the working tree;
   // once it is committed (or the card is scrolled back to from an older turn)
@@ -123,7 +126,7 @@ export const TurnChangesCard = React.memo(function TurnChangesCard({
 
   const applyUndo = async (): Promise<void> => {
     setBusy(true)
-    const result = await rewindFiles(userMessageId, false)
+    const result = await rewindFiles(chatId, userMessageId, false)
     setBusy(false)
     setPreview(result)
     if (result.canRewind) {

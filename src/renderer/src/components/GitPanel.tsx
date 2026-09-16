@@ -26,8 +26,8 @@ import { cn } from '@/lib/utils'
 import { handleTreeKeyDown } from '@/lib/treeKeyNav'
 import { resolveGitActions, type GitActionId } from '@/lib/gitActions'
 import { GIT_STATUS_COLOR } from '@/lib/gitStatusColor'
-import { useStableChanges } from '@/lib/useStableChanges'
-import { scopedChanges, useApp } from '@/store'
+import { useScopedChanges } from '@/lib/useScopedChanges'
+import { useApp } from '@/store'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -495,15 +495,7 @@ export function GitPanel(): React.JSX.Element {
   // panel's header; here we just read it to scope the change tree + commit.
   const changeScope = useApp((s) => s.changeScope)
   const branchChanges = useApp((s) => s.branchChanges)
-  const activeId = useApp((s) => s.activeId)
-  const chats = useApp((s) => s.chats)
-  const messages = useApp((s) => s.messages)
-
-  const rawChanges = React.useMemo(
-    () => scopedChanges({ changeScope, git, branchChanges, activeId, chats, messages }, cwd ?? ''),
-    [changeScope, git, branchChanges, activeId, chats, messages, cwd]
-  )
-  const changes = useStableChanges(rawChanges)
+  const changes = useScopedChanges(cwd ?? '')
 
   React.useEffect(() => {
     if (cwd) {

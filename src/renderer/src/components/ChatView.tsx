@@ -2,61 +2,31 @@ import * as React from 'react'
 import { flushSync } from 'react-dom'
 import {
   ArrowDown,
-  ArrowLeftRight,
   ArrowUp,
   Clock,
   FileDiff,
   Folder,
   GitBranch,
-  GitMerge,
-  MessageSquare,
-  MoreHorizontal,
-  PanelLeft,
-  PanelRight,
-  Pencil,
-  RefreshCw,
-  Trash,
-  Trash2,
+  MessageSquarePlus,
   X
 } from 'lucide-react'
 import type { AssistantMessage, ChatMessage, ChatMeta, ToolPart } from '@shared/types'
 import { PROVIDER_SHORT_LABELS, projectRoot } from '@shared/types'
 import { CHAT_BLEED } from '@/lib/chatColumn'
-import { cn } from '@/lib/utils'
 import { basename } from '@/lib/format'
-import { useApp } from '@/store'
+import { messagesOf, severalChatsShown, useApp } from '@/store'
 import { useTaskList } from '@/taskListStore'
 import { useAgents } from '@/agentsStore'
 import { foldAgentRuns, reconcileAgentRuns, type AgentRunView } from '@shared/agentRuns'
 import { foldTaskTimeline, NO_TASK_TIMELINE, reconcileTimeline } from '@/lib/taskList'
 import type { TaskItem, TaskTimeline } from '@/lib/taskList'
 import { Button } from '@/components/ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogTitle
-} from '@/components/ui/dialog'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger
-} from '@/components/ui/dropdown-menu'
-import { Input } from '@/components/ui/input'
-import { WithTooltip } from '@/components/ui/tooltip'
 import { Composer } from '@/components/Composer'
 import { CodexReviewMenu } from '@/components/CodexReviewDialog'
 import { ContextStrip } from '@/components/ContextStrip'
 import { AgentActivityBar } from '@/components/AgentsPanel'
 import { TaskDock } from '@/components/TaskDock'
 import { CodexGoalBar } from '@/components/CodexGoalBar'
-import {
-  MergeIntoMainDialog,
-  WorktreeFinishDialog,
-  WorktreeHandoffDialog
-} from '@/components/BranchActions'
 import {
   AssistantBlock,
   EventRow,
@@ -72,7 +42,6 @@ import {
   ToolOutputImages
 } from '@/components/messages/ToolCard'
 import { PromptDock } from '@/components/PromptDock'
-import { BackgroundJobs } from '@/components/BackgroundJobs'
 import { TasksCard } from '@/components/messages/TasksCard'
 import { TurnChangesCard } from '@/components/messages/TurnChangesCard'
 import { TurnHeader } from '@/components/messages/TurnHeader'
@@ -81,7 +50,6 @@ import { foldTurns, type TurnFold } from '@/lib/turnFold'
 
 const NO_PERMISSIONS: never[] = []
 const NO_QUEUED: never[] = []
-const NO_MESSAGES: ChatMessage[] = []
 
 /** Coalesce a run of this many consecutive read/search-only messages into one row. */
 const GROUP_MIN = 2
@@ -135,6 +103,8 @@ function isBlankMsg(m: ChatMessage): boolean {
 }
 
 interface RenderCtx {
+  /** The chat being drawn. Edits and undos act on it, so it is part of the cache key. */
+  chatId: string
   cwd: string
   busy: boolean
   onOpenPlan?: (plan: string) => void
@@ -321,6 +291,7 @@ function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
           <TurnChangesCard
             message={turn.summary}
             cwd={ctx.cwd}
+            chatId={ctx.chatId}
             userMessageId={turn.userMessageId}
           />
         )}
@@ -381,6 +352,7 @@ function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
             key={`changes-${last.id}`}
             message={lastTurn.summary}
             cwd={ctx.cwd}
+            chatId={ctx.chatId}
             userMessageId={lastTurn.userMessageId}
           />
         )
@@ -402,7 +374,7 @@ function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
     }
     flush()
     if (m.role === 'user') {
-      out.push(<UserBubble key={m.id} message={m} />)
+      out.push(<UserBubble key={m.id} message={m} chatId={ctx.chatId} />)
       // The turn's header, as a keyed sibling of everything below it. It is
       // pushed on the prompt rather than on the first reply so it is there the
       // moment the message is sent — the send's own acknowledgement, before
@@ -528,6 +500,7 @@ function sameHistory(
 ): boolean {
   if (
     prev.end !== end ||
+    prev.ctx.chatId !== ctx.chatId ||
     prev.ctx.cwd !== ctx.cwd ||
     // `busy` is what flips the last turn from live to settled: its header stops
     // ticking and the turn folds. Left out here, the cached nodes would survive
@@ -556,21 +529,22 @@ const ChatTerminal = React.lazy(() =>
   import('@/components/TerminalPanel').then((m) => ({ default: m.ChatTerminal }))
 )
 
-export function ChatView({
+/**
+ * One chat's transcript and composer — a column of a thread. The thread's
+ * header, its ⋯ menu and their dialogs belong to `ThreadView`, which draws one
+ * of these per chat.
+ */
+export const ChatView = React.memo(function ChatView({
   chat,
   side = false
 }: {
   chat: ChatMeta
   /**
-   * Draw the compact **side chat** variant, hosted in a right-panel tab.
-   *
-   * One component rather than two, because everything below the header — the
-   * transcript, the run grouping, the permission cards, the composer stack — is
-   * the same conversation, and two implementations of it would drift. What the
-   * flag turns off is the chrome belonging to the *main column* (its header and
-   * its dialogs, every one of which acts on a chat the sidebar can show) and
-   * the two publishes into app-wide singleton stores, which the second
-   * transcript on screen must not make.
+   * A **side chat** — any column but the thread's first. Its transcript lives
+   * in a keyed slot rather than the store's bare fields, it never draws as a
+   * terminal (only a chat the sidebar can show is one), and it leaves the
+   * project strip to the first column, which already names the folder and
+   * branch every column shares.
    */
   side?: boolean
 }): React.JSX.Element {
@@ -580,15 +554,26 @@ export function ChatView({
   // never one: the flag is only ever set on a chat the sidebar can show.
   const terminalSurface = chat.surface === 'terminal' && !side
 
-  // A side chat's transcript is a keyed slot; the main column's is the store's
-  // singular slice. Everything else about a chat is already keyed by id.
-  const messages = useApp((s) =>
-    side ? (s.sideChats[chat.id]?.messages ?? NO_MESSAGES) : s.messages
-  )
+  // Read by id: the thread's first chat keeps the store's singular slice, every
+  // other column a keyed slot (`messagesOf`). Everything else about a chat is
+  // already keyed by id.
+  const messages = useApp((s) => messagesOf(s, chat.id))
   const hiddenBefore = useApp((s) =>
-    side ? (s.sideChats[chat.id]?.hiddenBefore ?? 0) : s.hiddenBefore
+    chat.id === s.activeId ? s.hiddenBefore : (s.sideChats[chat.id]?.hiddenBefore ?? 0)
   )
-  const loadingOlder = useApp((s) => (side ? !!s.sideChats[chat.id]?.loadingOlder : s.loadingOlder))
+  // With several chats on screen, a composer nobody is writing in folds to its
+  // input line — see `Composer`'s `collapsible`.
+  const collapsible = useApp(severalChatsShown)
+  // The folder, branch and changes chips describe the thread, which every
+  // column shares. With several chats on screen the thread header carries them
+  // once; otherwise they sit above the one conversation showing — the thread's
+  // own chat, or whichever column is expanded.
+  const stripHere = useApp(
+    (s) => !severalChatsShown(s) && (s.expandedChatId ?? s.activeId) === chat.id
+  )
+  const loadingOlder = useApp((s) =>
+    chat.id === s.activeId ? s.loadingOlder : !!s.sideChats[chat.id]?.loadingOlder
+  )
   const loadOlderMessages = useApp((s) => s.loadOlderMessages)
   const status = useApp((s) => s.statuses[chat.id] ?? 'idle')
   // Fall back to a stable constant — a fresh `[]` per render makes zustand's
@@ -601,20 +586,12 @@ export function ChatView({
   const git = useApp((s) => s.git)
   const commands = useApp((s) => s.commands)
   const openPlanPanel = useApp((s) => s.openPlanPanel)
-  const togglePanel = useApp((s) => s.togglePanel)
   const reviewChanges = useApp((s) => s.reviewChanges)
   const runGitAction = useApp((s) => s.runGitAction)
   const worktreeNotice = useApp((s) =>
     s.worktreeNotice?.chatId === chat.id ? s.worktreeNotice.kind : null
   )
   const dismissWorktreeNotice = useApp((s) => s.dismissWorktreeNotice)
-  const panelOpen = useApp((s) => s.panelOpen)
-  const terminalBusy = useApp((s) => s.terminalBusy)
-  const busyTerminals = Object.values(terminalBusy)
-  const busyLabel =
-    busyTerminals.length === 1 ? busyTerminals[0] : `${busyTerminals.length} processes`
-  const sidebarOpen = useApp((s) => s.sidebarOpen)
-  const toggleSidebar = useApp((s) => s.toggleSidebar)
   const sendMessage = useApp((s) => s.sendMessage)
   const startCodexReview = useApp((s) => s.startCodexReview)
   const interrupt = useApp((s) => s.interrupt)
@@ -632,8 +609,6 @@ export function ChatView({
   // stays on the current backend.
   const composerProvider =
     chat.pendingModel !== undefined ? (chat.pendingProvider ?? chat.provider) : chat.provider
-  const renameChat = useApp((s) => s.renameChat)
-  const deleteChat = useApp((s) => s.deleteChat)
   // Which settled turns are showing their work. A gesture, not a stream: this
   // changes on a click and nowhere else, so subscribing the transcript to it
   // costs nothing between clicks — and it has to be read here rather than in
@@ -653,22 +628,9 @@ export function ChatView({
    */
   const bottomAnchor = React.useRef<number | null>(null)
   const [showJump, setShowJump] = React.useState(false)
-  const [renameOpen, setRenameOpen] = React.useState(false)
-  const [deleteOpen, setDeleteOpen] = React.useState(false)
-  const [renameValue, setRenameValue] = React.useState('')
-  const [handoffOpen, setHandoffOpen] = React.useState(false)
-  const [mergeOpen, setMergeOpen] = React.useState(false)
-  const [finishOpen, setFinishOpen] = React.useState(false)
   const [reviewOpen, setReviewOpen] = React.useState(false)
 
   const busy = status !== 'idle'
-
-  // Merging is only ever offered off the default branch — on it there is
-  // nothing to land, and the ladder's job there is to branch off instead.
-  // `git.defaultBranch` is the same field the ↓n chip and the merge dialog
-  // read, so the label always names the branch the operation actually targets.
-  const defaultBranch = git?.defaultBranch ?? 'main'
-  const canMerge = !!git?.defaultBranch && git.branch !== git.defaultBranch
 
   const scrollToBottom = React.useCallback((smooth = false): void => {
     const el = scrollRef.current
@@ -902,41 +864,26 @@ export function ChatView({
     return next
   }, [messages])
   const setAgentRuns = useAgents((s) => s.setRuns)
+  const clearAgentRuns = useAgents((s) => s.clearRuns)
   React.useEffect(() => {
-    // **The side variant publishes nothing here or below.** `agentsStore` is a
-    // pure singleton — it holds one chat's runs, with no chat id to check — and
-    // `taskListStore` is a singleton with a stamp. With two transcripts mounted,
-    // whichever folded last would win: the Agents tab would flip between the two
-    // chats' rosters as either streamed, and the dock would blank each time the
-    // other published. The main column owns both surfaces, which is also the
-    // honest answer — the dock sits on *its* composer, the roster tab beside it.
-    if (side) return
-    setAgentRuns(agentRuns)
-  }, [side, agentRuns, setAgentRuns])
-  // Clear on unmount, in an effect of its own so it fires *only* then: folded
-  // into the publish above it would empty the store between every two updates
-  // and flicker the tab out of the strip on each one. The store outlives this
-  // component, and the panel is the active chat's — without this, leaving a
-  // chat for the home screen leaves the dead chat's roster on screen, since
-  // nothing else ever publishes an empty list. `ChatView` is keyed by chat id,
-  // so React runs this cleanup before the next chat's publish.
-  // Guarded for the same reason, and more sharply: unguarded, *closing a side
-  // chat* would clear the main chat's roster and take the Agents tab out of the
-  // strip while its agents were still running.
-  React.useEffect(() => {
-    if (side) return
-    return () => setAgentRuns([])
-  }, [side, setAgentRuns])
+    setAgentRuns(chat.id, agentRuns)
+  }, [chat.id, agentRuns, setAgentRuns])
+  // Cleared on unmount, in an effect of its own so it fires *only* then: folded
+  // into the publish above it would empty the entry between every two updates
+  // and flicker the Agents tab out of the strip on each one. The store outlives
+  // this component — without this, leaving a thread, or closing a column, would
+  // leave that chat's roster standing in the panel.
+  React.useEffect(() => () => clearAgentRuns(chat.id), [chat.id, clearAgentRuns])
 
   // Published to its own store so the dock — and only the dock — re-renders
   // when a task moves; see `taskListStore`. Kept out of the history render path,
-  // and stamped with the chat it belongs to, because one box now serves every
-  // chat and this effect runs a frame after the switch.
+  // and keyed by chat, because every column of a thread has its own dock.
   const setTasks = useTaskList((s) => s.setTasks)
+  const clearTasks = useTaskList((s) => s.clearTasks)
   React.useEffect(() => {
-    if (side) return
     setTasks(chat.id, tasks)
-  }, [side, chat.id, tasks, setTasks])
+  }, [chat.id, tasks, setTasks])
+  React.useEffect(() => () => clearTasks(chat.id), [chat.id, clearTasks])
 
   const openPlan = React.useCallback(
     (plan: string) => {
@@ -1059,6 +1006,7 @@ export function ChatView({
   }, [busy, chat.switchingNote, messages])
   const historyCtx = React.useMemo<RenderCtx>(
     () => ({
+      chatId: chat.id,
       cwd: chat.cwd,
       busy,
       onOpenPlan: openPlan,
@@ -1068,6 +1016,7 @@ export function ChatView({
       onToggleTurn
     }),
     [
+      chat.id,
       chat.cwd,
       busy,
       openPlan,
@@ -1097,116 +1046,13 @@ export function ChatView({
 
   return (
     <div
-      // `data-chatview` is the frosted main column — which a side chat, sitting
-      // inside the right panel, is not. `data-chat-surface` is the neutral
-      // "which chat is this" marker, and it is on both: it is how a permission
-      // keypress finds the transcript it happened in (see `PermissionCard`).
-      {...(side ? {} : { 'data-chatview': true })}
+      // `data-chat-surface` is the "which chat is this" marker: it is how a
+      // permission keypress finds the transcript it happened in (see
+      // `PromptDock`). The frosted wash (`data-chatview`) is the thread's, one
+      // level up, so the columns share one material.
       data-chat-surface={chat.id}
-      className={cn(
-        'relative flex h-full flex-1 flex-col',
-        // The panel sets a side chat's width, and it is routinely narrower than
-        // the main column's floor.
-        side ? 'min-w-0' : 'min-w-[420px]'
-      )}
+      className="relative flex h-full min-w-0 flex-1 flex-col"
     >
-      {/* Header. The side variant has none: its tab is its header, and every
-          item in the ⋯ menu — rename, delete, and the whole worktree lifecycle —
-          acts on a chat the sidebar can show. */}
-      {!side && (
-      <header
-        className={cn(
-          // pr matches the panel header's px-2.5 so the panel toggle sits at the
-          // same inset whether it renders here or over there.
-          'drag flex h-[38px] shrink-0 items-center gap-2 pl-4 pr-2.5',
-          !sidebarOpen && 'pl-[84px]'
-        )}
-      >
-        {!sidebarOpen && (
-          <WithTooltip label="Show sidebar  ⌘B">
-            <Button size="icon-sm" variant="ghost" onClick={toggleSidebar} aria-label="Show sidebar">
-              <PanelLeft />
-            </Button>
-          </WithTooltip>
-        )}
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-[13px] font-semibold">
-            {chat.title || 'New chat'}
-          </div>
-        </div>
-        <BackgroundJobs />
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            render={
-              <Button size="icon-sm" variant="ghost" aria-label="Chat options">
-                <MoreHorizontal />
-              </Button>
-            }
-          />
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem
-              onClick={() => {
-                setRenameValue(chat.title)
-                setRenameOpen(true)
-              }}
-            >
-              <Pencil /> Rename
-            </DropdownMenuItem>
-            {/* How the branch ends: keep it current, land it here, or — in a
-                worktree — move out of it or retire it once the work landed
-                through a PR. Merging rewrites the chat's own directory when
-                there's no worktree, so that one waits for idle. */}
-            {(chat.worktree || canMerge) && <DropdownMenuSeparator />}
-            {canMerge && (
-              <>
-                <DropdownMenuItem onClick={() => void runGitAction('update-from-main')}>
-                  <RefreshCw /> Update from {defaultBranch}
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => setMergeOpen(true)} disabled={busy}>
-                  <GitMerge /> Merge into {defaultBranch}
-                </DropdownMenuItem>
-              </>
-            )}
-            {chat.worktree && (
-              <>
-                <DropdownMenuItem onClick={() => setHandoffOpen(true)}>
-                  <ArrowLeftRight /> Continue in local checkout
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => setFinishOpen(true)}>
-                  <Trash /> Remove worktree
-                </DropdownMenuItem>
-              </>
-            )}
-            <DropdownMenuSeparator />
-            <DropdownMenuItem destructive onClick={() => setDeleteOpen(true)}>
-              <Trash2 /> Delete chat
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-        {/* Last icon, deliberately: when the panel is open its own header hosts
-            the collapse button at the same inset, so open and close are one
-            unmoving target rather than two positions with the ⋯ menu between. */}
-        {!panelOpen && (
-          <WithTooltip label={busyTerminals.length ? `${busyLabel} running` : 'Show files'}>
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              onClick={togglePanel}
-              aria-label="Show file panel"
-              className="relative"
-            >
-              <PanelRight />
-              {/* A dev server left running in a collapsed panel is invisible
-                  otherwise — it only shows up later as memory. */}
-              {busyTerminals.length > 0 && (
-                <span className="absolute top-1 right-1 size-1.5 rounded-full bg-primary" />
-              )}
-            </Button>
-          </WithTooltip>
-        )}
-      </header>
-      )}
-
       {/* userData is shared between the dev and packaged builds on purpose, so
           the same chat can be open twice. The other instance owns the write
           lock; this one still works, it just is not persisting. */}
@@ -1287,26 +1133,17 @@ export function ChatView({
           className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]"
         >
           <div ref={columnRef} className="mx-auto flex max-w-3xl flex-col gap-4 px-6 py-6">
-            {/* A side chat opens on an empty pane, which on its own reads as a
-                conversation that failed to load — the empty-canvas argument.
-                What it has to say has now been wrong twice, in the two ways
-                this feature's lifecycle was: it said "in this project" while
-                the tab is stashed with *one chat*, so a reader would go looking
-                for it beside a sibling chat and find nothing; and it promised
-                the app cleared these at quit, which was true of the code and
-                the wrong design — the ✕ on a tab already kept the conversation,
-                so quitting, the weaker gesture, had no business destroying it.
-                What is left is the one thing a reader cannot infer from an
-                empty pane: where this conversation goes when it leaves the
-                screen. Said here, before the first message, rather than as a
-                banner that would sit over every turn repeating it. */}
+            {/* A new column opens on an empty pane, which on its own reads as a
+                conversation that failed to load. What it has to say is the one
+                thing a reader cannot infer from it: where it runs, and where it
+                goes when its column closes. */}
             {side && messages.length === 0 && hiddenBefore === 0 && (
               <div className="flex flex-col items-center gap-1.5 px-4 py-16 text-center">
-                <MessageSquare className="size-5 text-muted-foreground/70" />
-                <div className="text-[13px] font-medium">Side chat</div>
-                <p className="max-w-[38ch] text-xs text-muted-foreground">
-                  A scratch conversation beside this chat. It stays out of the sidebar, and
-                  closing its tab keeps it — reopen it from ＋.
+                <MessageSquarePlus className="size-5 text-muted-foreground/70" />
+                <div className="text-[13px] font-medium">New chat in this thread</div>
+                <p className="max-w-[38ch] text-xs text-balance text-muted-foreground">
+                  Runs in {basename(chat.cwd)} beside the other chats and shares their panel.
+                  Closing its column keeps it — reopen it from ＋.
                 </p>
               </div>
             )}
@@ -1368,22 +1205,15 @@ export function ChatView({
               like the composer, and they read as one column only while their
               borders share an edge. */}
           <div className={CHAT_BLEED}>
-            {/* Both belong to the main column. `AgentActivityBar` reads the
-                same singleton roster the side variant refuses to publish into,
-                so here it would describe the *other* chat's agents; and the
-                strip names the folder, branch and staleness of a project the
-                main column is already naming one pane over. */}
-            {!side && (
-              <>
-                <AgentActivityBar />
-                <ContextStrip
-                  cwd={chat.cwd}
-                  project={projectRoot(chat)}
-                  git={git}
-                  onReviewChanges={() => void reviewChanges()}
-                  onUpdateFromDefault={() => void runGitAction('update-from-main')}
-                />
-              </>
+            <AgentActivityBar chatId={chat.id} />
+            {stripHere && (
+              <ContextStrip
+                cwd={chat.cwd}
+                project={projectRoot(chat)}
+                git={git}
+                onReviewChanges={() => void reviewChanges()}
+                onUpdateFromDefault={() => void runGitAction('update-from-main')}
+              />
             )}
             {queued.length > 0 && (
               <div className="mb-2 space-y-1.5">
@@ -1431,25 +1261,14 @@ export function ChatView({
               // prompt their movement never pushes the question you have to
               // answer away from the keys that answer it.
               //
-              // The `side` guard covers the two main-column surfaces and
-              // deliberately not the other two. The dock and the goal bar are
-              // structurally dead in a side chat — the side variant publishes
-              // into neither `taskListStore` nor `agentsStore`, so they could
-              // only ever draw nothing, and mounting UI that cannot render is
-              // worse than not offering it. Permissions are the opposite:
-              // `permissions` is keyed by chat id and a side chat raises its
-              // own, so nulling them here would leave its turn blocked on a
-              // question with nowhere on screen to ask it.
+              // Every column carries its own: the goal bar, the checklist and
+              // the prompts are all keyed by chat id.
               header={
                 <>
-                  {!side && (
-                    <>
-                      {chat.provider === 'codex' && (
-                        <CodexGoalBar chatId={chat.id} threadId={chat.sessionId} working={busy} />
-                      )}
-                      <TaskDock chatId={chat.id} />
-                    </>
+                  {chat.provider === 'codex' && (
+                    <CodexGoalBar chatId={chat.id} threadId={chat.sessionId} working={busy} />
                   )}
+                  <TaskDock chatId={chat.id} />
                   <CodexReviewMenu
                     open={reviewOpen}
                     onOpenChange={setReviewOpen}
@@ -1481,6 +1300,13 @@ export function ChatView({
               }}
               draft={initialDraft}
               onDraftChange={(next) => saveChatDraft(chat.id, next)}
+              collapsible={collapsible}
+              // Only the thread's own chat takes the caret on mount. Every
+              // column mounts at once when a thread opens, and each grabbing it
+              // left focus — and with it the thread's focused chat — on the
+              // last column. A column added or jumped to is handed the caret
+              // explicitly (`focusComposer`).
+              autoFocus={!side}
               streaming={busy}
               onStop={() => void interrupt(chat.id)}
               // A cross-provider pick is only armed until the next send; the
@@ -1521,75 +1347,6 @@ export function ChatView({
         </>
       )}
 
-      {/* Rename dialog. All four dialogs below belong to the header's ⋯ menu,
-          which the side variant does not draw — so nothing can open them there,
-          and a side chat is deleted by closing its tab rather than by asking. */}
-      {!side && (
-        <>
-      <Dialog open={renameOpen} onOpenChange={setRenameOpen}>
-        <DialogContent>
-          <DialogTitle>Rename chat</DialogTitle>
-          <form
-            className="mt-3 space-y-3"
-            onSubmit={(e) => {
-              e.preventDefault()
-              if (renameValue.trim()) {
-                void renameChat(chat.id, renameValue.trim())
-                setRenameOpen(false)
-              }
-            }}
-          >
-            <Input
-              value={renameValue}
-              onChange={(e) => setRenameValue(e.target.value)}
-              autoFocus
-              placeholder="Chat title"
-            />
-            <div className="flex justify-end gap-2">
-              <Button variant="ghost" onClick={() => setRenameOpen(false)}>
-                Cancel
-              </Button>
-              <Button type="submit" disabled={!renameValue.trim()}>
-                Rename
-              </Button>
-            </div>
-          </form>
-        </DialogContent>
-      </Dialog>
-
-      {chat.worktree && (
-        <>
-          <WorktreeHandoffDialog chat={chat} open={handoffOpen} onOpenChange={setHandoffOpen} />
-          <WorktreeFinishDialog chat={chat} open={finishOpen} onOpenChange={setFinishOpen} />
-        </>
-      )}
-      {canMerge && <MergeIntoMainDialog chat={chat} open={mergeOpen} onOpenChange={setMergeOpen} />}
-
-      {/* Delete dialog */}
-      <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
-        <DialogContent>
-          <DialogTitle>Delete this chat?</DialogTitle>
-          <DialogDescription>
-            “{chat.title || 'New chat'}” and its history will be removed permanently.
-          </DialogDescription>
-          <div className="mt-4 flex justify-end gap-2">
-            <Button variant="ghost" onClick={() => setDeleteOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={() => {
-                setDeleteOpen(false)
-                void deleteChat(chat.id)
-              }}
-            >
-              Delete
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-        </>
-      )}
     </div>
   )
-}
+})

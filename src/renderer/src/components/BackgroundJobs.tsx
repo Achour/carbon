@@ -65,13 +65,13 @@ function jobLabel(type: string): string {
 }
 
 /**
- * Header pill listing the SDK's live background tasks for the active chat
+ * Header pill listing the SDK's live background tasks for one chat
  * (backgrounded shell commands, sub-agents, monitors, workflows). Hidden when
- * there are none; each job can be stopped from the popover.
+ * there are none; each job can be stopped from the popover. The thread header
+ * passes the focused chat, so the pill always describes the column you are in.
  */
-export function BackgroundJobs(): React.JSX.Element | null {
-  const activeId = useApp((s) => s.activeId)
-  const jobs = useApp((s) => (activeId ? s.backgroundJobs[activeId] : undefined)) ?? EMPTY
+export function BackgroundJobs({ chatId }: { chatId: string }): React.JSX.Element | null {
+  const jobs = useApp((s) => s.backgroundJobs[chatId]) ?? EMPTY
   const stopBackgroundJob = useApp((s) => s.stopBackgroundJob)
   const openAgentsPanel = useApp((s) => s.openAgentsPanel)
   const [open, setOpen] = React.useState(false)
@@ -111,7 +111,7 @@ export function BackgroundJobs(): React.JSX.Element | null {
               setOpen(false)
               // `callId` can be missing for a beat (see BackgroundJob) — the
               // roster is the honest landing place until it arrives.
-              openAgentsPanel(job.callId)
+              openAgentsPanel(job.callId, chatId)
             }
             return (
               <div
@@ -145,7 +145,7 @@ export function BackgroundJobs(): React.JSX.Element | null {
                     size="sm"
                     variant="ghost"
                     className="h-6 shrink-0 px-2 text-[11px] text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:text-destructive"
-                    onClick={() => stopBackgroundJob(job.id)}
+                    onClick={() => stopBackgroundJob(chatId, job.id)}
                   >
                     Stop
                   </Button>

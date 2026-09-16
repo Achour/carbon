@@ -2,7 +2,7 @@ import * as React from 'react'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { Sidebar } from '@/components/Sidebar'
-import { ChatView } from '@/components/ChatView'
+import { ThreadView } from '@/components/ThreadView'
 import { NewChat } from '@/components/NewChat'
 import { RightPanel } from '@/components/RightPanel'
 import { FileSearchDialog } from '@/components/FileSearchDialog'
@@ -213,7 +213,9 @@ export default function App(): React.JSX.Element {
               material unless it asks for it. The chat column asks (index.css
               clears this layer and washes the column instead) — everything
               else here paints its own solid background. */}
-          <div data-content className="flex min-w-0 flex-1 bg-background">
+          {/* `relative` and clipped: a floating panel is positioned against this
+              pane and slides out past its right edge when it closes. */}
+          <div data-content className="relative flex min-w-0 flex-1 overflow-hidden bg-background">
             {settingsOpen ? (
               <Settings />
             ) : usageOpen ? (
@@ -223,7 +225,7 @@ export default function App(): React.JSX.Element {
                 <span className="shimmer-text text-sm font-medium">Loading…</span>
               </div>
             ) : activeChat ? (
-              <ChatView key={activeChat.id} chat={activeChat} />
+              <ThreadView key={activeChat.id} chat={activeChat} />
             ) : (
               <NewChat key={homeCwd ?? ''} />
             )}

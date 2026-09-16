@@ -319,17 +319,17 @@ function keyMayAnswer(target: EventTarget | null): boolean {
  * Which chat's transcript a keypress happened *in*, or null for one that
  * happened nowhere in particular (nothing focused — by far the common case).
  *
- * There are two transcripts on screen once a side chat is open, each with its
- * own oldest pending prompt, so `keyboard` alone stops meaning "this card owns
+ * A thread draws up to four transcripts at once, each with its own oldest
+ * pending prompt, so `keyboard` alone stops meaning "this card owns
  * the keys": both cards would set it and both window listeners would fire on
  * one Enter, answering two prompts the user only meant to answer one of. And
- * `keyMayAnswer` cannot break the tie on its own — it unlocks on *either*
- * composer being empty, so typing in the main column while the side composer
- * sits empty still lets the key through.
+ * `keyMayAnswer` cannot break the tie on its own — it unlocks on *any*
+ * composer being empty, so typing in one column while another's composer sits
+ * empty still lets the key through.
  *
- * `data-chat-surface` rather than `data-chatview`: the latter is the frosted
- * main column, which a side chat inside the right panel is not. The dock lives
- * inside that element too, so a click into the prompt itself resolves here.
+ * `data-chat-surface` rather than `data-chatview`: the latter is the thread's
+ * frosted wash, shared by every column. The dock lives inside the surface too,
+ * so a click into the prompt itself resolves here.
  */
 function focusedChat(target: EventTarget | null): string | null {
   const el = target instanceof HTMLElement ? target : null
@@ -358,7 +358,9 @@ function PermissionPrompt({
   keyboard: boolean
 }): React.JSX.Element {
   const respondPermission = useApp((s) => s.respondPermission)
-  const activeId = useApp((s) => s.activeId)
+  // The chat keys belong to when focus is nowhere in particular: the thread's
+  // focused column, which is its own chat until another column is clicked.
+  const keyChat = useApp((s) => s.focusedChatId)
   const [busy, setBusy] = React.useState(false)
   const summary = summarize(request)
   const authorizationUrl =
@@ -398,11 +400,11 @@ function PermissionPrompt({
       // Escape would both close the picker and deny the prompt under it.
       if (e.defaultPrevented) return
       if (!keyMayAnswer(e.target)) return
-      // The transcript holding focus answers; with focus nowhere, the main
-      // column does. A side chat is never the active chat, so this is also what
-      // stops a background side chat's prompt from swallowing the key.
+      // The transcript holding focus answers; with focus nowhere, the thread's
+      // focused column does. With four columns each nominating its own oldest
+      // prompt, this is what keeps one keypress to one answer.
       const focused = focusedChat(e.target)
-      if (focused ? focused !== chatId : chatId !== activeId) return
+      if (focused ? focused !== chatId : chatId !== keyChat) return
       e.preventDefault()
       void respondRef.current({ behavior: e.key === 'Enter' ? 'allow' : 'deny' })
     }
@@ -410,7 +412,7 @@ function PermissionPrompt({
     return () => window.removeEventListener('keydown', onKey)
     // `busy` is a dep so a card that has answered stops listening at once,
     // rather than on unmount.
-  }, [keyboard, busy, chatId, activeId])
+  }, [keyboard, busy, chatId, keyChat])
 
   return (
     <PromptFrame

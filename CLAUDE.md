@@ -331,9 +331,10 @@ it guards**, and put new reasoning in that file rather than back in this one.
   `TerminalPanel.tsx`, `persist`/`attach`/`detach` in `main/terminal.ts`), and
   `main/parentEnv.ts` — why every spawn gets the environment a Dock launch
   would have had.
-- **`docs/side-chats.md`** — a second conversation in a panel tab
-  (`ChatMeta.ephemeral`, `ChatMeta.sideOf`, `SideChatSlot`, `openSideChat`,
-  `sideChats` in the renderer store).
+- **`docs/threads.md`** — a chat as a thread of up to four columns sharing one
+  right panel, floating over them while several show (`ThreadView`, `ChatMeta.sideOf`, `SideChatSlot`,
+  `sideColumns`, `focusedChatId`, `panelFloating`, the per-chat `agentsStore` /
+  `taskListStore`).
 - **`docs/drafts.md`** — text typed and not sent (`lib/drafts.ts`, `DraftItem`,
   `NewChat`).
 - **`docs/image-viewer.md`** — the lightbox (`ImageView.tsx`,

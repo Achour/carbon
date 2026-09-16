@@ -7,6 +7,7 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  Columns2,
   EyeOff,
   Folder,
   FolderOpen,
@@ -35,7 +36,7 @@ import { basename, dateGroup, relativeTime, shortenPath } from '@/lib/format'
 import { REVEAL_LABEL } from '@/lib/platform'
 import { chatActivity, projectActivity, type ChatActivity } from '@/lib/chatActivity'
 import { draftSummary, sortedProjectDrafts, type ProjectDraft } from '@/lib/drafts'
-import { useApp, visibleChats } from '@/store'
+import { columnsOf, useApp, visibleChats } from '@/store'
 import { UpdateBanner } from '@/components/UpdateBanner'
 import { UsagePanel } from '@/components/UsagePanel'
 import { Button } from '@/components/ui/button'
@@ -204,6 +205,7 @@ function ChatItemRow({
   active,
   activity,
   titling,
+  threadCount,
   detail,
   projectMenu,
   actions
@@ -212,8 +214,11 @@ function ChatItemRow({
   /** Minute-aligned clock supplied by the sidebar so relative labels advance. */
   now: number
   active: boolean
+  /** Across every open column of this chat's thread — see `ThreadView`. */
   activity: ChatActivity
   titling: boolean
+  /** Chats open in this row's thread; 1 is a plain chat and draws nothing. */
+  threadCount: number
   /** Second line for a detailed row; null renders the compact single-line row. */
   detail: ChatDetail | null
   /**
@@ -315,6 +320,7 @@ function ChatItemRow({
           <span className="flex min-w-0 flex-1 flex-col gap-px">
             <span className="flex min-w-0 items-center gap-1.5">
               <span className={titleClass}>{chat.title || 'New chat'}</span>
+              <ThreadMark count={threadCount} active={active} />
               {/* Beside the title only once the avatar shows a provider — before
                   that the avatar is already the terminal glyph. */}
               {chat.surface === 'terminal' && chat.sessionId && <TerminalMark active={active} />}
@@ -356,6 +362,7 @@ function ChatItemRow({
           )}
           {chat.surface === 'terminal' && <TerminalMark active={active} />}
           <span className={titleClass}>{chat.title || 'New chat'}</span>
+          <ThreadMark count={threadCount} active={active} />
           {trailing}
         </button>
       )}
@@ -455,6 +462,7 @@ const ChatItem = React.memo(
     prev.chat === next.chat &&
     prev.active === next.active &&
     prev.titling === next.titling &&
+    prev.threadCount === next.threadCount &&
     prev.actions === next.actions &&
     sameActivity(prev.activity, next.activity) &&
     (prev.activity.kind !== 'idle' ||
@@ -784,6 +792,28 @@ function NewChatDialog({
   )
 }
 
+/**
+ * How many chats the row's thread has open. The row is the thread, so without
+ * this a chat with four columns reads the same as one with none — and the
+ * activity beside it, which covers all of them, would look misattributed.
+ */
+function ThreadMark({ count, active }: { count: number; active: boolean }): React.JSX.Element | null {
+  if (count < 2) return null
+  return (
+    <WithTooltip label={`${count} chats in this thread`} side="right">
+      <span
+        className={cn(
+          'flex shrink-0 items-center gap-0.5 text-[11px] tabular-nums transition-colors',
+          active ? 'text-sidebar-foreground/70' : 'text-sidebar-foreground/40'
+        )}
+      >
+        <Columns2 className="size-3" />
+        {count}
+      </span>
+    </WithTooltip>
+  )
+}
+
 function ActivityIndicator({ activity }: { activity: ChatActivity }): React.JSX.Element | null {
   if (activity.kind === 'idle') return null
 
@@ -919,6 +949,8 @@ export function Sidebar(): React.JSX.Element {
   const chats = React.useMemo(() => visibleChats(allChats), [allChats])
   const activeId = useApp((s) => s.activeId)
   const statuses = useApp((s) => s.statuses)
+  const sideColumns = useApp((s) => s.sideColumns)
+  const sideColumnsByChat = useApp((s) => s.sideColumnsByChat)
   const permissions = useApp((s) => s.permissions)
   const backgroundJobs = useApp((s) => s.backgroundJobs)
   const titling = useApp((s) => s.titling)
@@ -1310,14 +1342,25 @@ export function Sidebar(): React.JSX.Element {
   // Pinned section — so both sites render through here.
   const renderChatItem = (chat: ChatMeta): React.JSX.Element => {
     const root = projectRoot(chat)
+    // The row stands for its whole thread: what any of its open columns is
+    // doing shows here, the way a collapsed project row sums its chats.
+    const columns = columnsOf({ activeId, sideColumns, sideColumnsByChat }, chat.id)
+    const own = chatActivity(statuses[chat.id], backgroundJobs[chat.id], permissions[chat.id])
+    const activity = columns.length
+      ? projectActivity([
+          own,
+          ...columns.map((id) => chatActivity(statuses[id], backgroundJobs[id], permissions[id]))
+        ])
+      : own
     return (
       <ChatItem
         key={chat.id}
         chat={chat}
         now={now}
         active={chat.id === activeId}
-        activity={chatActivity(statuses[chat.id], backgroundJobs[chat.id], permissions[chat.id])}
+        activity={activity}
         titling={!!titling[chat.id]}
+        threadCount={1 + columns.length}
         detail={detailed ? chatDetail(chat, !filterProject) : null}
         // Whenever no project row is on screen to carry the project's actions —
         // always in detailed, and in compact once a filter has collapsed the

@@ -115,12 +115,12 @@ function notifyOnStatus(chatId: string, status: string): void {
   const prev = lastStatus.get(chatId)
   lastStatus.set(chatId, status)
   if (!win || win.isFocused() || !Notification.isSupported()) return
-  // A side chat is never notified about. The notification is titled with the
-  // chat's title — which an ephemeral chat deliberately never generates, so it
-  // would read "Carbon" — and clicking it sends `ui:open-chat`, which the
-  // sidebar cannot honour for a chat that is not in its list. A notification
+  // A chat of a thread's column is notified about like any other: clicking
+  // sends `ui:open-chat`, and the renderer opens the thread with that column in
+  // front. An ephemeral chat with no thread to open is not — a notification
   // whose only action does nothing is worse than no notification.
-  if (store.getMeta(chatId)?.ephemeral) return
+  const notifyMeta = store.getMeta(chatId)
+  if (notifyMeta?.ephemeral && !notifyMeta.sideOf) return
   const body =
     prev && prev !== 'idle' && status === 'idle'
       ? 'Finished responding'

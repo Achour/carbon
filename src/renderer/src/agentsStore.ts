@@ -1,8 +1,9 @@
 import { create } from 'zustand'
 import { agentTotals, type AgentRunView, type AgentTotals } from '@shared/agentRuns'
+import { omit } from '@/lib/utils'
 
 /**
- * The active chat's sub-agent runs, kept deliberately OUTSIDE the message-history
+ * Sub-agent runs of the chats on screen, kept deliberately OUTSIDE the message-history
  * render path — the same arrangement, for the same reason, as `taskListStore`.
  *
  * Agent vitals churn harder than anything else in a turn: a token total lands
@@ -12,13 +13,28 @@ import { agentTotals, type AgentRunView, type AgentTotals } from '@shared/agentR
  * rather than being threaded through props across the cached history nodes,
  * where it would re-render every row in the conversation on each tick.
  *
- * It holds one chat's runs (the active one), because that is the only chat whose
- * messages the renderer has. Switching chats republishes.
+ * It holds the runs of every chat on screen, keyed by chat id. A thread draws
+ * up to four transcripts side by side, each with its own activity bar, so a
+ * single slot would have the bars trade rosters as each column streamed — the
+ * reason the side variant used to publish nothing at all. Each `ChatView`
+ * publishes its own entry and removes it on unmount.
  */
-interface AgentsStore {
+interface ChatAgents {
   runs: AgentRunView[]
   totals: AgentTotals
-  setRuns: (runs: AgentRunView[]) => void
+}
+
+interface AgentsStore {
+  byChat: Record<string, ChatAgents>
+  setRuns: (chatId: string, runs: AgentRunView[]) => void
+  clearRuns: (chatId: string) => void
+  /**
+   * The chat whose roster the panel is showing. A thread has one panel and up
+   * to four rosters, so the panel has to be told which one — set by whatever
+   * opened it (a card, an activity bar, a background job), and resolved against
+   * the focused chat when it names nothing with runs (`rosterChat`).
+   */
+  chatId: string | null
   /**
    * The run the panel is reading, or null for the roster.
    *
@@ -35,22 +51,61 @@ interface AgentsStore {
    * the panel falls back to the roster.
    */
   selectedId: string | null
-  selectAgent: (id: string | null) => void
+  /** Point the panel at `chatId`'s roster, reading `id`'s stream when one is named. */
+  selectAgent: (id: string | null, chatId?: string | null) => void
 }
 
 const EMPTY_TOTALS: AgentTotals = { running: 0, total: 0, tokens: 0 }
+export const NO_AGENTS: ChatAgents = { runs: [], totals: EMPTY_TOTALS }
+
+/**
+ * The chat the Agents panel shows: the one it was pointed at while that chat
+ * still has runs, else the focused chat, else the first chat on screen that has
+ * any. Returns a primitive, so it is safe as a selector.
+ */
+export function rosterChat(s: Pick<AgentsStore, 'byChat' | 'chatId'>, focused: string | null): string | null {
+  const has = (id: string | null): id is string => !!id && (s.byChat[id]?.runs.length ?? 0) > 0
+  if (has(s.chatId)) return s.chatId
+  if (has(focused)) return focused
+  for (const id of Object.keys(s.byChat)) if (has(id)) return id
+  return s.chatId ?? focused
+}
+
+/** Some chat on screen has spawned an agent — the Agents tab exists. */
+export function anyRuns(s: Pick<AgentsStore, 'byChat'>): boolean {
+  for (const id in s.byChat) if (s.byChat[id].runs.length > 0) return true
+  return false
+}
+
+/** Some chat on screen has an agent working. */
+export function anyRunning(s: Pick<AgentsStore, 'byChat'>): boolean {
+  for (const id in s.byChat) if (s.byChat[id].totals.running > 0) return true
+  return false
+}
+
+/** The chat whose runs include `runId`, if any chat on screen has it. */
+export function chatOfRun(s: Pick<AgentsStore, 'byChat'>, runId: string): string | null {
+  for (const [id, entry] of Object.entries(s.byChat)) {
+    if (entry.runs.some((r) => r.id === runId)) return id
+  }
+  return null
+}
 
 export const useAgents = create<AgentsStore>((set) => ({
-  runs: [],
-  totals: EMPTY_TOTALS,
-  // A chat with no agents publishes the same empty array on every message, so
-  // the no-op guard is the common case rather than an optimization for a rare
-  // one: without it every streamed token would notify the panel's subscribers.
-  setRuns: (runs) =>
+  byChat: {},
+  setRuns: (chatId, runs) =>
     set((s) => {
-      if (s.runs === runs || (s.runs.length === 0 && runs.length === 0)) return s
-      return { runs, totals: agentTotals(runs) }
+      const prev = s.byChat[chatId]
+      if (prev?.runs === runs) return s
+      if (runs.length === 0 && (!prev || prev.runs.length === 0)) return s
+      return { byChat: { ...s.byChat, [chatId]: { runs, totals: agentTotals(runs) } } }
     }),
+  clearRuns: (chatId) => set((s) => (chatId in s.byChat ? { byChat: omit(s.byChat, [chatId]) } : s)),
+  chatId: null,
   selectedId: null,
-  selectAgent: (id) => set((s) => (s.selectedId === id ? s : { selectedId: id }))
+  selectAgent: (id, chatId) =>
+    set((s) => {
+      const nextChat = chatId === undefined ? s.chatId : chatId
+      return s.selectedId === id && s.chatId === nextChat ? s : { selectedId: id, chatId: nextChat }
+    })
 }))

@@ -19,6 +19,7 @@ export function ContextStrip({
   project,
   onReviewChanges,
   onUpdateFromDefault,
+  className,
   children
 }: {
   cwd: string
@@ -43,6 +44,8 @@ export function ContextStrip({
    * it in, which is what turns the staleness marker from a label into a fix.
    */
   onUpdateFromDefault?: () => void
+  /** Replaces the spacing below it — the thread header draws it inline. */
+  className?: string
   children?: React.ReactNode
 }): React.JSX.Element {
   // Said out loud because every other symptom is a lie: git answers a missing
@@ -56,7 +59,7 @@ export function ContextStrip({
   const behind = branch === undefined ? (git?.behindDefault ?? 0) : 0
   const base = git?.defaultBranch ?? 'main'
   return (
-    <div data-context-strip className="mb-2 flex items-center gap-2">
+    <div data-context-strip className={cn('mb-2 flex items-center gap-2', className)}>
       <WithTooltip label={missing ? `${cwd} — ${MISSING_TITLE.toLowerCase()}` : cwd}>
         <div className={contextPill}>
           <Folder className={cn('size-3 shrink-0', missing && 'text-muted-foreground/50')} />

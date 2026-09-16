@@ -21,7 +21,7 @@ import type {
 import { PROVIDER_LABELS, PROVIDER_SHORT_LABELS } from '@shared/types'
 import { cn } from '@/lib/utils'
 import { formatCost, resetsIn } from '@/lib/format'
-import { useApp } from '@/store'
+import { chatMeta, useApp } from '@/store'
 import { UsageBar } from '@/components/UsageBar'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -57,17 +57,17 @@ function SectionTitle({
 
 /**
  * Session introspection: account & usage/limits, MCP servers, subagents, and
- * persisted permission rules for the active chat's session. Data loads lazily
- * when the popover opens (this may start the chat's CLI session if idle).
+ * persisted permission rules for one chat's session — the composer's own, so
+ * each column of a thread describes itself. Data loads lazily when the popover
+ * opens (this may start the chat's CLI session if idle).
  */
-export function SessionPanel(): React.JSX.Element {
-  const chatId = useApp((s) => s.activeId)
+export function SessionPanel({ chatId }: { chatId: string | null }): React.JSX.Element {
   const cwd = useApp((s) => s.selectedCwd)
-  const rateLimit = useApp((s) => (s.activeId ? s.rateLimits[s.activeId] : undefined))
+  const rateLimit = useApp((s) => (chatId ? s.rateLimits[chatId] : undefined))
   const loadModels = useApp((s) => s.loadModels)
   // Permission rules and the subagent catalog remain Claude-specific. Codex App
   // Server does expose account, rate-limit and MCP status control requests.
-  const provider = useApp((s) => s.chats.find((c) => c.id === s.activeId)?.provider) ?? 'claude'
+  const provider = useApp((s) => chatMeta(s, chatId)?.provider) ?? 'claude'
   const isCodex = provider === 'codex'
   // Several sections below are Claude-only, and were gated on `!isCodex` back
   // when "not Codex" and "Claude" were the same statement. With a third

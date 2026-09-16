@@ -8,8 +8,8 @@ import {
 } from '@shared/agentRuns'
 import type { ToolPart } from '@shared/types'
 import { cn } from '@/lib/utils'
-import { useApp } from '@/store'
-import { useAgents } from '@/agentsStore'
+import { messagesOf, useApp } from '@/store'
+import { NO_AGENTS, rosterChat, useAgents } from '@/agentsStore'
 import { Markdown } from '@/components/Markdown'
 import { SubAgentStream } from '@/components/messages/ToolCard'
 
@@ -31,20 +31,25 @@ import { SubAgentStream } from '@/components/messages/ToolCard'
  * panel exists to state.
  */
 export function AgentsPanel(): React.JSX.Element {
-  const runs = useAgents((s) => s.runs)
-  const totals = useAgents((s) => s.totals)
+  // One panel serves every chat in the thread, so it shows one roster: the chat
+  // it was pointed at, else the focused one — see `rosterChat`.
+  const focused = useApp((s) => s.focusedChatId)
+  const chatId = useAgents((s) => rosterChat(s, focused))
+  const { runs, totals } = useAgents((s) => (chatId ? s.byChat[chatId] : undefined) ?? NO_AGENTS)
   const selectedId = useAgents((s) => s.selectedId)
   // The part rather than the view: the roster is a projection, and the work is
   // in `children`. Selecting the part directly means the detail re-renders when
   // that agent moves and on nothing else — `applyEvent` replaces a `ToolPart`
   // wholesale, so an unrelated token elsewhere in the transcript leaves this
   // reference untouched.
-  const part = useApp((s) => (selectedId ? findAgentPart(s.messages, selectedId) : undefined))
+  const part = useApp((s) =>
+    selectedId && chatId ? findAgentPart(messagesOf(s, chatId), selectedId) : undefined
+  )
   const run = selectedId ? runs.find((r) => r.id === selectedId) : undefined
 
   // A selection naming a run this window no longer holds is not an error state
   // — see `selectedId`. Falling through to the roster is the whole handling.
-  if (selectedId && part) return <AgentDetail part={part} run={run} />
+  if (selectedId && part && chatId) return <AgentDetail part={part} run={run} chatId={chatId} />
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -100,10 +105,12 @@ export function AgentsPanel(): React.JSX.Element {
  */
 function AgentDetail({
   part,
-  run
+  run,
+  chatId
 }: {
   part: ToolPart
   run?: AgentRunView
+  chatId: string
 }): React.JSX.Element {
   const selectAgent = useAgents((s) => s.selectAgent)
   const scrollRef = React.useRef<HTMLDivElement>(null)
@@ -111,7 +118,7 @@ function AgentDetail({
   const pinnedRef = React.useRef(true)
   // The chat's own cwd, not the project's: a chat in a worktree resolves its
   // file links against the worktree. A string, so the selector is stable.
-  const cwd = useApp((s) => s.chats.find((c) => c.id === s.activeId)?.cwd ?? '')
+  const cwd = useApp((s) => s.chats.find((c) => c.id === chatId)?.cwd ?? '')
   const input = (part.input ?? {}) as Record<string, unknown>
   const description =
     run?.description ||
@@ -348,15 +355,15 @@ function AgentRow({ run }: { run: AgentRunView }): React.JSX.Element {
  * screen while you read what they produce. It is present only while something
  * is running, so it costs nothing the rest of the time.
  */
-export function AgentActivityBar(): React.JSX.Element | null {
-  const totals = useAgents((s) => s.totals)
+export function AgentActivityBar({ chatId }: { chatId: string }): React.JSX.Element | null {
+  const totals = useAgents((s) => (s.byChat[chatId] ?? NO_AGENTS).totals)
   const openAgentsPanel = useApp((s) => s.openAgentsPanel)
   if (totals.running === 0) return null
 
   return (
     <button
       type="button"
-      onClick={() => openAgentsPanel()}
+      onClick={() => openAgentsPanel(undefined, chatId)}
       className="group mb-2 flex w-full animate-enter items-center gap-2 rounded-lg border border-border bg-secondary/40 px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
     >
       <StatusDot status="running" />

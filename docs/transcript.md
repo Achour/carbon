@@ -535,12 +535,12 @@ turn was waiting. It is now glued to the input the answer would be typed into.
   which a disabled Submit is a question about options that may be off screen.
   Measured on four of each: the dock went 383px → 254px and stopped scrolling,
   and the composer's share of the window 56% → 41%.
-- **The `side` guard splits.** `TaskDock` and `CodexGoalBar` stay nulled in a side
-  chat because they are structurally dead there — the side variant publishes into
-  neither `taskListStore` nor `agentsStore`. Permissions are the opposite:
-  `permissions` is keyed by chat id and a side chat raises its own, so nulling
-  them would leave its turn blocked on a question with nowhere on screen to ask
-  it.
+- **Every column carries all of it.** `TaskDock` and `CodexGoalBar` were once
+  nulled in a side chat, because the side variant published into neither
+  `taskListStore` nor `agentsStore`; both stores are keyed by chat now (see
+  `docs/threads.md`), so each column of a thread draws its own. Permissions were
+  always per chat — a column raises its own, and nulling them would leave its
+  turn blocked on a question with nowhere on screen to ask it.
 - **The foot had to start speaking.** `showActivity` was
   `busy && permissions.length === 0` — correct while the prompt was *in* the
   transcript, where the label would have been a second voice under it. With the

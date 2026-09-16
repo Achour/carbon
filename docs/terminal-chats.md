@@ -224,8 +224,8 @@ that provider's mark with a small terminal badge beside the title.
 - **Git actions.** The source-control ladder delegates commit/PR/merge prompts to
   the active chat's agent. A terminal chat has no session Carbon can send to, so
   `runGitAction` opens a new chat for the work, as it does from the home screen.
-- **Side chats** still work, and are the intended way to ask Carbon something
-  beside a terminal chat.
+- **A thread's other columns** still work, and are the intended way to ask
+  Carbon something beside a terminal chat (see `docs/threads.md`).
 
 ## `parentEnv.ts`
 
