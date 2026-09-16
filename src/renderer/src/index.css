@@ -561,6 +561,12 @@
   border: none;
   padding: 0;
 }
+/* The block's wrap toggle (`PreBlock`). Spaces first, then anywhere, so a
+   long token — a path, a hash — breaks instead of pushing the frame wide. */
+.markdown pre[data-wrap] {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 /* The frame. A table is a boxed block like `pre` is, and it takes that box's
    chrome exactly — same border, same radius, same rhythm above and below — so
    the two read as one kind of object rather than two that nearly agree.

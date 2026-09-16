@@ -4,8 +4,9 @@ import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkBreaks from 'remark-breaks'
 import rehypeHighlight from 'rehype-highlight'
-import { Check, Code2, Copy, Maximize2, RotateCcw, X, ZoomIn, ZoomOut } from 'lucide-react'
+import { Check, Code2, Copy, Maximize2, RotateCcw, WrapText, X, ZoomIn, ZoomOut } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { WithTooltip } from '@/components/ui/tooltip'
 import { nextReveal, revealLimit } from '@/lib/streamReveal'
 import { useApp } from '@/store'
 import { getImageEpoch, readImageOnce, subscribeImageEpoch } from '@/lib/imageCache'
@@ -305,13 +306,26 @@ function MermaidBlock({ code }: { code: string }): React.JSX.Element {
   )
 }
 
-/** A fenced code block with a hover copy button (the non-mermaid path). */
+/**
+ * A fenced code block with hover controls: copy, and wrap (the non-mermaid path).
+ *
+ * **Wrap is per block and offered only where it does something.** A block
+ * scrolls sideways by default, which keeps code shaped the way it was written;
+ * wrapping is for the one block whose long line — a prompt, a command, a path —
+ * is the thing being read. It is not remembered: turning it on for one block
+ * would otherwise reflow every block above the reader. Whether a line overflows
+ * is measured when the pointer enters rather than observed, so a transcript of
+ * code blocks carries no observer apiece; a block that grows past the edge
+ * while hovered offers it on the next entry.
+ */
 function PreBlock({
   children,
   ...props
 }: React.HTMLAttributes<HTMLPreElement>): React.JSX.Element {
   const ref = React.useRef<HTMLPreElement>(null)
   const [copied, setCopied] = React.useState(false)
+  const [wrap, setWrap] = React.useState(false)
+  const [overflows, setOverflows] = React.useState(false)
 
   const copy = (): void => {
     const text = ref.current?.textContent ?? ''
@@ -320,19 +334,39 @@ function PreBlock({
     setTimeout(() => setCopied(false), 1500)
   }
 
+  const measure = (): void => {
+    const pre = ref.current
+    if (pre && !wrap) setOverflows(pre.scrollWidth > pre.clientWidth)
+  }
+
+  const button =
+    'rounded-md border border-border bg-popover/90 p-1.5 text-muted-foreground backdrop-blur transition-colors hover:text-foreground'
+
   return (
-    <div className="group relative">
-      <pre ref={ref} {...props}>
+    <div className="group relative" onPointerEnter={measure}>
+      <pre ref={ref} data-wrap={wrap || undefined} {...props}>
         {children}
       </pre>
-      <button
-        type="button"
-        onClick={copy}
-        className="absolute top-2 right-2 rounded-md border border-border bg-popover/90 p-1.5 text-muted-foreground opacity-0 backdrop-blur transition-opacity hover:text-foreground group-hover:opacity-100"
-        aria-label="Copy code"
-      >
-        {copied ? <Check className="size-3.5 text-success" /> : <Copy className="size-3.5" />}
-      </button>
+      <div className="absolute top-2 right-2 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+        {(wrap || overflows) && (
+          <WithTooltip label={wrap ? 'Don’t wrap lines' : 'Wrap lines'}>
+            <button
+              type="button"
+              onClick={() => setWrap((on) => !on)}
+              aria-pressed={wrap}
+              aria-label="Wrap lines"
+              className={cn(button, wrap && 'text-foreground')}
+            >
+              <WrapText className="size-3.5" />
+            </button>
+          </WithTooltip>
+        )}
+        <WithTooltip label={copied ? 'Copied' : 'Copy'}>
+          <button type="button" onClick={copy} className={button} aria-label="Copy code">
+            {copied ? <Check className="size-3.5 text-success" /> : <Copy className="size-3.5" />}
+          </button>
+        </WithTooltip>
+      </div>
     </div>
   )
 }
