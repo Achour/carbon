@@ -49,7 +49,7 @@ import {
   saveDrafts
 } from '@/lib/drafts'
 import type { ComposerDraft, ProjectDraft, ProjectDraftOptions } from '@/lib/drafts'
-import { moveItem } from '@/lib/tabOrder'
+import { moveItem, orderByHint } from '@/lib/tabOrder'
 // One direction only: the agents store knows nothing of this one, which is
 // what lets the panel's selection be set from every route into it.
 import { chatOfRun, useAgents } from '@/agentsStore'
@@ -361,6 +361,48 @@ export function columnsOf(
   return threadId === s.activeId ? s.sideColumns : (s.sideColumnsByChat[threadId] ?? NO_COLUMNS)
 }
 
+/**
+ * Thread `threadId`'s chats in column order: its own chat and its open side
+ * columns, arranged as the user last dragged them. Allocates only when the
+ * order differs from the default, so it is memoized by its caller.
+ */
+export function threadColumnIds(
+  s: Pick<AppState, 'activeId' | 'sideColumns' | 'sideColumnsByChat' | 'threadOrder'>,
+  threadId: string
+): readonly string[] {
+  return orderByHint(s.threadOrder[threadId], [threadId, ...columnsOf(s, threadId)])
+}
+
+/**
+ * Whether chat `chatId` can be dragged into the thread on screen, and if not,
+ * why — said while hovering, so a refused drop explains itself. Null when there
+ * is nothing to say: no thread open, or the chat is that thread.
+ */
+export function threadJoinCheck(
+  s: Pick<AppState, 'activeId' | 'chats' | 'sideColumns' | 'sideColumnsByChat'>,
+  chatId: string
+): { ok: true; title: string } | { ok: false; reason: string } | null {
+  const thread = chatMeta(s, s.activeId)
+  const chat = chatMeta(s, chatId)
+  if (!thread || !chat || chat.id === thread.id || chat.sideOf) return null
+  if (chat.surface === 'terminal') return { ok: false, reason: 'A terminal chat cannot join a thread' }
+  if (chat.cwd !== thread.cwd) {
+    return { ok: false, reason: 'Only chats in the same folder can share a thread' }
+  }
+  const incoming = 1 + columnsOf(s, chatId).length
+  const free = MAX_THREAD_CHATS - 1 - s.sideColumns.length
+  if (incoming > free) {
+    return {
+      ok: false,
+      reason:
+        free === 0
+          ? `This thread already has ${MAX_THREAD_CHATS} chats`
+          : `This thread has room for ${free} more — that one brings ${incoming}`
+    }
+  }
+  return { ok: true, title: chat.title?.trim() || 'New chat' }
+}
+
 /** Every thread's open columns, the active thread's included — what storage holds. */
 function allColumns(
   s: Pick<AppState, 'activeId' | 'sideColumns' | 'sideColumnsByChat'>
@@ -595,6 +637,28 @@ interface AppState {
   toggleExpandedChat(id: string): void
   /** The layout picked for three or more chats; null follows the count. */
   threadLayout: ThreadLayout | null
+  /**
+   * Each thread's column order, as dragged — a hint keyed by the thread's chat
+   * id, read through `threadColumnIds`. A hint rather than the columns
+   * themselves, so adding, closing, reopening and restoring columns keep working
+   * without keeping a second list in step (see `orderByHint`). Persisted.
+   */
+  threadOrder: Record<string, string[]>
+  /** Drop chat `id` on `side` of column `target` in thread `threadId`. */
+  moveThreadChat(threadId: string, id: string, target: string, side: 'before' | 'after'): void
+  /**
+   * Make chat `chatId` — a thread in the sidebar — columns of the thread on
+   * screen: it and the columns it had open join as side chats, and the side
+   * chats it had closed join the closed list. Refused (see `threadJoinCheck`)
+   * rather than trimmed when they would not all fit.
+   */
+  joinThread(chatId: string): Promise<void>
+  /**
+   * Take a column out of the thread on screen: it becomes a chat of its own,
+   * at the top of the sidebar, and the thread goes on without it. Only a side
+   * chat can leave — the thread's own chat is the thread.
+   */
+  leaveThread(chatId: string): Promise<void>
   setThreadLayout(layout: ThreadLayout): void
   /**
    * Chats whose turn ended while another column had focus. The column's own
@@ -1614,6 +1678,13 @@ function pruneTerminals(
   return patch
 }
 
+/** Drop the column orders of deleted threads, and write the result through. */
+function pruneThreadOrder(order: Record<string, string[]>, ids: string[]): Record<string, string[]> {
+  const next = omit(order, ids)
+  saveThreadOrder(next)
+  return next
+}
+
 /** Drop saved tab sets for deleted chats. */
 function pruneTabsByChat(
   s: Pick<AppState, 'tabsByChat'>,
@@ -1875,6 +1946,28 @@ function readStoredColumns(): Record<string, string[]> {
   }
 }
 
+function readThreadOrder(): Record<string, string[]> {
+  try {
+    const raw = JSON.parse(localStorage.getItem('threadOrder') ?? '{}') as unknown
+    if (!raw || typeof raw !== 'object') return {}
+    const out: Record<string, string[]> = {}
+    for (const [thread, ids] of Object.entries(raw as Record<string, unknown>)) {
+      if (Array.isArray(ids)) out[thread] = ids.filter((id): id is string => typeof id === 'string')
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
+
+function saveThreadOrder(order: Record<string, string[]>): void {
+  try {
+    localStorage.setItem('threadOrder', JSON.stringify(order))
+  } catch {
+    // Storage full or blocked: the order lasts for this session only.
+  }
+}
+
 function readThreadLayout(): ThreadLayout | null {
   const v = localStorage.getItem('threadLayout')
   return v === 'columns' || v === 'grid' ? v : null
@@ -1914,6 +2007,7 @@ export const useApp = create<AppState>((set, get) => ({
   focusedChatId: null,
   expandedChatId: null,
   threadLayout: readThreadLayout(),
+  threadOrder: readThreadOrder(),
   unreadChats: {},
   panelFloating: localStorage.getItem('panelFloating') !== 'false',
   defaults: null,
@@ -2471,6 +2565,18 @@ export const useApp = create<AppState>((set, get) => ({
       chats,
       chatDrafts,
       sideColumnsByChat,
+      // Orders of threads that no longer exist would otherwise pile up in
+      // storage for good.
+      threadOrder: (() => {
+        const kept: Record<string, string[]> = {}
+        for (const [thread, ids] of Object.entries(get().threadOrder)) {
+          if (visible.some((c) => c.id === thread)) kept[thread] = ids
+        }
+        if (Object.keys(kept).length !== Object.keys(get().threadOrder).length) {
+          saveThreadOrder(kept)
+        }
+        return kept
+      })(),
       defaults,
       providerClis,
       loading: false,
@@ -2584,6 +2690,91 @@ export const useApp = create<AppState>((set, get) => ({
   toggleExpandedChat(id) {
     set({ expandedChatId: get().expandedChatId === id ? null : id })
     get().focusChat(id, { caret: true })
+  },
+
+  async joinThread(chatId) {
+    const threadId = get().activeId
+    if (!threadId || !threadJoinCheck(get(), chatId)?.ok) return
+    const res = await window.api.moveChatToThread(chatId, threadId)
+    if (!res.ok) {
+      console.warn('[thread] join refused:', res.error)
+      return
+    }
+    const moved = new Set(res.moved)
+    let incoming: string[] = []
+    set((st) => {
+      // Its open columns come with it, in their order, after it.
+      incoming = [chatId, ...columnsOf(st, chatId)].filter((id) => !st.sideColumns.includes(id))
+      const chats = st.chats.map((c) =>
+        moved.has(c.id) ? { ...c, sideOf: threadId, ephemeral: true as const, pinnedAt: undefined } : c
+      )
+      const threadOrder = omit(st.threadOrder, [chatId])
+      if (chatId in st.threadOrder) saveThreadOrder(threadOrder)
+      const base = {
+        chats,
+        sideColumnsByChat: omit(st.sideColumnsByChat, [chatId]),
+        threadOrder
+      }
+      // The user moved to another thread inside the round trip: file the
+      // columns under the thread they joined.
+      if (st.activeId !== threadId) {
+        return {
+          ...base,
+          sideColumnsByChat: {
+            ...base.sideColumnsByChat,
+            [threadId]: [...(base.sideColumnsByChat[threadId] ?? []), ...incoming]
+          }
+        }
+      }
+      const sideChats = { ...st.sideChats }
+      for (const id of incoming) sideChats[id] ??= EMPTY_SIDE_SLOT
+      return {
+        ...base,
+        sideColumns: [...st.sideColumns, ...incoming],
+        sideChats,
+        focusedChatId: chatId,
+        expandedChatId: null
+      }
+    })
+    if (get().activeId === threadId) void get().hydrateSideChats(incoming)
+  },
+
+  async leaveThread(chatId) {
+    const s = get()
+    const threadId = s.activeId
+    if (!threadId || chatMeta(s, chatId)?.sideOf !== threadId) return
+    const res = await window.api.leaveThread(chatId)
+    if (!res.ok) {
+      console.warn('[thread] leave refused:', res.error)
+      return
+    }
+    set((st) => {
+      const meta = chatMeta(st, chatId)
+      if (!meta) return {}
+      const left = { ...meta, sideOf: undefined, ephemeral: undefined, updatedAt: Date.now() }
+      return {
+        // To the top of the list, where a chat that just became a row belongs —
+        // the array's order is the sidebar's (see `hoistChat`).
+        chats: [left, ...st.chats.filter((c) => c.id !== chatId)],
+        ...(st.activeId === threadId ? closeSideColumn(st, chatId) : {}),
+        sideColumnsByChat: stripSideStashes(st.sideColumnsByChat, new Set([chatId])),
+        // Its transcript is no longer drawn here, so the slot goes — as a
+        // closed column's does.
+        sideChats: omit(st.sideChats, [chatId]),
+        unreadChats: omit(st.unreadChats, [chatId])
+      }
+    })
+  },
+
+  moveThreadChat(threadId, id, target, side) {
+    set((s) => {
+      const ids = threadColumnIds(s, threadId)
+      const next = moveItem(ids, ids.indexOf(id), ids.indexOf(target), side)
+      if (next === ids) return s
+      const threadOrder = { ...s.threadOrder, [threadId]: [...next] }
+      saveThreadOrder(threadOrder)
+      return { threadOrder }
+    })
   },
 
   setThreadLayout(layout) {
@@ -4208,6 +4399,7 @@ export const useApp = create<AppState>((set, get) => ({
         planPanel:
           s.planPanel && dead.has(s.planPanel.chatId) ? null : wasActive ? null : s.planPanel,
         panelOpenByChat: prunePanelState(s, [id]),
+        ...(id in s.threadOrder ? { threadOrder: pruneThreadOrder(s.threadOrder, [id]) } : {}),
         tabsByChat: pruneTabsByChat(s, [id]),
         ...pruneTerminals(s, [id])
       }

@@ -135,6 +135,40 @@ behind it.
   runs in its thread's cwd by construction — counted, it would refuse to remove,
   merge or hand off the worktree the whole thread is about.
 
+### Reordering columns, and dragging a thread into another
+
+**Columns reorder by drag**: a column's header, or its pill in the thread
+header, dropped on the left or right half of another column or pill. The order
+is kept as a hint per thread (`threadOrder`, persisted) and read through
+`orderByHint` rather than stored as the columns themselves, because columns are
+added, closed, reopened and restored at launch by paths that know nothing about
+order — as a hint, a new column lands at the end, a closed one drops out and a
+reopened one comes back where it was, with none of those paths keeping a second
+list in step. The thread's own chat can be dragged anywhere too: position is
+presentation, while which chat *is* the thread (its title, its ⋯ menu, the one
+column with no ✕, the store's singular transcript slice) stays data.
+
+**A sidebar chat dragged onto the thread on screen joins it as a column**
+(`joinThread`, `chats:move-to-thread`). Joining is a meta change and nothing
+else — the chat gains `sideOf` and `ephemeral`, so do the side chats it already
+had, and their sessions are untouched — which is why it can be done at all
+without a migration. The columns it had open come with it, after it; the ones
+it had closed join the closed list. It is refused, and says so while hovering
+(`threadJoinCheck`), for a terminal chat, for a chat in another folder (a column
+runs in its thread's cwd), and when the chat and its open columns would not all
+fit — refused rather than trimmed, so a drop never silently closes something.
+**And back out**: a column's header or pill dropped on the sidebar — or "Move to
+its own chat" on the header's right-click menu — takes the chat out of its thread
+(`leaveThread`, `chats:leave-thread`): `sideOf` and `ephemeral` are cleared, its
+`updatedAt` is bumped so its row lands at the top of the list rather than
+wherever its last turn was, and its column closes the way a closed column does.
+Only a side chat can leave; the thread's own chat *is* the thread, so the
+sidebar does not offer itself for one.
+
+The dragged id rides `lib/threadDrag.ts` as well as the drag payload, because
+`dataTransfer.getData` is empty until the drop and the verdict is needed before
+it. Main checks the same rules again, since it is the layer that writes the rows.
+
 ### Focus (`focusedChatId`, `focusChat`)
 
 With one transcript on screen "the active chat" answered every question about
@@ -287,7 +321,8 @@ to the front, reopening it if it had been closed. The tab version could not:
 opening a side chat as the active chat was a state nothing else allowed, and a
 notification whose click does nothing is worse than none.
 
-`demo/e2e/threads.js` pins all of the above against the real reducer — the
+`demo/e2e/threads.js` pins all of the above against the real reducer, drives
+the reorder and the join with real drag events, — the
 reference identity across columns, the cap, focus and unread, the layouts,
 an expansion that hides the other columns without unmounting them, close/reopen/discard, persistence and
 restore, opening a side chat by id, the floating panel's zero reflow, the docked

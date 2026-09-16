@@ -10,7 +10,7 @@
 //
 // It creates and deletes chats, so run it against a copy of the profile:
 //
-//   ./demo/shoot.sh /tmp/threads 18000,22000,26000,30000,34000 demo/e2e/threads.js
+//   ./demo/shoot.sh /tmp/threads 24000,28000,32000,36000,40000,50000 demo/e2e/threads.js
 //
 // Shots, in order: three chats in columns with one waiting on a prompt; four in
 // a grid; one expanded to the full width; the panel floating over
@@ -219,9 +219,116 @@
     dialogButton('Close chat')?.click();
     await sleep(800);
     check('confirming closes it — an untouched chat is discarded', !S().chats.some((c) => c.id === c4));
-    await S().addThreadChat();
-    await sleep(900);
-    const c4b = S().sideColumns.find((id) => id !== c2 && id !== c3);
+    // --- A chat dragged in from the sidebar joins the thread ---
+    const mainCwd = S().chats.find((c) => c.id === mainId)?.cwd;
+    const sidebarChat = async (title) => {
+      const meta = await window.api.createChat({ cwd: mainCwd });
+      app.setState((st) => ({ chats: [{ ...meta, title }, ...st.chats] }));
+      await sleep(500);
+      const row = [...document.querySelectorAll('[data-sidebar] [draggable="true"]')]
+        .find((el) => el.textContent?.includes(title));
+      return { id: meta.id, row };
+    };
+    const threadRoot = () => document.querySelector('[data-chatview]');
+    const dragOverThread = (dt) => {
+      const r = threadRoot().getBoundingClientRect();
+      const at = { bubbles: true, cancelable: true, dataTransfer: dt, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 };
+      threadRoot().dispatchEvent(new DragEvent('dragover', at));
+      return at;
+    };
+    const joiner = await sidebarChat('Pricing canvas draft');
+    check('a sidebar chat row can be dragged', !!joiner.row);
+    {
+      const dt = new DataTransfer();
+      joiner.row?.dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer: dt }));
+      const at = dragOverThread(dt);
+      await sleep(300);
+      check('dragging it over the thread offers to add it',
+        !!threadRoot().textContent?.includes('to this thread'));
+      threadRoot().dispatchEvent(new DragEvent('drop', at));
+      joiner.row?.dispatchEvent(new DragEvent('dragend', { bubbles: true }));
+      await sleep(1500);
+    }
+    const c4b = joiner.id;
+    check('dropping it makes it a column of the thread',
+      S().sideColumns.includes(c4b) && S().chats.find((c) => c.id === c4b)?.sideOf === mainId,
+      JSON.stringify(S().sideColumns));
+    check('...and it leaves the sidebar', ![...document.querySelectorAll('[data-sidebar] *')]
+      .some((el) => el.childElementCount === 0 && el.textContent === 'Pricing canvas draft'));
+    check('...and the move is written to disk',
+      (await window.api.listSideChats()).some((c) => c.id === c4b && c.sideOf === mainId));
+    {
+      const extra = await sidebarChat('One too many');
+      const dt = new DataTransfer();
+      extra.row?.dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer: dt }));
+      dragOverThread(dt);
+      await sleep(300);
+      check('a full thread refuses a fifth chat, and says so',
+        !!threadRoot().textContent?.includes('already has 4 chats'));
+      extra.row?.dispatchEvent(new DragEvent('dragend', { bubbles: true }));
+      await sleep(200);
+      check('...and the notice clears when the drag ends', !threadRoot().textContent?.includes('already has 4 chats'));
+      await S().deleteChat(extra.id);
+    }
+
+    // --- Columns reorder by dragging a header onto another column ---
+    {
+      const dt = new DataTransfer();
+      document.querySelector(`[data-thread-column="${c4b}"] > [draggable="true"]`)
+        ?.dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer: dt }));
+      const target = document.querySelector(`[data-thread-column="${mainId}"]`);
+      const r = target.getBoundingClientRect();
+      const at = { bubbles: true, cancelable: true, dataTransfer: dt, clientX: r.left + 8, clientY: r.top + r.height / 2 };
+      target.dispatchEvent(new DragEvent('dragover', at));
+      target.dispatchEvent(new DragEvent('drop', at));
+      await sleep(400);
+      const first = document.querySelector('[data-thread-column]')?.getAttribute('data-thread-column');
+      check('dropping a column on the left of the first moves it first', first === c4b, first);
+      check('...the pills follow', document.querySelector('[role="tablist"] [role="tab"]')?.getAttribute('aria-label')?.startsWith('Chat 1: Pricing canvas draft'));
+      check('...and the order is remembered', JSON.parse(localStorage.getItem('threadOrder') || '{}')[mainId]?.[0] === c4b);
+      // Back to the default order, so the shots below stay as they were.
+      app.setState({ threadOrder: {} });
+      localStorage.removeItem('threadOrder');
+      await sleep(300);
+    }
+
+    // --- A column dragged onto the sidebar leaves the thread ---
+    {
+      const aside = document.querySelector('[data-sidebar]');
+      const ar = aside.getBoundingClientRect();
+      const over = (dt) => ({ bubbles: true, cancelable: true, dataTransfer: dt, clientX: ar.left + ar.width / 2, clientY: ar.top + ar.height / 2 });
+      const dragHeader = (id) => {
+        const dt = new DataTransfer();
+        const handle = document.querySelector(`[data-thread-column="${id}"] > [draggable="true"]`);
+        handle?.dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer: dt }));
+        return { dt, handle };
+      };
+      // The thread's own chat cannot leave: the sidebar does not offer itself.
+      {
+        const { dt, handle } = dragHeader(mainId);
+        aside.dispatchEvent(new DragEvent('dragover', over(dt)));
+        await sleep(250);
+        check("the thread's own chat is not offered a way out", !aside.textContent?.includes('to its own chat'));
+        handle?.dispatchEvent(new DragEvent('dragend', { bubbles: true }));
+      }
+      const { dt, handle } = dragHeader(c4b);
+      aside.dispatchEvent(new DragEvent('dragover', over(dt)));
+      await sleep(250);
+      check('dragging a column over the sidebar offers to make it its own chat', !!aside.textContent?.includes('to its own chat'));
+      aside.dispatchEvent(new DragEvent('drop', over(dt)));
+      handle?.dispatchEvent(new DragEvent('dragend', { bubbles: true }));
+      await sleep(1200);
+      const left = S().chats.find((c) => c.id === c4b);
+      check('dropping it takes it out of the thread',
+        !S().sideColumns.includes(c4b) && !left?.sideOf && !left?.ephemeral, JSON.stringify(S().sideColumns));
+      check('...back into the sidebar', [...document.querySelectorAll('[data-sidebar] *')]
+        .some((el) => el.childElementCount === 0 && el.textContent === 'Pricing canvas draft'));
+      check('...and the change is written to disk', (await window.api.listChats()).some((c) => c.id === c4b));
+      // And back in, for the shots.
+      await S().joinThread(c4b);
+      await sleep(1200);
+      check('it can join the thread again', S().sideColumns.includes(c4b));
+    }
 
     // --- A thread is stashed, persisted and restored with its chat ---
     const stored = JSON.parse(localStorage.getItem('threadColumns') || '{}');
@@ -261,16 +368,16 @@
     S().setThreadLayout('columns');
     app.setState({ sideColumns: [c3, shotFour] });
     S().focusChat(c3);
-    await until(18700);
+    await until(24700);
 
     // Shot 2: four chats in a grid.
     app.setState({ sideColumns: [c3, shotFour, c2] });
     app.setState({ threadLayout: null });
-    await until(22700);
+    await until(28700);
 
     // Shot 3: one expanded.
     S().toggleExpandedChat(c3);
-    await until(26700);
+    await until(32700);
 
     // Shot 4: the panel floating over the columns.
     S().toggleExpandedChat(c3);
@@ -290,7 +397,7 @@
         !!a && !!p && a.top === p.top && a.bottom === p.bottom && Math.round(a.right) === Math.round(p.right),
         a && p ? `panel ${a.top}-${a.bottom} right ${a.right}; pane ${p.top}-${p.bottom} right ${p.right}` : 'no panel');
     }
-    await until(30700);
+    await until(36700);
 
     // Shot 5: pinned beside them.
     S().togglePanelFloating();
@@ -299,7 +406,7 @@
     check('pinning docks it beside the columns', colsPinned < colsBefore, `${colsBefore} -> ${colsPinned}`);
     check('...leaving two columns of room', colsPinned >= 679, `${colsPinned}px`);
     check('no composer chips overlap in the narrow columns', composerOverlaps().length === 0, JSON.stringify(composerOverlaps()));
-    await until(34700);
+    await until(40700);
 
     // Leave the profile's panel preference as the app ships it.
     if (!S().panelFloating) S().togglePanelFloating();

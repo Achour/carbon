@@ -35,8 +35,14 @@ import { cn, missingTag, MISSING_TITLE } from '@/lib/utils'
 import { basename, dateGroup, relativeTime, shortenPath } from '@/lib/format'
 import { REVEAL_LABEL } from '@/lib/platform'
 import { chatActivity, projectActivity, type ChatActivity } from '@/lib/chatActivity'
+import {
+  COLUMN_DRAG_MIME,
+  draggedColumn,
+  setDraggedThread,
+  THREAD_DRAG_MIME
+} from '@/lib/threadDrag'
 import { draftSummary, sortedProjectDrafts, type ProjectDraft } from '@/lib/drafts'
-import { columnsOf, useApp, visibleChats } from '@/store'
+import { chatMeta, columnsOf, useApp, visibleChats } from '@/store'
 import { UpdateBanner } from '@/components/UpdateBanner'
 import { UsagePanel } from '@/components/UsagePanel'
 import { Button } from '@/components/ui/button'
@@ -268,6 +274,15 @@ function ChatItemRow({
       <ContextMenuTrigger
         render={
           <div
+            // A chat row can be dragged into the thread on screen, to become one
+            // of its columns (see `ThreadView`'s drop target).
+            draggable={chat.surface !== 'terminal'}
+            onDragStart={(e) => {
+              e.dataTransfer.setData(THREAD_DRAG_MIME, chat.id)
+              e.dataTransfer.effectAllowed = 'move'
+              setDraggedThread(chat.id)
+            }}
+            onDragEnd={() => setDraggedThread(null)}
             className={cn(
               'group relative rounded-md transition-colors',
               // Active fill is a foreground-tinted overlay, not the sidebar-accent
@@ -812,6 +827,58 @@ function ThreadMark({ count, active }: { count: number; active: boolean }): Reac
       </span>
     </WithTooltip>
   )
+}
+
+/**
+ * The sidebar as a drop target for a thread's column: dropped here, the chat
+ * leaves its thread and becomes a row of its own — the reverse of dragging a row
+ * onto a thread. Only a side chat can leave (the thread's own chat *is* the
+ * thread), so the target offers itself only for one; the dragged id comes from
+ * `threadDrag`, because the payload is unreadable until the drop.
+ */
+function useLeaveThreadDrop(): {
+  title: string | null
+  handlers: Pick<React.HTMLAttributes<HTMLElement>, 'onDragOver' | 'onDragLeave' | 'onDrop'>
+} {
+  const [title, setTitle] = React.useState<string | null>(null)
+  React.useEffect(() => {
+    const clear = (): void => setTitle(null)
+    document.addEventListener('dragend', clear)
+    document.addEventListener('drop', clear)
+    return () => {
+      document.removeEventListener('dragend', clear)
+      document.removeEventListener('drop', clear)
+    }
+  }, [])
+  const leaving = (e: React.DragEvent): ChatMeta | null => {
+    if (!Array.from(e.dataTransfer.types).includes(COLUMN_DRAG_MIME)) return null
+    const s = useApp.getState()
+    const chat = chatMeta(s, draggedColumn())
+    return chat?.sideOf && chat.sideOf === s.activeId ? chat : null
+  }
+  return {
+    title,
+    handlers: {
+      onDragOver: (e) => {
+        const chat = leaving(e)
+        if (!chat) return
+        e.preventDefault()
+        e.dataTransfer.dropEffect = 'move'
+        const next = chat.title?.trim() || 'New chat'
+        if (next !== title) setTitle(next)
+      },
+      onDragLeave: (e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setTitle(null)
+      },
+      onDrop: (e) => {
+        setTitle(null)
+        const chat = leaving(e)
+        if (!chat) return
+        e.preventDefault()
+        void useApp.getState().leaveThread(chat.id)
+      }
+    }
+  }
 }
 
 function ActivityIndicator({ activity }: { activity: ChatActivity }): React.JSX.Element | null {
@@ -1375,9 +1442,12 @@ export function Sidebar(): React.JSX.Element {
     )
   }
 
+  const leaveDrop = useLeaveThreadDrop()
+
   return (
     <aside
       data-sidebar
+      {...leaveDrop.handlers}
       style={{ width: sidebarOpen ? width : 0 }}
       className={cn(
         'relative flex h-full shrink-0 flex-col overflow-hidden border-r border-sidebar-border bg-sidebar',
@@ -2051,6 +2121,16 @@ export function Sidebar(): React.JSX.Element {
         </DialogContent>
       </Dialog>
       </div>
+      {leaveDrop.title !== null && (
+        <div
+          aria-live="polite"
+          className="pointer-events-none absolute inset-2 top-[42px] z-40 flex items-center justify-center rounded-xl border-2 border-dashed border-primary/60 bg-primary/5 px-4 text-center"
+        >
+          <span className="rounded-md bg-popover px-3 py-1.5 text-[13px] text-foreground shadow-lg">
+            Move <span className="font-medium">“{leaveDrop.title}”</span> to its own chat
+          </span>
+        </div>
+      )}
       {/* Resize handle — drag to resize, double-click to reset */}
       {sidebarOpen && (
         <div

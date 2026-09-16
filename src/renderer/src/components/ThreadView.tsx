@@ -13,6 +13,7 @@ import {
   PanelLeft,
   PanelRight,
   Pencil,
+  PanelLeftOpen,
   Plus,
   RefreshCw,
   Trash,
@@ -24,6 +25,13 @@ import { projectRoot } from '@shared/types'
 import { cn } from '@/lib/utils'
 import { chatActivityKind } from '@/lib/chatActivity'
 import { focusComposer } from '@/lib/composerFocus'
+import { orderByHint } from '@/lib/tabOrder'
+import {
+  COLUMN_DRAG_MIME,
+  draggedThread,
+  setDraggedColumn,
+  THREAD_DRAG_MIME
+} from '@/lib/threadDrag'
 import {
   chatMeta,
   isClosedSideChat,
@@ -31,6 +39,7 @@ import {
   MAX_THREAD_CHATS,
   panelFloats,
   severalChatsShown,
+  threadJoinCheck,
   threadLayoutFor,
   useApp
 } from '@/store'
@@ -42,6 +51,13 @@ import { Button } from '@/components/ui/button'
 import { WithTooltip } from '@/components/ui/tooltip'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger
+} from '@/components/ui/context-menu'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -70,21 +86,113 @@ import {
  */
 export function ThreadView({ chat }: { chat: ChatMeta }): React.JSX.Element {
   const sideColumns = useApp((s) => s.sideColumns)
-  const ids = React.useMemo(() => [chat.id, ...sideColumns], [chat.id, sideColumns])
+  // In the order the columns were last dragged into — see `threadOrder`.
+  const order = useApp((s) => s.threadOrder[chat.id])
+  const ids = React.useMemo(
+    () => orderByHint(order, [chat.id, ...sideColumns]),
+    [order, chat.id, sideColumns]
+  )
   useThreadKeys(ids)
+  const join = useThreadJoinDrop()
 
   return (
     // The frosted main column: one wash under every column, so a thread reads
     // as one surface rather than four tinted panes.
-    <div data-chatview className="relative flex h-full min-w-0 flex-1 flex-col">
+    <div data-chatview className="relative flex h-full min-w-0 flex-1 flex-col" {...join.handlers}>
       <ThreadHeader chat={chat} ids={ids} />
       {ids.length === 1 ? (
         <div className="flex min-h-0 flex-1">
           <ChatView chat={chat} />
         </div>
       ) : (
-        <ThreadColumns ids={ids} />
+        <ThreadColumns ids={ids} threadId={chat.id} />
       )}
+      {join.state && <JoinOverlay state={join.state} />}
+    </div>
+  )
+}
+
+type JoinState = NonNullable<ReturnType<typeof threadJoinCheck>>
+
+/**
+ * The thread as a drop target for a chat dragged from the sidebar, which joins
+ * it as a column. The verdict is worked out while hovering — the dragged id
+ * comes from `threadDrag`, since the payload is unreadable until the drop — so
+ * a full thread or another folder says so before the drop, not after it.
+ */
+function useThreadJoinDrop(): {
+  state: JoinState | null
+  handlers: Pick<React.HTMLAttributes<HTMLElement>, 'onDragOver' | 'onDragLeave' | 'onDrop'>
+} {
+  const [state, setState] = React.useState<JoinState | null>(null)
+  // A drag released anywhere — including over this thread with the drop
+  // refused, which fires no `drop` — ends the overlay.
+  React.useEffect(() => {
+    const clear = (): void => setState(null)
+    document.addEventListener('dragend', clear)
+    document.addEventListener('drop', clear)
+    return () => {
+      document.removeEventListener('dragend', clear)
+      document.removeEventListener('drop', clear)
+    }
+  }, [])
+  const isThreadDrag = (e: React.DragEvent): boolean =>
+    Array.from(e.dataTransfer.types).includes(THREAD_DRAG_MIME)
+  return {
+    state,
+    handlers: {
+      onDragOver: (e) => {
+        if (!isThreadDrag(e)) return
+        const id = draggedThread()
+        const check = id ? threadJoinCheck(useApp.getState(), id) : null
+        if (!check) return
+        e.preventDefault()
+        e.dataTransfer.dropEffect = check.ok ? 'move' : 'none'
+        setState((prev) =>
+          prev &&
+          prev.ok === check.ok &&
+          (prev.ok ? prev.title : prev.reason) === (check.ok ? check.title : check.reason)
+            ? prev
+            : check
+        )
+      },
+      onDragLeave: (e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setState(null)
+      },
+      onDrop: (e) => {
+        setState(null)
+        if (!isThreadDrag(e)) return
+        e.preventDefault()
+        const id = draggedThread() ?? e.dataTransfer.getData(THREAD_DRAG_MIME)
+        if (id) void useApp.getState().joinThread(id)
+      }
+    }
+  }
+}
+
+function JoinOverlay({ state }: { state: JoinState }): React.JSX.Element {
+  return (
+    <div
+      aria-live="polite"
+      className={cn(
+        'pointer-events-none absolute inset-x-3 top-[46px] bottom-3 z-40 flex items-center justify-center rounded-xl border-2 border-dashed backdrop-blur-[1px]',
+        state.ok ? 'border-primary/60 bg-primary/5' : 'border-border bg-background/60'
+      )}
+    >
+      <span
+        className={cn(
+          'rounded-md bg-popover px-3 py-1.5 text-[13px] shadow-lg',
+          state.ok ? 'text-foreground' : 'text-muted-foreground'
+        )}
+      >
+        {state.ok ? (
+          <>
+            Add <span className="font-medium">“{state.title}”</span> to this thread
+          </>
+        ) : (
+          state.reason
+        )}
+      </span>
     </div>
   )
 }
@@ -95,7 +203,7 @@ export function ThreadView({ chat }: { chat: ChatMeta }): React.JSX.Element {
  * an expansion. Window-level so they work from anywhere in the thread, including
  * a composer that has the caret.
  */
-function useThreadKeys(ids: string[]): void {
+function useThreadKeys(ids: readonly string[]): void {
   const idsRef = React.useRef(ids)
   idsRef.current = ids
   React.useEffect(() => {
@@ -154,7 +262,7 @@ function useThreadKeys(ids: string[]): void {
   }, [])
 }
 
-function ThreadHeader({ chat, ids }: { chat: ChatMeta; ids: string[] }): React.JSX.Element {
+function ThreadHeader({ chat, ids }: { chat: ChatMeta; ids: readonly string[] }): React.JSX.Element {
   const sidebarOpen = useApp((s) => s.sidebarOpen)
   const toggleSidebar = useApp((s) => s.toggleSidebar)
   const panelOpen = useApp((s) => s.panelOpen)
@@ -205,7 +313,7 @@ function ThreadHeader({ chat, ids }: { chat: ChatMeta; ids: string[] }): React.J
             className="no-drag ml-1 flex shrink-0 items-center gap-0.5 border-l border-border pl-2"
           >
             {ids.map((id, i) => (
-              <ThreadPill key={id} id={id} index={i} focused={id === focused} />
+              <ThreadPill key={id} id={id} threadId={chat.id} index={i} focused={id === focused} />
             ))}
           </div>
           <div className="min-w-2 flex-1" />
@@ -302,6 +410,88 @@ function LayoutButton({
   )
 }
 
+const isChatDrag = (e: React.DragEvent): boolean =>
+  Array.from(e.dataTransfer.types).includes(COLUMN_DRAG_MIME)
+
+/**
+ * Drag handlers for chat `id`'s handle — its column header or its pill. Dropped
+ * on another column it reorders; dropped on the sidebar it leaves the thread.
+ */
+function chatDragHandlers(
+  id: string
+): Pick<React.HTMLAttributes<HTMLElement>, 'draggable' | 'onDragStart' | 'onDragEnd'> {
+  return {
+    draggable: true,
+    onDragStart: (e) => {
+      e.dataTransfer.setData(COLUMN_DRAG_MIME, id)
+      e.dataTransfer.effectAllowed = 'move'
+      setDraggedColumn(id)
+    },
+    onDragEnd: () => setDraggedColumn(null)
+  }
+}
+
+/**
+ * Make an element a drop target for reordering the thread's chats: which edge
+ * the dragged chat would land on, and the handlers that track and apply it.
+ * Left or right half, whatever the layout — a grid reads left to right, top to
+ * bottom, so "after" the top-left cell is the top-right one.
+ */
+function useChatDrop(
+  threadId: string,
+  id: string
+): {
+  over: 'before' | 'after' | null
+  handlers: Pick<
+    React.HTMLAttributes<HTMLElement>,
+    'onDragOver' | 'onDragLeave' | 'onDrop'
+  >
+} {
+  const [over, setOver] = React.useState<'before' | 'after' | null>(null)
+  const sideOf = (e: React.DragEvent<HTMLElement>): 'before' | 'after' => {
+    const r = e.currentTarget.getBoundingClientRect()
+    return e.clientX < r.left + r.width / 2 ? 'before' : 'after'
+  }
+  return {
+    over,
+    handlers: {
+      onDragOver: (e) => {
+        if (!isChatDrag(e)) return
+        e.preventDefault()
+        e.dataTransfer.dropEffect = 'move'
+        const side = sideOf(e)
+        if (side !== over) setOver(side)
+      },
+      onDragLeave: (e) => {
+        // Crossing into a child fires leave on the parent; only a real exit clears.
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setOver(null)
+      },
+      onDrop: (e) => {
+        setOver(null)
+        if (!isChatDrag(e)) return
+        e.preventDefault()
+        const dragged = e.dataTransfer.getData(COLUMN_DRAG_MIME)
+        if (dragged && dragged !== id) useApp.getState().moveThreadChat(threadId, dragged, id, sideOf(e))
+      }
+    }
+  }
+}
+
+/** The bar a reorder drop would land on: the dragged chat goes on this edge. */
+function DropEdge({ side, inset }: { side: 'before' | 'after' | null; inset: string }): React.JSX.Element | null {
+  if (!side) return null
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        'pointer-events-none absolute z-20 w-0.5 rounded-full bg-primary',
+        inset,
+        side === 'before' ? 'left-0' : 'right-0'
+      )}
+    />
+  )
+}
+
 /**
  * One chat of the thread in the header: its number (what ⌘1–⌘4 name), its
  * provider, and whether it is working, waiting on you, or finished while you
@@ -310,14 +500,17 @@ function LayoutButton({
  */
 function ThreadPill({
   id,
+  threadId,
   index,
   focused
 }: {
   id: string
+  threadId: string
   index: number
   focused: boolean
 }): React.JSX.Element | null {
   const meta = useApp((s) => chatMeta(s, id))
+  const drop = useChatDrop(threadId, id)
   if (!meta) return null
   const title = meta.title?.trim() || 'New chat'
   const onClick = (): void => useApp.getState().focusChat(id, { caret: true })
@@ -329,8 +522,12 @@ function ThreadPill({
         aria-selected={focused}
         aria-label={`Chat ${index + 1}: ${title}`}
         onClick={onClick}
+        // Pills reorder the columns too: the strip is the one place every chat
+        // is in reach at once, expanded or not.
+        {...chatDragHandlers(id)}
+        {...drop.handlers}
         className={cn(
-          'flex h-6.5 items-center gap-1.5 rounded-md border px-1.5 transition-colors',
+          'relative flex h-6.5 items-center gap-1.5 rounded-md border px-1.5 transition-colors',
           focused
             ? 'border-border bg-background text-foreground shadow-sm'
             : 'border-transparent text-muted-foreground hover:bg-accent hover:text-foreground'
@@ -339,6 +536,7 @@ function ThreadPill({
         <ChatNumber index={index} focused={focused} />
         <ProviderMark provider={meta.provider} className="size-3" />
         <ChatMark id={id} />
+        <DropEdge side={drop.over} inset="inset-y-1 -mx-[3px]" />
       </button>
     </WithTooltip>
   )
@@ -709,7 +907,13 @@ function ThreadMenu({ chat }: { chat: ChatMeta }): React.JSX.Element {
  * them on screen: the header's pills already name every chat, carry its status,
  * and switch the expansion to it.
  */
-function ThreadColumns({ ids }: { ids: string[] }): React.JSX.Element {
+function ThreadColumns({
+  ids,
+  threadId
+}: {
+  ids: readonly string[]
+  threadId: string
+}): React.JSX.Element {
   const threadLayout = useApp((s) => s.threadLayout)
   const expandedChatId = useApp((s) => s.expandedChatId)
   const focusedChatId = useApp((s) => s.focusedChatId)
@@ -732,6 +936,7 @@ function ThreadColumns({ ids }: { ids: string[] }): React.JSX.Element {
           <ThreadColumn
             key={id}
             id={id}
+            threadId={threadId}
             index={i}
             focused={focusedChatId === id}
             expanded={expandedChatId === id}
@@ -764,12 +969,14 @@ function gridCell(i: number, n: number): string {
 
 function ThreadColumn({
   id,
+  threadId,
   index,
   focused,
   expanded,
   className
 }: {
   id: string
+  threadId: string
   index: number
   focused: boolean
   expanded: boolean
@@ -778,7 +985,13 @@ function ThreadColumn({
   // Its own meta by id, so a `meta` patch to another chat leaves this column's
   // props identical and the memoized `ChatView` skips it.
   const chat = useApp((s) => chatMeta(s, id))
+  // The whole column is the drop target, not just its header: a 32px strip is
+  // too small to aim a drag at across a grid.
+  const drop = useChatDrop(threadId, id)
   if (!chat) return null
+  // The thread's own chat can be dragged anywhere, but it is still the thread:
+  // not closable, and its transcript lives in the store's singular slice.
+  const side = id !== threadId
   // Pointer or keyboard entering the column — its header or its transcript —
   // makes it the thread's focused chat. Imperative, so a focus change re-renders
   // no transcript, and without the caret: clicking to read is not asking to type.
@@ -789,12 +1002,14 @@ function ThreadColumn({
       aria-label={`Chat ${index + 1}`}
       onPointerDownCapture={claimFocus}
       onFocusCapture={claimFocus}
+      {...drop.handlers}
       className={cn('relative flex min-h-0 min-w-0 flex-col', className)}
     >
-      <ColumnHeader chat={chat} index={index} focused={focused} expanded={expanded} />
+      <ColumnHeader chat={chat} index={index} side={side} focused={focused} expanded={expanded} />
       <div className="flex min-h-0 flex-1">
-        <ChatView chat={chat} side={index > 0} />
+        <ChatView chat={chat} side={side} />
       </div>
+      <DropEdge side={drop.over} inset="inset-y-0" />
     </section>
   )
 }
@@ -802,62 +1017,90 @@ function ThreadColumn({
 function ColumnHeader({
   chat,
   index,
+  side,
   focused,
   expanded
 }: {
   chat: ChatMeta
   index: number
+  /** Every column but the thread's own chat can close. */
+  side: boolean
   focused: boolean
   expanded: boolean
 }): React.JSX.Element {
   const toggleExpandedChat = useApp((s) => s.toggleExpandedChat)
+  const leaveThread = useApp((s) => s.leaveThread)
   const [confirmClose, setConfirmClose] = React.useState(false)
-  // Every column but the thread's own chat can close.
-  const side = index > 0
   const title = chat.title?.trim() || 'New chat'
   return (
     <>
-      <div
-        onDoubleClick={() => toggleExpandedChat(chat.id)}
-        className="flex h-8 shrink-0 items-center gap-2 pr-1.5 pl-3"
+      <ContextMenu>
+        <ContextMenuTrigger
+          render={
+            <div
+              onDoubleClick={() => toggleExpandedChat(chat.id)}
+              // The header is the column's handle: drag it onto another column to
+              // swap places, or onto the sidebar to take it out of the thread.
+              {...chatDragHandlers(chat.id)}
+              className="flex h-8 shrink-0 cursor-grab items-center gap-2 pr-1.5 pl-3 active:cursor-grabbing"
+            />
+        }
       >
-        <ChatNumber index={index} focused={focused} />
-        <ProviderMark provider={chat.provider} className="size-3 shrink-0 text-muted-foreground" />
-        <span
-          title={title}
-          className={cn(
-            'min-w-0 truncate text-xs font-medium',
-            focused ? 'text-foreground' : 'text-muted-foreground'
-          )}
-        >
-          {title}
-        </span>
-        <ChatMark id={chat.id} labelled />
-        <div className="ml-auto flex shrink-0 items-center">
-          <WithTooltip label={expanded ? 'Show all chats  esc' : 'Expand  ⌘⇧↵'}>
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              onClick={() => toggleExpandedChat(chat.id)}
-              aria-label={expanded ? 'Show all chats' : `Expand chat ${index + 1}`}
-            >
-              {expanded ? <Minimize2 /> : <Maximize2 />}
-            </Button>
-          </WithTooltip>
-          {side && (
-            <WithTooltip label="Close chat">
+          <ChatNumber index={index} focused={focused} />
+          <ProviderMark provider={chat.provider} className="size-3 shrink-0 text-muted-foreground" />
+          <span
+            title={title}
+            className={cn(
+              'min-w-0 truncate text-xs font-medium',
+              focused ? 'text-foreground' : 'text-muted-foreground'
+            )}
+          >
+            {title}
+          </span>
+          <ChatMark id={chat.id} labelled />
+          <div className="ml-auto flex shrink-0 items-center">
+            <WithTooltip label={expanded ? 'Show all chats  esc' : 'Expand  ⌘⇧↵'}>
               <Button
                 size="icon-sm"
                 variant="ghost"
-                onClick={() => setConfirmClose(true)}
-                aria-label={`Close chat ${index + 1}`}
+                onClick={() => toggleExpandedChat(chat.id)}
+                aria-label={expanded ? 'Show all chats' : `Expand chat ${index + 1}`}
               >
-                <X />
+                {expanded ? <Minimize2 /> : <Maximize2 />}
               </Button>
             </WithTooltip>
+            {side && (
+              <WithTooltip label="Close chat">
+                <Button
+                  size="icon-sm"
+                  variant="ghost"
+                  onClick={() => setConfirmClose(true)}
+                  aria-label={`Close chat ${index + 1}`}
+                >
+                  <X />
+                </Button>
+              </WithTooltip>
+            )}
+          </div>
+        </ContextMenuTrigger>
+        <ContextMenuContent>
+          <ContextMenuItem onClick={() => toggleExpandedChat(chat.id)}>
+            {expanded ? <Minimize2 /> : <Maximize2 />} {expanded ? 'Show all chats' : 'Expand'}
+          </ContextMenuItem>
+          {side && (
+            <>
+              {/* The same move as dragging the header onto the sidebar. */}
+              <ContextMenuItem onClick={() => void leaveThread(chat.id)}>
+                <PanelLeftOpen /> Move to its own chat
+              </ContextMenuItem>
+              <ContextMenuSeparator />
+              <ContextMenuItem onClick={() => setConfirmClose(true)}>
+                <X /> Close chat
+              </ContextMenuItem>
+            </>
           )}
-        </div>
-      </div>
+        </ContextMenuContent>
+      </ContextMenu>
       {/* Outside the header: a portal still bubbles React events to its
           ancestors, and the header's double-click expands the column. Mounted
           only while asking, so its selectors do not run on every delta. */}

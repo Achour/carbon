@@ -750,6 +750,61 @@ function registerIpc(): void {
     emit({ type: 'meta', chatId: id, patch: { pinnedAt: chat.pinnedAt } })
   })
 
+  // A chat dragged into another thread becomes one of its columns. Ownership is
+  // data (`sideOf`), so this is a meta change on the chat and on the side chats
+  // it already had — nothing about the sessions moves. Checked here as well as
+  // in the renderer, because this is the layer that writes the rows.
+  ipcMain.handle('chats:move-to-thread', (_e, id: string, threadId: string) => {
+    if (id === threadId) return { ok: false, error: 'A chat cannot join its own thread.' }
+    const chat = store.getChat(id)
+    const thread = store.getChat(threadId)
+    if (!chat || !thread) return { ok: false, error: 'That chat no longer exists.' }
+    if (thread.sideOf) return { ok: false, error: 'Chats can only join a thread, not one of its columns.' }
+    if (chat.sideOf) return { ok: false, error: 'That chat is already part of a thread.' }
+    if (chat.surface === 'terminal') return { ok: false, error: 'A terminal chat cannot join a thread.' }
+    if (chat.cwd !== thread.cwd) {
+      return { ok: false, error: 'Only chats in the same folder can share a thread.' }
+    }
+    const moved = [id, ...store.sideChatIdsOf(id)]
+    for (const movedId of moved) {
+      const m = movedId === id ? chat : store.getChat(movedId)
+      if (!m) continue
+      m.sideOf = threadId
+      m.ephemeral = true
+      // A pinned row that is no longer a row would come back pinned if it ever
+      // left the thread again.
+      delete m.pinnedAt
+      store.saveChat(movedId)
+      emit({
+        type: 'meta',
+        chatId: movedId,
+        patch: { sideOf: threadId, ephemeral: true, pinnedAt: undefined }
+      })
+    }
+    return { ok: true, moved }
+  })
+
+  // The reverse: a side chat taken out of its thread is a chat of its own again.
+  // Its own side chats cannot come along — a side chat has none — so this is one
+  // meta change.
+  ipcMain.handle('chats:leave-thread', (_e, id: string) => {
+    const chat = store.getChat(id)
+    if (!chat) return { ok: false, error: 'That chat no longer exists.' }
+    if (!chat.sideOf) return { ok: false, error: 'That chat is not in a thread.' }
+    delete chat.sideOf
+    delete chat.ephemeral
+    // Its sidebar row sorts on `updatedAt`, and leaving is the moment it becomes
+    // a row at all — without this it would land wherever its last turn was.
+    chat.updatedAt = Date.now()
+    store.saveChat(id)
+    emit({
+      type: 'meta',
+      chatId: id,
+      patch: { sideOf: undefined, ephemeral: undefined, updatedAt: chat.updatedAt }
+    })
+    return { ok: true }
+  })
+
   ipcMain.handle(
     'chat:send',
     (_e, chatId: string, text: string, attachments?: Attachment[], label?: string) => {

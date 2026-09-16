@@ -2029,6 +2029,23 @@ export interface Api {
   renameChat(id: string, title: string): Promise<void>
   /** Pin/unpin a chat to the sidebar's Pinned section. */
   setChatPinned(id: string, pinned: boolean): Promise<void>
+  /**
+   * Make chat `id` a column of thread `threadId`: it becomes a side chat of that
+   * thread (`sideOf`, `ephemeral`), and so do the side chats it had. Refused for
+   * a terminal chat, a chat already in a thread, a target that is not a thread,
+   * and a different folder — a column runs in its thread's cwd. `moved` is every
+   * chat that now belongs to `threadId`.
+   */
+  moveChatToThread(
+    id: string,
+    threadId: string
+  ): Promise<{ ok: true; moved: string[] } | { ok: false; error: string }>
+  /**
+   * Take side chat `id` out of its thread: it becomes a chat of its own, back in
+   * the sidebar. Refused for a chat that is not a side chat — a thread's own chat
+   * is the thread, and cannot leave it.
+   */
+  leaveThread(id: string): Promise<{ ok: true } | { ok: false; error: string }>
   send(chatId: string, text: string, attachments?: Attachment[], label?: string): Promise<void>
   /** Start Codex's native reviewer with a structured App Server target. */
   startReview(chatId: string, target: CodexReviewTarget): Promise<void>
