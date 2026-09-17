@@ -659,6 +659,28 @@ export interface PermissionRequestPayload {
   decisionReason?: string
   /** True when the provider offered "always allow" permission suggestions. */
   hasSuggestions: boolean
+  /**
+   * The ask must not be approvable by a single stray keystroke: the prompt
+   * opens on its decline option and offers no one-key approve.
+   *
+   * The provider's own judgement about *this* ask, not a class of tools —
+   * Claude Code sets it on the ones where a mistaken yes is expensive — so
+   * Carbon has no business second-guessing it. Enter is the fast path the
+   * transcript notes deliberately (see `docs/transcript.md`), and this is the
+   * one flag that takes it away.
+   */
+  defaultToNo?: boolean
+  /**
+   * The ask must not offer a persistent "don't ask again": the rule it would
+   * write grants more than this ask's own action.
+   *
+   * Separate from `hasSuggestions`, which says whether there is a rule to
+   * write at all. A provider can offer suggestions *and* say they must not be
+   * persisted from here, and the two are answered by different sources — so
+   * folding them into one field would make "no suggestions" and "suggestions
+   * you may not use" indistinguishable.
+   */
+  noAlwaysAllow?: boolean
 }
 
 export type PermissionDecision =

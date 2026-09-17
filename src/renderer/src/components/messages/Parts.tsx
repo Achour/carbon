@@ -392,7 +392,8 @@ export const AssistantBlock = React.memo(function AssistantBlock({
   streaming,
   onOpenPlan,
   summarizeEdits = false,
-  fromPart = 0
+  fromPart = 0,
+  turnLive = false
 }: {
   message: AssistantMessage
   cwd: string
@@ -400,6 +401,18 @@ export const AssistantBlock = React.memo(function AssistantBlock({
   onOpenPlan?: (plan: string) => void
   /** Hide completed edit rows when the turn-level summary represents them. */
   summarizeEdits?: boolean
+  /**
+   * The turn this message belongs to is still working, so the runs inside it
+   * stay open (`ToolGroup`'s `live`).
+   *
+   * It is a property of the *turn* and not of this message, which is what makes
+   * it the answer for **Codex**: Codex accumulates a whole turn into one
+   * accumulating message, so its batches of calls are message-local groups and
+   * this is the only path that draws them. Left unset, every such group folded
+   * the moment the next reasoning or prose part landed on the same message —
+   * once per batch, for the whole turn.
+   */
+  turnLive?: boolean
   /**
    * Draw the message from this part onwards.
    *
@@ -459,7 +472,7 @@ export const AssistantBlock = React.memo(function AssistantBlock({
     <div className="space-y-2.5">
       {items.map((item) => {
         if (item.kind === 'group') {
-          return <ToolGroup key={item.key} parts={item.parts} cwd={cwd} />
+          return <ToolGroup key={item.key} parts={item.parts} cwd={cwd} live={turnLive} />
         }
         if (item.kind === 'images') {
           return (

@@ -63,6 +63,40 @@ const GROUP_MIN = 2
  */
 const QUIET_MS = 700
 
+/**
+ * How much of a streaming tool input has arrived, without serializing it.
+ *
+ * The clock below only needs a number that *moves* as the input fills in, and
+ * it used to get one from `JSON.stringify(input).length` — which is the whole
+ * input re-serialized on every event of the turn, for a value that is then
+ * thrown away. On the inputs this exists for that is the pathological case:
+ * main scales its emit window precisely because a big `Write` or canvas page
+ * reaches tens of kilobytes, and re-encoding it per emit is the cost the
+ * scaling was added to bound, paid again one layer up. Summing string lengths
+ * instead allocates nothing of size and changes on exactly the same emits.
+ *
+ * **It has to walk nested values, not just the top level.** A `Write`'s growth
+ * is one top-level string, but an MCP tool's argument is an object and
+ * `TodoWrite`'s is an array of them — count those as a constant and the clock
+ * stops re-arming while the call is still filling in, so "Working…" appears
+ * under a row that is visibly moving. Depth is bounded by `MAX_DEPTH` because
+ * this runs per part per event and a tool input is shallow by construction;
+ * past it the count is constant again, which is the same wrong answer as
+ * before but only for a shape no provider produces.
+ */
+const MAX_DEPTH = 4
+
+function partialWeight(input: unknown, depth = 0): number {
+  if (typeof input === 'string') return input.length
+  if (!input || typeof input !== 'object') return 1
+  if (depth >= MAX_DEPTH) return 1
+  let n = 0
+  for (const value of Object.values(input as Record<string, unknown>)) {
+    n += partialWeight(value, depth + 1)
+  }
+  return n
+}
+
 /** True when a message is nothing but read/search tool calls — each such call
  *  arrives as its own assistant message, so these are what pile up. A withheld
  *  thought riding along with one draws nothing (see `isBlankMsg`), so it must
@@ -242,6 +276,14 @@ function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
   /** The turn being walked, and whether its work is folded away. */
   let fold: TurnFold | undefined
   let folded = false
+  /**
+   * The turn being walked is still working, so its activity runs stay open.
+   *
+   * The same `live` the header is given below, hoisted to where `flush` can
+   * reach it. `flush` for a turn's run always runs *before* the next prompt
+   * reassigns these, so the value a run reads is its own turn's.
+   */
+  let turnLive = false
   /** Within a folded turn: has the walk reached the answer yet? */
   let reachedAnswer = false
 
@@ -280,6 +322,7 @@ function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
           onOpenPlan={ctx.onOpenPlan}
           summarizeEdits={turn?.hasChanges ?? false}
           fromPart={hidden ? m.parts.length : fromPart}
+          turnLive={turnLive}
         />
         {/* A finished checklist hangs off this message, so it folds with it —
             and stays when the message is only *partly* folded, since the block
@@ -302,7 +345,19 @@ function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
   const flush = (): void => {
     // Called at every non-groupable message, so most calls have nothing in hand.
     if (run.length === 0) return
-    if (run.length >= GROUP_MIN) {
+    // **Counted in tool calls, not in messages, because `liveRun` counts calls.**
+    // Claude ships one call per assistant message, so for it the two agree; a
+    // provider that puts two calls in one message did not, and the disagreement
+    // is a remount at the live→history handoff: `liveRun` drew a top-level
+    // `ToolGroup` and this drew `Fragment > AssistantBlock > ToolGroup`, a
+    // different parent under a different key, so every settled row in the run
+    // was rebuilt the moment the turn moved on. A run is a run at the same size
+    // on both sides of the seam.
+    const runCalls = run.reduce(
+      (n, m) => n + m.parts.filter((p) => !!p && p.type === 'tool').length,
+      0
+    )
+    if (runCalls >= GROUP_MIN) {
       // A run of tool-only messages is work by definition — it can never be the
       // turn's answer — so a folded turn omits the group and the checklist hung
       // off its last message, and keeps the changes card, which is the turn's
@@ -334,7 +389,17 @@ function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
             )
           : parts
         if (visibleParts.length >= GROUP_MIN) {
-          out.push(<ToolGroup key={groupKey(run[0].id)} parts={visibleParts} cwd={ctx.cwd} />)
+          out.push(
+            <ToolGroup
+              key={groupKey(run[0].id)}
+              parts={visibleParts}
+              cwd={ctx.cwd}
+              // An earlier batch of a turn that is still working. Without this
+              // the group folded the instant the turn's next sentence began —
+              // see `ToolGroup`'s `live`.
+              live={turnLive}
+            />
+          )
         } else if (visibleParts.length === 1) {
           out.push(
             <ToolCard key={visibleParts[0].toolUseId} part={visibleParts[0]} cwd={ctx.cwd} />
@@ -389,6 +454,7 @@ function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
       // take a card that is still moving off screen, and take with it the node
       // `AgentsPanel`'s row click scrolls to.
       const live = !!fold && (fold.userId === liveUserId || fold.running)
+      turnLive = live
       // A turn the CLI has already closed once and that is live again is a
       // *continuation* (`TurnFold.closed`): it folded when it closed, and the
       // continuation streams under the fold rather than throwing the work open
@@ -968,7 +1034,7 @@ export const ChatView = React.memo(function ChatView({
             !p
               ? ''
               : p.type === 'tool'
-                ? p.status + (p.partial ? '~' + JSON.stringify(p.input ?? null).length : '')
+                ? p.status + (p.partial ? '~' + partialWeight(p.input) : '')
                 : p.text.length
                   ? String(p.text.length)
                   : ''
@@ -1040,7 +1106,16 @@ export const ChatView = React.memo(function ChatView({
     <ToolGroup key={liveRun.key} parts={liveRun.parts} cwd={chat.cwd} live />
   ) : liveAssistant ? (
     <React.Fragment key={liveAssistant.id}>
-      <AssistantBlock message={liveAssistant} cwd={chat.cwd} streaming onOpenPlan={openPlan} />
+      {/* The live message of a live turn, so its runs stay open — and it takes
+          exactly the props `renderMessages` will give this same message once it
+          is history, so crossing over is a prop change rather than a rebuild. */}
+      <AssistantBlock
+        message={liveAssistant}
+        cwd={chat.cwd}
+        streaming
+        onOpenPlan={openPlan}
+        turnLive={busy}
+      />
     </React.Fragment>
   ) : null
 

@@ -271,6 +271,11 @@ const PARTIAL_INPUT_MAX_MS = 5000
 // How often a redacted thought's running token estimate is shipped. Nothing
 // draws it, so once a second is already generous.
 const THINKING_PING_MS = 1000
+// How often a sub-agent's accumulated transcript is shipped to its spawning
+// card, and how much the window widens per child. See `childUpdateDelay`.
+const CHILD_UPDATE_MS = 120
+const CHILD_UPDATE_PER_CHILD_MS = 8
+const CHILD_UPDATE_MAX_MS = 1000
 const ADVISOR_TOOL = 'advisor'
 
 /**
@@ -300,6 +305,35 @@ function partialInputDelay(length: number): number {
   return Math.min(
     PARTIAL_INPUT_MAX_MS,
     Math.max(PARTIAL_INPUT_MS, length / PARTIAL_INPUT_BYTES_PER_MS)
+  )
+}
+
+/**
+ * How long to wait before shipping a sub-agent's transcript again, given how
+ * much of it there is.
+ *
+ * **The third emitter with this shape, and the one with no bound at all.** A
+ * child update carries the parent call's *whole* `children` array — every
+ * text, thought and tool result the agent has produced — because that is what
+ * `ToolPart.children` is, and it went out once per child event. So an agent
+ * that makes fifty calls ships the first child fifty times and the fiftieth
+ * once: quadratic in the agent's own output, with a `saveChatSoon` on each and
+ * a structured clone of the lot in between, and `/simplify` spawning four
+ * review agents is four of those at once. Read off the code rather than
+ * measured: the probes in `demo/e2e` cover the transcript's own streaming and
+ * none of them spawns an agent, so the size of the win here is unquantified.
+ *
+ * The window widens with the child count for exactly the reason
+ * `partialInputDelay`'s does — that keeps the total linear — and the ceiling
+ * is chosen the other way round from that one: it sits **below**
+ * `saveChatSoon`'s 1.5 s debounce window rather than above its 5 s cap, so
+ * emits keep resetting the debounce and persistence behaves as it did. Above
+ * 1.5 s every emit would miss the window and write.
+ */
+function childUpdateDelay(children: number): number {
+  return Math.min(
+    CHILD_UPDATE_MAX_MS,
+    Math.max(CHILD_UPDATE_MS, children * CHILD_UPDATE_PER_CHILD_MS)
   )
 }
 
@@ -389,6 +423,14 @@ function createInputQueue(): InputQueue {
 interface PendingPermission {
   resolve: (result: PermissionResult) => void
   suggestions?: PermissionUpdate[]
+  /**
+   * The CLI said this ask's suggestions must not be persisted. Kept here as
+   * well as sent to the renderer: the renderer draws no "Always allow" button
+   * for it, but `chat:respond-permission` is an IPC channel and a decision
+   * carrying `always` must not write a rule the provider refused — the flag is
+   * a policy about the ask, so it is enforced where the ask lives.
+   */
+  noAlwaysAllow?: boolean
   toolUseId: string
   toolName: string
   input: Record<string, unknown>
@@ -537,13 +579,15 @@ const ASSISTANT_ERROR_TEXT: Record<string, string> = {
   authentication_failed: 'Authentication failed — sign in again.',
   oauth_org_not_allowed: 'Your organization does not allow this login.',
   account_on_hold: 'Your account is on hold. Check billing on the Anthropic console.',
+  verification_required: 'Your account needs to be verified before it can be used.',
   billing_error: 'A billing error stopped this turn.',
   rate_limit: 'Rate limited — wait a moment and try again.',
   overloaded: 'The API is overloaded right now.',
   invalid_request: 'The request was rejected as invalid.',
   model_not_found: 'That model is not available on this account.',
   server_error: 'The API returned a server error.',
-  max_output_tokens: 'The reply hit the maximum output length.'
+  max_output_tokens: 'The reply hit the maximum output length.',
+  cloud_credential_error: 'The cloud provider rejected these credentials.'
 }
 
 class ClaudeSession implements AgentSession {
@@ -560,6 +604,14 @@ class ClaudeSession implements AgentSession {
   private partialTimers = new Map<number, NodeJS.Timeout>()
   /** One trailing timer per thinking part, for the `estimated_tokens` pings. */
   private thinkingPingTimers = new Map<number, NodeJS.Timeout>()
+  /**
+   * One parked child update per spawning call, keyed by its `toolUseId` — the
+   * whole accumulated sub-agent transcript, throttled. See `emitChildUpdate`.
+   */
+  private childUpdates = new Map<
+    string,
+    { timer: NodeJS.Timeout; messageId: string; part: ToolPart }
+  >()
   // Route a tool's result (which lands on a later `user` message, matched by
   // toolUseId) back to its streamed part. Entries are pruned the moment a result
   // is applied (see handleToolResults) so these stay ~O(in-flight tools) instead
@@ -1208,7 +1260,7 @@ class ClaudeSession implements AgentSession {
       // ['user','project','local'], the rule then survives restarts and applies
       // to future chats in this project. Mode/directory updates keep their scope.
       const persisted =
-        decision.always && pending.suggestions?.length
+        decision.always && !pending.noAlwaysAllow && pending.suggestions?.length
           ? pending.suggestions.map((s) =>
               s.type === 'addRules' || s.type === 'replaceRules' || s.type === 'removeRules'
                 ? { ...s, destination: 'localSettings' as const }
@@ -1294,6 +1346,9 @@ class ClaudeSession implements AgentSession {
     this.partialTimers.clear()
     for (const timer of this.thinkingPingTimers.values()) clearTimeout(timer)
     this.thinkingPingTimers.clear()
+    // Flushes the parked child updates on its way through, which is why they
+    // are not cleared alongside the two timer maps above: a sub-agent's last
+    // few steps are exactly what a reader goes looking for after a session ends.
     this.terminalizeRunning('error')
     this.disposed = true
     this.dead = true
@@ -1322,6 +1377,10 @@ class ClaudeSession implements AgentSession {
       displayName?: string
       description?: string
       decisionReason?: string
+      /** See `PermissionRequestPayload.defaultToNo`. */
+      defaultToNo?: boolean
+      /** See `PermissionRequestPayload.noAlwaysAllow`. */
+      suppressAlwaysAllowRule?: boolean
     }
   ): Promise<PermissionResult> {
     return new Promise<PermissionResult>((resolve) => {
@@ -1329,6 +1388,7 @@ class ClaudeSession implements AgentSession {
       this.pending.set(requestId, {
         resolve,
         suggestions: opts.suggestions,
+        noAlwaysAllow: opts.suppressAlwaysAllowRule || undefined,
         toolUseId: opts.toolUseID,
         toolName,
         input
@@ -1346,7 +1406,12 @@ class ClaudeSession implements AgentSession {
           displayName: opts.displayName,
           description: opts.description,
           decisionReason: opts.decisionReason,
-          hasSuggestions: Boolean(opts.suggestions?.length)
+          hasSuggestions: Boolean(opts.suggestions?.length),
+          // Both are the CLI's constraints on how the ask may be answered, and
+          // they ride the request rather than being re-derived in the renderer:
+          // nothing on that side can know which asks the bridge marked.
+          defaultToNo: opts.defaultToNo || undefined,
+          noAlwaysAllow: opts.suppressAlwaysAllowRule || undefined
         }
       })
       this.setStatus('waiting-permission')
@@ -1835,6 +1900,11 @@ class ClaudeSession implements AgentSession {
     { keepBackground = false }: { keepBackground?: boolean } = {}
   ): void {
     if (!keepBackground) this.backgroundCalls.clear()
+    // Any sub-agent transcript still inside its throttle window, delivered
+    // before the parts it belongs to are settled below. This is the one moment
+    // a parked update can be *lost* rather than merely late — `dispose` reaches
+    // here too, and after it the timers are gone with the session.
+    this.flushChildUpdates()
     const settle = (part: ToolPart): boolean => {
       let changed = false
       if (keepBackground && this.backgroundCalls.has(part.toolUseId)) return false
@@ -2395,7 +2465,44 @@ class ClaudeSession implements AgentSession {
     return { messageId: loc.message.id, part }
   }
 
+  /**
+   * Ship a sub-agent's transcript to its spawning card, at most every
+   * `childUpdateDelay`.
+   *
+   * One **trailing** entry per parent call, holding the latest state rather
+   * than a queue of them: the payload is the whole accumulated `children`
+   * array, so a superseded emit carries nothing the next one does not. The
+   * window is armed by the first update and the payload is re-read at fire
+   * time, which makes this a throttle rather than a debounce — an agent
+   * producing children without pause still reports, it just reports at a grain
+   * a roster can be read at.
+   */
   private emitChildUpdate(messageId: string, parent: ToolPart): void {
+    const key = parent.toolUseId
+    const parked = this.childUpdates.get(key)
+    if (parked) {
+      // Same call, newer state. Nothing to re-arm: the array is read when the
+      // timer fires, and `parent` is the same object main mutates in place.
+      parked.messageId = messageId
+      parked.part = parent
+      return
+    }
+    const timer = setTimeout(() => {
+      const entry = this.childUpdates.get(key)
+      this.childUpdates.delete(key)
+      if (entry) this.sendChildUpdate(entry.messageId, entry.part)
+    }, childUpdateDelay(parent.children?.length ?? 0))
+    this.childUpdates.set(key, { timer, messageId, part: parent })
+  }
+
+  /**
+   * The emit itself, and the path anything terminal has to take.
+   *
+   * A trailing window always delivers *eventually*, so the only state that can
+   * be lost is one whose session ends inside the window — which is why dispose
+   * and the turn's own end flush rather than clear.
+   */
+  private sendChildUpdate(messageId: string, parent: ToolPart): void {
     this.deltas.flush()
     this.emit({
       type: 'tool-update',
@@ -2411,6 +2518,17 @@ class ClaudeSession implements AgentSession {
     })
     this.flagBuriedMutation(messageId)
     this.store.saveChatSoon(this.chat.id)
+  }
+
+  /** Deliver every parked child update now — a turn ending, or the session going. */
+  private flushChildUpdates(): void {
+    if (this.childUpdates.size === 0) return
+    const parked = [...this.childUpdates.values()]
+    this.childUpdates.clear()
+    for (const entry of parked) {
+      clearTimeout(entry.timer)
+      this.sendChildUpdate(entry.messageId, entry.part)
+    }
   }
 
   /**

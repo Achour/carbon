@@ -75,15 +75,75 @@ where the output already lived.
   the whole feature working or visibly failing. Between any two calls in a run
   there is a moment when the last has returned and the next has not started, so a
   row keyed on call status collapsed and reopened *once per call*: a
-  seven-command run flickered seven times. `ChatView` owns the only correct
-  answer — its `liveRun` exists exactly while the chat is busy — and passes it
-  down. `running` is still OR-ed in so a group holding a backgrounded agent that
-  outlives its turn does not shut on it, and a **lone call never opens itself**:
-  it is in flight for a few hundred milliseconds and is not a block.
-- **`dense` now suppresses only the enter animation.** A call reads the same
-  wherever it sits, so the styling no longer forks; the rows arrive together when
-  a group opens, and a dozen of them each playing their own entrance is a stutter
-  rather than an arrival.
+  seven-command run flickered seven times. `running` is still OR-ed in so a group
+  holding a backgrounded agent that outlives its turn does not shut on it, and a
+  **lone call never opens itself**: it is in flight for a few hundred
+  milliseconds and is not a block.
+- **`live` means "this run's *turn* is working", and it used to mean "this run
+  is the trailing block" — three unrequested folds a turn apart.** The first
+  answer was `ChatView`'s `liveRun` alone, which exists only while the streaming
+  message is tool calls; one sentence of prose ends it. So the model says "now
+  let me check the tests", the open run is handed to history with `live` false,
+  and a four-row block folds to a line *mid-turn*, under a reader who was
+  looking at it, with the turn's next batch about to open below. Measured on a
+  three-batch Claude turn (`demo/e2e/disclosure-probe.js`, which watches every
+  `data-panel-open` flip on a row that stayed mounted): **three folds in 32
+  seconds**, none of them asked for. A progress sentence is not evidence the
+  reader has finished reading the work above it, and the transcript already has
+  the control that cleans up after a turn — the turn fold itself. So all three
+  paths that draw a run of a live turn now say so: `liveRun` (the trailing
+  block), `renderMessages`' `flush` (an earlier batch already in history) and
+  `AssistantBlock`'s own grouping — **that last one is Codex's whole case**,
+  since Codex accumulates a turn into one message and its batches are
+  message-local groups, so it folded once per batch with nothing in `ChatView`
+  able to see it. One of the three saying `false` is one fold nobody asked for;
+  the probe reports 0. The turn's own fold still happens and still takes the
+  work with it: 1.5 s and 4.5 s after idle the probe finds every turn header
+  `expanded: false` and not one activity row left on screen.
+- **A run is a run at the same size on both sides of the live→history seam.**
+  `liveRun` counted *tool calls* and `flush` counted *messages*, which agree for
+  Claude (one call per assistant message) and do not for a provider that puts
+  two calls in one. There the handoff swapped a top-level `ToolGroup` for
+  `Fragment > AssistantBlock > ToolGroup` — a different parent under a different
+  key — and rebuilt every settled row in the run the moment the turn moved on.
+  Both count calls.
+- **`dense` suppresses the enter animation for rows that arrive *together*, and
+  only those.** A call reads the same wherever it sits, so the styling does not
+  fork; a dozen rows each playing their own entrance when you click a group open
+  is a stutter rather than an arrival. But once a run stays open for the whole
+  turn, its rows no longer arrive together — they arrive one per step, seconds
+  apart, and drawn without motion a run of eight commands appends eight
+  motionless lines, which reads as the app lagging behind the work rather than
+  reporting it. `useArrivals` tells the two apart: a row whose id the group had
+  not seen before `arriving`s in, and a group's *first* render counts as a batch
+  — except for its last call when the group is live, because a live group's
+  first render is always the promotion of a lone card that was already on screen
+  and only that last call is new.
+- **An arriving step fades and de-blurs; it does not move — and the first
+  attempt moved it, which is why it was invisible.** Giving arriving rows the
+  ordinary `animate-enter` produced twelve animations on a twelve-step turn and
+  no animation the reader could see, because `enter` rises from
+  `translateY(6px)` and a run's rows live in `ACTIVITY_PANEL`: `overflow-hidden`
+  with a height that grows to exactly fit. A row 6px below its final position is
+  6px inside the crop, so it played its whole entrance out of sight and became
+  visible at the moment it landed. Opacity and blur cannot be clipped by
+  anything, which is what makes `step-in` (`index.css`) the shape that works
+  here; the blur is also what makes it legible, since a 20px muted row fading in
+  is easy to miss where a word resolving out of a blur is a focus cue. So
+  `demo/e2e/disclosure-probe.js` samples the **computed style** at the moment an
+  animation starts rather than counting animations: on the measured turn, 9
+  `step-in`s and 3 `enter`s, every one of them caught at `opacity: 0.00` — and
+  `blur(3px)` for the nine — with `invisible: 0`, `maxGap` 33ms and no long
+  tasks.
+- **A live group never plays its own entrance, because it never arrives.** A run
+  reaches the screen at `GROUP_MIN` calls, so the first render of a live group
+  is always a *promotion*: the group row is new, but the panel it wraps already
+  holds a row the reader is looking at, and animating the wrapper slides that
+  row in a second time. There is no formulation where a lone call and the first
+  row of a group are the same element under the same key — the parents differ —
+  so suppressing the wrapper's entrance is the honest fix rather than the
+  complete one. A group mounting with `live` false is a chat being opened or a
+  turn being unfolded, where everything is genuinely new.
 - **The expanded calls are flush, not railed.** The calls a run made are the same
   kind of line as the row summarizing them. An indent would say they are a
   different kind of thing, and at three levels (group → call → its output) it
@@ -109,6 +169,31 @@ where the output already lived.
   prefix has a first character the replacement reads as unchanged rather than
   as every anchor line deleted for a beat. Nothing about the collapsed row
   changes — a row is one line, folded, and stays so.
+- **Codex spells an edit as a *patch*, and that card used to expand to
+  nothing.** Its `file_change` item carries a unified `diff` per path rather
+  than an `old_string`/`new_string` pair, and `normalizeAppServerItem` kept only
+  the path and the kind — so on the one row where "what did it change" is the
+  only question, Codex showed `update  src/App.tsx` and Claude showed a diff.
+  The patch is carried through now and parsed with `parseDiff`, the review
+  panel's own parser (a second reading of `@@` headers is a second reading that
+  drifts); a multi-file patch draws one labelled block per file. Verified on a
+  real Codex turn (`demo/e2e/codex-patch-probe.js`), which reads the part out of
+  the store rather than the DOM: an `@@ -17 +17,4 @@` hunk on the finished card
+  where there had been nothing.
+  **`item/fileChange/patchUpdated` is handled too, and that half is wired
+  rather than witnessed.** It is Codex's own channel for revising a
+  `file_change`'s patch, the shape `codex app-server generate-ts` publishes
+  (`{ threadId, turnId, itemId, changes }`), and the string is in the CLI
+  binary as often as `item/commandExecution/outputDelta` is — which Carbon
+  demonstrably receives. But the probe's small single-hunk patch never
+  triggered a revision: its diff landed at `item/completed`, and
+  `sawPartialDiff` came back false. So the handler is there and correct against
+  the published binding; what has not been seen is a patch arriving in pieces.
+  The payload is the whole change set each time, so it replaces rather than
+  accumulates, and it goes through the same `item.updated` path as every other
+  live item so one normalizer owns the part. A change with no `diff` renders the
+  card it always did, which is what a `thread/resume` replaying older items
+  needs.
 - **A result is cut to its tail, not its head.** The one output people open is
   a failed build or test run, and the error is at the bottom; keeping the first
   6,000 characters hid exactly that. `OutputBlock` keeps the last, cuts on a
@@ -123,6 +208,20 @@ where the output already lived.
   non-empty composer is a message being written, and any other input is a
   dialog. The prompt itself no longer lives in the transcript at all; see **What
   the agent asks you** below.
+- **…unless the CLI says this ask may not be answered that fast.** Claude Code
+  marks an ask `defaultToNo` when a mistaken yes is expensive, and
+  `suppressAlwaysAllowRule` when the rule an "always allow" would write grants
+  more than the ask's own action. Both ride `PermissionRequestPayload`
+  (`defaultToNo` / `noAlwaysAllow`) rather than being re-derived, because
+  nothing on the renderer's side can know which asks the bridge marked. The
+  first takes Enter away — Esc still denies, since the constraint is on saying
+  yes and a prompt with no keyboard answer at all is worse — moves the emphasis
+  and the autofocus onto Deny, and says so in the hint band. It does **not**
+  reorder the buttons: moving them between prompts is how a reader clicks the
+  wrong one. The second drops the button entirely, and `respondPermission`
+  refuses a persisted rule for such an ask regardless of what came over IPC —
+  the flag is a policy about the ask, so it is enforced where the ask lives, and
+  a button that is silently refused is worse than no button.
 
 **`summarizeActivity` is the part that carries information rather than style.**
 A mixed run said `Workspace activity · 7 actions` — a count of the one thing the

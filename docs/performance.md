@@ -99,6 +99,44 @@ turn, or on every message of every turn.
   `ts title=foo.ts` stream plain and snap to colour at the fence's close (mdast
   hands remark only the first word, hence `languageFromFenceInfo`'s fallback).
 
+- **A growing run re-answered the same question about every call it already
+  held.** `ToolGroup` derives a `toolMeta` per member, and a live run changes on
+  every emit of the call still streaming — so an eight-call run re-derived seven
+  settled metas at the rate main ships partial inputs, and for a `Bash` member
+  that is not a cheap question: `humanizeShellCommand` resolved `lastPath` up
+  front, tokenizing the *whole* command with `matchAll`, when only six of its
+  labels ever look at the answer. Every `git commit -F-` with a paragraph in it,
+  every `cat > file <<EOF` carrying forty kilobytes, was fully tokenized to
+  produce a value the `Git`/`Run`/`Terminal` branch threw away. Measured (a
+  read-only benchmark of the helper itself, by Codex during the review that
+  found it): **~19.5 ms for 100 commands of ~39 KB, against 0.039 ms for 100
+  short ones** — a dropped frame, spent reading text nothing draws. The path is
+  resolved lazily now, and `toolMeta` is cached in a `WeakMap` on the part
+  object. Identity is a sound key because **a part is immutable in the
+  renderer**: every path that changes one mints a new object, and everything
+  crossing IPC is structured-cloned, so a part the renderer holds can never be
+  mutated underneath the cache. `cwd` rides the entry rather than the key, so a
+  chat that moves does not keep stale relative paths.
+- **The foot's clock serialized the whole of a streaming tool input to measure
+  it.** `drawn` needs a number that *moves* as an input fills in and took it
+  from `JSON.stringify(input).length` — the entire input re-encoded on every
+  event of the turn, for a value immediately discarded. On the inputs that
+  exists for it is the pathological case: main scales its emit window precisely
+  because a big `Write` or canvas page reaches tens of kilobytes, and the
+  re-encode paid that cost again one layer up. `partialWeight` sums the string
+  lengths of the top-level values — O(keys), no allocation of size, and it
+  changes on exactly the same emits.
+- **What the transcript's length costs per event: measured, and it is nothing.**
+  `HYDRATE_TAIL` bounds what main *loads* to 60 messages, but nothing bounds
+  what a session *appends*, so the suspicion was that the per-event passes over
+  `messages` (`displayedMessages`, `foldTurns`, `turnPresentations`, the tail
+  scans) are what makes a long session sluggish. `demo/e2e/scale-probe.js`
+  pumps one identical synthetic tool-heavy turn through the real reducer at
+  three transcript lengths: **0.19 ms mean per event at 68 messages, 0.16 at
+  294, 0.26 at 989 — and zero long tasks at any of them.** `useHistoryNodes`
+  and the turn fold are doing their job; this is written down so the next person
+  to suspect it can skip the experiment rather than repeat it.
+
 **A settled turn's pre-answer nodes remount by design.** Folding a turn is
 omission from `ChatView`'s flat array (see the turn header in
 `docs/transcript.md`), so every node above the answer unmounts the moment the

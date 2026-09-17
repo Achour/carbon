@@ -20,7 +20,7 @@
     (row.closest('button,[role="button"],li,a') || row).click();
     await sleep(1500);
     const chatId = app.getState().activeId;
-    await app.getState().setChatOptions({ permissionMode: 'bypassPermissions' });
+    await app.getState().setChatOptions(chatId, { permissionMode: 'bypassPermissions' });
     await sleep(300);
 
     const t0 = performance.now();
@@ -58,7 +58,7 @@
     }, 100);
 
     const status = () => app.getState().statuses[chatId] ?? 'idle';
-    void app.getState().sendMessage(PROMPT, []);
+    void app.getState().sendMessage(chatId, PROMPT, []);
     let waited = 0;
     while (status() === 'idle' && waited < 20000) { await sleep(100); waited += 100; }
     const started = performance.now();

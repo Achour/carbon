@@ -134,7 +134,7 @@ Path aliases: `@` → `src/renderer/src`, `@shared` → `src/shared` (renderer a
   they keep resetting it and only the cap ever fires — a ceiling between the two
   would make every emit miss the window and persist, i.e. more writes than the
   flat window it replaced, on exactly the inputs this exists for.
-- **Two more emitters are throttled at the same grain, for the same reason.** A
+- **Three more emitters are throttled at the same grain, for the same reason.** A
   redacted thought's `estimated_tokens` pings went out as a full-part IPC each,
   several a second for the whole of a long thought, re-rendering the transcript
   for a number nothing draws; the count still accumulates on the part per ping
@@ -142,7 +142,21 @@ Path aliases: `@` → `src/renderer/src`, `@shared` → `src/shared` (renderer a
   close. Codex's `item/commandExecution/outputDelta` arrived as the whole item
   and went out as the whole part per write to the pipe — O(k²) bytes for a
   chatty command, plus a persist each; `OUTPUT_MS` (`codex.ts`) holds one
-  trailing timer per item and the terminal update flushes it.
+  trailing timer per item and the terminal update flushes it. And a
+  **sub-agent's transcript** was the same shape with nothing bounding it at
+  all: `emitChildUpdate` ships the spawning call's whole `children` array —
+  every text, thought and 40 KB-capped tool result the agent has produced — and
+  it fired once per child event, so an agent making fifty calls shipped its
+  first child fifty times, with a `saveChatSoon` on each. `childUpdateDelay`
+  parks one trailing entry per parent and widens the window with the child
+  count the way `partialInputDelay` does; its ceiling sits *below*
+  `saveChatSoon`'s 1.5 s debounce rather than above its 5 s cap, so
+  persistence behaves exactly as before. `terminalizeRunning` flushes — and
+  `dispose` reaches it, which is the only moment a parked update could be lost
+  rather than merely late. Four agents from one `/simplify` is four of these at
+  once. The quadratic is read off the code rather than measured — no probe in
+  `demo/e2e` spawns an agent — so unlike the transcript's own costs this one's
+  size is unquantified.
 - **Force-sending a queued message races the turn it interrupts.** The SDK
   writes the interrupt receipt *before* the aborted turn's result, so
   `interrupt()` resolves, the renderer's idle drain sends the queued prompt, a
@@ -180,17 +194,22 @@ Path aliases: `@` → `src/renderer/src`, `@shared` → `src/shared` (renderer a
 - Changing **effort** has no live SDK setter — `setOptions` disposes the session and the next send resumes it in a fresh process. Model and permission mode change live.
 - **The system prompt is the one option that changes on neither axis.** Carbon
   passes an `append` (`GUI_SYSTEM_APPEND`, which carries the Mermaid nudge and
-  `CANVAS_SESSION_RULES`), and the SDK stops *recording* the rendered prompt the
-  moment one is passed — so the preset re-rendered its dynamic sections on every
+  `CANVAS_SESSION_RULES`) and `systemPrompt.snapshot: true`, so the rendered
+  prompt is *recorded* on the conversation's first request and sent as-is after
+  that. Unrecorded — which is what passing an `append` used to mean, up to
+  agent-sdk 0.3.263 — the preset re-rendered its dynamic sections on every
   request and every relaunch, moving the prompt-cache prefix underneath a
   conversation and, with extended thinking, discarding the reasoning already in
-  it. `systemPrompt.snapshot: true` restores recording. The cost is that the
-  record then lives in the session transcript and survives `resume`: an edit to
-  either constant reaches a chat only once it starts or compacts, not merely on
-  the next launch. Codex re-sends its equivalent (`developerInstructions`) on
-  every `turn/start`, and Grok's rides `_meta.rules` on `session/new` /
-  `session/load`, so both pick a constant up at their next turn or spawn — the
-  asymmetry is deliberate and lives at the definition sites.
+  it. **Recording is the SDK's default as of 0.3.274**, and Carbon still passes
+  the flag: it is the behaviour the rest of this bullet depends on, and a
+  default that changed once can change back. The cost is that the record lives
+  in the session transcript and survives `resume`: an edit to either constant
+  reaches a chat only once it starts or compacts, not merely on the next launch
+  (`snapshot: false` is the opt-out while iterating on the text). Codex
+  re-sends its equivalent (`developerInstructions`) on every `turn/start`, and
+  Grok's rides `_meta.rules` on `session/new` / `session/load`, so both pick a
+  constant up at their next turn or spawn — the asymmetry is deliberate and
+  lives at the definition sites.
 - Sub-agent traffic never becomes a top-level message, but it is no longer *dropped*: only a
   `stream_event` carrying a `parent_tool_use_id` breaks: its `assistant` and `user` messages
   are routed onto the spawning tool card (`handleSubAgentAssistant` /

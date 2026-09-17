@@ -47,6 +47,7 @@ import { humanizeShellCommand, unwrapGrokTool } from '@/lib/toolLabels'
 import { leadActivityLabel, summarizeActivity } from '@/lib/toolSummary'
 import { groupToolRuns } from '@/lib/toolRuns'
 import { lineDiff, type DiffLine } from '@/lib/lineDiff'
+import { parseDiff } from '@/lib/diffRows'
 import { Markdown } from '@/components/Markdown'
 import { useApp } from '@/store'
 import {
@@ -206,7 +207,35 @@ function browserMeta(name: string, input: Record<string, unknown>): ToolMeta {
   }
 }
 
+/**
+ * What a row says about a call, cached on the **part object itself**.
+ *
+ * `ToolGroup` re-derives a meta for every member each time the run changes, and
+ * a run changes on every emit of the one call still streaming — so an eight-call
+ * run re-answered the same question about seven settled calls, at the rate main
+ * ships partial inputs. For a `Bash` member that question is not cheap (see
+ * `humanizeShellCommand`), and for a browser or MCP call it walks the input.
+ *
+ * Identity is a sound key because **a part is immutable in the renderer**:
+ * every path that changes one mints a new object (`{ ...p, ...ev.patch }` for a
+ * `tool-update`, a whole replacement for a `part`), and everything crossing IPC
+ * is structured-cloned, so a part the renderer holds can never be mutated
+ * underneath this. Main mutates parts in place and does not call any of this.
+ * `cwd` rides the entry rather than the key: it is per-chat, it changes when a
+ * chat moves, and a stale relative path is exactly the bug a second field
+ * avoids.
+ */
+const metaCache = new WeakMap<ToolPart, { cwd: string; meta: ToolMeta }>()
+
 function toolMeta(part: ToolPart, cwd: string): ToolMeta {
+  const hit = metaCache.get(part)
+  if (hit && hit.cwd === cwd) return hit.meta
+  const meta = computeToolMeta(part, cwd)
+  metaCache.set(part, { cwd, meta })
+  return meta
+}
+
+function computeToolMeta(part: ToolPart, cwd: string): ToolMeta {
   // Ahead of the switch, and asking the recognizer rather than a name: Grok
   // wraps every deferred MCP tool in `use_tool`, so a canvas mutation reaches
   // here under a name no case can match and the card would read `use_tool` with
@@ -221,8 +250,10 @@ function toolMeta(part: ToolPart, cwd: string): ToolMeta {
   // browser click, a preview screenshot, a canvas read. Renamed into the
   // `mcp__server__tool` shape below and read again, so those calls reach the
   // cases that already draw them rather than a wrench labelled `use_tool`.
+  // The uncached function, deliberately: the renamed part is a fresh object per
+  // call, so caching it would only fill the map with keys nothing looks up again.
   const unwrapped = unwrapGrokTool(part.name, input)
-  if (unwrapped) return toolMeta({ ...part, ...unwrapped }, cwd)
+  if (unwrapped) return computeToolMeta({ ...part, ...unwrapped }, cwd)
   const rel = (p?: string): string | undefined =>
     p?.startsWith(cwd + '/') ? p.slice(cwd.length + 1) : p
   // The SDKs report absolute paths, but don't rely on it — a relative one still opens.
@@ -600,10 +631,24 @@ const ACTIVITY_PANEL =
  * is the wrong question and was the first answer here: between any two calls in
  * a run there is a moment when the last one has returned and the next has not
  * started, so a row driven by it collapsed and reopened *once per call* — a
- * seven-command run flickering seven times. The right question is whether this
- * is the turn's live block, which stays true across those gaps; `ToolGroup`
- * takes it as `live` from the one place that knows, and a lone call — in flight
- * for a few hundred milliseconds — is not a block and never opens itself.
+ * seven-command run flickering seven times. The right question is whether the
+ * **turn** this run belongs to is still working, which stays true across those
+ * gaps *and* across the prose between two runs; `ToolGroup` takes it as `live`
+ * from the places that know, and a lone call — in flight for a few hundred
+ * milliseconds — is not a block and never opens itself.
+ *
+ * **"The turn", not "the live block", and the difference is three folds a
+ * turn.** `live` used to mean *this is the trailing run of the streaming
+ * message*, which a single sentence of prose ends: the model says "now let me
+ * check the tests", `ChatView`'s `liveRun` stops recognizing the live message,
+ * the group is handed to history with `live` false and folds shut — mid-turn,
+ * under a reader who was looking at it, with the turn's next batch about to
+ * open below it. Measured on a three-batch Claude turn
+ * (`demo/e2e/disclosure-probe.js`): three unrequested folds in 32 seconds, each
+ * one a four-row block collapsing to a line. A progress sentence is not
+ * evidence the reader has finished reading the work above it, and the transcript
+ * already has the control that cleans up after a turn — the turn fold itself.
+ * So a run now folds exactly once, when its turn ends.
  *
  * `null` is "nobody has said", which is deliberately not the same as `false`.
  * Storing a boolean up front would make the first auto-close look like a user
@@ -791,6 +836,34 @@ interface TodoItem {
   status?: string
 }
 
+/**
+ * A Codex `file_change`'s unified patches, as the rows `DiffBlock` draws.
+ *
+ * `parseDiff` is the review panel's parser, reused rather than repeated — a
+ * second reading of `@@` headers is a second reading that drifts. Its `note`
+ * rows (a "\ No newline at end of file" marker, a header it could not place)
+ * carry no line of the file, so they are dropped here rather than drawn as
+ * blank context: this is a preview inside a row, not the review.
+ *
+ * A change with no `diff` yields nothing and is skipped, which is how an older
+ * CLI — and a `thread/resume` replaying items from one — still renders the
+ * card it always did instead of an empty block per path.
+ */
+function codexPatches(changes: unknown): { path: string; lines: DiffLine[] }[] {
+  if (!Array.isArray(changes)) return []
+  const out: { path: string; lines: DiffLine[] }[] = []
+  for (const change of changes) {
+    const raw = (change ?? {}) as Record<string, unknown>
+    const diff = str(raw.diff)
+    if (!diff) continue
+    const lines = parseDiff(diff)
+      .rows.filter((row) => row.kind !== 'note')
+      .map((row) => ({ kind: row.kind as DiffLine['kind'], text: row.text }))
+    if (lines.length) out.push({ path: str(raw.path) ?? '', lines })
+  }
+  return out
+}
+
 function ToolDetails({ part }: { part: ToolPart }): React.JSX.Element {
   const input = (part.input ?? {}) as Record<string, unknown>
 
@@ -799,6 +872,24 @@ function ToolDetails({ part }: { part: ToolPart }): React.JSX.Element {
       case 'Bash':
         return str(input.command) ? <MonoBlock label="Command">{String(input.command)}</MonoBlock> : null
       case 'Edit': {
+        // **Codex spells an edit as a patch, not as a pair of strings.** Its
+        // `file_change` item carries a unified diff per path (see
+        // `item/fileChange/patchUpdated`), so there is no `old_string` to diff
+        // against and this card used to expand to nothing on that provider —
+        // the one row where "what did it change" is the only question. The
+        // patch is already the answer, so it is parsed rather than recomputed,
+        // through the same parser the review panel uses; a multi-file patch
+        // draws one labelled block per file, in the order the CLI sent them.
+        const patched = codexPatches(input.changes)
+        if (patched.length) {
+          return (
+            <div className="space-y-2">
+              {patched.map((change) => (
+                <DiffBlock key={change.path} lines={change.lines} label={change.path} />
+              ))}
+            </div>
+          )
+        }
         const before = str(input.old_string)
         if (!before) return null
         // `new_string` streams in after `old_string`. Until its first character
@@ -907,6 +998,7 @@ export const ToolCard = React.memo(function ToolCard({
   cwd,
   onOpenPlan,
   dense = false,
+  arriving = false,
   showOutputImages = true
 }: {
   part: ToolPart
@@ -919,6 +1011,21 @@ export const ToolCard = React.memo(function ToolCard({
    * entrance is a stutter rather than an arrival.
    */
   dense?: boolean
+  /**
+   * …unless this row arrived *alone*, into a group already on screen — then it
+   * animates, `dense` or not.
+   *
+   * The two cases only became distinguishable once a run stopped folding at
+   * every sentence (see `ToolGroup`'s `live`): a live group now stays open for
+   * the whole turn, so its rows arrive one per step, seconds apart. A dozen
+   * entrances firing together is the stutter `dense` exists to prevent; one
+   * entrance per step, at the pace the agent works, is the opposite — it is the
+   * only thing on screen saying a step just happened. Without it a run of
+   * eight commands appends eight motionless lines, which reads as the app
+   * lagging behind the work rather than reporting it. `ToolGroup` decides which
+   * rows these are.
+   */
+  arriving?: boolean
   /** A containing ToolGroup owns the one always-visible image copy. */
   showOutputImages?: boolean
 }): React.JSX.Element {
@@ -967,7 +1074,11 @@ export const ToolCard = React.memo(function ToolCard({
       <Collapsible.Root
         open={open}
         onOpenChange={onOpenChange}
-        className={cn(!dense && 'animate-enter')}
+        // `step-in` rather than `enter` for an arriving row, and the reason is
+        // the container: a dense row lives in `ACTIVITY_PANEL`, which clips, so
+        // an animation that displaces the row plays entirely inside the crop.
+        // See the keyframe's own note in `index.css`.
+        className={cn(arriving ? 'animate-step-in' : !dense && 'animate-enter')}
       >
         <Collapsible.Trigger className={ACTIVITY_ROW}>
           {/* The label and what it acted on are one phrase and shrink together,
@@ -1117,6 +1228,48 @@ export function groupRunning(parts: ToolPart[]): boolean {
 }
 
 /**
+ * Which rows of a run arrived **on their own**, and so should animate in.
+ *
+ * The distinction a group has to make is between rows that appear *together* —
+ * someone clicked it open, a chat was opened, a folded turn was expanded — and
+ * a row that appears *alone*, seconds after the ones above it, because the
+ * agent just took another step. The first is a batch and a dozen simultaneous
+ * entrances is a stutter; the second is the step itself, and drawn without
+ * motion it reads as the transcript lagging behind the agent.
+ *
+ * Two rules, and the first is what makes a *promotion* silent. A live group's
+ * first render is always a promotion: a run reaches the screen at `GROUP_MIN`
+ * calls, so the calls before the last were already drawn as lone cards and only
+ * the last is new. Everything else on a first render — a settled group, mounting
+ * with its whole run in hand — arrived as a batch and animates nothing, which
+ * is what `dense` has always meant. After that, any id the group has not seen
+ * before is an arrival.
+ *
+ * The set is **monotonic**: a row that animated keeps the class for its life
+ * rather than losing it on the next of the turn's many re-renders, which would
+ * cancel the animation part-way through. Written during render, like
+ * `useHistoryNodes`' cache and for the same reason — a class added in an effect
+ * lands after paint, so the row would appear in place and *then* slide, which
+ * is worse than not animating at all.
+ */
+function useArrivals(parts: ToolPart[], live: boolean): ReadonlySet<string> {
+  const seen = React.useRef<Set<string> | null>(null)
+  const arrived = React.useRef<Set<string>>(new Set())
+  if (seen.current === null) {
+    seen.current = new Set(parts.map((p) => p.toolUseId))
+    const last = parts[parts.length - 1]
+    if (live && last) arrived.current.add(last.toolUseId)
+  } else {
+    for (const p of parts) {
+      if (seen.current.has(p.toolUseId)) continue
+      seen.current.add(p.toolUseId)
+      arrived.current.add(p.toolUseId)
+    }
+  }
+  return arrived.current
+}
+
+/**
  * A run of consecutive read/search tools shown as one collapsible row
  * ("Read 12 files") so hundreds of reads don't bury the conversation. Expand to
  * see each call as a thin, still-expandable row.
@@ -1129,9 +1282,16 @@ export const ToolGroup = React.memo(function ToolGroup({
   parts: ToolPart[]
   cwd: string
   /**
-   * This is the turn's in-flight block. Only `ChatView`'s `liveRun` sets it, and
-   * only while the chat is busy — which is exactly the span the run should stay
-   * open for, gaps between calls included.
+   * This run belongs to a turn that is still working — which is exactly the
+   * span it should stay open for: the gaps between its calls, and the prose
+   * between it and the turn's next batch.
+   *
+   * Set by every path that draws a run of a live turn, and they have to agree:
+   * `ChatView`'s `liveRun` (the trailing block), `renderMessages`' `flush` (an
+   * earlier batch of the same turn, already handed to history) and
+   * `AssistantBlock`'s own grouping (Codex accumulates a whole turn into one
+   * message, so its batches are message-local). One of the three saying `false`
+   * is one fold the reader did not ask for.
    */
   live?: boolean
 }): React.JSX.Element {
@@ -1182,10 +1342,35 @@ export const ToolGroup = React.memo(function ToolGroup({
   // row, beside the status, the way a published artifact's does on a ToolCard.
   const canvas = canvasInRun(parts)
   const outputImages = parts.flatMap((part) => part.outputImages ?? [])
+  const arrivals = useArrivals(parts, live)
+  /**
+   * **A live group never plays its entrance, because it never arrives** — and
+   * this is decided *once, at mount*, which is the whole of the correctness
+   * here. A run reaches the screen at `GROUP_MIN` calls, and the call before
+   * that was already there as a lone `ToolCard`, so the first render of a live
+   * group is always the *promotion* of a row the reader is already looking at,
+   * under a new key and therefore as a fresh mount. Animating it slides that
+   * row in a second time; the rows inside arrive `dense` and suppress their own
+   * entrance for the same reason. A group mounting with `live` false is a chat
+   * being opened or a turn being unfolded, where everything is genuinely new.
+   *
+   * Spelled `!live` inline it was a live-ness *test re-run every render*, which
+   * is a different and wrong thing: adding an `animation` to an element that is
+   * already mounted plays it, so the moment a run stopped being live its
+   * wrapper slid in from below while folding shut. The transcript hides that —
+   * the turn folds in the same commit and the node goes — but `AgentsPanel`
+   * keeps a finished agent's stream mounted, so every run in it would have
+   * played its entrance at once the instant the agent ended.
+   */
+  const [entrance] = React.useState(() => !live)
 
   return (
     <>
-      <Collapsible.Root open={open} onOpenChange={onOpenChange} className="animate-enter">
+      <Collapsible.Root
+        open={open}
+        onOpenChange={onOpenChange}
+        className={cn(entrance && 'animate-enter')}
+      >
         <Collapsible.Trigger className={ACTIVITY_ROW}>
           <span className="flex min-w-0 items-center gap-1.5">
             <GroupIcon className={ACTIVITY_ICON} />
@@ -1213,7 +1398,14 @@ export const ToolGroup = React.memo(function ToolGroup({
         </Collapsible.Trigger>
         <Collapsible.Panel className={ACTIVITY_PANEL}>
           {parts.map((p) => (
-            <ToolCard key={p.toolUseId} part={p} cwd={cwd} dense showOutputImages={false} />
+            <ToolCard
+              key={p.toolUseId}
+              part={p}
+              cwd={cwd}
+              dense
+              arriving={arrivals.has(p.toolUseId)}
+              showOutputImages={false}
+            />
           ))}
         </Collapsible.Panel>
       </Collapsible.Root>
@@ -1243,16 +1435,18 @@ export function SubAgentStream({
   parts: AssistantPart[]
   cwd: string
   /**
-   * The agent is mid-turn, so its **trailing** run is the live block.
+   * The agent is mid-turn, so **every** run in it stays open.
    *
-   * The same thing `ChatView`'s `liveRun` says, for the same reason: a group
-   * keyed on "a call is running" collapses in the gap between one call
-   * returning and the next opening, so a seven-command run flickers seven
-   * times. The sub-agent stream had no groups to flicker before it started
-   * grouping; it does now. The caller reads this off the *spawning part's*
-   * status rather than the roster's, because the part is held running gap-free
-   * for the agent's whole life while the roster's `running` ORs in
-   * `childrenBusy` — which is exactly the gap.
+   * The same thing `ChatView` says for the main transcript, for the same
+   * reason: a group keyed on "a call is running" collapses in the gap between
+   * one call returning and the next opening, and a group keyed on "this is the
+   * trailing run" collapses at the first sentence the agent writes after it.
+   * An agent narrates between its batches exactly as the main one does, so
+   * scoping this to the last group folded every earlier batch the moment the
+   * agent spoke. The caller reads this off the *spawning part's* status rather
+   * than the roster's, because the part is held running gap-free for the
+   * agent's whole life while the roster's `running` ORs in `childrenBusy` —
+   * which is exactly the gap.
    */
   live?: boolean
 }): React.JSX.Element {
@@ -1260,19 +1454,11 @@ export function SubAgentStream({
     isGroupable: (part) => isGroupableTool(part.name),
     skip: (part) => (part.type === 'text' || part.type === 'thinking') && !part.text
   })
-  const lastGroupKey = items.filter((i) => i.kind === 'group').pop()?.key
   return (
     <div className="space-y-2">
       {items.map((item) => {
         if (item.kind === 'group') {
-          return (
-            <ToolGroup
-              key={item.key}
-              parts={item.parts}
-              cwd={cwd}
-              live={live && item.key === lastGroupKey}
-            />
-          )
+          return <ToolGroup key={item.key} parts={item.parts} cwd={cwd} live={live} />
         }
         const p = item.part
         if (p.type === 'text') {

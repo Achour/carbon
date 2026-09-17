@@ -464,7 +464,16 @@ export function normalizeAppServerItem(item: NativeItem): ThreadItem | null {
               const raw = change as Record<string, unknown>
               return {
                 path: String(raw.path ?? ''),
-                kind: raw.kind === 'add' || raw.kind === 'delete' ? raw.kind : ('update' as const)
+                kind: raw.kind === 'add' || raw.kind === 'delete' ? raw.kind : ('update' as const),
+                // **The patch itself, which used to be dropped here.** A
+                // `FileUpdateChange` carries a unified `diff` beside its path,
+                // and keeping only the path and the kind is why a Codex edit
+                // expanded to nothing at all while the same edit on Claude
+                // expanded to a diff: `ToolDetails`' Edit card reads
+                // `old_string`, Codex has no such field, and there was nothing
+                // else on the part to draw. It is optional because
+                // `thread/resume` replays older items that predate it.
+                ...(typeof raw.diff === 'string' && raw.diff ? { diff: raw.diff } : {})
               }
             })
           : [],
@@ -1417,6 +1426,24 @@ export class CodexAppServerClient implements CodexClientLike {
       if (!item) return
       if (run.review && run.reviewFinalSeen && item.type === 'agentMessage') return
       updateItemFromDelta(item, method, params)
+      const normalized = normalizeAppServerItem(item)
+      if (normalized) run.queue.push({ type: 'item.updated', item: normalized })
+      return
+    }
+    // **The patch as it is written, not only once it is applied.** Claude's
+    // Edit card fills in progressively because its `new_string` streams as
+    // partial JSON; Codex publishes the same thing as its own notification,
+    // and without it a `file_change` item sat as a bare "Edit" row for the
+    // whole of a long patch and then appeared complete in one jump. The
+    // payload is the *whole* change set each time (`FileUpdateChange[]`), so
+    // it replaces rather than accumulates — and it goes through the same
+    // `item.updated` path as every other live item so the part is rebuilt by
+    // the one normalizer.
+    if (method === 'item/fileChange/patchUpdated') {
+      const itemId = String(params.itemId ?? '')
+      const item = run.items.get(itemId)
+      if (!item || !Array.isArray(params.changes)) return
+      item.changes = params.changes
       const normalized = normalizeAppServerItem(item)
       if (normalized) run.queue.push({ type: 'item.updated', item: normalized })
       return

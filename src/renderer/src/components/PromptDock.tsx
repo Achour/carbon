@@ -395,6 +395,10 @@ function PermissionPrompt({
     const onKey = (e: KeyboardEvent): void => {
       if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey || e.isComposing) return
       if (e.key !== 'Enter' && e.key !== 'Escape') return
+      // The CLI marked this ask as one a stray keystroke must not approve. Esc
+      // still denies — the constraint is on saying yes, and taking the deny key
+      // away too would leave the reader with no keyboard answer at all.
+      if (e.key === 'Enter' && request.defaultToNo) return
       // The review picker sits in this same dock and closes on Escape from a
       // capture listener that marks the event handled. Without this check one
       // Escape would both close the picker and deny the prompt under it.
@@ -424,7 +428,12 @@ function PermissionPrompt({
       hint={
         keyboard && !busy ? (
           <span className="shrink-0 text-[11px] text-muted-foreground/70 select-none">
-            <kbd className="font-sans">↵</kbd> allow · <kbd className="font-sans">esc</kbd> deny
+            {!request.defaultToNo && (
+              <>
+                <kbd className="font-sans">↵</kbd> allow ·{' '}
+              </>
+            )}
+            <kbd className="font-sans">esc</kbd> deny
           </span>
         ) : undefined
       }
@@ -457,16 +466,29 @@ function PermissionPrompt({
           </Collapsible.Panel>
         </Collapsible.Root>
       </PromptBody>
+      {/* **Which answer the prompt opens on is the provider's call.** An ask
+          carrying `defaultToNo` is one Claude Code judged expensive to get
+          wrong, so Deny becomes the emphasized button and Allow drops to the
+          quiet one — the order of the row is untouched, because moving the
+          buttons around between prompts is how a reader clicks the wrong one.
+          It does **not** take focus: the SDK asks for the prompt to open on its
+          decline option and for no one-key approve, both of which the emphasis
+          and the Enter gate above already give — and autofocusing here would
+          pull the caret out of a composer someone is mid-sentence in, so their
+          next Space would press Deny. `Always allow` is absent entirely for an ask whose rule would grant
+          more than the ask itself; main refuses one anyway (see
+          `PendingPermission.noAlwaysAllow`), and a button that is refused is
+          worse than no button. */}
       <PromptActions>
         <Button
           size="sm"
-          variant="ghost"
+          variant={request.defaultToNo ? 'default' : 'ghost'}
           disabled={busy}
           onClick={() => void respond({ behavior: 'deny' })}
         >
           Deny
         </Button>
-        {request.hasSuggestions && (
+        {request.hasSuggestions && !request.noAlwaysAllow && (
           <Button
             size="sm"
             variant="secondary"
@@ -476,7 +498,12 @@ function PermissionPrompt({
             Always allow
           </Button>
         )}
-        <Button size="sm" disabled={busy} onClick={() => void respond({ behavior: 'allow' })}>
+        <Button
+          size="sm"
+          variant={request.defaultToNo ? 'ghost' : 'default'}
+          disabled={busy}
+          onClick={() => void respond({ behavior: 'allow' })}
+        >
           {authorizationUrl ? 'Open & continue' : 'Allow'}
         </Button>
       </PromptActions>

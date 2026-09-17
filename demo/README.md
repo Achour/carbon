@@ -44,6 +44,24 @@ node demo/seed.mjs                           # write the chats
   access, so nothing waits on a permission) and reports the same frame numbers
   plus every entrance animation that replayed — pair it with `AIGUI_PROFILE` to
   see what a long task was doing. It spends real tokens.
+  `disclosure-probe.js` is the one that answers "did a row fold under me" and
+  "could the reader see that step arrive": it watches every `data-panel-open`
+  flip on an activity row that stayed mounted, every animation a row played —
+  **with the computed style it had while playing**, because an animation that
+  runs inside a clipping container is one the reader never sees — and the state
+  of every turn header and row once the turn has settled. Its prompt asks for batches of back-to-back calls with one
+  sentence between them, because a run only forms from consecutive tool-only
+  messages and the sentence is what used to end it. Real tokens, and it leaves
+  its turns in the chat — `node demo/seed.mjs` puts the profile back.
+  `scale-probe.js` is synthetic and free: it pumps one identical turn through
+  the reducer at three transcript lengths to show what a long session costs per
+  event.
+
+**These probes drive the store directly, so they go stale silently.** Two of
+them called `sendMessage(text)` and `setChatOptions(patch)` — both of which grew
+a leading `chatId` — and the symptom was not an error but a probe that reported
+a clean turn because no turn had run. A probe whose numbers look too good is the
+first thing to re-read.
 
 The appearance mode is persisted in `settings.json`, so a script that wants dark
 sets it explicitly; otherwise the previous shoot decides what this one looks

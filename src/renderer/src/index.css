@@ -260,6 +260,7 @@
   --animate-shimmer: shimmer 2s linear infinite;
   --animate-pulse-soft: pulse-soft 1.6s ease-in-out infinite;
   --animate-enter: enter 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-step-in: step-in 0.34s cubic-bezier(0.16, 1, 0.3, 1);
 
   @keyframes shimmer {
     from {
@@ -286,6 +287,36 @@
     to {
       opacity: 1;
       transform: translateY(0);
+    }
+  }
+  /*
+   * One step of a run arriving, and **it moves nothing** — which is the whole
+   * reason it is not `enter`.
+   *
+   * A run's rows live in `ACTIVITY_PANEL`: `overflow-hidden` with a height that
+   * grows to exactly fit its content. `enter` rises from `translateY(6px)`, so
+   * inside that panel a new row spends its animation 6px *below* its final
+   * position — i.e. in the clipped region — and becomes visible at the exact
+   * moment it lands. The animation plays in full and the reader sees the row
+   * appear instantly, which is the report that produced this keyframe.
+   *
+   * Opacity and blur cannot be clipped by anything, so they read the same in a
+   * cropped container as out of one. The blur is what makes it legible at this
+   * size: a 20px muted row fading from 0 to 1 over a third of a second is easy
+   * to miss, where a word resolving out of a blur is a *focus* cue — the same
+   * thing a camera does, and the reason it reads as "this just arrived" rather
+   * than "this is being redrawn". Longer than `enter` because there is no
+   * displacement to carry it, and it is the only thing on screen saying a step
+   * happened.
+   */
+  @keyframes step-in {
+    from {
+      opacity: 0;
+      filter: blur(3px);
+    }
+    to {
+      opacity: 1;
+      filter: blur(0);
     }
   }
 }
