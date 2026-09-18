@@ -1059,6 +1059,14 @@ interface AppState {
    * sidebar end up drawing different pictures of the same project.
    */
   projectIcons: Record<string, string | null>
+  /**
+   * Give a project the mark the user picked, or open the picker to choose one.
+   * Answers an error sentence to show, or null when it worked (or the picker
+   * was dismissed, which is not something to report).
+   */
+  setProjectIcon(root: string, source?: string): Promise<string | null>
+  /** Drop a chosen mark: to the project's initials, or back to the scan. */
+  clearProjectIcon(root: string, mode: 'initials' | 'auto'): Promise<void>
   /** Resolves marks for any project that hasn't got one yet. */
   loadProjectIcons(): Promise<void>
   /** One project's worktrees and branches; fetched when its card is expanded. */
@@ -2739,6 +2747,46 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   projectIcons: {},
+
+  async setProjectIcon(root, source) {
+    const result = await window.api.setProjectIcon(root, source)
+    // An empty error is a cancelled picker — nothing happened, and saying so
+    // would be reporting a decision the user already knows they made.
+    if (result.error !== undefined) return result.error || null
+    // The icon changed under both maps at once. `loadProjectIcons` only asks
+    // for roots it has no answer for, so the sidebar would keep drawing the
+    // old mark forever if this only wrote `projects`.
+    const icon = result.icon ?? null
+    set((s) => ({
+      projectIcons: { ...s.projectIcons, [root]: icon },
+      projects: s.projects[root]
+        ? { ...s.projects, [root]: { ...s.projects[root], icon, customIcon: true } }
+        : s.projects
+    }))
+    return null
+  },
+
+  async clearProjectIcon(root, mode) {
+    await window.api.clearProjectIcon(root, mode)
+    if (mode === 'initials') {
+      set((s) => ({
+        projectIcons: { ...s.projectIcons, [root]: null },
+        projects: s.projects[root]
+          ? { ...s.projects, [root]: { ...s.projects[root], icon: null, customIcon: true } }
+          : s.projects
+      }))
+      return
+    }
+    // Back to automatic: main has to re-scan the folder before anyone knows
+    // what the answer is, so drop what is held and ask again.
+    set((s) => {
+      const projectIcons = { ...s.projectIcons }
+      delete projectIcons[root]
+      return { projectIcons }
+    })
+    await get().loadProjects(true)
+    await get().loadProjectIcons()
+  },
 
   async loadProjectIcons() {
     const s = get()

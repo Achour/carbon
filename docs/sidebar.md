@@ -4,6 +4,30 @@
 seams are in `CLAUDE.md`; the other surfaces are the neighbouring files in this
 directory.*
 
+### One measure for the whole column
+
+**Two numbers, written once: an 8px gutter on every block and an 8px inset on
+every row.** So a row's hover pill always runs from 8 to the far gutter and its
+icon column always starts at 16 — the New chat / Search / project-filter rows
+and the chat rows are the same shape, in both densities.
+
+They were not. The nav block sat on `px-2` + `px-2` and the lists on `px-3` +
+`px-2.5`: four pixels narrower a side, six pixels further in. Nothing about it
+was deliberate — the two halves were written at different times and neither
+knew the other's numbers — and the symptom was not "the padding differs", it was
+that **the chats looked squeezed** against the three rows above them, which they
+were. Section labels (`Drafts`, `Yesterday`, `Archived`) were on a third set of
+numbers again, landing between the pill edge and the content column; they now
+sit on the content column, which is the thing they label.
+
+The compact hanging indent falls out of it for free: `ml-[24px]` was chosen
+against the old measure and missed by four, so a project's name and its chats'
+titles were on 42 and 46. Both are on 40 now.
+
+Not included, deliberately: the window's drag strip and the status footer keep
+their own padding. Neither is a row in the list, and the footer's icon buttons
+hug the right edge on purpose.
+
 ### Sidebar modes (`Sidebar.tsx`, `SidebarDensity`)
 
 The sidebar has two shapes, chosen in Settings → Chats and persisted in

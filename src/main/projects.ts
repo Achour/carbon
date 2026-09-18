@@ -22,8 +22,8 @@
  */
 
 import { Buffer } from 'node:buffer'
-import { readFile, stat } from 'node:fs/promises'
-import { extname, join } from 'node:path'
+import { readFile, readdir, stat } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import type {
   BranchRef,
   ProjectDetail,
@@ -31,7 +31,15 @@ import type {
   ProjectRemote,
   ProjectWorktreeInfo
 } from '../shared/types.ts'
-import { imageMime } from './faviconCache.ts'
+import {
+  dirIconRefs,
+  htmlIconRefs,
+  ICON_MAX_BYTES,
+  iconDataUri,
+  manifestIconRefs,
+  refPaths
+} from './iconCandidates.ts'
+import { clearProjectIconOverrides, projectIconOverride } from './projectIconStore.ts'
 import { branchAt, detectDefaultBranch, git, localBranches } from './git.ts'
 import { isManagedWorktree, parseWorktreeList } from './worktree.ts'
 
@@ -46,13 +54,18 @@ import { isManagedWorktree, parseWorktreeList } from './worktree.ts'
  *
  * The order is *what the thing calls itself*, not what is prettiest: a deliberate
  * app icon outranks a favicon, a favicon outranks a logo, and a logo outranks
- * whatever a framework's starter template left behind (`vite.svg`, `next.svg`),
+ * whatever a framework's starter template left behind (`FRAMEWORK_CANDIDATES`),
  * which sit last because they identify the **framework** and would otherwise
  * give three unrelated projects the same mark.
  *
  * SVG is preferred within each family: it is small enough to survive the byte
  * cap and the only format here that stays sharp at the 28px this is drawn at.
- * `.icns` and `.ico`-only-in-name entries are absent — see `readIcon`.
+ * `.icns` and `.ico`-only-in-name entries are absent — see `iconDataUri`.
+ *
+ * **This list is the fast path, not the whole answer.** It is exact paths, so
+ * it costs one `stat` each and resolves most repos without opening a single
+ * file; a repo that names its icon anything else falls through to the declared
+ * and scanned tiers in `readIcon`.
  */
 const ICON_CANDIDATES = [
   // A packaged app's own icon: the most deliberate answer a repo can give.
@@ -65,18 +78,14 @@ const ICON_CANDIDATES = [
   // Web app favicons, framework by framework.
   'public/favicon.svg',
   'public/favicon.png',
-  'public/favicon.ico',
   'public/icon.svg',
   'public/icon.png',
   'app/icon.svg',
   'app/icon.png',
-  'app/favicon.ico',
   'src/app/icon.svg',
   'src/app/icon.png',
-  'src/app/favicon.ico',
   'static/favicon.svg',
   'static/favicon.png',
-  'static/favicon.ico',
   'static/icon.svg',
   'static/icon.png',
   'public/apple-touch-icon.png',
@@ -85,7 +94,6 @@ const ICON_CANDIDATES = [
   'src/assets/logo.svg',
   'src/assets/logo.png',
   'favicon.svg',
-  'favicon.ico',
   'icon.svg',
   'icon.png',
   'logo.svg',
@@ -93,55 +101,94 @@ const ICON_CANDIDATES = [
   'public/logo.svg',
   'public/logo.png',
   'docs/logo.svg',
-  'docs/logo.png',
-  // Starter-template leftovers: a real mark, but the framework's rather than
-  // the project's, so they only answer when nothing above did.
-  'public/vite.svg',
-  'public/next.svg'
+  'docs/logo.png'
 ] as const
 
 /**
- * The ceiling on an icon.
+ * The `.ico` files, below what a project *declares* and above what it merely
+ * has lying around.
  *
- * It is a *transport* limit before it is a taste one: every hit is base64'd
- * into a `data:` URI and shipped across IPC with the rest of the list, so a
- * 1 MB source is a 1.4 MB string times however many projects the user has.
- * Carbon's own `build/icon-1024.png` is 979 KB and is correctly skipped in
- * favour of the 1.7 KB `build/icon.svg` beside it — which is also the better
- * mark at 28px, so the cap and the ranking agree.
+ * **An `.ico` is the weakest format at this size.** It is typically a stack
+ * topping out at 32 or 48 pixels — soft at the 44 CSS px, 88 device px, a mark
+ * is drawn at — and Chromium picks a frame from it without being asked. A repo
+ * that has one almost always has something better beside it: create-react-app
+ * ships `public/favicon.ico` *and* `public/logo192.png`, and the `.ico` won
+ * purely because it was an exact path while the PNG was only in the manifest.
+ *
+ * It does **not** drop below the directory scan, though, and the difference
+ * matters: a file a project named `favicon.ico` is a decision, while a name
+ * that merely starts with `logo` is a guess. Under the scan, every
+ * create-next-app repo with a themed logo pair beside it would resolve to
+ * `logo-light.svg` — invisible on a light theme, since `classifyInk` only
+ * inverts marks that are *dark*.
  */
-export const ICON_MAX_BYTES = 128 * 1024
-
-/** Extensions mapped to the type `imageMime` cannot sniff (SVG is markup). */
-const EXT_TYPES: Record<string, string> = {
-  '.svg': 'image/svg+xml',
-  '.png': 'image/png',
-  '.ico': 'image/x-icon',
-  '.webp': 'image/webp',
-  '.gif': 'image/gif',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg'
-}
+const ICO_CANDIDATES = [
+  'public/favicon.ico',
+  'app/favicon.ico',
+  'src/app/favicon.ico',
+  'static/favicon.ico',
+  'favicon.ico'
+] as const
 
 /**
- * Formats Chromium will actually draw in an `<img>`.
+ * Starter-template leftovers: a real mark, but the framework's rather than the
+ * project's.
  *
- * `imageMime` is shared with the favicon fetcher, which answers for two types
- * this renderer has no use for: HEIC draws nothing at all in Chromium, and an
- * `.icns` never reaches here because no candidate names one. Refusing them by
- * name keeps a silent blank square from being the answer — a project with no
- * icon should fall back to its initials, which is a mark.
+ * Last of everything, below even the directory scan — they used to sit at the
+ * foot of `ICON_CANDIDATES`, which put them **above** a manifest a project had
+ * written on purpose. A repo that both declares its icon and still has
+ * `public/vite.svg` lying around is an ordinary repo, and it was showing Vite's
+ * mark.
  */
-const DRAWABLE = new Set([
-  'image/svg+xml',
-  'image/png',
-  'image/x-icon',
-  'image/webp',
-  'image/gif',
-  'image/jpeg',
-  'image/bmp',
-  'image/avif'
-])
+const FRAMEWORK_CANDIDATES = ['public/vite.svg', 'public/next.svg'] as const
+
+/**
+ * Files that *declare* an icon, and the directory each one's root-relative
+ * paths are served from — see `refPaths`.
+ *
+ * A manifest before an HTML document because a manifest's `icons[]` is the
+ * project's considered answer (sizes, types, purposes) while a `<link>` is
+ * usually one line pointing at whatever the generator emitted.
+ */
+const MANIFEST_CANDIDATES = [
+  'public/manifest.json',
+  'public/manifest.webmanifest',
+  'public/site.webmanifest',
+  'static/manifest.json',
+  'static/manifest.webmanifest',
+  'app/manifest.json',
+  'src/app/manifest.json',
+  'manifest.json',
+  'manifest.webmanifest',
+  'site.webmanifest'
+] as const
+
+const HTML_CANDIDATES = ['index.html', 'public/index.html', 'src/index.html'] as const
+
+/**
+ * Directories an icon is kept in, scanned only when everything above missed.
+ *
+ * One `readdir` apiece and no recursion — the point is to catch the size and
+ * version suffixes nobody standardized (`favicon-v5-64x64.png`), which always
+ * sit in exactly these folders. `node_modules` and `dist` are absent on
+ * purpose: a build output holds a *copy* of an icon the source already has, and
+ * a dependency's icon is not this project's.
+ */
+const ICON_DIRS = [
+  'public',
+  'static',
+  'app',
+  'src/app',
+  'assets',
+  'src/assets',
+  'build',
+  'resources',
+  ''
+] as const
+
+/** The most text worth reading out of a declaration. An `index.html` from a
+ * build output can be a megabyte of inlined CSS; its `<head>` is not. */
+const DECLARATION_MAX_BYTES = 512 * 1024
 
 interface IconEntry {
   /** The file the URI was built from, and its mtime — absent for a miss. */
@@ -167,63 +214,140 @@ const icons = new Map<string, IconEntry>()
 
 export function clearIconCache(): void {
   icons.clear()
+  clearProjectIconOverrides()
+}
+
+/** One candidate read, sniffed and capped, or null. */
+async function readIconFile(path: string): Promise<IconEntry | null> {
+  let info: Awaited<ReturnType<typeof stat>>
+  try {
+    info = await stat(path)
+  } catch {
+    return null
+  }
+  if (!info.isFile() || info.size === 0) return null
+  // Over the cap: skip this candidate and keep looking. A 1 MB source is the
+  // wrong asset for a 28px mark, and the next entry down is usually the right
+  // one — Carbon's own repo is exactly this case.
+  if (info.size > ICON_MAX_BYTES) return null
+  let bytes: Buffer
+  try {
+    bytes = await readFile(path)
+  } catch {
+    return null
+  }
+  const uri = iconDataUri(bytes, path)
+  return uri ? { source: { path, mtimeMs: info.mtimeMs }, uri } : null
+}
+
+/** The first candidate that is a drawable image. */
+async function firstIcon(paths: Iterable<string>): Promise<IconEntry | null> {
+  for (const path of paths) {
+    const hit = await readIconFile(path)
+    if (hit) return hit
+  }
+  return null
+}
+
+/** A declaration's text, or null — bounded, because one of these is an HTML
+ * document and some of those are enormous. */
+async function readDeclaration(path: string): Promise<string | null> {
+  const info = await stat(path).catch(() => null)
+  if (!info?.isFile() || info.size === 0) return null
+  const bytes = await readFile(path).catch(() => null)
+  if (!bytes) return null
+  return bytes.subarray(0, DECLARATION_MAX_BYTES).toString('utf8')
 }
 
 /**
  * The project's own icon as a `data:` URI, or null.
  *
- * The file is *sniffed*, not trusted: `public/favicon.ico` is very often a PNG
- * (or, in a framework starter, an HTML 404 that got committed), and a `data:`
- * URI carrying markup draws nothing while looking exactly like a broken icon.
- * `imageMime` is the favicon fetcher's own gate, reused whole — it refuses
- * markup that isn't an SVG whatever the extension claims.
+ * Five tiers, and the order between them is **how much the project meant it**:
+ * a conventional path it chose, then an icon it declares in a manifest or an
+ * `index.html`, then a `favicon.ico`, then anything icon-shaped sitting in the
+ * folders icons live in, and only then a framework's leftover. Each tier runs
+ * only when the ones above it found nothing, so a repo with
+ * `public/favicon.svg` still costs the handful of `stat`s it always did and
+ * never opens a directory.
  */
 async function readIcon(root: string): Promise<IconEntry> {
-  for (const rel of ICON_CANDIDATES) {
-    const path = join(root, rel)
-    let info: Awaited<ReturnType<typeof stat>>
-    try {
-      info = await stat(path)
-    } catch {
-      continue
-    }
-    if (!info.isFile() || info.size === 0) continue
-    // Over the cap: skip this candidate and keep looking. A 1 MB source is the
-    // wrong asset for a 28px mark, and the next entry down is usually the right
-    // one — Carbon's own repo is exactly this case.
-    if (info.size > ICON_MAX_BYTES) continue
-    let bytes: Buffer
-    try {
-      bytes = await readFile(path)
-    } catch {
-      continue
-    }
-    const mime = imageMime(bytes, EXT_TYPES[extname(path).toLowerCase()] ?? null)
-    if (!mime || !DRAWABLE.has(mime)) continue
-    return {
-      source: { path, mtimeMs: info.mtimeMs },
-      uri: `data:${mime};base64,${bytes.toString('base64')}`
-    }
+  const exact = await firstIcon(ICON_CANDIDATES.map((rel) => join(root, rel)))
+  if (exact) return exact
+
+  for (const rel of MANIFEST_CANDIDATES) {
+    const text = await readDeclaration(join(root, rel))
+    if (!text) continue
+    const dir = dirname(rel) === '.' ? '' : dirname(rel)
+    const hit = await firstIcon(
+      manifestIconRefs(text).flatMap((ref) => refPaths(root, dir, ref))
+    )
+    if (hit) return hit
   }
+
+  for (const rel of HTML_CANDIDATES) {
+    const text = await readDeclaration(join(root, rel))
+    if (!text) continue
+    const dir = dirname(rel) === '.' ? '' : dirname(rel)
+    // An `index.html` at the repo root serves `public/` at `/`, which
+    // `refPaths` already tries — so a Vite app's `/favicon.svg` is found
+    // whether the file sits beside the HTML or inside `public/`.
+    const hit = await firstIcon(
+      htmlIconRefs(text).flatMap((ref) => [
+        ...refPaths(root, dir, ref),
+        ...(ref.startsWith('/') ? refPaths(root, 'public', ref) : [])
+      ])
+    )
+    if (hit) return hit
+  }
+
+  const ico = await firstIcon(ICO_CANDIDATES.map((rel) => join(root, rel)))
+  if (ico) return ico
+
+  for (const dir of ICON_DIRS) {
+    const names = await readdir(join(root, dir)).catch(() => null)
+    if (!names) continue
+    const hit = await firstIcon(dirIconRefs(names).map((name) => join(root, dir, name)))
+    if (hit) return hit
+  }
+
+  const leftover = await firstIcon(FRAMEWORK_CANDIDATES.map((rel) => join(root, rel)))
+  if (leftover) return leftover
+
   return { source: null, uri: null }
 }
 
-async function projectIcon(root: string, exists: boolean): Promise<string | null> {
+/** A project's mark, and whether the user picked it rather than the scan. */
+interface ResolvedIcon {
+  uri: string | null
+  custom: boolean
+}
+
+/**
+ * **The override is read first, and above the `exists` gate.** It is not in the
+ * project's folder, so a project whose directory was moved or deleted keeps the
+ * icon its owner chose — and a user who overrode a scan result must never see
+ * the scan's answer again until they say so.
+ */
+async function projectIcon(root: string, exists: boolean): Promise<ResolvedIcon> {
+  const override = await projectIconOverride(root)
+  if (override === 'initials') return { uri: null, custom: true }
+  if (override) return { uri: override.uri, custom: true }
+
   const hit = icons.get(root)
   if (hit) {
     // A miss stays a miss until Recheck. A hit is only kept while the file it
     // was read from is still the file it was read from.
-    if (!hit.source) return null
+    if (!hit.source) return { uri: null, custom: false }
     const fresh = await stat(hit.source.path).catch(() => null)
-    if (fresh && fresh.mtimeMs === hit.source.mtimeMs) return hit.uri
+    if (fresh && fresh.mtimeMs === hit.source.mtimeMs) return { uri: hit.uri, custom: false }
   }
   // A folder that isn't there has no icon to find, and walking forty paths
   // inside it would be forty `stat`s answering nothing. Whatever was resolved
   // while it existed is kept: a missing project still deserves its mark.
-  if (!exists) return hit?.uri ?? null
+  if (!exists) return { uri: hit?.uri ?? null, custom: false }
   const entry = await readIcon(root)
   icons.set(root, entry)
-  return entry.uri
+  return { uri: entry.uri, custom: false }
 }
 
 /**
@@ -321,7 +445,7 @@ const CONCURRENCY = 4
 
 async function overview(root: string): Promise<ProjectOverview> {
   const exists = await isDir(root)
-  const icon = await projectIcon(root, exists)
+  const { uri: icon, custom: customIcon } = await projectIcon(root, exists)
   if (!exists) {
     // Nothing else can be asked of a folder that isn't there, and asking would
     // mean a git process per dead project every time the page opens.
@@ -333,6 +457,7 @@ async function overview(root: string): Promise<ProjectOverview> {
       remote: null,
       remoteUrl: null,
       icon,
+      customIcon,
       worktrees: 0,
       branches: 0
     }
@@ -358,6 +483,7 @@ async function overview(root: string): Promise<ProjectOverview> {
     remote: parseRemoteUrl(remoteRaw),
     remoteUrl: remoteRaw || null,
     icon,
+    customIcon,
     worktrees: Math.max(0, worktrees.filter((w) => !w.isMain).length),
     branches: branches.length
   }
@@ -380,7 +506,7 @@ async function overview(root: string): Promise<ProjectOverview> {
 export async function projectIcons(roots: string[]): Promise<Record<string, string | null>> {
   const out: Record<string, string | null> = {}
   await pool([...new Set(roots)], CONCURRENCY, async (root) => {
-    out[root] = await projectIcon(root, await isDir(root))
+    out[root] = (await projectIcon(root, await isDir(root))).uri
   })
   return out
 }

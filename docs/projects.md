@@ -102,8 +102,9 @@ that is also running the user's agents.
 
 **`projectIcons(roots)` is a third call below both, and it exists because the
 sidebar draws marks at first paint.** It is the overview's one field that costs
-no git: a `stat` of the folder, a walk of `ICON_CANDIDATES`, one `readFile`,
-all of it cached for the life of the process. Reusing `projectsOverview` for it
+no git: a `stat` of the folder, a walk of `ICON_CANDIDATES` (and, only if that
+finds nothing, the tiers below it), one `readFile`, all of it cached for the
+life of the process. Reusing `projectsOverview` for it
 would put two or three subprocesses per project between the click on the dock
 icon and a window — the exact cost that made the overview a *settings page's*
 call in the first place — and it would ship a branch, a remote and two counts
@@ -195,11 +196,63 @@ neither reads the folder.
 ours.** A repo that ships a favicon or an app icon has already decided what it
 looks like. `ICON_CANDIDATES` is a long ordered list rather than a short clever
 one: a miss costs one `stat`, and the order is *what the thing calls itself* —
-a packaged app's icon, then a favicon, then a logo, then whatever a framework's
-starter template left behind (`vite.svg`, `next.svg`), which sit last because
-they identify the framework and would otherwise give three unrelated projects
-the same mark. SVG is preferred within each family: it survives the byte cap and
-is the only format here that stays sharp at 28px.
+a packaged app's icon, then a favicon, then a logo. SVG is preferred within each
+family: it survives the byte cap and is the only format here that stays sharp at
+28px.
+
+#### Exact paths are the fast path, not the whole answer
+
+A list of exact filenames answers for every repo that named its icon the way its
+framework's template did, and for nothing else. A repo carrying
+`public/favicon-v5-64x64.png`, `public/favicon-32x32.png` and a `manifest.json`
+naming both has a mark on disk, declares it twice, and drew two grey letters —
+which is not an exotic shape, it is what happens to any project that ever
+revised its favicon.
+
+So four tiers sit under the exact list (`main/iconCandidates.ts`, pinned by
+`test/iconCandidates.test.ts`), ordered by **how much the project meant it**:
+
+1. **A web app manifest** — `public/manifest.json` and its spellings. `icons[]`
+   is the project stating, in a file whose only job is to state it, which image
+   represents it.
+2. **`<link rel="icon">` in an `index.html`** — the same statement for the whole
+   Vite/plain-web class, which ships no manifest. `parseIconLinks` is the
+   favicon fetcher's own parser, reused whole.
+3. **`favicon.ico`** — a weak asset at this size but a named decision, so it
+   outranks the scan below it.
+4. **A directory scan** of the folders icons live in — one `readdir` apiece, no
+   recursion, names anchored on `favicon`/`icon`/`logo`. A guess, which is why
+   it is last before the leftovers, and it is the tier that catches the size and
+   version suffixes nobody standardized.
+5. **Framework leftovers** (`vite.svg`, `next.svg`), which identify the
+   *framework* and would otherwise give three unrelated projects the same mark.
+
+Each tier runs only when everything above it found nothing, so a repo with
+`public/favicon.svg` still costs the handful of `stat`s it always did and never
+opens a directory — measured at 0.3 ms for Carbon's own repo against 1.7 ms for
+one that falls through to its manifest.
+
+**The ranking wants 128px, where `faviconCache`'s wants 32.** Same question,
+different picture: a favicon beside a link is 16 CSS px, and a project's mark is
+drawn at up to 44 — 88 device px on a retina panel — so the 32px `.ico` that is
+perfect for a link is visibly soft here. Anything at or above 96px is *good* and
+then ranked by **bytes rather than pixels**, which is why a 192px PNG beats the
+512px one beside it. A `maskable` manifest icon is demoted rather than dropped:
+it is drawn to be cropped, so up to 20% of each edge is padding, and rendered
+whole it is a small mark floating in space — but a manifest that declares
+nothing else should still resolve.
+
+That size rule is also why the `.ico` entries left `ICON_CANDIDATES`. An `.ico`
+is a stack topping out at 32 or 48 pixels and Chromium picks a frame without
+being asked; a repo that has one nearly always has something better beside it.
+create-react-app ships `public/favicon.ico` **and** `public/logo192.png`, and
+the `.ico` won purely because it was an exact path while the PNG was only
+declared — so a CRA project was represented by its worst copy. It drops below
+the two *declared* tiers and no further: a file a project named `favicon.ico` is
+a decision, where a name merely starting with `logo` is a guess. Under the scan,
+every create-next-app repo with a themed logo pair would resolve to
+`logo-light.svg` — invisible on a light theme, since `classifyInk` only inverts
+marks that are dark.
 
 `ICON_MAX_BYTES` (128 KB) is a *transport* limit before it is a taste one —
 every hit is base64'd into a `data:` URI and shipped with the rest of the list.
@@ -215,6 +268,45 @@ an icon shows up without a restart, and does not re-validate a **miss** — ther
 is no file to watch, and re-walking forty candidate paths per render is what the
 cache exists to avoid. Recheck (`clearIconCache`) is the answer for a project
 that has just been given one, which is why the button says what it says.
+
+#### The scan is a default, not a verdict (`main/projectIconStore.ts`)
+
+It is right about almost every repo and unfixably wrong about a few — a monorepo
+root with no icon anywhere under it, a repo whose only image is a placeholder
+nobody replaced, a client project whose mark lives in a design file. So the
+header avatar in Settings → Projects is itself the control (the ⋯ menu carries
+the same items, for anyone who doesn't try clicking the icon), offering three
+states: choose an image, use the initials, or go back to what is in the folder.
+
+**"Use the initials" is a state, not the absence of one.** A project whose
+folder *does* contain an icon the user does not want drawn has to be able to say
+so, and merely clearing the override would hand that icon straight back. It is a
+`<key>.none` sentinel file, which is why `ProjectOverview` carries `customIcon`
+beside `icon`: a null mark with the flag set is a deliberate choice, and only
+then is there something to revert.
+
+**The directory is the record.** `userData/project-icons/<hash of root>.<ext>`
+exists, or the project has no override — no second copy of that fact in
+`settings.json` to drift out of step with it, no migration when the shape
+changes, and `rm -rf` on the folder is a complete reset. Data URIs in
+`settings.json` was the alternative and is startup-parse weight, per project,
+for a file read at launch.
+
+The chosen file is **copied, not referenced**: a path into `~/Downloads` is a
+mark that vanishes the next time the user tidies up, and one inside the repo
+vanishes on the next branch switch — neither failure would say anything, the
+mark would just be two grey letters again. A raster is re-encoded only when it
+has to be (over the cap, or wider than 512px, which is the common case of
+picking a 2048px brand PNG); a 3 KB 64px favicon is stored exactly as it is
+rather than upscaled into a blurry 256px one.
+
+The override is read **above the `exists` gate** and above the cache: it is not
+in the project's folder, so a project whose directory was moved or deleted keeps
+the icon its owner chose. `projectIconStore.ts` is `node:*`-only and takes its
+directory by injection — the scan imports it, `test/projectIdentity.test.ts`
+imports the scan, and one `import … from 'electron'` underneath stops that test
+at a SyntaxError. The dialog and the resizer live in `projectIconPicker.ts`, the
+same split `favicons.ts` keeps against `faviconCache.ts`.
 
 **The fallback is two letters and one hue** (`lib/projectIdentity.ts`,
 `ui/project-avatar.tsx`). It must be stable — the same project draws the same

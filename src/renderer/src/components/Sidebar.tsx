@@ -418,7 +418,7 @@ function ChatItemRow({
         <button
           type="button"
           onClick={onOpen}
-          className="flex w-full min-w-0 flex-col gap-1 px-2.5 py-2 text-left outline-none"
+          className="flex w-full min-w-0 flex-col gap-1 px-2 py-2 text-left outline-none"
         >
           <span className="flex min-w-0 items-center gap-1.5 text-[11px] leading-tight text-muted-foreground/70">
             {/* Identity, not state — so it keeps its colour on every row and
@@ -468,7 +468,7 @@ function ChatItemRow({
         <button
           type="button"
           onClick={onOpen}
-          className="flex w-full min-w-0 items-center gap-1.5 px-2.5 py-1.5 text-left outline-none"
+          className="flex w-full min-w-0 items-center gap-1.5 px-2 py-1.5 text-left outline-none"
         >
           {/* Compact rows sit under their project's own row, which already
               wears the mark — except the Pinned section's, which are lifted out
@@ -1080,7 +1080,7 @@ function DraftItem({
       <button
         type="button"
         onClick={onOpen}
-        className="flex w-full min-w-0 items-start gap-2 py-1.5 pr-7 pl-2.5 text-left outline-none"
+        className="flex w-full min-w-0 items-start gap-2 py-1.5 pr-7 pl-2 text-left outline-none"
       >
         {/* Laid out as a chat row is, because it sits directly above them: the
             project takes the avatar column, and the mark that says what *kind*
@@ -1583,7 +1583,17 @@ export function Sidebar(): React.JSX.Element {
         </WithTooltip>
       </div>
 
-      {/* Primary actions, Cursor-style rows */}
+      {/* Primary actions, Cursor-style rows.
+
+          **This block sets the sidebar's measure, and everything below it
+          matches.** Two numbers, once: an 8px gutter on every block, and an
+          8px inset on every row, so a row's hover pill always runs from 8 and
+          its icon column always starts at 16. The list used to sit on 12 + 10
+          — four pixels narrower a side and six further in — which read as the
+          chats being squeezed relative to the three rows above them, because
+          they were. The one bonus is compact mode's hanging indent: the
+          project row's name and its chats' titles both land on 40 now, where
+          before they missed each other by four. */}
       <div className="flex flex-col gap-0.5 px-2 pb-1">
         <button
           type="button"
@@ -1717,12 +1727,12 @@ export function Sidebar(): React.JSX.Element {
           row or two and never a screenful. */}
       {draftsShown.length > 0 && (
         <div className="flex max-h-[25vh] shrink-0 flex-col">
-          <div className="flex items-center gap-2 px-3.5 pt-3 pb-1">
+          <div className="flex items-center gap-2 px-4 pt-3 pb-1">
             <span className="text-[11px] font-medium tracking-wide text-muted-foreground/70">
               Drafts
             </span>
           </div>
-          <div className="min-h-0 overflow-y-auto px-3">
+          <div className="min-h-0 overflow-y-auto px-2">
             <div className="space-y-px">
               {draftsShown.map((draft) => (
                 <DraftItem
@@ -1750,7 +1760,7 @@ export function Sidebar(): React.JSX.Element {
           side of a divider a row is on. The glyph travels with the chat. */}
       {pinnedShown.length > 0 && (
         <div className="flex max-h-[35vh] shrink-0 flex-col">
-          <div className="min-h-0 overflow-y-auto px-3 pt-0.5 pb-1">
+          <div className="min-h-0 overflow-y-auto px-2 pt-0.5 pb-1">
             <div className="space-y-px">{pinnedShown.map(renderChatItem)}</div>
           </div>
         </div>
@@ -1758,7 +1768,7 @@ export function Sidebar(): React.JSX.Element {
 
       {/* Detailed mode: one flat list, newest first, bucketed by date */}
       {detailed && (
-        <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-2">
+        <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
           {flatChats.length === 0 && pinnedShown.length === 0 && (
             <div className="px-2 py-8 text-center text-xs text-muted-foreground">
               {filterProject
@@ -1771,7 +1781,7 @@ export function Sidebar(): React.JSX.Element {
               {/* "Today" goes unlabelled: the top of a newest-first list is today
                   by definition, so the heading would cost a row to say nothing. */}
               {section.label !== 'Today' && (
-                <div className={cn('flex items-center gap-2 px-1.5 pb-0.5', i === 0 ? 'pt-1' : 'pt-4')}>
+                <div className={cn('flex items-center gap-2 px-2 pb-0.5', i === 0 ? 'pt-1' : 'pt-4')}>
                   <span className="text-[10px] font-semibold tracking-wider text-muted-foreground/60 uppercase">
                     {section.label}
                   </span>
@@ -1785,7 +1795,7 @@ export function Sidebar(): React.JSX.Element {
             <button
               type="button"
               onClick={() => setFlatBatches((n) => n + 1)}
-              className="mt-1 flex w-full min-w-0 items-center gap-1.5 rounded-md px-2.5 py-1.5 text-left text-[12px] text-sidebar-foreground/55 transition-colors hover:bg-sidebar-accent/60 hover:text-sidebar-foreground/90"
+              className="mt-1 flex w-full min-w-0 items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[12px] text-sidebar-foreground/55 transition-colors hover:bg-sidebar-accent/60 hover:text-sidebar-foreground/90"
             >
               <ChevronRight className="size-3 shrink-0" />
               Show {Math.min(FLAT_BATCH, flatHidden)} more
@@ -1796,7 +1806,7 @@ export function Sidebar(): React.JSX.Element {
 
       {/* Compact mode: chats grouped by project */}
       {!detailed && (
-      <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-2">
+      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
         {activeGroups.length === 0 && archivedGroups.length === 0 && (
           <div className="px-2 py-8 text-center text-xs text-muted-foreground">
             Open a project to get started.
@@ -1842,7 +1852,7 @@ export function Sidebar(): React.JSX.Element {
           return (
             <React.Fragment key={group.cwd}>
               {firstArchived && (
-                <div className="flex items-center gap-2 px-1.5 pt-4 pb-0.5">
+                <div className="flex items-center gap-2 px-2 pt-4 pb-0.5">
                   <span className="text-[10px] font-semibold tracking-wider text-muted-foreground/60 uppercase">
                     Archived
                   </span>
@@ -1905,7 +1915,7 @@ export function Sidebar(): React.JSX.Element {
                       <button
                         type="button"
                         onClick={() => toggleProject(group.cwd, isCollapsed)}
-                        className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 py-1.5 text-left transition-colors hover:bg-sidebar-accent/60"
+                        className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-sidebar-accent/60"
                         aria-expanded={!isCollapsed}
                       >
                         {/* One icon slot: the project's own mark at rest,
@@ -1987,7 +1997,7 @@ export function Sidebar(): React.JSX.Element {
                                 [group.cwd]: revealedBatches + 1
                               }))
                             }
-                            className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2.5 py-1.5 text-left text-[12px] text-sidebar-foreground/55 transition-colors hover:bg-sidebar-accent/60 hover:text-sidebar-foreground/90"
+                            className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[12px] text-sidebar-foreground/55 transition-colors hover:bg-sidebar-accent/60 hover:text-sidebar-foreground/90"
                           >
                             <ChevronRight className="size-3 shrink-0" />
                             Show {Math.min(chatsPerProject, hiddenChatCount)} more
@@ -1999,7 +2009,7 @@ export function Sidebar(): React.JSX.Element {
                             onClick={() =>
                               setRevealedChatBatches((prev) => ({ ...prev, [group.cwd]: 0 }))
                             }
-                            className="shrink-0 rounded-md px-2.5 py-1.5 text-[12px] text-sidebar-foreground/55 transition-colors hover:bg-sidebar-accent/60 hover:text-sidebar-foreground/90"
+                            className="shrink-0 rounded-md px-2 py-1.5 text-[12px] text-sidebar-foreground/55 transition-colors hover:bg-sidebar-accent/60 hover:text-sidebar-foreground/90"
                           >
                             Show less
                           </button>

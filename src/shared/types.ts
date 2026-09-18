@@ -251,10 +251,18 @@ export interface ProjectOverview {
    */
   remoteUrl: string | null
   /**
-   * An icon found *in the project* — its favicon, its app icon — as a `data:`
-   * URI, or null to fall back to initials. See `main/projects.ts`.
+   * The project's mark as a `data:` URI, or null to fall back to initials —
+   * either the one found *in the project* (its favicon, its app icon) or the
+   * one the user chose. See `main/projects.ts`.
    */
   icon: string | null
+  /**
+   * The user picked this mark, so the scan's answer is not being shown. Null
+   * `icon` with this set is the deliberate "just use the initials", which is
+   * why the two fields are separate — and why the menu can offer to go back to
+   * automatic only when there is something to go back to.
+   */
+  customIcon: boolean
   /** Linked worktrees, main checkout excluded. Drives the expand affordance. */
   worktrees: number
   /** Local branches. 0 outside a repo. */
@@ -2376,6 +2384,22 @@ export interface Api {
    * No git, so this one can be asked at launch; see `main/projects.ts`.
    */
   projectIcons(roots: string[]): Promise<Record<string, string | null>>
+  /**
+   * Give a project a mark of the user's choosing.
+   *
+   * `source` absent opens a file picker in main; passing a path is what makes
+   * this drivable from `AIGUI_E2E`. Answers the resolved `data:` URI, or an
+   * `error` to show verbatim — an empty one meaning the picker was cancelled,
+   * which is not a failure to report. See `main/projectIconStore.ts`.
+   */
+  setProjectIcon(root: string, source?: string): Promise<{ icon?: string; error?: string }>
+  /**
+   * Stop drawing an icon for this project.
+   *
+   * `'initials'` is a deliberate choice that outranks whatever the scan finds;
+   * `'auto'` throws the choice away and goes back to the scan.
+   */
+  clearProjectIcon(root: string, mode: 'initials' | 'auto'): Promise<void>
   /** One project's worktrees and branches — the expanded card. */
   projectDetail(root: string): Promise<ProjectDetail>
   /** GitHub state (PR + checks) for the cwd's current branch; best-effort. */

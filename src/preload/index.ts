@@ -162,6 +162,9 @@ const api: Api = {
     invoke('projects:overview', roots, refresh),
   projectIcons: (roots: string[]) => invoke('projects:icons', roots),
   projectDetail: (root: string) => invoke('projects:detail', root),
+  setProjectIcon: (root: string, source?: string) => invoke('projects:set-icon', root, source),
+  clearProjectIcon: (root: string, mode: 'initials' | 'auto') =>
+    invoke('projects:clear-icon', root, mode),
   githubState: (cwd: string) => invoke('github:state', cwd),
   githubOpenPr: (cwd: string) => invoke('github:open-pr', cwd),
   githubPublishInfo: (cwd: string) => invoke('github:publish-info', cwd),

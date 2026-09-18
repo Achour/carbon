@@ -5,14 +5,17 @@ import {
   FolderGit2,
   FolderOpen,
   GitBranch,
+  Image,
   Layers,
   Loader2,
   MessageSquare,
   Pencil,
   Plus,
   RefreshCw,
+  RotateCcw,
   Trash2,
-  TriangleAlert
+  TriangleAlert,
+  Type
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -360,6 +363,66 @@ function ProjectRow({
 }
 
 /** The right-hand pane: everything about the one project that is selected. */
+/**
+ * The three things a project's mark can be.
+ *
+ * **The scan is right about almost every repo and unfixably wrong about a
+ * few** — a monorepo root with no icon anywhere under it, a repo whose only
+ * image is a placeholder favicon nobody replaced, a client project whose mark
+ * lives in a design file. So the answer it finds is a default rather than a
+ * verdict, and these are the three ways past it.
+ *
+ * "Use initials" is a state and not merely the absence of one: a project whose
+ * folder *does* contain an icon the user does not want drawn has to be able to
+ * say so, and clearing the override would hand it straight back. Both items
+ * appear only when there is something for them to do — no icon is showing, so
+ * nothing to replace with initials; nothing was chosen, so nothing to revert.
+ */
+function IconMenuItems({
+  root,
+  overview,
+  onError
+}: {
+  root: string
+  overview: ProjectOverview | undefined
+  onError: (message: string | null) => void
+}): React.JSX.Element {
+  const setProjectIcon = useApp((s) => s.setProjectIcon)
+  const clearProjectIcon = useApp((s) => s.clearProjectIcon)
+  return (
+    <>
+      <DropdownMenuItem
+        onClick={() => {
+          onError(null)
+          void setProjectIcon(root).then(onError)
+        }}
+      >
+        <Image /> Choose image…
+      </DropdownMenuItem>
+      {!!overview?.icon && (
+        <DropdownMenuItem
+          onClick={() => {
+            onError(null)
+            void clearProjectIcon(root, 'initials')
+          }}
+        >
+          <Type /> Use initials
+        </DropdownMenuItem>
+      )}
+      {!!overview?.customIcon && (
+        <DropdownMenuItem
+          onClick={() => {
+            onError(null)
+            void clearProjectIcon(root, 'auto')
+          }}
+        >
+          <RotateCcw /> Use the icon in the folder
+        </DropdownMenuItem>
+      )}
+    </>
+  )
+}
+
 function ProjectDetailPane({
   root,
   chatCount,
@@ -382,6 +445,7 @@ function ProjectDetailPane({
   const detail = useApp((s) => s.projectDetails[root])
   const loadProjectDetail = useApp((s) => s.loadProjectDetail)
   const loadProjects = useApp((s) => s.loadProjects)
+  const [iconError, setIconError] = React.useState<string | null>(null)
 
   const label = projectLabel(root, projectNames)
   const missing = overview !== undefined && !overview.exists
@@ -418,13 +482,36 @@ function ProjectDetailPane({
     <div className="min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto w-full max-w-4xl px-8 py-7">
         <header className="flex items-start gap-3.5">
-          <ProjectAvatar
-            root={root}
-            name={label}
-            icon={overview?.icon ?? null}
-            size="lg"
-            dimmed={missing}
-          />
+          {/* The mark is the control for itself. A menu item alone would be
+              correct and unfindable — the icon is the thing you want to change
+              and the thing you are looking at, so clicking it is the gesture
+              anyone tries first. The same items are in the ⋯ menu for anyone
+              who doesn't. */}
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <button
+                  type="button"
+                  aria-label={`Change the icon for ${label}`}
+                  className="group relative shrink-0 rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                >
+                  <ProjectAvatar
+                    root={root}
+                    name={label}
+                    icon={overview?.icon ?? null}
+                    size="lg"
+                    dimmed={missing}
+                  />
+                  <span className="absolute inset-0 flex items-center justify-center rounded-xl bg-background/75 opacity-0 backdrop-blur-[1px] transition-opacity group-hover:opacity-100">
+                    <Pencil className="size-4" />
+                  </span>
+                </button>
+              }
+            />
+            <DropdownMenuContent align="start">
+              <IconMenuItems root={root} overview={overview} onError={setIconError} />
+            </DropdownMenuContent>
+          </DropdownMenu>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <h2 className="truncate text-[17px] font-semibold">{label}</h2>
@@ -480,6 +567,7 @@ function ProjectDetailPane({
                 <DropdownMenuItem onClick={() => onPrompt({ kind: 'rename', cwd: root })}>
                   <Pencil /> Rename project…
                 </DropdownMenuItem>
+                <IconMenuItems root={root} overview={overview} onError={setIconError} />
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
                   destructive
@@ -491,6 +579,15 @@ function ProjectDetailPane({
             </DropdownMenu>
           </div>
         </header>
+
+        {/* Every way choosing an icon fails is something about the file that
+            was picked, so the sentence names it rather than saying "failed". */}
+        {iconError && (
+          <div className="mt-4 flex items-start gap-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2.5 text-[12px] text-warning">
+            <TriangleAlert className="mt-px size-4 shrink-0" />
+            <span>{iconError}</span>
+          </div>
+        )}
 
         {/* The folder is gone. Said once, in words, rather than left for the
             next turn to discover — and it names the two ways out, neither of

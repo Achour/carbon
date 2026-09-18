@@ -63,6 +63,12 @@ import { LspManager } from './lsp'
 import * as gitOps from './git'
 import * as githubOps from './github'
 import * as projectOps from './projects'
+import { setProjectIcon } from './projectIconPicker'
+import {
+  clearProjectIcon,
+  configureProjectIcons,
+  useProjectInitials
+} from './projectIconStore'
 import { getPermissionRules, removePermissionRule } from './permissions'
 import { PreviewManager } from './preview'
 import { CanvasManager } from './canvas.ts'
@@ -1132,6 +1138,13 @@ function registerIpc(): void {
   )
   ipcMain.handle('projects:icons', (_e, roots: string[]) => projectOps.projectIcons(roots))
   ipcMain.handle('projects:detail', (_e, root: string) => projectOps.projectDetail(root))
+  ipcMain.handle('projects:set-icon', (e, root: string, source?: string) =>
+    setProjectIcon(BrowserWindow.fromWebContents(e.sender), root, source)
+  )
+  ipcMain.handle('projects:clear-icon', async (_e, root: string, mode: 'initials' | 'auto') => {
+    if (mode === 'initials') await useProjectInitials(root)
+    else await clearProjectIcon(root)
+  })
   ipcMain.handle('github:state', (_e, cwd: string) => githubOps.ghState(cwd))
   ipcMain.handle('github:open-pr', (_e, cwd: string) => githubOps.openPrWeb(cwd))
   ipcMain.handle('github:publish-info', (_e, cwd: string) => githubOps.ghPublishInfo(cwd))
@@ -1150,6 +1163,11 @@ app.whenReady().then(() => {
   // Ahead of the PATH hydration below, which now remembers its answer there.
   // `setPath` only records a location — nothing reads userData in between.
   app.setPath('userData', process.env.AIGUI_USERDATA || join(app.getPath('appData'), 'ai-gui'))
+  // Immediately after the pin and long before any window: a `projects:icons`
+  // call arriving with this unwired would answer with the *scan's* mark, and
+  // the renderer caches what it is told for the session — so an overridden
+  // project would draw the wrong icon until a Recheck.
+  configureProjectIcons(app.getPath('userData'))
   // Finder/Dock launches do not inherit the user's shell PATH. Hydrate it
   // before constructing managers so Claude, Codex, previews, Git, and terminal
   // sessions all see the same command-line tools as an interactive shell.
