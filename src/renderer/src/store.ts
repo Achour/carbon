@@ -179,6 +179,13 @@ export interface PreviewTab {
   url: string
   /** Project folder this preview belongs to (drives dev-server + agent tools). */
   cwd: string
+  /** The site's mark for the tab, as a `data:` URI — the icons the guest page
+   * declared, resolved in main (`BrowserPane`). Absent until one lands, and for
+   * good on a site that publishes none: the tab keeps the globe. */
+  favicon?: string
+  /** Whether that mark is a dark glyph needing inverting on a dark ground —
+   * measured beside the fetch so the tab's first paint is already right. */
+  faviconInkDark?: boolean
 }
 
 export interface PlanPanelState {
@@ -468,6 +475,13 @@ export function visibleChats(chats: ChatMeta[]): ChatMeta[] {
   return chats.filter((c) => !c.ephemeral)
 }
 
+/** One queued attachment, and the composer it is meant for (see `attachmentInbox`). */
+export interface InboxAttachment {
+  att: Attachment
+  /** A chat id, when the sender knows which composer this belongs to. */
+  to?: string
+}
+
 interface AppState {
   chats: ChatMeta[]
   activeId: string | null
@@ -677,8 +691,14 @@ interface AppState {
    * defer. `chats:create` freezes no pair worth protecting here (the pickers
    * stay live), and a side chat never takes a worktree, so no checkout or branch
    * is made on disk.
+   *
+   * Answers with the new chat's id, or null when there was no thread to add to
+   * or no room left in it. The id is what lets a caller hand the column
+   * something on arrival — the quote bar's "Ask in side chat" — while checking
+   * first that this column is still the focused one, since the round trip is
+   * long enough for the user to have moved threads under it.
    */
-  addThreadChat(): Promise<void>
+  addThreadChat(): Promise<string | null>
   /**
    * Closes a side chat's **column**. The conversation survives, and the `+`
    * menu's closed list is where it comes back from.
@@ -798,6 +818,8 @@ interface AppState {
   closePreview(id: string): void
   /** Records the URL a preview navigated to, so it restores on tab switch. */
   setPreviewUrl(id: string, url: string): void
+  /** The site's mark for a preview tab; null clears it back to the globe. */
+  setPreviewFavicon(id: string, uri: string | null, inkDark?: boolean): void
   /** Dev-server state per project folder, keyed by cwd. */
   previewStates: Record<string, PreviewState>
   applyPreviewState(state: PreviewState): void
@@ -805,10 +827,25 @@ interface AppState {
   stopPreview(cwd?: string): Promise<void>
 
   // ---- Composer inbox ----
-  /** Attachments handed to the composer from elsewhere (e.g. picked elements). */
-  attachmentInbox: Attachment[]
-  addAttachment(att: Attachment): void
-  clearAttachmentInbox(): void
+  /**
+   * Attachments handed to a composer from elsewhere — the editor's "Add to
+   * chat" pill, the canvas list, the browser's element picker, the quote bar.
+   *
+   * `to` names the chat whose composer is meant to take it, and it exists
+   * because the usual answer — whichever column is focused — is a *moving*
+   * answer. Adding a column moves focus three times: `addThreadChat` names the
+   * new chat at once, the old column's `claimFocus` fires again as React
+   * re-parents its subtree (measured ~56ms later), and `focusComposer`'s rAF
+   * lands back on the new one ~24ms after that. An unaddressed entry dropped
+   * into that last window — which is exactly where the `createChat` round trip
+   * ends — is taken by the column the user is leaving, which for "Ask in side
+   * chat" is precisely the wrong one. An addressed entry waits for its own
+   * composer instead.
+   */
+  attachmentInbox: InboxAttachment[]
+  addAttachment(att: Attachment, to?: string): void
+  /** Removes the entries a composer has taken, leaving anyone else's. */
+  takeAttachments(ids: string[]): void
 
   // ---- Drafts ----
   /**
@@ -2190,16 +2227,33 @@ export const useApp = create<AppState>((set, get) => ({
     }))
   },
 
+  setPreviewFavicon(id, uri, inkDark) {
+    set((s) => {
+      const tab = s.previews.find((p) => p.id === id)
+      if (!tab) return s
+      const favicon = uri ?? undefined
+      const ink = uri ? !!inkDark : undefined
+      // Every navigation clears the mark before the next one lands, and most of
+      // those clears have nothing to clear. A new array there would redraw the
+      // whole tab strip for no change at all.
+      if (tab.favicon === favicon && tab.faviconInkDark === ink) return s
+      return {
+        previews: s.previews.map((p) => (p.id === id ? { ...p, favicon, faviconInkDark: ink } : p))
+      }
+    })
+  },
+
   // ---- Composer inbox ----
 
   attachmentInbox: [],
 
-  addAttachment(att) {
-    set((s) => ({ attachmentInbox: [...s.attachmentInbox, att] }))
+  addAttachment(att, to) {
+    set((s) => ({ attachmentInbox: [...s.attachmentInbox, { att, ...(to ? { to } : {}) }] }))
   },
 
-  clearAttachmentInbox() {
-    set({ attachmentInbox: [] })
+  takeAttachments(ids) {
+    const taken = new Set(ids)
+    set((s) => ({ attachmentInbox: s.attachmentInbox.filter((e) => !taken.has(e.att.id)) }))
   },
 
   // ---- Drafts ----
@@ -2797,8 +2851,8 @@ export const useApp = create<AppState>((set, get) => ({
     // chat means the home screen, where there is no thread to add to.
     const openedFor = s.activeId
     const parent = s.chats.find((c) => c.id === openedFor)
-    if (!openedFor || !parent) return
-    if (threadFull(s)) return
+    if (!openedFor || !parent) return null
+    if (threadFull(s)) return null
     const defaults = s.defaults
     const meta = await window.api.createChat({
       cwd: parent.cwd,
@@ -2844,6 +2898,7 @@ export const useApp = create<AppState>((set, get) => ({
       }
     })
     if (get().activeId === openedFor) focusComposer(meta.id)
+    return meta.id
   },
 
   async closeSideChat(id) {

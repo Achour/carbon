@@ -10,6 +10,7 @@ import {
   Copy,
   FileText,
   Loader2,
+  MessageSquareQuote,
   MousePointerClick,
   Pencil,
   PenLine
@@ -19,6 +20,7 @@ import { CHAT_BLEED, CHAT_BLEED_PAD, CHAT_FRAME } from '@/lib/chatColumn'
 import { groupToolRuns, type PartRun } from '@/lib/toolRuns'
 import { cn } from '@/lib/utils'
 import { formatCost } from '@/lib/format'
+import { DISCLOSURE_PANEL } from '@/lib/disclosure'
 import { AssistantMarkdown, Markdown, useStreamText } from '@/components/Markdown'
 import { Button } from '@/components/ui/button'
 import { WithTooltip } from '@/components/ui/tooltip'
@@ -231,6 +233,15 @@ function PromptAttachments({ message }: { message: UserMessage }): React.JSX.Ele
             <PenLine className="size-3.5 shrink-0 text-muted-foreground" />
             <span className="truncate text-xs">{att.name}</span>
           </button>
+        ) : att.kind === 'quote' && att.quote ? (
+          <div
+            key={att.id}
+            title={att.quote.text.slice(0, 400)}
+            className="flex h-8 max-w-56 items-center gap-1.5 rounded-lg border border-border bg-secondary/60 px-2.5"
+          >
+            <MessageSquareQuote className="size-3.5 shrink-0 text-muted-foreground" />
+            <span className="truncate text-xs">{att.name}</span>
+          </div>
         ) : att.kind === 'selection' && att.selection ? (
           <div
             key={att.id}
@@ -302,7 +313,10 @@ export const UserBubble = React.memo(function UserBubble({
   // nothing at all for it.
   const hasBody = !!message.text || (message.attachments?.length ?? 0) > 0
   return (
-    <div className="group relative flex animate-enter flex-col">
+    // `data-message-role` is what the quote bar reads to say *whose* words a
+    // selected passage is; a drag that crosses the boundary between two of
+    // these leaves the prompt naming the transcript instead.
+    <div data-message-role="user" className="group relative flex animate-enter flex-col">
       {editing ? (
         <MessageEditor message={message} chatId={chatId} onClose={() => setEditing(false)} />
       ) : (
@@ -377,7 +391,7 @@ export const ThinkingBlock = React.memo(function ThinkingBlock({
         <ChevronRight className="size-3 transition-transform duration-200 group-data-[panel-open]:rotate-90" />
         {active ? 'Thinking…' : 'Thought process'}
       </Collapsible.Trigger>
-      <Collapsible.Panel className="h-[var(--collapsible-panel-height)] overflow-hidden transition-[height] duration-200 ease-out data-[ending-style]:h-0 data-[starting-style]:h-0">
+      <Collapsible.Panel className={DISCLOSURE_PANEL}>
         <div className="mt-1.5 ml-1 select-text border-l-2 border-border pl-3.5 text-[13px] leading-relaxed text-muted-foreground italic whitespace-pre-wrap">
           {shown}
         </div>
@@ -469,7 +483,7 @@ export const AssistantBlock = React.memo(function AssistantBlock({
   if (items.length === 0) return null
 
   return (
-    <div className="space-y-2.5">
+    <div data-message-role="assistant" className="space-y-2.5">
       {items.map((item) => {
         if (item.kind === 'group') {
           return <ToolGroup key={item.key} parts={item.parts} cwd={cwd} live={turnLive} />

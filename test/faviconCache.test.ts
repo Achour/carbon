@@ -1,6 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
+  FaviconCache,
   cacheFileName,
   imageMime,
   originOf,
@@ -10,8 +14,10 @@ import {
   sniffImage
 } from '../src/main/faviconCache.ts'
 
-// Nothing here touches the network: these are the parse and the validation gate,
-// which is where every real failure of a favicon resolver lives.
+// Almost nothing here touches the network: these are the parse and the
+// validation gate, which is where every real failure of a favicon resolver
+// lives. The exception is `image()` at the foot, whose whole job is deciding
+// *whether* to make a request — so those tests stub `fetch` and count calls.
 
 // ---- originOf ----
 
@@ -221,5 +227,94 @@ test('a cache file name never escapes its directory', () => {
     assert.doesNotMatch(name, /[/\\]/, origin)
     assert.doesNotMatch(name, /^\.\.?/, origin)
     assert.ok(name.length < 80, origin)
+  }
+})
+
+
+// ---- image(): one exact URL, for a caller that already knows which ----
+
+/** A `FaviconCache` with a stubbed `fetch` that counts calls. `image()` is
+ * memory-only by design and never touches the directory, but the last test
+ * reaches `get()`, which writes one — so it gets a real temp path rather than
+ * a name that happens to be unwritable on this machine. */
+function imageFixture(body: Uint8Array | null): {
+  cache: FaviconCache
+  calls: () => string[]
+  restore: () => void
+} {
+  const real = globalThis.fetch
+  const seen: string[] = []
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    seen.push(String(input))
+    if (!body) return new Response(null, { status: 404 })
+    return new Response(body, { status: 200, headers: { 'content-type': 'image/png' } })
+  }) as typeof fetch
+  return {
+    cache: new FaviconCache(mkdtempSync(join(tmpdir(), 'favicon-'))),
+    calls: () => seen,
+    restore: () => {
+      globalThis.fetch = real
+    }
+  }
+}
+
+test('a declared `data:` icon is the answer itself, never a request', async () => {
+  const f = imageFixture(png)
+  try {
+    const inline = 'data:image/svg+xml;base64,PHN2Zy8+'
+    assert.equal(await f.cache.image(inline), inline)
+    assert.deepEqual(f.calls(), [])
+  } finally {
+    f.restore()
+  }
+})
+
+test('only http(s) and data icons are ever fetched', async () => {
+  const f = imageFixture(png)
+  try {
+    for (const url of ['file:///etc/passwd', 'chrome://favicon/x', 'about:blank', '']) {
+      assert.equal(await f.cache.image(url), null, url)
+    }
+    assert.deepEqual(f.calls(), [])
+  } finally {
+    f.restore()
+  }
+})
+
+test('a found icon is fetched once, however often the page declares it', async () => {
+  const f = imageFixture(png)
+  try {
+    const uri = await f.cache.image('https://example.com/favicon.png')
+    assert.match(String(uri), /^data:image\/png;base64,/)
+    assert.equal(await f.cache.image('https://example.com/favicon.png'), uri)
+    assert.equal(f.calls().length, 1)
+  } finally {
+    f.restore()
+  }
+})
+
+test('a miss is remembered too, so a reload storm is one request', async () => {
+  const f = imageFixture(null)
+  try {
+    assert.equal(await f.cache.image('https://example.com/favicon.ico'), null)
+    assert.equal(await f.cache.image('https://example.com/favicon.ico'), null)
+    assert.equal(f.calls().length, 1)
+  } finally {
+    f.restore()
+  }
+})
+
+test('an origin and an icon URL are separate entries, never one', async () => {
+  const f = imageFixture(png)
+  try {
+    // `get()` keys on the origin and `image()` on the URL; the same string is a
+    // legal key in both, and one shared map would let either answer for the
+    // other. Only `image()` may answer here — `get()` would have to fetch.
+    await f.cache.image('https://example.com')
+    assert.equal(f.calls().length, 1)
+    await f.cache.get('https://example.com/page')
+    assert.ok(f.calls().length > 1)
+  } finally {
+    f.restore()
   }
 })

@@ -327,8 +327,9 @@ it guards**, and put new reasoning in that file rather than back in this one.
   (`ToolCard`, `ToolGroup`, `lib/toolSummary.ts`), the task checklist
   (`lib/taskList.ts`, `TaskDock`, `TasksCard`), the agent roster
   (`shared/agentRuns.ts`, `AgentsPanel`, `AgentActivityBar`), what the agent
-  asks you (`PromptDock`, `CodexReviewDialog`) and the turn's changed files
-  (`TurnChangesCard`, `lib/turnChanges.ts`).
+  asks you (`PromptDock`, `CodexReviewDialog`), the turn's changed files
+  (`TurnChangesCard`, `lib/turnChanges.ts`) and quoting a passage back at it
+  (`QuoteBar`, `lib/quoteSelection.ts`).
 - **`docs/chat-layout.md`** — the one reading column (`lib/chatColumn.ts`),
   tables in a message (`.markdown table`, `Markdown.tsx`), type in the chrome
   (`--ui-row`, `--code-font-size`, and why there is no text-size setting), file

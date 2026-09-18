@@ -4,6 +4,7 @@ import { ChevronRight, ClipboardList, MessageCircleQuestion, ShieldAlert } from 
 import type { PermissionRequestPayload, Provider, UserQuestion } from '@shared/types'
 import { PROVIDER_SHORT_LABELS } from '@shared/types'
 import { cn } from '@/lib/utils'
+import { DISCLOSURE_PANEL } from '@/lib/disclosure'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useApp } from '@/store'
@@ -459,7 +460,7 @@ function PermissionPrompt({
             <ChevronRight className="size-3 transition-transform duration-200 group-data-[panel-open]:rotate-90" />
             Details
           </Collapsible.Trigger>
-          <Collapsible.Panel className="h-[var(--collapsible-panel-height)] overflow-hidden transition-[height] duration-200 data-[ending-style]:h-0 data-[starting-style]:h-0">
+          <Collapsible.Panel className={DISCLOSURE_PANEL}>
             <pre className="mt-1.5 max-h-48 overflow-auto rounded-md border border-border bg-code p-2 font-mono text-[11px] whitespace-pre-wrap select-text">
               {JSON.stringify(request.input, null, 2)}
             </pre>

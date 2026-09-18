@@ -85,7 +85,7 @@ import { PREVIEW_SESSION_RULES } from './previewTools.ts'
 import { projectRoot } from '../shared/types.ts'
 import type { CanvasManager } from './canvas.ts'
 import { CANVAS_SESSION_RULES } from './canvasTools.ts'
-import { describeCanvas, describeSelection } from './attachmentText.ts'
+import { describeCanvas, describeQuote, describeSelection } from './attachmentText.ts'
 
 const OUTPUT_CAP = 100_000
 
@@ -834,6 +834,7 @@ export class CodexSession implements AgentSession {
       if (a.kind === 'element' && a.element) elementNotes.push(describeElement(a.element))
       if (a.kind === 'selection' && a.selection) elementNotes.push(describeSelection(a.selection))
       if (a.kind === 'canvas' && a.canvas) elementNotes.push(describeCanvas(a.canvas))
+      if (a.kind === 'quote' && a.quote) elementNotes.push(describeQuote(a.quote))
       if (a.kind === 'file' && a.path) filePaths.push(a.path)
     }
     let prompt = text

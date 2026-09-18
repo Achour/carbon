@@ -207,7 +207,10 @@ The pill is positioned in the editor's *content* coordinates and recomputed on
 scroll, so it travels with the code; a fixed-position element detaches from the
 lines it names on the first wheel tick. The **diff view is not covered** — its
 rows carry their own line numbers, so mapping a selection there is a different
-problem, not this one.
+problem, not this one. The **transcript** has its own half of this gesture, on
+the same inbox seam and the same ⌘L — see "Quoting a passage" in
+`docs/transcript.md`; what it selects is prose rather than lines, so it shares
+the seam and nothing else.
 
 ### The panel's tabs (`RightPanel.tsx`, `lib/tabOrder.ts`)
 

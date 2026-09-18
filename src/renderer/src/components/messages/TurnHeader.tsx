@@ -73,7 +73,11 @@ export const TurnHeader = React.memo(function TurnHeader({
   // `body`'s 14px by hand. It is a chrome *colour* on reading-size type — the
   // row is quiet, not small.
   return (
-    <div className="flex flex-col gap-2">
+    // A turn opening is a step like any other, so it fades in with the rest.
+    // The header is pushed the moment the prompt is sent — it is the send's own
+    // acknowledgement — so this is the first thing that moves in a new turn,
+    // and it was the one row that appeared with no motion at all.
+    <div className="flex animate-enter flex-col gap-2">
       {!collapsible ? (
         // No affordance on a row that would answer a click with nothing: a
         // turn still doing its first run of work, or one with nothing to hide.

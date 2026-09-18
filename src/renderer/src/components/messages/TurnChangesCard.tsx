@@ -5,6 +5,7 @@ import type { AssistantMessage, GitFileChange, RewindResult } from '@shared/type
 import { cn } from '@/lib/utils'
 import { changedPathsFromParts, groupChanges, type ChangedFile } from '@/lib/turnChanges'
 import { FileIcon } from '@/lib/fileIcon'
+import { DISCLOSURE_PANEL } from '@/lib/disclosure'
 import { useApp } from '@/store'
 import { LineDeltas } from '@/components/GitPanel'
 import { Button } from '@/components/ui/button'
@@ -201,7 +202,7 @@ export const TurnChangesCard = React.memo(function TurnChangesCard({
         )}
       </div>
 
-      <Collapsible.Panel className="h-[var(--collapsible-panel-height)] overflow-hidden transition-[height] duration-200 ease-out data-[ending-style]:h-0 data-[starting-style]:h-0">
+      <Collapsible.Panel className={DISCLOSURE_PANEL}>
         <div className="border-t border-border/70 px-2 py-1">
           {entries.map((entry) => {
             if (entry.kind === 'file') {

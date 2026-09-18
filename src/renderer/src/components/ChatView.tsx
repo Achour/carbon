@@ -42,6 +42,7 @@ import {
   ToolOutputImages
 } from '@/components/messages/ToolCard'
 import { PromptDock } from '@/components/PromptDock'
+import { QuoteBar } from '@/components/QuoteBar'
 import { TasksCard } from '@/components/messages/TasksCard'
 import { TurnChangesCard } from '@/components/messages/TurnChangesCard'
 import { TurnHeader } from '@/components/messages/TurnHeader'
@@ -683,6 +684,8 @@ export const ChatView = React.memo(function ChatView({
   const toggleTurnExpanded = useApp((s) => s.toggleTurnExpanded)
 
   const scrollRef = React.useRef<HTMLDivElement>(null)
+  /** The scroller's positioned ancestor — what the quote bar is placed inside. */
+  const viewRef = React.useRef<HTMLDivElement>(null)
   /** The reading column inside the scroller — what the follow observer measures. */
   const columnRef = React.useRef<HTMLDivElement>(null)
   const pinnedRef = React.useRef(true)
@@ -1201,7 +1204,7 @@ export const ChatView = React.memo(function ChatView({
           happened to end — over the context strip, or over the last line of
           the prompt above it once a queued row or a taller composer moved
           the stack. */}
-      <div className="relative flex min-h-0 flex-1 flex-col">
+      <div ref={viewRef} className="relative flex min-h-0 flex-1 flex-col">
         <div
           ref={scrollRef}
           onScroll={onScroll}
@@ -1249,6 +1252,11 @@ export const ChatView = React.memo(function ChatView({
             <div className="h-2" />
           </div>
         </div>
+
+        {/* Select a passage in a reply and ask about it. It sits in the
+            scroller's frame rather than in the scroller, so it can be placed
+            against the passage without scrolling away from it. */}
+        <QuoteBar chatId={chat.id} scrollRef={scrollRef} containerRef={viewRef} />
 
         {/* Jump to bottom */}
         {showJump && (

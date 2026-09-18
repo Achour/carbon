@@ -55,6 +55,26 @@ const MAX_DECLARED = 4
 /** Origins held in memory; a transcript cites far fewer. */
 const MEMORY_MAX = 512
 
+/**
+ * How long `image()` remembers that a URL held no icon.
+ *
+ * Positives are kept for the session — an icon at a fixed URL does not become
+ * something else — but a negative is a statement about a server that is very
+ * often *the user's own dev server*, and "I just added `public/favicon.ico`"
+ * has to be one reload away rather than one relaunch. A minute is long enough
+ * that a reload storm costs one request and short enough that nobody notices
+ * the wait.
+ */
+const IMAGE_NEGATIVE_TTL_MS = 60_000
+
+/** Icon URLs held in memory. A pane visits far fewer sites than a transcript
+ * cites, so this is a ceiling rather than a working size. */
+const IMAGE_MEMORY_MAX = 128
+
+/** A `data:` icon is passed through rather than fetched; this caps the string
+ * itself, since base64 is the only size we ever see it at. */
+const DATA_URI_MAX = ICON_MAX_BYTES
+
 const USER_AGENT = 'Carbon (+https://github.com/Achour/carbon)'
 
 // ---- Pure: origins, markup, sniffing (all tested offline) ----
@@ -311,6 +331,22 @@ export class FaviconCache {
   /** One request per origin, however many links arrive in the same frame. */
   private readonly inFlight = new Map<string, Promise<string | null>>()
 
+  /**
+   * What `image()` has answered, by icon URL, with the moment it answered.
+   *
+   * Deliberately *not* the `memory` map above: both are keyed by a plain
+   * string and `https://example.com` is a legal key in either, so one shared
+   * map would let a site's origin answer for a URL that happens to spell it.
+   * Memory-only too — the disk entry is `{ origin, icon }` and re-keying it
+   * would buy a page's own icon nothing, while writing a 24-hour negative for
+   * `http://localhost:5173` is exactly the answer that must not outlive the
+   * minute it was true for.
+   */
+  private readonly images = new Map<string, { d: string | null; t: number }>()
+
+  /** One request per icon URL, however many candidates arrive together. */
+  private readonly imagesInFlight = new Map<string, Promise<string | null>>()
+
   /** Where the disk half lives; `node --test` passes a temp directory, and a
    * parameter property would not survive Node's strip-only type removal. */
   private readonly dir: string
@@ -342,6 +378,57 @@ export class FaviconCache {
     } finally {
       this.inFlight.delete(origin)
     }
+  }
+
+  /**
+   * The image at **this exact URL** as a `data:` URI, or null when it isn't
+   * one. `get` above answers "the mark for this origin" and discovers the URL
+   * itself; this answers for a URL something else already discovered.
+   *
+   * That something else is the browser pane's guest: `page-favicon-updated`
+   * hands over the icons the page declared, already absolute and already
+   * resolved against `prefers-color-scheme` — which is how GitHub's *dark*
+   * octocat reaches a dark tab strip, and a discovery run here never could.
+   * The fetch still has to happen in main. The renderer could point an `<img>`
+   * straight at the URL, but a cross-origin image taints the canvas, and the
+   * canvas is how a black-on-transparent mark is recognized as needing
+   * inverting (`lib/faviconInk.ts`) — so the one thing drawing the raw URL
+   * would save is the one thing that makes it legible.
+   */
+  async image(url: string): Promise<string | null> {
+    const target = url.trim()
+    // A page may declare its icon inline. There is nothing to fetch, and
+    // nothing to cache either — the URI *is* the answer.
+    if (/^data:image\//i.test(target)) return target.length <= DATA_URI_MAX ? target : null
+    if (!/^https?:\/\//i.test(target)) return null
+
+    const known = this.images.get(target)
+    if (known && (known.d !== null || Date.now() - known.t < IMAGE_NEGATIVE_TTL_MS)) {
+      return known.d
+    }
+
+    const existing = this.imagesInFlight.get(target)
+    if (existing) return existing
+
+    const pending = this.fetchImage(target, Date.now() + REQUEST_TIMEOUT_MS, {
+      answered: false
+    }).catch(() => null)
+    this.imagesInFlight.set(target, pending)
+    try {
+      const icon = await pending
+      this.rememberImage(target, icon)
+      return icon
+    } finally {
+      this.imagesInFlight.delete(target)
+    }
+  }
+
+  private rememberImage(url: string, icon: string | null): void {
+    if (this.images.size >= IMAGE_MEMORY_MAX) {
+      const oldest = this.images.keys().next()
+      if (!oldest.done) this.images.delete(oldest.value)
+    }
+    this.images.set(url, { d: icon, t: Date.now() })
   }
 
   private remember(origin: string, icon: string | null): void {

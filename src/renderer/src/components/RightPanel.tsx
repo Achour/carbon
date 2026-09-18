@@ -71,6 +71,39 @@ const TerminalPane = React.lazy(() =>
 // keys on `Files` in `dataTransfer.types` — stays dark while a tab crosses it.
 const TAB_DRAG_MIME = 'application/x-carbon-tab'
 
+/**
+ * A preview tab's icon: the site's own mark where it has one, the globe where
+ * it hasn't.
+ *
+ * Every preview drawing the same globe is what this replaces — with three panes
+ * open the strip said "Preview 1/2/3" three times over one glyph. The mark is a
+ * `data:` URI resolved by `BrowserPane` from what the guest page declared, so
+ * there is nothing to fetch here and nothing to wait for: a tab either has one
+ * by the time it draws or does not.
+ *
+ * The failed URI is held rather than a flag — a tab that navigates on to
+ * another site must not stay globed because the last site's bytes didn't
+ * decode.
+ */
+function SiteMark({ uri, inkDark }: { uri?: string; inkDark?: boolean }): React.JSX.Element {
+  const [bad, setBad] = React.useState<string | null>(null)
+  if (!uri || uri === bad) return <Globe className="size-3.5" />
+  return (
+    <img
+      src={uri}
+      alt=""
+      aria-hidden
+      onError={() => setBad(uri)}
+      className={cn(
+        'size-3.5 shrink-0 rounded-[2px] object-contain',
+        // Dark mode only: on a light ground the mark is already right, and it
+        // is the site's own drawing wherever it can be.
+        inkDark && 'dark:invert'
+      )}
+    />
+  )
+}
+
 function Tab({
   icon,
   label,
@@ -1139,7 +1172,7 @@ export function RightPanel(): React.JSX.Element | null {
           {previews.map((p) => (
             <Tab
               key={p.id}
-              icon={<Globe className="size-3.5" />}
+              icon={<SiteMark uri={p.favicon} inkDark={p.faviconInkDark} />}
               label={`Preview ${p.n}`}
               active={current === p.id}
               dragId={p.id}

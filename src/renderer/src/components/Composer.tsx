@@ -7,6 +7,7 @@ import {
   ChevronRight,
   ClipboardList,
   FileCheck2,
+  MessageSquareQuote,
   MousePointerClick,
   Paperclip,
   PencilLine,
@@ -216,6 +217,7 @@ function AttachmentChip({
       : undefined
   const sel = att.kind === 'selection' ? att.selection : undefined
   const canvas = att.kind === 'canvas' ? att.canvas : undefined
+  const quote = att.kind === 'quote' ? att.quote : undefined
   return (
     <div className="group/att relative shrink-0">
       {att.kind === 'image' ? (
@@ -250,6 +252,17 @@ function AttachmentChip({
         >
           <FileIcon path={sel.path} />
           <span className="truncate font-mono text-[11px]">{att.name}</span>
+        </div>
+      ) : quote ? (
+        // A passage, not code: prose face, and the label is one flat line of it
+        // (`quoteLabel`) rather than a name someone chose — which is why the
+        // whole quote goes in the tooltip, where a selection puts its snippet.
+        <div
+          title={quote.text.slice(0, 400)}
+          className="flex h-8 max-w-52 items-center gap-1.5 rounded-lg border border-border bg-secondary/60 px-2.5"
+        >
+          <MessageSquareQuote className="size-3.5 shrink-0 text-muted-foreground" />
+          <span className="truncate text-xs">{att.name}</span>
         </div>
       ) : canvas ? (
         // Prose face, not mono: a canvas title is a name someone wrote, where a
@@ -929,16 +942,20 @@ export function Composer({
   const selectedPermissionAppearance = permissionAppearance(permissionValue, isCodex)
 
   // The inbox is app-global — one queue fed by the editor's "Add to chat" pill,
-  // the canvas list and the browser's element picker — so with several
-  // composers mounted the first effect to run would consume whatever was in it.
-  // It goes to the **focused** column's composer: the panel those gestures are
-  // made in is shared by the whole thread, and the column you were last in is
-  // the one you are adding context to.
+  // the canvas list, the browser's element picker and the transcript's quote
+  // bar — so with several composers mounted the first effect to run would
+  // consume whatever was in it. An entry goes to the **focused** column's
+  // composer: the panel those gestures are made in is shared by the whole
+  // thread, and the column you were last in is the one you are adding context
+  // to. An entry that names a chat goes to *that* one however long its column
+  // takes to arrive, which is the case focus cannot answer — see
+  // `attachmentInbox`.
   const isFocusedComposer = useApp((s) => !!chatId && s.focusedChatId === chatId)
   const inbox = useApp((s) => s.attachmentInbox)
   React.useEffect(() => {
-    if (!isFocusedComposer) return
     if (inbox.length === 0) return
+    const mine = inbox.filter((e) => (e.to ? e.to === chatId : isFocusedComposer)).map((e) => e.att)
+    if (mine.length === 0) return
     setAttachments((prev) => {
       // Dedupe on path as well as id: the same file can be sent here more than
       // once (tree menu, repeatedly) and should stay a single chip. A canvas
@@ -949,7 +966,7 @@ export function Composer({
       const paths = new Set(prev.flatMap((a) => (a.path ? [a.path] : [])))
       const canvasIds = new Set(prev.flatMap((a) => (a.canvas ? [a.canvas.id] : [])))
       const fresh: Attachment[] = []
-      for (const att of inbox) {
+      for (const att of mine) {
         if (seen.has(att.id) || (att.path && paths.has(att.path))) continue
         if (att.canvas && canvasIds.has(att.canvas.id)) continue
         seen.add(att.id)
@@ -959,9 +976,9 @@ export function Composer({
       }
       return fresh.length === 0 ? prev : [...prev, ...fresh]
     })
-    useApp.getState().clearAttachmentInbox()
+    useApp.getState().takeAttachments(mine.map((a) => a.id))
     ref.current?.focus()
-  }, [isFocusedComposer, inbox])
+  }, [isFocusedComposer, inbox, chatId])
   const [dragOver, setDragOver] = React.useState(false)
   const dragDepth = React.useRef(0)
   const ref = React.useRef<HTMLTextAreaElement>(null)

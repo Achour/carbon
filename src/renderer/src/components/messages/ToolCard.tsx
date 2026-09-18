@@ -46,6 +46,7 @@ import { cn } from '@/lib/utils'
 import { humanizeShellCommand, unwrapGrokTool } from '@/lib/toolLabels'
 import { leadActivityLabel, summarizeActivity } from '@/lib/toolSummary'
 import { groupToolRuns } from '@/lib/toolRuns'
+import { DISCLOSURE_PANEL } from '@/lib/disclosure'
 import { lineDiff, type DiffLine } from '@/lib/lineDiff'
 import { parseDiff } from '@/lib/diffRows'
 import { Markdown } from '@/components/Markdown'
@@ -614,8 +615,7 @@ const ACTIVITY_CHEVRON =
  * thing, and at three levels (group → call → its output) it would walk the
  * transcript steadily rightwards.
  */
-const ACTIVITY_PANEL =
-  'h-[var(--collapsible-panel-height)] overflow-hidden transition-[height] duration-200 ease-out data-[ending-style]:h-0 data-[starting-style]:h-0'
+const ACTIVITY_PANEL = DISCLOSURE_PANEL
 
 /**
  * Open while the work is happening, closed once it is done — and an explicit
@@ -1343,35 +1343,18 @@ export const ToolGroup = React.memo(function ToolGroup({
   const canvas = canvasInRun(parts)
   const outputImages = parts.flatMap((part) => part.outputImages ?? [])
   const arrivals = useArrivals(parts, live)
-  /**
-   * **A live group never plays its entrance, because it never arrives** — and
-   * this is decided *once, at mount*, which is the whole of the correctness
-   * here. A run reaches the screen at `GROUP_MIN` calls, and the call before
-   * that was already there as a lone `ToolCard`, so the first render of a live
-   * group is always the *promotion* of a row the reader is already looking at,
-   * under a new key and therefore as a fresh mount. Animating it slides that
-   * row in a second time; the rows inside arrive `dense` and suppress their own
-   * entrance for the same reason. A group mounting with `live` false is a chat
-   * being opened or a turn being unfolded, where everything is genuinely new.
-   *
-   * Spelled `!live` inline it was a live-ness *test re-run every render*, which
-   * is a different and wrong thing: adding an `animation` to an element that is
-   * already mounted plays it, so the moment a run stopped being live its
-   * wrapper slid in from below while folding shut. The transcript hides that —
-   * the turn folds in the same commit and the node goes — but `AgentsPanel`
-   * keeps a finished agent's stream mounted, so every run in it would have
-   * played its entrance at once the instant the agent ended.
-   */
-  const [entrance] = React.useState(() => !live)
 
   return (
     <>
-      <Collapsible.Root
-        open={open}
-        onOpenChange={onOpenChange}
-        className={cn(entrance && 'animate-enter')}
-      >
-        <Collapsible.Trigger className={ACTIVITY_ROW}>
+      <Collapsible.Root open={open} onOpenChange={onOpenChange}>
+        {/* **The entrance is on the summary row, not on the group.** A live
+            group's first render is always a *promotion*: the run reached
+            `GROUP_MIN`, so the call before the last was already on screen as a
+            lone card and is now this panel's first child. Animating the Root
+            animates the panel with it, sliding that row in a second time —
+            which is the "it moves again" half of the flicker. The trigger is
+            the only genuinely new element, so it is the only one that enters. */}
+        <Collapsible.Trigger className={cn(ACTIVITY_ROW, 'animate-enter')}>
           <span className="flex min-w-0 items-center gap-1.5">
             <GroupIcon className={ACTIVITY_ICON} />
             {/* The summary stays muted even when a call inside failed. A group is

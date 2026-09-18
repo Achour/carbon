@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { describeCanvas, describeSelection } from '../src/main/attachmentText.ts'
+import { describeCanvas, describeQuote, describeSelection } from '../src/main/attachmentText.ts'
 
 const base = { path: '/proj/src/foo.ts', rel: 'src/foo.ts', startLine: 12, endLine: 30 }
 
@@ -85,5 +85,44 @@ test('a canvas containing a fence is wrapped in a longer one', () => {
   // found — and a three-backtick fence around one ends at *its* fence.
   const out = describeCanvas({ ...canvas, text: 'see:\n```sql\nSELECT 1\n```' })
   assert.match(out, /````\nsee:/)
+  assert.ok(out.trimEnd().endsWith('````'))
+})
+
+// ---------- quoted passages ----------
+
+test('a quote names who wrote the passage', () => {
+  const out = describeQuote({ text: 'the pill travels with the code', role: 'assistant' })
+  assert.match(out, /^The user selected this passage from an assistant's reply and is asking about it\./)
+  assert.match(out, /```\nthe pill travels with the code\n```/)
+})
+
+test("a quote of the user's own words says so", () => {
+  const out = describeQuote({ text: 'ship it', role: 'user' })
+  assert.match(out, /from the user's own earlier message/)
+})
+
+test('a selection across two messages claims neither', () => {
+  // `role` is unset when the drag crossed the boundary — naming one of them
+  // would be a guess, and the model would answer about the wrong speaker.
+  const out = describeQuote({ text: 'both halves' })
+  assert.match(out, /from the chat transcript/)
+})
+
+test('a quote is framed as quoted text rather than an instruction', () => {
+  // The passage is usually the model's own last reply, and a prompt that reads
+  // as one gets followed instead of discussed.
+  assert.match(describeQuote({ text: 'delete the table' }), /not a new instruction/)
+})
+
+test('a truncated quote says it was cut', () => {
+  // Nothing can re-read it — unlike a selection's file or a canvas's id — so
+  // silence here is the model answering about half a sentence as if it were all.
+  const out = describeQuote({ text: 'the beginning of', truncated: true })
+  assert.match(out, /cut short here/)
+})
+
+test('a quoted fence is wrapped in a longer one', () => {
+  const out = describeQuote({ text: 'run:\n```sh\nnpm test\n```' })
+  assert.match(out, /````\nrun:/)
   assert.ok(out.trimEnd().endsWith('````'))
 })

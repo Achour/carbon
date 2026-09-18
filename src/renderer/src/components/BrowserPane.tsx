@@ -15,6 +15,7 @@ import type { Attachment, ElementRef } from '@shared/types'
 import { cn } from '@/lib/utils'
 import { useApp } from '@/store'
 import { registerPreview, unregisterPreview } from '@/lib/previewRegistry'
+import { classifyInk } from '@/lib/faviconInk'
 import { Button } from '@/components/ui/button'
 import { WithTooltip } from '@/components/ui/tooltip'
 
@@ -213,6 +214,23 @@ function karbunPicker(): void {
 
 const PICKER_JS = '(' + karbunPicker.toString() + ')()'
 
+/**
+ * Declared icons tried before the pane gives up and keeps the globe. A page
+ * often declares a set — GitHub sends a `.png` and an `.svg` — and the first
+ * that is really an image wins.
+ */
+const MAX_ICON_CANDIDATES = 4
+
+/** The origin a page belongs to, or null for anything main could not fetch. */
+function pageOrigin(url: string): string | null {
+  try {
+    const u = new URL(url)
+    return u.protocol === 'http:' || u.protocol === 'https:' ? u.origin : null
+  } catch {
+    return null
+  }
+}
+
 function normalizeUrl(input: string): string {
   const v = input.trim()
   if (!v) return v
@@ -257,6 +275,21 @@ export function BrowserPane({
   const autoUrlRef = React.useRef<string | null>(null)
   // Mirrors `editing` for the mount-once nav handlers (they can't read state).
   const editingRef = React.useRef(false)
+  // ---- The site's mark on this pane's tab ----
+  // `iconSeq` names the resolution a result belongs to. `page-favicon-updated`
+  // fires more than once per page — the parsed `<link>`s, then anything the
+  // page changes later — and each candidate costs an async IPC, so a slow
+  // first answer must never land on top of a newer one.
+  const iconSeqRef = React.useRef(0)
+  // The origin the current mark belongs to, so a reload keeps it and a new site
+  // does not inherit it.
+  const iconOriginRef = React.useRef<string | null>(null)
+  // Whether this document declared any icon, whether the guess has already run
+  // for it, and whether it failed to load — the three `did-stop-loading` reads
+  // to decide about the `/favicon.ico` guess.
+  const declaredIconRef = React.useRef(false)
+  const guessedIconRef = React.useRef(false)
+  const loadFailedRef = React.useRef(false)
 
   const [address, setAddress] = React.useState(initialUrl.current)
   const [editing, setEditingState] = React.useState(false)
@@ -314,6 +347,39 @@ export function BrowserPane({
       // ignore
     }
   }
+
+  const publishIcon = React.useCallback(
+    (uri: string | null, ink: boolean): void => {
+      useApp.getState().setPreviewFavicon(id, uri, ink)
+    },
+    [id]
+  )
+
+  /**
+   * The first candidate that is really an image, measured and published.
+   *
+   * The bytes are fetched in main rather than pointed at from an `<img>`: a
+   * cross-origin image taints the canvas, and the canvas is how a
+   * black-on-transparent glyph is recognized as needing inverting on a dark tab
+   * strip. Measuring before publishing — rather than at draw time — is what
+   * keeps the tab from flashing an invisible mark for a frame.
+   */
+  const resolveIcon = React.useCallback(
+    async (candidates: string[], seq: number): Promise<void> => {
+      for (const candidate of candidates.slice(0, MAX_ICON_CANDIDATES)) {
+        const uri = await window.api.faviconImage(candidate).catch(() => null)
+        // Superseded while the fetch was in flight: the newer resolution owns
+        // the tab now, and finishing this one would undo it.
+        if (seq !== iconSeqRef.current) return
+        if (!uri) continue
+        const ink = await classifyInk(candidate, uri)
+        if (seq !== iconSeqRef.current) return
+        publishIcon(uri, ink)
+        return
+      }
+    },
+    [publishIcon]
+  )
 
   const handlePick = React.useCallback(async (p: PickPayload): Promise<void> => {
     const wv = wvRef.current
@@ -400,17 +466,69 @@ export function BrowserPane({
         if (!editingRef.current) setAddress(url)
         setPreviewUrl(id, url)
       }
+      // A new site is a new mark. A same-origin move — a reload, an in-page
+      // route — keeps the one it has until the next lands, the way a browser
+      // tab does; clearing on `did-start-loading` instead flashes the globe on
+      // every reload.
+      const origin = url ? pageOrigin(url) : iconOriginRef.current
+      if (origin !== iconOriginRef.current) {
+        iconOriginRef.current = origin
+        iconSeqRef.current++
+        publishIcon(null, false)
+      }
       setError(null)
       syncNav()
     }
+    // **The spinner events are every frame's; only a commit is a new document.**
+    // `did-start-loading` fires for an iframe too — an embed, an analytics
+    // frame, an ad — so resetting "this page declared nothing" there meant a
+    // subframe landing seconds after the page did re-armed the guess and put
+    // `/favicon.ico` over the icon the page had actually declared. Measured:
+    // one iframe swapped a declared green SVG for the server's magenta `.ico`.
+    // A main-frame commit is the one event that really is a new document, and
+    // `did-navigate-in-page` is deliberately not one — an SPA route change
+    // keeps the mark its document declared.
+    const onCommit = (e: Event): void => {
+      declaredIconRef.current = false
+      guessedIconRef.current = false
+      onNavigate(e)
+    }
+    const onFavicon = (e: Event): void => {
+      const declared = (e as unknown as { favicons?: string[] }).favicons ?? []
+      if (!declared.length) return
+      declaredIconRef.current = true
+      void resolveIcon(declared, ++iconSeqRef.current)
+    }
     const onStart = (): void => {
       loadingRef.current = true
+      loadFailedRef.current = false
       setLoading(true)
     }
     const onStop = (): void => {
       loadingRef.current = false
       setLoading(false)
       syncNav()
+      // **A page that declares nothing usually still serves `/favicon.ico`.**
+      // Chromium reports only what the document declares — example.com, which
+      // declares none, fires no `page-favicon-updated` at all — so the
+      // conventional path is a guess this side has to make. Only after a load
+      // that actually succeeded: a refused connection would otherwise be
+      // remembered as "this site has no icon" for as long as the dev server
+      // takes to come up, which is the one site this pane always points at.
+      if (declaredIconRef.current || guessedIconRef.current || loadFailedRef.current) return
+      let here = ''
+      try {
+        here = wv.getURL()
+      } catch {
+        // Not attached yet; there is no page to guess for.
+      }
+      const origin = pageOrigin(here)
+      if (!origin) return
+      // Once per document, whatever the guess turns up: a page with no icon at
+      // all still finishes a subframe now and then, and each one would be
+      // another round trip for the same answer.
+      guessedIconRef.current = true
+      void resolveIcon([`${origin}/favicon.ico`], ++iconSeqRef.current)
     }
     const onFail = (e: Event): void => {
       const ev = e as unknown as {
@@ -420,6 +538,13 @@ export function BrowserPane({
       }
       // -3 is a user-initiated abort (e.g. navigating away); not an error.
       if (ev.isMainFrame && ev.errorCode !== -3) {
+        loadFailedRef.current = true
+        // The page this mark belonged to is gone — a dead dev server is the
+        // usual way here — and `did-navigate` never fires for a load that
+        // failed, so nothing else would take it off the tab.
+        iconOriginRef.current = null
+        iconSeqRef.current++
+        publishIcon(null, false)
         setError(ev.errorDescription || 'Failed to load')
         setLoading(false)
         // A failed load may not be followed by did-stop-loading; clear the ref
@@ -450,12 +575,13 @@ export function BrowserPane({
     }
 
     wv.addEventListener('dom-ready', onDomReady)
-    wv.addEventListener('did-navigate', onNavigate)
+    wv.addEventListener('did-navigate', onCommit)
     wv.addEventListener('did-navigate-in-page', onNavigate)
     wv.addEventListener('did-start-loading', onStart)
     wv.addEventListener('did-stop-loading', onStop)
     wv.addEventListener('did-fail-load', onFail)
     wv.addEventListener('console-message', onConsole)
+    wv.addEventListener('page-favicon-updated', onFavicon)
     host.appendChild(wv)
 
     // Expose an imperative handle so agent-driven commands (navigate/screenshot)
@@ -528,12 +654,13 @@ export function BrowserPane({
 
     return () => {
       wv.removeEventListener('dom-ready', onDomReady)
-      wv.removeEventListener('did-navigate', onNavigate)
+      wv.removeEventListener('did-navigate', onCommit)
       wv.removeEventListener('did-navigate-in-page', onNavigate)
       wv.removeEventListener('did-start-loading', onStart)
       wv.removeEventListener('did-stop-loading', onStop)
       wv.removeEventListener('did-fail-load', onFail)
       wv.removeEventListener('console-message', onConsole)
+      wv.removeEventListener('page-favicon-updated', onFavicon)
       // **The guest is ours to remove.** React unmounts the host div, but a
       // cleanup that runs *without* one — StrictMode's mount → cleanup → mount
       // in dev, or a Fast Refresh — leaves this webview in the host and the

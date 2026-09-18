@@ -132,18 +132,43 @@ where the output already lived.
   is easy to miss where a word resolving out of a blur is a focus cue. So
   `demo/e2e/disclosure-probe.js` samples the **computed style** at the moment an
   animation starts rather than counting animations: on the measured turn, 9
-  `step-in`s and 3 `enter`s, every one of them caught at `opacity: 0.00` — and
-  `blur(3px)` for the nine — with `invisible: 0`, `maxGap` 33ms and no long
-  tasks.
+  `step-in`s and 3 `enter`s, every one of them caught at `opacity: 0.00`, with
+  `invisible: 0`, `maxGap` 33ms and no long tasks.
+
+  **Then it was reported invisible anyway, and the probe was not wrong.** At
+  340ms with a 3px blur, on a 20px row of muted grey text, an animation can play
+  in full and clear every check here and still be beneath the threshold anyone
+  notices — the measurement proves the animation *ran*, which is a different
+  claim from the reader seeing it. The values that landed are 450ms, `blur(6px)`
+  and a 0.97→1 scale, with opacity reaching 1 at the halfway mark so the row is
+  legible for the second half while it sharpens. That is the floor for a row
+  this quiet; anything subtler measures identically and reads as nothing.
+- **Collapsing fades out, and for a long time nothing did.** Five disclosures
+  carried near-identical copies of one class string — an activity row's body, a
+  run's expanded calls, a permission prompt's details, the task card, the turn's
+  changed files — and every one of them animated **height only**. Under
+  `overflow-hidden` that is a wipe: content cropped away a row at a time at full
+  opacity right up to the moment it is gone, which reads as the work
+  *disappearing* rather than closing. `DISCLOSURE_PANEL` (`lib/disclosure.ts`)
+  is the single definition, and it names opacity in both `data-starting-style`
+  and `data-ending-style` so opening dissolves in as it grows and collapsing
+  fades as it shrinks. One constant rather than five, because five copies of a
+  transition are five chances for two disclosures to disagree about how long
+  closing takes — which a reader feels as inconsistency without being able to
+  name it.
+- **The turn header fades in too**, and had no entrance at all: it is pushed the
+  moment the prompt is sent, so it is the *first* thing a new turn draws, and it
+  was the one row that appeared with no motion.
 - **A live group never plays its own entrance, because it never arrives.** A run
   reaches the screen at `GROUP_MIN` calls, so the first render of a live group
   is always a *promotion*: the group row is new, but the panel it wraps already
   holds a row the reader is looking at, and animating the wrapper slides that
   row in a second time. There is no formulation where a lone call and the first
   row of a group are the same element under the same key — the parents differ —
-  so suppressing the wrapper's entrance is the honest fix rather than the
-  complete one. A group mounting with `live` false is a chat being opened or a
-  turn being unfolded, where everything is genuinely new.
+  so the entrance moved onto the **summary row** instead of the wrapper: the
+  trigger is the only genuinely new element, and animating the Root dragged the
+  panel — and therefore the row already on screen — through the animation with
+  it.
 - **The expanded calls are flush, not railed.** The calls a run made are the same
   kind of line as the row summarizing them. An indent would say they are a
   different kind of thing, and at three levels (group → call → its output) it
@@ -842,3 +867,75 @@ synthetic assistant messages with no user message, so all three shapes land in
 one turn that now folds at each `status: idle`; its DOM-identity readings
 measure omission rather than a remount until each shape gets a prompt of its
 own. `foot-probe.js` is unaffected — it only reads the foot label.
+
+### Quoting a passage (`QuoteBar`, `lib/quoteSelection.ts`)
+
+Select text in a reply and a small bar offers **Add to chat** (⌘L) and **Ask in
+side chat**. It is the transcript's half of the editor's selection pill, and the
+same seam: a `quote` attachment in the `attachmentInbox`, so the chip, the draft
+and all three providers' prompt text were already written.
+
+**What it adds is the pointing, not the text.** The passage is usually the
+model's own last reply — already in its history, verbatim — so nothing here
+gives the model information it lacks. What it lacks is *which part*. The thing
+people do instead is retype the sentence, and a retyped sentence is a
+paraphrase: the answer then addresses something nobody wrote. So the prompt says
+who wrote the passage and frames it as quoted text rather than as an
+instruction, because the common case is quoting an instruction-shaped line
+("delete the table") that the model would otherwise carry out
+(`describeQuote`, pinned by `test/attachmentText.test.ts`).
+
+- **`user-select` is the feature's boundary, and it was already drawn.** `body`
+  is `user-select: none` and `.markdown` turns it back on, so what can be
+  selected is exactly what can be quoted, with no allowlist of message kinds to
+  keep in step. Scope is by **containment** — the range's common ancestor inside
+  this column's scroller — since `.markdown` is also the panel's preview and a
+  canvas, and a drag that ends in another column is a quote from neither.
+- **The bar waits for the pointer to come up.** `selectionchange` fires on every
+  mousemove of a drag, and a bar placed from it appears under the cursor halfway
+  through the gesture and eats the rest of it. Pointer-down is the whole test:
+  while it is down the selection is still being made. Keyboard selection has no
+  such phase, so it shows from `selectionchange` directly.
+- **A scroll fires no `selectionchange`**, so the bar carries its own passive
+  listener on the scroller: left where it was, it would be pointing at whatever
+  scrolled under it. A selection scrolled out of the scroller hides the bar
+  rather than pinning it to an edge — a bar that names nothing is worse than no
+  bar, and with two columns on screen the reader cannot tell whose selection it
+  belongs to.
+- **`onMouseDown` is prevented on the buttons**, or the browser collapses the
+  selection before the click resolves and the quote is gone by the time the
+  handler runs. The action then clears the selection itself: left highlighted
+  under a bar that has done its job, the click reads as having done nothing —
+  the editor's pill collapses its selection at the same moment for the same
+  reason.
+- **The role is read off the DOM, from both ends.** `data-message-role` on the
+  two message wrappers answers "whose words are these"; a drag that crossed the
+  boundary leaves it unset, and the prompt names the transcript rather than
+  guessing a speaker. It answers at *message* granularity, so a passage dragged
+  out of a tool result inside a reply is still called the assistant's — the
+  wrapper is the only thing that knows, and a per-part answer would be a second
+  marker on every row for a distinction the prompt barely leans on.
+- **A quote is capped like a selection and truncated unlike one.** It carries no
+  `data`, so it persists into a draft and shares `localStorage`'s quota — but
+  past the cap a *file* selection can be re-read and a passage cannot, which is
+  why `describeQuote` says it was cut where `describeSelection` says which lines
+  to read.
+
+**"Ask in side chat" is why the inbox learned an address.** The obvious
+implementation — add the column, then drop the quote in the inbox — puts it in
+the *old* column's composer, intermittently. Adding a column moves focus three
+times: `addThreadChat` names the new chat at once, the old column's
+`claimFocus` fires again as React re-parents its subtree (~56 ms later), and
+`focusComposer`'s rAF lands back on the new one ~24 ms after that. The
+`createChat` round trip ends inside that last window, so an unaddressed entry
+goes wherever focus happens to be. So
+`addAttachment(att, to)` names the composer, and an addressed entry waits for
+that chat however long its column takes to mount; unaddressed entries still go
+to the focused column, which is right for every gesture made in the shared
+panel. `addThreadChat` returns the new id for this.
+
+`demo/e2e/quote-probe.js` drives it against a real transcript — real `Range`s,
+real pointer events — because every question here is about the live selection:
+whether the bar waits for the drag, what `Selection.toString()` yields across a
+code block's hover controls (nothing: they are icon buttons with no text), and
+what lands in which composer.

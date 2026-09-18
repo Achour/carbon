@@ -522,9 +522,41 @@ export interface CanvasRef {
  */
 export const CANVAS_ATTACH_MAX_CHARS = 8000
 
+/**
+ * A passage selected in the transcript and attached to the next prompt.
+ *
+ * Reference-shaped like a selection, and capped for the same reason: it carries
+ * no `data`, so `persistableAttachments` keeps it in a draft and every draft
+ * shares `localStorage`'s ~5 MB quota. Unlike a selection it names **no file** —
+ * what it points at is something that was *said*, and a reply has no address to
+ * re-read. The text is therefore the whole of the reference rather than an
+ * excerpt of something the model can go and look at, which is also why the cap
+ * is the honest thing to report when it bites.
+ */
+export interface QuoteRef {
+  /** The selected passage verbatim, capped at QUOTE_MAX_CHARS. */
+  text: string
+  /**
+   * Who wrote the passage, when the whole selection sits inside one message.
+   * A drag across the boundary between a prompt and a reply leaves it unset
+   * rather than guessing, and the prompt then says only "the transcript".
+   */
+  role?: 'assistant' | 'user'
+  /** `text` was cut at the cap — the prompt says so, since nothing can re-read it. */
+  truncated?: boolean
+}
+
+/**
+ * A selection's cap, for a selection's reason. It is spelled separately rather
+ * than aliased because the two are capped by the same *constraint* and not by
+ * the same *judgement*: lines of code past the cap can be recovered by reading
+ * the file, and a quoted passage past it cannot be recovered at all.
+ */
+export const QUOTE_MAX_CHARS = 4000
+
 export interface Attachment {
   id: string
-  kind: 'image' | 'file' | 'element' | 'selection' | 'canvas'
+  kind: 'image' | 'file' | 'element' | 'selection' | 'canvas' | 'quote'
   name: string
   /** Images (and element screenshots): IANA media type + raw base64 (no data: prefix). */
   mediaType?: string
@@ -546,6 +578,12 @@ export interface Attachment {
    * and a canvas has no file for it to name.
    */
   canvas?: CanvasRef
+  /**
+   * Quotes: a passage picked in the transcript. Sets no `path` for the two
+   * reasons a selection doesn't — the composer dedupes its inbox on that field,
+   * and a passage has no file to name.
+   */
+  quote?: QuoteRef
 }
 
 export interface UserMessage {
@@ -2163,6 +2201,14 @@ export interface Api {
    * cached and kept off the renderer — see `main/favicons.ts`.
    */
   favicon(url: string): Promise<string | null>
+  /**
+   * The image at one exact URL as a `data:` URI, or null when it isn't an
+   * image. `favicon` above discovers a site's mark; this one is for a caller
+   * that already has the URL — the browser pane, whose guest reports the icons
+   * the page declares. Fetched in main so the bytes can reach a canvas
+   * untainted; see `main/faviconCache.ts`.
+   */
+  faviconImage(url: string): Promise<string | null>
   searchFiles(cwd: string, query: string): Promise<{ rel: string; path: string }[]>
   gitStatus(cwd: string): Promise<GitStatus>
   gitDiff(cwd: string, target: GitDiffTarget): Promise<string>

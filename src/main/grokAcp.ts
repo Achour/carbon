@@ -9,7 +9,7 @@ import type { Attachment, ElementRef, ToolPart, UserQuestion } from '@shared/typ
 import { spawnEnv } from './parentEnv.ts'
 import { cliAvailable, providerCli } from './providerCli.ts'
 import { isPreviewToolName, type PreviewToolName } from './previewTools.ts'
-import { describeCanvas, describeSelection } from './attachmentText.ts'
+import { describeCanvas, describeQuote, describeSelection } from './attachmentText.ts'
 import type { StdioMcpServer } from './previewMcpConfig.ts'
 
 /**
@@ -1018,6 +1018,9 @@ export function buildGrokPrompt(
     }
     if (attachment.kind === 'canvas' && attachment.canvas) {
       elementNotes.push(describeCanvas(attachment.canvas))
+    }
+    if (attachment.kind === 'quote' && attachment.quote) {
+      elementNotes.push(describeQuote(attachment.quote))
     }
   }
 

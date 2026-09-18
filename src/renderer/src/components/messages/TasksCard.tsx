@@ -2,6 +2,7 @@ import * as React from 'react'
 import { Collapsible } from '@base-ui/react/collapsible'
 import { Check, ChevronRight, ListTodo } from 'lucide-react'
 import type { TaskItem } from '@/lib/taskList'
+import { DISCLOSURE_PANEL } from '@/lib/disclosure'
 
 /**
  * A finished checklist, parked in the transcript at the end of the turn that
@@ -50,7 +51,7 @@ export const TasksCard = React.memo(function TasksCard({
           {tasks.length}/{tasks.length}
         </span>
       </Collapsible.Trigger>
-      <Collapsible.Panel className="h-[var(--collapsible-panel-height)] overflow-hidden transition-[height] duration-200 ease-out data-[ending-style]:h-0 data-[starting-style]:h-0">
+      <Collapsible.Panel className={DISCLOSURE_PANEL}>
         <div className="space-y-1.5 border-t border-border/70 px-3 py-2.5">
           {tasks.map((task) => (
             <div key={task.id} className="flex items-start gap-2.5 text-[13px] leading-snug">
