@@ -77,7 +77,7 @@ export const TurnHeader = React.memo(function TurnHeader({
     // The header is pushed the moment the prompt is sent — it is the send's own
     // acknowledgement — so this is the first thing that moves in a new turn,
     // and it was the one row that appeared with no motion at all.
-    <div className="flex animate-enter flex-col gap-2">
+    <div className="flex animate-step-in flex-col gap-2">
       {!collapsible ? (
         // No affordance on a row that would answer a click with nothing: a
         // turn still doing its first run of work, or one with nothing to hide.

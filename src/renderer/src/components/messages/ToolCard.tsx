@@ -1013,7 +1013,14 @@ export const ToolCard = React.memo(function ToolCard({
   dense?: boolean
   /**
    * …unless this row arrived *alone*, into a group already on screen — then it
-   * animates, `dense` or not.
+   * animates, `dense` or not. Either way the animation is `step-in`, the same
+   * one every other activity row and the turn header play: a step is a step
+   * wherever it lands, and the first attempt at this used `step-in` for exactly
+   * one of those paths and left the other nineteen entrances on `animate-enter`
+   * — 250 ms and a 6px rise, which is the version that had already been
+   * reported invisible twice. A batched prompt hits the good path and a real
+   * conversation, where prose keeps breaking runs into lone cards, mostly does
+   * not, so it read as "works in dev, not in the app".
    *
    * The two cases only became distinguishable once a run stopped folding at
    * every sentence (see `ToolGroup`'s `live`): a live group now stays open for
@@ -1053,7 +1060,7 @@ export const ToolCard = React.memo(function ToolCard({
       <button
         type="button"
         onClick={() => onOpenPlan(plan)}
-        className="group flex w-full animate-enter items-center gap-2.5 rounded-xl border border-border bg-card/60 px-3 py-2 text-left transition-colors hover:border-primary/40 hover:bg-accent/50"
+        className="group flex w-full animate-step-in items-center gap-2.5 rounded-xl border border-border bg-card/60 px-3 py-2 text-left transition-colors hover:border-primary/40 hover:bg-accent/50"
       >
         <Icon className="size-4 shrink-0 text-primary" />
         <span className="shrink-0 text-[13px] font-medium">Plan</span>
@@ -1078,7 +1085,7 @@ export const ToolCard = React.memo(function ToolCard({
         // the container: a dense row lives in `ACTIVITY_PANEL`, which clips, so
         // an animation that displaces the row plays entirely inside the crop.
         // See the keyframe's own note in `index.css`.
-        className={cn(arriving ? 'animate-step-in' : !dense && 'animate-enter')}
+        className={cn((arriving || !dense) && 'animate-step-in')}
       >
         <Collapsible.Trigger className={ACTIVITY_ROW}>
           {/* The label and what it acted on are one phrase and shrink together,
@@ -1354,7 +1361,7 @@ export const ToolGroup = React.memo(function ToolGroup({
             animates the panel with it, sliding that row in a second time —
             which is the "it moves again" half of the flicker. The trigger is
             the only genuinely new element, so it is the only one that enters. */}
-        <Collapsible.Trigger className={cn(ACTIVITY_ROW, 'animate-enter')}>
+        <Collapsible.Trigger className={cn(ACTIVITY_ROW, 'animate-step-in')}>
           <span className="flex min-w-0 items-center gap-1.5">
             <GroupIcon className={ACTIVITY_ICON} />
             {/* The summary stays muted even when a call inside failed. A group is
@@ -1533,7 +1540,7 @@ function AgentCard({ part }: { part: ToolPart; cwd: string }): React.JSX.Element
       data-agent-run={part.toolUseId}
       onClick={() => openAgentsPanel(part.toolUseId)}
       className={cn(
-        'group flex w-full animate-enter items-center gap-2.5 rounded-xl border px-3 py-2 text-left outline-none transition-colors',
+        'group flex w-full animate-step-in items-center gap-2.5 rounded-xl border px-3 py-2 text-left outline-none transition-colors',
         running
           ? 'border-warning/40 bg-warning/[0.04] hover:bg-warning/[0.08]'
           : 'border-primary/25 bg-primary/[0.03] hover:bg-primary/[0.07]'
