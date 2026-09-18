@@ -18,6 +18,8 @@ import type {
   CodexReviewTarget
 } from '../src/shared/types.ts'
 import { CodexSession } from '../src/main/codex.ts'
+import type { CarbonMcpProvider } from '../src/main/carbonBridge.ts'
+import type { CarbonToolContext } from '../src/main/carbonMcp.ts'
 import type { AppServerThreadOptions } from '../src/main/codexAppServer.ts'
 import type {
   CodexRolloutEvent,
@@ -204,12 +206,7 @@ class FakeRolloutWatcher implements CodexRolloutWatcher {
 function harness(
   turns: TurnFactory[],
   patch: Partial<ChatData> = {},
-  preview: {
-    mcpCodexConfig(
-      cwd: string,
-      opts?: { plan?: boolean }
-    ): Promise<Record<string, unknown> | undefined>
-  } | null = null
+  preview: CarbonMcpProvider | null = null
 ): {
   session: CodexSession
   chat: ChatData
@@ -1699,21 +1696,40 @@ test('generated images surface at the session boundary only when newly created',
   }
 })
 
-test('a Codex turn receives Carbon preview as a keyed MCP overlay', async () => {
-  const preview = {
-    mcpCodexConfig: async (cwd: string, opts?: { plan?: boolean }) => ({
-      mcp_servers: {
-        preview: {
-          command: '/bin/echo',
-          args: ['--stdio'],
-          env: {
-            CARBON_PREVIEW_CWD: cwd,
-            ...(opts?.plan ? { CARBON_PREVIEW_PLAN: '1' } : {})
-          }
+/**
+ * One `carbon` server reached over loopback HTTP, where there used to be two
+ * stdio children. The overlay is Codex's whole view of it: a URL and a header.
+ */
+function carbonStub(): CarbonMcpProvider & { contexts: CarbonToolContext[]; disposed: () => number } {
+  const contexts: CarbonToolContext[] = []
+  let disposed = 0
+  const url = 'http://127.0.0.1:65000/mcp/2f1c4a3e-0000-4000-8000-000000000000'
+  return {
+    contexts,
+    disposed: () => disposed,
+    mcpSession: async (ctx) => {
+      contexts.push(ctx)
+      return {
+        url,
+        acpServer: {
+          type: 'http' as const,
+          name: 'carbon',
+          url,
+          headers: [{ name: 'Authorization', value: 'Bearer token' }]
+        },
+        codexConfig: {
+          mcp_servers: { carbon: { url, http_headers: { Authorization: 'Bearer token' } } }
+        },
+        dispose: () => {
+          disposed += 1
         }
       }
-    })
+    }
   }
+}
+
+test('a Codex turn receives the carbon MCP server as an http overlay', async () => {
+  const preview = carbonStub()
   const h = harness(
     [
       async function* () {
@@ -1728,30 +1744,30 @@ test('a Codex turn receives Carbon preview as a keyed MCP overlay', async () => 
   await waitFor(() => h.events.some((event) => event.type === 'status' && event.status === 'idle'))
 
   const opts = h.codex.resumeCalls[0]?.options
-  const servers = (opts?.extraConfig?.mcp_servers ?? {}) as Record<string, { env?: Record<string, string> }>
-  assert.deepEqual(Object.keys(servers), ['preview'])
-  assert.equal(servers.preview.env?.CARBON_PREVIEW_CWD, h.cwd)
-  assert.equal(servers.preview.env?.CARBON_PREVIEW_PLAN, undefined)
+  const servers = (opts?.extraConfig?.mcp_servers ?? {}) as Record<
+    string,
+    { url?: string; http_headers?: Record<string, string> }
+  >
+  assert.deepEqual(Object.keys(servers), ['carbon'])
+  assert.match(servers.carbon.url ?? '', /^http:\/\/127\.0\.0\.1:\d+\/mcp\//)
+  assert.equal(servers.carbon.http_headers?.Authorization, 'Bearer token')
+  // No `command`: nothing is spawned any more.
+  assert.equal((servers.carbon as { command?: string }).command, undefined)
+  assert.equal(preview.contexts[0]?.cwd, h.cwd)
   assert.match(opts?.developerInstructions ?? '', /in-app browser/)
+  assert.match(opts?.developerInstructions ?? '', /canvas_write/)
   cleanup(h)
 })
 
-test('a plan-mode Codex turn pins preview start/stop as blocked', async () => {
-  const preview = {
-    mcpCodexConfig: async (_cwd: string, opts?: { plan?: boolean }) => ({
-      mcp_servers: {
-        preview: {
-          command: '/bin/echo',
-          args: ['--stdio'],
-          env: opts?.plan ? { CARBON_PREVIEW_PLAN: '1' } : {}
-        }
-      }
-    })
-  }
+test('the carbon session is registered once and reads plan mode live', async () => {
+  const preview = carbonStub()
   const h = harness(
     [
       async function* () {
         yield { type: 'thread.started', thread_id: 'thread-1' }
+        yield { type: 'turn.completed', usage }
+      },
+      async function* () {
         yield { type: 'turn.completed', usage }
       }
     ],
@@ -1760,11 +1776,21 @@ test('a plan-mode Codex turn pins preview start/stop as blocked', async () => {
   )
   h.session.send('Plan a UI change')
   await waitFor(() => h.events.some((event) => event.type === 'status' && event.status === 'idle'))
+  h.session.send('Plan some more')
+  await waitFor(
+    () => h.events.filter((event) => event.type === 'status' && event.status === 'idle').length >= 2
+  )
 
-  const servers = (h.codex.resumeCalls[0]?.options?.extraConfig?.mcp_servers ?? {}) as Record<
-    string,
-    { env?: Record<string, string> }
-  >
-  assert.equal(servers.preview.env?.CARBON_PREVIEW_PLAN, '1')
+  // Once per session, not once per turn: `ensureThread` runs on every send, and
+  // registering there would leak a context into the bridge for each one.
+  assert.equal(preview.contexts.length, 1)
+  // Plan mode is read through a getter rather than frozen into the spawn, which
+  // is what lets the bridge refuse `preview_start` on a turn whose mode changed
+  // after the session was registered.
+  assert.equal(preview.contexts[0]?.plan?.(), true)
+  h.chat.permissionMode = 'acceptEdits'
+  assert.equal(preview.contexts[0]?.plan?.(), false)
+  h.session.dispose()
+  await waitFor(() => preview.disposed() === 1)
   cleanup(h)
 })

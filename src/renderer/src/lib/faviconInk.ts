@@ -33,6 +33,17 @@
 
 const verdicts = new Map<string, boolean>()
 
+/**
+ * Measurements in flight, so N rows sharing a key decode once.
+ *
+ * `verdicts` only answers *after* the decode resolves, which was fine while
+ * every caller was a single row on a settings page. The sidebar draws forty
+ * chat rows over a handful of projects and its marks all arrive in the same
+ * tick, so without this one project's icon is decoded once per row it appears
+ * on — forty `Image` loads and forty canvases for one 16x16 answer.
+ */
+const inflight = new Map<string, Promise<boolean>>()
+
 /** The verdict for a key, or false while it is unknown — a mark drawn as the
  * site drew it is the safe answer, and the wrong one is invisible. */
 export function inkDark(key: string | null | undefined): boolean {
@@ -49,9 +60,12 @@ export function inkKnown(key: string): boolean {
 export function classifyInk(key: string, uri: string): Promise<boolean> {
   const known = verdicts.get(key)
   if (known !== undefined) return Promise.resolve(known)
-  return new Promise<boolean>((resolve) => {
+  const running = inflight.get(key)
+  if (running) return running
+  const measured = new Promise<boolean>((resolve) => {
     const done = (dark: boolean): void => {
       verdicts.set(key, dark)
+      inflight.delete(key)
       resolve(dark)
     }
     const img = new Image()
@@ -104,4 +118,6 @@ export function classifyInk(key: string, uri: string): Promise<boolean> {
     img.onerror = () => done(false)
     img.src = uri
   })
+  inflight.set(key, measured)
+  return measured
 }

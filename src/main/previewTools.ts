@@ -14,7 +14,11 @@ export function isPreviewSideEffect(name: PreviewToolName): boolean {
   return name === 'start' || name === 'stop'
 }
 
-/** Plan-mode deny for start/stop. Codex pins this via `CARBON_PREVIEW_PLAN`. */
+/**
+ * Plan-mode deny for start/stop. Asked at the call — the session's registered
+ * context carries a `plan()` getter — rather than pinned when the server was
+ * wired, so a mode change between turns lands without a respawn.
+ */
 export function previewPlanBlock(name: string, plan: boolean): string | null {
   if (!plan || !isPreviewToolName(name) || !isPreviewSideEffect(name)) return null
   return 'Starting or stopping the dev server is a side effect and is not allowed in plan mode. Note it in the plan — it can run once the plan is approved.'
@@ -56,11 +60,12 @@ export const PREVIEW_TOOL_INFO: Record<
 }
 
 /**
- * What a Grok session appends so the model knows the preview MCP is the
- * in-app browser, not a system browser it should ask the user to open.
+ * What a session appends so the model knows the preview tools are the in-app
+ * browser, not a system browser it should ask the user to open. The tools live
+ * on the one `carbon` MCP server, beside the canvas ones.
  */
 export const PREVIEW_SESSION_RULES =
-  'You are running inside Carbon, a desktop GUI. The `preview` MCP server controls this project\'s in-app browser: `status`, `start` (dev server + open the preview), `stop`, `navigate` (a URL), `screenshot` (the page as the user sees it), and `console` (browser + dev-server errors). Use those tools to verify UI changes. Do not ask the user to open a browser or take a screenshot for you.'
+  'You are running inside Carbon, a desktop GUI. The `carbon` MCP server controls this project\'s in-app browser: `preview_status`, `preview_start` (dev server + open the preview), `preview_stop`, `preview_navigate` (a URL), `preview_screenshot` (the page as the user sees it), and `preview_console` (browser + dev-server errors). Use those tools to verify UI changes. Do not ask the user to open a browser or take a screenshot for you.'
 
 export type PreviewToolHost = {
   state(cwd: string): PreviewState

@@ -69,16 +69,24 @@ export function ProviderMark({
  */
 export function ProviderAvatar({
   provider,
-  className
+  className,
+  ...rest
 }: {
   provider: Provider
   className?: string
-}): React.JSX.Element {
+  /**
+   * Anything else goes on the outer span, because this is used as a tooltip
+   * trigger and Base UI merges the trigger's handlers, id and ref onto the
+   * child *as props* — dropped by a component that doesn't forward them, and
+   * with nothing to see: the mark renders, the tooltip simply never opens.
+   */
+} & Omit<React.ComponentProps<'span'>, 'children'>): React.JSX.Element {
   const color = PROVIDER_COLOR[provider]
   return (
     <span
       className={cn('flex size-[18px] shrink-0 items-center justify-center rounded-full', className)}
       style={{ color, background: `color-mix(in oklab, ${color} 14%, transparent)` }}
+      {...rest}
     >
       <ProviderMark provider={provider} className="size-[11px]" />
     </span>

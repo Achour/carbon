@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert'
 import test from 'node:test'
 import { runCanvasTool, type CanvasToolHost } from '../src/main/canvasTools.ts'
-import { canvasToolList } from '../src/main/previewMcp.ts'
+import { carbonToolList } from '../src/main/carbonMcp.ts'
 
 function host(): CanvasToolHost & { rows: Map<string, Record<string, unknown>> } {
   const rows = new Map<string, Record<string, unknown>>()
@@ -101,7 +101,11 @@ test('read returns the document, and says so when the id is gone', () => {
 })
 
 test('the wire schema requires exactly what the tool cannot default', () => {
-  const tools = Object.fromEntries(canvasToolList().map((t) => [t.name, t]))
+  const tools = Object.fromEntries(
+    carbonToolList()
+      .filter((t) => t.name.startsWith('canvas_'))
+      .map((t) => [t.name.replace('canvas_', ''), t])
+  )
   assert.deepEqual(Object.keys(tools), ['write', 'edit', 'list', 'read'])
   assert.deepEqual((tools.edit.inputSchema as { required: string[] }).required, ['id'])
   // The schema is derived from CANVAS_TOOL_INFO's parameter table, so a boolean

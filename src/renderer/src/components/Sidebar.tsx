@@ -10,6 +10,7 @@ import {
   Columns2,
   EyeOff,
   Folder,
+  FolderGit2,
   FolderOpen,
   FolderPlus,
   GitBranch,
@@ -25,14 +26,20 @@ import {
   Plus,
   Search,
   Settings,
+  SquareStack,
   SquareTerminal,
   Trash2,
   X
 } from 'lucide-react'
-import type { ChatMeta, WorktreeStatus } from '@shared/types'
+import type { ChatMeta } from '@shared/types'
 import { PROVIDER_LABELS, projectRoot } from '@shared/types'
+import { projectGroups, projectLabel as labelOf } from '@/lib/projects'
+import { ProjectAvatar } from '@/components/ui/project-avatar'
+import { ProviderMark, PROVIDER_COLOR } from '@/components/ui/provider-mark'
+import { ChatDeleteDialog } from '@/components/ChatDeleteDialog'
+import { ProjectDialogs, type ProjectPrompt } from '@/components/ProjectDialogs'
 import { cn, missingTag, MISSING_TITLE } from '@/lib/utils'
-import { basename, dateGroup, relativeTime, shortenPath } from '@/lib/format'
+import { dateGroup, relativeTime, shortenPath } from '@/lib/format'
 import { REVEAL_LABEL } from '@/lib/platform'
 import { chatActivity, projectActivity, type ChatActivity } from '@/lib/chatActivity'
 import {
@@ -42,7 +49,7 @@ import {
   THREAD_DRAG_MIME
 } from '@/lib/threadDrag'
 import { draftSummary, sortedProjectDrafts, type ProjectDraft } from '@/lib/drafts'
-import { chatMeta, columnsOf, useApp, visibleChats } from '@/store'
+import { chatMeta, columnsOf, listedChats, useApp } from '@/store'
 import { UpdateBanner } from '@/components/UpdateBanner'
 import { UsagePanel } from '@/components/UsagePanel'
 import { Button } from '@/components/ui/button'
@@ -70,18 +77,7 @@ import {
 } from '@/components/ui/context-menu'
 import { Input } from '@/components/ui/input'
 import { Kbd } from '@/components/ui/kbd'
-import { ProviderAvatar } from '@/components/ui/provider-mark'
 import { WithTooltip } from '@/components/ui/tooltip'
-
-/** "3 uncommitted files and 2 unmerged commits" — what a force-delete destroys, '' when nothing is. */
-function describeAtRisk({ dirtyFiles, unmergedCommits }: WorktreeStatus): string {
-  const parts: string[] = []
-  if (dirtyFiles > 0) parts.push(`${dirtyFiles} uncommitted file${dirtyFiles === 1 ? '' : 's'}`)
-  if (unmergedCommits && unmergedCommits > 0) {
-    parts.push(`${unmergedCommits} unmerged commit${unmergedCommits === 1 ? '' : 's'}`)
-  }
-  return parts.join(' and ')
-}
 
 /**
  * The line a detailed row carries under its title — what makes the row stand on
@@ -95,8 +91,6 @@ function describeAtRisk({ dirtyFiles, unmergedCommits }: WorktreeStatus): string
  */
 interface ChatDetail {
   kind: 'branch' | 'path'
-  /** Project the chat belongs to; absent when `text` already names the folder. */
-  project?: string
   text: string
 }
 
@@ -117,10 +111,17 @@ interface RowActions {
   remove(chat: ChatMeta): void
   /** Move the chat to (or out of) the Pinned section at the top of the sidebar. */
   togglePin(chat: ChatMeta): void
+  /**
+   * Take the chat out of the sidebar without deleting it. One direction only:
+   * a row that is on screen is by definition not archived, and the way back is
+   * Settings → Archive.
+   */
+  archive(chat: ChatMeta): void
   /** Start another chat — possibly on another provider — in the same worktree. */
   newInWorktree(chat: ChatMeta): void
   newChatIn(cwd: string): void
   renameProject(cwd: string): void
+  manageProjects(): void
   revealProject(cwd: string): void
   setProjectArchived(cwd: string, archived: boolean): void
   confirmProject(kind: 'archive' | 'hide', cwd: string): void
@@ -145,6 +146,12 @@ function ProjectMenuItems({
       </ContextMenuItem>
       <ContextMenuItem onClick={() => actions.revealProject(cwd)}>
         <FolderOpen /> {REVEAL_LABEL}
+      </ContextMenuItem>
+      {/* The full list, where a project is a row rather than a right-click:
+          the only place a *hidden* project can be found again, which is why it
+          sits on the menu that hides them. */}
+      <ContextMenuItem onClick={actions.manageProjects}>
+        <FolderGit2 /> Manage projects…
       </ContextMenuItem>
       <ContextMenuSeparator />
       {archived ? (
@@ -180,7 +187,22 @@ const sameActivity = (a: ChatActivity, b: ChatActivity): boolean =>
   (a.kind === 'background' ? a.count : 0) === (b.kind === 'background' ? b.count : 0)
 
 const sameDetail = (a: ChatDetail | null, b: ChatDetail | null): boolean =>
-  a === b || (!!a && !!b && a.kind === b.kind && a.project === b.project && a.text === b.text)
+  a === b || (!!a && !!b && a.kind === b.kind && a.text === b.text)
+
+/**
+ * A project's mark, as a row needs it — everything to draw one, nothing to
+ * look up. Passed down rather than read per row: forty rows over five projects
+ * would be forty store subscriptions for a field that changes once, where the
+ * sidebar already holds the map with one.
+ */
+interface ProjectMark {
+  root: string
+  name: string
+  icon: string | null
+}
+
+const sameMark = (a: ProjectMark, b: ProjectMark): boolean =>
+  a === b || (a.root === b.root && a.name === b.name && a.icon === b.icon)
 
 const sameProjectMenu = (a: RowProjectMenu | null, b: RowProjectMenu | null): boolean =>
   a === b ||
@@ -205,6 +227,64 @@ function TerminalMark({ active }: { active: boolean }): React.JSX.Element {
   )
 }
 
+/**
+ * The backend, where it no longer has an avatar: a bare 11px mark in its own
+ * brand colour, at the right end of the row's second line.
+ *
+ * It was a corner badge on the tile above for one build, and a badge is the
+ * wrong shape for this mark at this size — punched out of the sidebar's ground
+ * it reads as a chip taken out of the project's icon, and OpenAI's knot at 9px
+ * is a smudge. Out here nothing is occluded and nothing is shrunk past
+ * legibility. It sits on the second line rather than beside the title because
+ * the title is what the row is *for* and was down to three words on a 264px
+ * sidebar; the rank is right either way — the project is which list this row is
+ * in, the backend is a property of the row.
+ */
+/**
+ * A pinned chat, said on the chat.
+ *
+ * It replaces a "Pinned" heading over the block. Being pinned is a property of
+ * *this chat*, not of a group, and the heading could only say it for a block
+ * whose membership is otherwise invisible — move a pin and the only thing that
+ * changed was which side of a divider a row sat on. The glyph travels with the
+ * row, so a pinned chat is recognizable wherever it is drawn.
+ */
+function PinMark({ active }: { active: boolean }): React.JSX.Element {
+  return (
+    <WithTooltip label="Pinned">
+      <span
+        className={cn(
+          'flex shrink-0 items-center transition-colors',
+          active ? 'text-sidebar-foreground/70' : 'text-sidebar-foreground/45'
+        )}
+      >
+        <Pin className="size-3" />
+      </span>
+    </WithTooltip>
+  )
+}
+
+function RowProvider({ chat, active }: { chat: ChatMeta; active: boolean }): React.JSX.Element {
+  const terminal = chat.surface === 'terminal' && !chat.sessionId
+  return (
+    <WithTooltip label={terminal ? 'Terminal' : PROVIDER_LABELS[chat.provider]}>
+      <span
+        className={cn(
+          'flex shrink-0 items-center transition-opacity',
+          active ? 'opacity-100' : 'opacity-70 group-hover:opacity-100'
+        )}
+        style={terminal ? undefined : { color: PROVIDER_COLOR[chat.provider] }}
+      >
+        {terminal ? (
+          <SquareTerminal className="size-3 text-sidebar-foreground/60" />
+        ) : (
+          <ProviderMark provider={chat.provider} className="size-[11px]" />
+        )}
+      </span>
+    </WithTooltip>
+  )
+}
+
 function ChatItemRow({
   chat,
   now,
@@ -213,6 +293,7 @@ function ChatItemRow({
   titling,
   threadCount,
   detail,
+  mark,
   projectMenu,
   actions
 }: {
@@ -228,6 +309,23 @@ function ChatItemRow({
   /** Second line for a detailed row; null renders the compact single-line row. */
   detail: ChatDetail | null
   /**
+   * The project this row is in, always — the avatar column means one thing or
+   * it means nothing.
+   *
+   * It was suppressed under a filter at first, on the reasoning that the
+   * control at the head of the list had already named the project. That is
+   * true of the *word* and false of the column: every row swapped its mark for
+   * the provider's the moment a filter went on, so the one fixed point in the
+   * list became the thing that moved. Repeating a mark down a filtered list
+   * costs nothing; a column that changes what it depicts costs the reader the
+   * habit they were building.
+   *
+   * Where it is *drawn* still differs by density — a detailed row has an
+   * avatar column, a compact row is one line and only the Pinned section needs
+   * one, since every other compact row sits under its project's own row.
+   */
+  mark: ProjectMark
+  /**
    * This chat's *project*, whose actions are appended to the right-click menu.
    * Detailed mode has no project rows to carry them, and a mode where archiving
    * or hiding a project silently disappears is not a mode — so the row the
@@ -242,6 +340,7 @@ function ChatItemRow({
   const onRename = (): void => actions.rename(chat)
   const onDelete = (): void => actions.remove(chat)
   const onTogglePin = (): void => actions.togglePin(chat)
+  const onArchive = (): void => actions.archive(chat)
   const onNewInWorktree = (): void => actions.newInWorktree(chat)
   const pinned = chat.pinnedAt !== undefined
   // Cursor-style: inactive chats are muted, the open one is bright — the
@@ -255,6 +354,17 @@ function ChatItemRow({
     titling && 'title-forming'
   )
   // The timestamp yields to the ⋯ button on hover; both occupy the same corner.
+  // The headline's ladder is raised: a detailed row's title is the one thing on
+  // its line and has to read as the row's subject, so an inactive one sits much
+  // closer to full brightness than compact's does. The gap to the active row is
+  // still there, and the filled pill carries the rest of that signal.
+  const detailTitleClass = cn(
+    'min-w-0 truncate text-[13px] transition-colors',
+    active
+      ? 'text-sidebar-foreground'
+      : 'text-sidebar-foreground/85 group-hover:text-sidebar-foreground',
+    titling && 'title-forming'
+  )
   const trailing = (
     <span
       className={cn(
@@ -294,68 +404,63 @@ function ChatItemRow({
         }
       >
       {detail ? (
+        // **Three lines, and the title is the headline.** Every arrangement
+        // before this one led with the title and hung the row's facts off it,
+        // which meant the title shared its line with a timestamp — and on a
+        // 264px sidebar that is a third of the only thing the row is for. Here
+        // the context comes *first*, small and muted: whose project this is,
+        // and when. The title then gets a line to itself, at full width and a
+        // step brighter than everything around it, so it reads as the headline
+        // of the row rather than its first field. Where the work happens —
+        // branch or folder — closes it, with the row's marks right-aligned
+        // beside it. No column of avatars either: the mark rides the context
+        // line, which is what leaves the title the whole row.
         <button
           type="button"
           onClick={onOpen}
-          className="flex w-full min-w-0 items-start gap-2 px-2 py-1.5 text-left outline-none"
+          className="flex w-full min-w-0 flex-col gap-1 px-2.5 py-2 text-left outline-none"
         >
-          <WithTooltip
-            label={
-              chat.surface === 'terminal' && !chat.sessionId
-                ? 'Terminal'
-                : PROVIDER_LABELS[chat.provider]
-            }
-            side="right"
-          >
-            {/* Identity, not state — so it keeps its color on every row and the
-                brightness ladder that marks the active chat stays the title's
-                job. Inactive rows only take the edge off it. */}
-            {/* A terminal chat has no provider until a CLI session is found in
-                it — its `provider` is a placeholder, and drawing that mark would
-                claim a backend nobody started. */}
-            {chat.surface === 'terminal' && !chat.sessionId ? (
-              <span
-                className={cn(
-                  'mt-px flex size-[18px] shrink-0 items-center justify-center rounded-full bg-sidebar-foreground/10 text-sidebar-foreground/70 transition-opacity',
-                  !active && 'opacity-75 group-hover:opacity-100'
-                )}
-              >
-                <SquareTerminal className="size-[11px]" />
-              </span>
-            ) : (
-            <ProviderAvatar
-              provider={chat.provider}
+          <span className="flex min-w-0 items-center gap-1.5 text-[11px] leading-tight text-muted-foreground/70">
+            {/* Identity, not state — so it keeps its colour on every row and
+                the brightness ladder that marks the active chat stays the
+                title's job. Inactive rows only take the edge off it. */}
+            <ProjectAvatar
+              size="sm"
+              root={mark.root}
+              name={mark.name}
+              icon={mark.icon}
               className={cn(
-                'mt-px transition-opacity',
-                !active && 'opacity-75 group-hover:opacity-100'
+                'size-[18px] rounded-[6px] transition-opacity',
+                !active && 'opacity-85 group-hover:opacity-100'
               )}
             />
-            )}
-          </WithTooltip>
-          <span className="flex min-w-0 flex-1 flex-col gap-px">
-            <span className="flex min-w-0 items-center gap-1.5">
-              <span className={titleClass}>{chat.title || 'New chat'}</span>
-              <ThreadMark count={threadCount} active={active} />
-              {/* Beside the title only once the avatar shows a provider — before
-                  that the avatar is already the terminal glyph. */}
-              {chat.surface === 'terminal' && chat.sessionId && <TerminalMark active={active} />}
-              {trailing}
-            </span>
-            <span className="flex min-w-0 items-center gap-1.5 text-[11px] leading-tight text-muted-foreground/65">
-              {detail.project && (
-                <>
-                  <span className="min-w-0 truncate">{detail.project}</span>
-                  <span className="shrink-0 opacity-45">·</span>
-                </>
+            <span className="min-w-0 truncate">{mark.name}</span>
+            {pinned && <PinMark active={active} />}
+            <span className="ml-auto pl-2">{trailing}</span>
+          </span>
+          <span className={detailTitleClass}>{chat.title || 'New chat'}</span>
+          <span className="flex min-w-0 items-center gap-1.5 text-[11px] leading-tight text-muted-foreground/55">
+            <span className="flex min-w-0 items-center gap-1">
+              {detail.kind === 'branch' ? (
+                <GitBranch className="size-3 shrink-0" />
+              ) : (
+                <Folder className="size-3 shrink-0" />
               )}
-              <span className="flex min-w-0 items-center gap-1">
-                {detail.kind === 'branch' ? (
-                  <GitBranch className="size-3 shrink-0" />
-                ) : (
-                  <Folder className="size-3 shrink-0" />
-                )}
-                <span className="min-w-0 truncate">{detail.text}</span>
-              </span>
+              <span className="min-w-0 truncate">{detail.text}</span>
+            </span>
+            {/* Pushed to the right edge rather than trailing the branch, so
+                they form a column instead of landing at a different x on every
+                row. `ml-auto` and not a spacer: with all three absent the
+                cluster takes no space at all. */}
+            <span className="ml-auto flex shrink-0 items-center gap-2 pl-2">
+              <ThreadMark count={threadCount} active={active} />
+              {/* A chat you cannot type into has to be recognizable before you
+                  open it, and the mark beside it is the provider's once a CLI
+                  session has been found. */}
+              {chat.surface === 'terminal' && chat.sessionId && (
+                <TerminalMark active={active} />
+              )}
+              <RowProvider chat={chat} active={active} />
             </span>
           </span>
         </button>
@@ -365,6 +470,21 @@ function ChatItemRow({
           onClick={onOpen}
           className="flex w-full min-w-0 items-center gap-1.5 px-2.5 py-1.5 text-left outline-none"
         >
+          {/* Compact rows sit under their project's own row, which already
+              wears the mark — except the Pinned section's, which are lifted out
+              of their groups and share one list across every project. */}
+          {pinned && <PinMark active={active} />}
+          {pinned && (
+            <WithTooltip label={mark.name} side="right">
+              <ProjectAvatar
+                size="sm"
+                root={mark.root}
+                name={mark.name}
+                icon={mark.icon}
+                className={cn('transition-opacity', !active && 'opacity-80 group-hover:opacity-100')}
+              />
+            </WithTooltip>
+          )}
           {chat.worktree && (
             <WithTooltip label={`${chat.worktree.branch} · ${chat.cwd}`}>
               <GitBranch
@@ -410,6 +530,9 @@ function ChatItemRow({
                 <GitBranch /> New chat in this worktree
               </DropdownMenuItem>
             )}
+            <DropdownMenuItem onClick={onArchive}>
+              <Archive /> Archive
+            </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem destructive onClick={onDelete}>
               <Trash2 /> Delete
@@ -430,6 +553,11 @@ function ChatItemRow({
             <GitBranch /> New chat in this worktree
           </ContextMenuItem>
         )}
+        {/* Above the separator: archiving destroys nothing, and sitting beside
+            Delete is how it gets read as one of the dangerous ones. */}
+        <ContextMenuItem onClick={onArchive}>
+          <Archive /> Archive
+        </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem destructive onClick={onDelete}>
           <Trash2 /> Delete
@@ -483,6 +611,7 @@ const ChatItem = React.memo(
     (prev.activity.kind !== 'idle' ||
       relativeTime(prev.chat.updatedAt, prev.now) === relativeTime(next.chat.updatedAt, next.now)) &&
     sameDetail(prev.detail, next.detail) &&
+    sameMark(prev.mark, next.mark) &&
     sameProjectMenu(prev.projectMenu, next.projectMenu)
 )
 
@@ -516,6 +645,7 @@ function SearchChatsDialog({
   const [idx, setIdx] = React.useState(0)
   const inputRef = React.useRef<HTMLInputElement>(null)
   const projectNames = useApp((s) => s.projectNames)
+  const projectIcons = useApp((s) => s.projectIcons)
 
   React.useEffect(() => {
     if (!open) return
@@ -586,8 +716,17 @@ function SearchChatsDialog({
                 )}
               >
                 <span className="min-w-0 flex-1 truncate text-[13px]">{c.title || 'New chat'}</span>
-                <span className="max-w-32 shrink-0 truncate text-[11px] text-muted-foreground/70">
-                  {projectNames[projectRoot(c)]?.trim() || basename(projectRoot(c))}
+                {/* This list is every project at once and groups by nothing, so
+                    the project caption is what tells two similarly-titled chats
+                    apart — and a caption is read, where a mark is recognized. */}
+                <span className="flex max-w-32 shrink-0 items-center gap-1.5 text-[11px] text-muted-foreground/70">
+                  <ProjectAvatar
+                    size="xs"
+                    root={projectRoot(c)}
+                    name={labelOf(projectRoot(c), projectNames)}
+                    icon={projectIcons[projectRoot(c)] ?? null}
+                  />
+                  <span className="min-w-0 truncate">{labelOf(projectRoot(c), projectNames)}</span>
                 </span>
                 <span className="shrink-0 text-[11px] text-muted-foreground/50">
                   {relativeTime(c.updatedAt, now)}
@@ -635,12 +774,17 @@ function NewChatDialog({
   projects: { cwd: string; label: string; count: number }[]
   onPick: (cwd: string) => void
   onBrowse: () => void
-  onRemove: (cwd: string, count: number) => void
+  onRemove: (cwd: string) => void
 }): React.JSX.Element {
   const [q, setQ] = React.useState('')
   const [idx, setIdx] = React.useState(0)
   const [missing, setMissing] = React.useState<Record<string, boolean>>({})
   const inputRef = React.useRef<HTMLInputElement>(null)
+  // The marks the sidebar has already resolved. Read here rather than passed
+  // in because this dialog's project list is its own (recency-ordered, archived
+  // ones included) — threading a second list beside it to carry one field each
+  // is how the two get to disagree about which project a row is.
+  const projectIcons = useApp((s) => s.projectIcons)
 
   React.useEffect(() => {
     if (!open) return
@@ -723,7 +867,7 @@ function NewChatDialog({
                 const p = results[idx]
                 if (p) {
                   e.preventDefault()
-                  onRemove(p.cwd, p.count)
+                  onRemove(p.cwd)
                 }
               }
             }}
@@ -747,11 +891,16 @@ function NewChatDialog({
                 onClick={() => choose(i)}
                 className="flex min-w-0 flex-1 items-center gap-2 py-2 pl-2.5 text-left"
               >
-                <Folder
-                  className={cn(
-                    'size-3.5 shrink-0 text-muted-foreground',
-                    missing[p.cwd] && 'text-muted-foreground/50'
-                  )}
+                {/* The same mark as the sidebar's rows and the filter's. This
+                    is the only surface that lists every project at once, so a
+                    generic folder here would be the one place the projects all
+                    look alike. */}
+                <ProjectAvatar
+                  size="sm"
+                  root={p.cwd}
+                  name={p.label}
+                  icon={projectIcons[p.cwd] ?? null}
+                  dimmed={missing[p.cwd]}
                 />
                 <span
                   className={cn(
@@ -778,7 +927,7 @@ function NewChatDialog({
                 <button
                   type="button"
                   aria-label={`Remove ${p.label}`}
-                  onClick={() => onRemove(p.cwd, p.count)}
+                  onClick={() => onRemove(p.cwd)}
                   className={cn(
                     'mr-1.5 ml-1 shrink-0 rounded p-1 text-muted-foreground transition-opacity hover:bg-secondary hover:text-destructive',
                     i === idx ? 'opacity-100' : 'opacity-0'
@@ -913,13 +1062,13 @@ function ActivityIndicator({ activity }: { activity: ChatActivity }): React.JSX.
  */
 function DraftItem({
   draft,
-  project,
+  mark,
   onOpen,
   onDiscard
 }: {
   draft: ProjectDraft
-  /** Folder this belongs to; null when the header above already names it. */
-  project: string | null
+  /** Project this belongs to — always, for the reason a chat row's is. */
+  mark: ProjectMark
   onOpen: () => void
   onDiscard: () => void
 }): React.JSX.Element {
@@ -933,17 +1082,31 @@ function DraftItem({
         onClick={onOpen}
         className="flex w-full min-w-0 items-start gap-2 py-1.5 pr-7 pl-2.5 text-left outline-none"
       >
-        <PencilLine className="mt-px size-3.5 shrink-0 text-muted-foreground/70" />
+        {/* Laid out as a chat row is, because it sits directly above them: the
+            project takes the avatar column, and the mark that says what *kind*
+            of row this is goes to the end of the second line, where a chat row
+            keeps its provider. */}
+        <ProjectAvatar
+          size="md"
+          root={mark.root}
+          name={mark.name}
+          icon={mark.icon}
+          className="mt-px size-7 rounded-[9px] text-[11px]"
+        />
         <span className="flex min-w-0 flex-1 flex-col gap-px">
           <span className="min-w-0 truncate text-[13px] text-sidebar-foreground/55 transition-colors group-hover:text-sidebar-foreground/90">
             {/* Attachments with no text are still a draft worth coming back to,
                 and there is nothing to quote for them. */}
             {draftSummary(draft.text) || 'Attachment'}
           </span>
-          {project && (
-            <span className="flex min-w-0 items-center gap-1 text-[11px] leading-tight text-muted-foreground/65">
-              <Folder className="size-3 shrink-0" />
-              <span className="min-w-0 truncate">{project}</span>
+          {(
+            <span className="flex min-w-0 items-center gap-1.5 text-[11px] leading-tight text-muted-foreground/65">
+              <span className="min-w-0 truncate">{mark.name}</span>
+              <WithTooltip label="Unsent draft">
+                <span className="ml-auto flex shrink-0 items-center pl-2">
+                  <PencilLine className="size-3" />
+                </span>
+              </WithTooltip>
             </span>
           )}
         </span>
@@ -1013,7 +1176,7 @@ export function Sidebar(): React.JSX.Element {
   // a fresh array every call fails zustand's snapshot comparison on every read
   // and loops React into a crash — the same trap `NO_PERMISSIONS` exists for.
   const allChats = useApp((s) => s.chats)
-  const chats = React.useMemo(() => visibleChats(allChats), [allChats])
+  const chats = React.useMemo(() => listedChats(allChats), [allChats])
   const activeId = useApp((s) => s.activeId)
   const statuses = useApp((s) => s.statuses)
   const sideColumns = useApp((s) => s.sideColumns)
@@ -1023,7 +1186,6 @@ export function Sidebar(): React.JSX.Element {
   const titling = useApp((s) => s.titling)
   const openChat = useApp((s) => s.openChat)
   const renameChat = useApp((s) => s.renameChat)
-  const deleteChat = useApp((s) => s.deleteChat)
   const setSelectedCwd = useApp((s) => s.setSelectedCwd)
   const sidebarOpen = useApp((s) => s.sidebarOpen)
   const toggleSidebar = useApp((s) => s.toggleSidebar)
@@ -1033,11 +1195,9 @@ export function Sidebar(): React.JSX.Element {
   // un-hides it (handled in the store's setSelectedCwd). Distinct from Delete,
   // which discards the chats.
   const hiddenProjects = useApp((s) => s.hiddenProjects)
-  const setProjectHidden = useApp((s) => s.setProjectHidden)
   // Custom project display names (keyed by cwd); falls back to the folder basename.
   const projectNames = useApp((s) => s.projectNames)
-  const setProjectName = useApp((s) => s.setProjectName)
-  const projectLabel = (cwd: string): string => projectNames[cwd]?.trim() || basename(cwd)
+  const projectLabel = (cwd: string): string => labelOf(cwd, projectNames)
 
   const projectDrafts = useApp((s) => s.projectDrafts)
   const openDraft = useApp((s) => s.openDraft)
@@ -1048,6 +1208,8 @@ export function Sidebar(): React.JSX.Element {
   const setSidebarProject = useApp((s) => s.setSidebarProject)
   const chatBranches = useApp((s) => s.chatBranches)
   const refreshChatBranches = useApp((s) => s.refreshChatBranches)
+  const projectIcons = useApp((s) => s.projectIcons)
+  const loadProjectIcons = useApp((s) => s.loadProjectIcons)
   // Branches are read for every chat's folder at once, so the trigger is the set
   // of folders — not each chat. Turn endings and worktree moves refresh it from
   // the store; this covers a cold start and a project appearing or leaving.
@@ -1056,20 +1218,21 @@ export function Sidebar(): React.JSX.Element {
     if (detailed) void refreshChatBranches()
   }, [detailed, branchKey, refreshChatBranches])
 
-  // `withProject` is false once the list is filtered to one project — the
-  // filter chip already names it, and repeating it on every row is exactly the
-  // noise dropping the project grouping was meant to remove.
-  const chatDetail = (chat: ChatMeta, withProject: boolean): ChatDetail => {
+  // The project is no longer part of this: a detailed row draws its own mark
+  // and names it on its own line, so this answers only "where in the project".
+  const chatDetail = (chat: ChatMeta): ChatDetail => {
     // A worktree carries its branch on the chat itself, so those rows are
     // labelled before any git read lands.
     const branch = chat.worktree?.branch ?? chatBranches[chat.cwd]
     if (!branch) return { kind: 'path', text: shortenPath(chat.cwd, window.api.home) }
-    return {
-      kind: 'branch',
-      project: withProject ? projectLabel(projectRoot(chat)) : undefined,
-      text: branch
-    }
+    return { kind: 'branch', text: branch }
   }
+
+  const markFor = (root: string): ProjectMark => ({
+    root,
+    name: projectLabel(root),
+    icon: projectIcons[root] ?? null
+  })
 
   const newChatIn = (cwd: string | null): void => {
     if (cwd) setSelectedCwd(cwd)
@@ -1093,50 +1256,22 @@ export function Sidebar(): React.JSX.Element {
   const startNewChat = useApp((s) => s.startNewChat)
   const [renaming, setRenaming] = React.useState<ChatMeta | null>(null)
   const [deleting, setDeleting] = React.useState<ChatMeta | null>(null)
-  const [deletingWt, setDeletingWt] = React.useState<WorktreeStatus | null>(null)
-  // git's refusal when worktree cleanup failed, shown after the dialog closes.
-  const [deleteError, setDeleteError] = React.useState<string | null>(null)
-
-  // Fetch the dirty/unmerged report when a worktree chat's delete dialog opens,
-  // so the confirm can say what would actually be lost.
-  React.useEffect(() => {
-    setDeletingWt(null)
-    if (!deleting?.worktree) return
-    let cancelled = false
-    void window.api.worktreeStatus(deleting.id).then((s) => {
-      if (!cancelled) setDeletingWt(s)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [deleting])
-
-  // What a force-delete would destroy ('' when nothing), and whether the report
-  // is still in flight — both derived, so the predicate lives in one place.
-  const atRisk = deletingWt ? describeAtRisk(deletingWt) : ''
-  const wtLoading = !!deleting?.worktree && !deletingWt
   const [renameValue, setRenameValue] = React.useState('')
-  // Project being renamed (its cwd) and the working input value.
-  const [renamingProject, setRenamingProject] = React.useState<string | null>(null)
-  const [projectNameValue, setProjectNameValue] = React.useState('')
-  const removeProject = useApp((s) => s.removeProject)
   const setChatPinned = useApp((s) => s.setChatPinned)
+  const setChatArchived = useApp((s) => s.setChatArchived)
   const startInWorktree = useApp((s) => s.startInWorktree)
-  const [removingProject, setRemovingProject] = React.useState<{
-    cwd: string
-    count: number
-  } | null>(null)
-  // Archiving and hiding delete nothing, but both take a whole project — every
-  // chat in it — out of the sidebar in one click, and in detailed mode they sit
-  // on a *chat's* menu two rows under the chat-level Delete, where the project
-  // they act on is named nowhere else on screen. Naming it is most of what the
-  // dialog is for; the rest is saying how to get the project back, which is a
-  // different answer for each and obvious for neither.
-  const [confirmProject, setConfirmProject] = React.useState<{
-    kind: 'archive' | 'hide'
-    cwd: string
-    count: number
-  } | null>(null)
+  /**
+   * Which project question is open — rename, archive, hide or remove. The
+   * dialogs themselves are `ProjectDialogs`, shared with Settings → Projects,
+   * because archiving and hiding delete nothing but both take a whole project
+   * out of the sidebar in one click, and in detailed mode they sit on a *chat's*
+   * menu two rows under the chat-level Delete, where the project they act on is
+   * named nowhere else on screen. Naming it is most of what the dialog is for;
+   * the rest is saying how to get the project back, which is a different answer
+   * for each and obvious for neither — and it must be the same answer wherever
+   * it is asked.
+   */
+  const [projectPrompt, setProjectPrompt] = React.useState<ProjectPrompt | null>(null)
   const [collapsedProjects, setCollapsedProjects] = React.useState<Record<string, boolean>>(() => {
     try {
       return JSON.parse(localStorage.getItem('collapsedProjects') ?? '{}') as Record<
@@ -1161,37 +1296,15 @@ export function Sidebar(): React.JSX.Element {
     })
   }
 
-  const [archivedProjects, setArchivedProjects] = React.useState<Record<string, boolean>>(() => {
-    try {
-      return JSON.parse(localStorage.getItem('archivedProjects') ?? '{}') as Record<string, boolean>
-    } catch {
-      return {}
-    }
-  })
-
-  const setArchived = (cwd: string, archived: boolean): void => {
-    setArchivedProjects((prev) => {
-      const next = { ...prev }
-      if (archived) next[cwd] = true
-      else delete next[cwd]
-      localStorage.setItem('archivedProjects', JSON.stringify(next))
-      return next
-    })
-  }
-
+  // Archived and ordered projects live in the store, not here: Settings →
+  // Projects toggles both, and one `localStorage` key behind two `useState`s is
+  // two copies that drift the moment either writes.
+  const archivedProjects = useApp((s) => s.archivedProjects)
+  const setArchived = useApp((s) => s.setProjectArchived)
   // User-controlled project order (array of cwds). Persisted; a project not yet
   // listed keeps its discovery order. `dragCwd`/`dropCwd` drive drag-to-reorder.
-  const [projectOrder, setProjectOrder] = React.useState<string[]>(() => {
-    try {
-      return JSON.parse(localStorage.getItem('projectOrder') ?? '[]') as string[]
-    } catch {
-      return []
-    }
-  })
-  const persistOrder = (next: string[]): void => {
-    setProjectOrder(next)
-    localStorage.setItem('projectOrder', JSON.stringify(next))
-  }
+  const projectOrder = useApp((s) => s.projectOrder)
+  const persistOrder = useApp((s) => s.setProjectOrder)
   const [dragCwd, setDragCwd] = React.useState<string | null>(null)
   const [dropCwd, setDropCwd] = React.useState<string | null>(null)
   // Whether the drop lands after (below) the target row vs before (above it).
@@ -1250,27 +1363,15 @@ export function Sidebar(): React.JSX.Element {
   // delete-project count means. `unpinned` is what the group actually lists;
   // keeping both is also what keeps a project whose only chat is pinned from
   // disappearing from the sidebar entirely.
-  const groups: { cwd: string; chats: ChatMeta[]; unpinned: ChatMeta[] }[] = []
-  for (const chat of chats) {
-    const key = projectRoot(chat)
-    let group = groups.find((g) => g.cwd === key)
-    if (!group) {
-      group = { cwd: key, chats: [], unpinned: [] }
-      groups.push(group)
-    }
-    group.chats.push(chat)
-    if (chat.pinnedAt === undefined) group.unpinned.push(chat)
-  }
+  const groups = projectGroups(chats, projectOrder).map((g) => ({
+    ...g,
+    unpinned: g.chats.filter((c) => c.pinnedAt === undefined)
+  }))
   // Oldest pin first, so pinning appends to the bottom of the section instead of
   // the order shuffling every time one of them is used.
   const pinnedChats = chats
     .filter((c) => c.pinnedAt !== undefined)
     .sort((a, b) => (a.pinnedAt ?? 0) - (b.pinnedAt ?? 0))
-  const orderRank = (cwd: string): number => {
-    const i = projectOrder.indexOf(cwd)
-    return i === -1 ? Number.MAX_SAFE_INTEGER : i
-  }
-  groups.sort((a, b) => orderRank(a.cwd) - orderRank(b.cwd))
   // Pinned chats included: `group.chats` is the whole project, which is what
   // leaves the sidebar and so what the three project dialogs have to report.
   const projectChatCount = (cwd: string): number =>
@@ -1285,6 +1386,24 @@ export function Sidebar(): React.JSX.Element {
     persistOrder(ordered)
   }
   const visibleGroups = groups.filter((g) => !hiddenProjects[g.cwd])
+
+  // **Marks arrive after the sidebar does.** A project's icon is a walk of
+  // `stat`s in a folder, which is cheap but not free and answers nothing the
+  // first frame needs — every row has its initials to fall back on, and that
+  // is the same mark a project with no icon keeps. So it is asked for on the
+  // first idle frame, `preloadHeavy`'s idiom, keyed on the project set the way
+  // `branchKey` is so a folder the app has just met resolves its own mark
+  // without re-shipping every icon already held.
+  const iconKey = groups.map((g) => g.cwd).join('\n')
+  React.useEffect(() => {
+    const run = (): void => void loadProjectIcons()
+    if (typeof requestIdleCallback !== 'function') {
+      const t = setTimeout(run, 300)
+      return () => clearTimeout(t)
+    }
+    const id = requestIdleCallback(run, { timeout: 10_000 })
+    return () => cancelIdleCallback(id)
+  }, [iconKey, loadProjectIcons])
 
   // "Show me one project" — the same question in both modes, so the same
   // control answers it. Detailed has no project rows and nothing else to ask
@@ -1384,6 +1503,7 @@ export function Sidebar(): React.JSX.Element {
       },
       remove: (chat) => setDeleting(chat),
       togglePin: (chat) => void setChatPinned(chat.id, chat.pinnedAt === undefined),
+      archive: (chat) => void setChatArchived(chat.id, true),
       newInWorktree: (chat) => {
         // Drops to the composer with the worktree preselected; the model picker
         // there chooses the provider, so a Codex chat can pick up a worktree
@@ -1391,24 +1511,21 @@ export function Sidebar(): React.JSX.Element {
         if (chat.worktree) void startInWorktree(chat.cwd, chat.worktree)
       },
       newChatIn: (cwd) => latest.current.newChatIn(cwd),
-      renameProject: (cwd) => {
-        setProjectNameValue(latest.current.projectLabel(cwd))
-        setRenamingProject(cwd)
-      },
+      renameProject: (cwd) => setProjectPrompt({ kind: 'rename', cwd }),
+      manageProjects: () => openSettings('projects'),
       revealProject: (cwd) => void window.api.revealPath(cwd),
       setProjectArchived: (cwd, archived) => latest.current.setArchived(cwd, archived),
-      confirmProject: (kind, cwd) =>
-        setConfirmProject({ kind, cwd, count: latest.current.projectChatCount(cwd) }),
-      removeProject: (cwd) =>
-        setRemovingProject({ cwd, count: latest.current.projectChatCount(cwd) })
+      confirmProject: (kind, cwd) => setProjectPrompt({ kind, cwd }),
+      removeProject: (cwd) => setProjectPrompt({ kind: 'remove', cwd })
     }),
-    [openChat, setChatPinned, startInWorktree]
+    [openChat, setChatPinned, setChatArchived, startInWorktree]
   )
 
   // A chat row is identical wherever it appears — in its project group or in the
   // Pinned section — so both sites render through here.
   const renderChatItem = (chat: ChatMeta): React.JSX.Element => {
     const root = projectRoot(chat)
+    const mark = markFor(root)
     // The row stands for its whole thread: what any of its open columns is
     // doing shows here, the way a collapsed project row sums its chats.
     const columns = columnsOf({ activeId, sideColumns, sideColumnsByChat }, chat.id)
@@ -1428,7 +1545,8 @@ export function Sidebar(): React.JSX.Element {
         activity={activity}
         titling={!!titling[chat.id]}
         threadCount={1 + columns.length}
-        detail={detailed ? chatDetail(chat, !filterProject) : null}
+        detail={detailed ? chatDetail(chat) : null}
+        mark={mark}
         // Whenever no project row is on screen to carry the project's actions —
         // always in detailed, and in compact once a filter has collapsed the
         // list to one project and its row along with it.
@@ -1488,12 +1606,115 @@ export function Sidebar(): React.JSX.Element {
           Search
           <Kbd className="ml-auto opacity-0 transition-opacity group-hover:opacity-100">⌘K</Kbd>
         </button>
+        {/* The project filter, as the third primary row rather than a heading
+            over the list.
+
+            It was a section label that had become a control and never stopped
+            looking like one: sized against the rows it headed, carrying the
+            add-a-folder button, and sitting *below* the drafts and pins it
+            scopes. Here it reads as what it is — "which project am I looking
+            at", beside "new chat" and "search" — and everything it filters is
+            underneath it. The mark is drawn at the nav icons' size so the three
+            rows share one column. */}
+        <div className="group flex items-center rounded-md pr-0.5 text-[13px] text-sidebar-foreground transition-colors hover:bg-sidebar-accent/60">
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <button
+                  type="button"
+                  aria-label="Filter by project"
+                  className="flex min-w-0 flex-1 items-center gap-2.5 rounded-md px-2 py-1.5 text-left outline-none"
+                />
+              }
+            >
+              {filterProject ? (
+                <ProjectAvatar
+                  size="sm"
+                  root={filterProject}
+                  name={projectLabel(filterProject)}
+                  icon={projectIcons[filterProject] ?? null}
+                  className="size-4 rounded-[5px]"
+                />
+              ) : (
+                // A line icon, not a tile: this is the icon column of "New
+                // chat" and "Search", and "all projects" is a *state of the
+                // control*, not a project with a mark of its own. A project
+                // brings its own tile when one is chosen, which is the whole
+                // point of the column — same 16px box either way, so nothing
+                // shifts.
+                <SquareStack className="size-4 shrink-0 text-muted-foreground" />
+              )}
+              <span className="min-w-0 truncate">
+                {filterProject ? projectLabel(filterProject) : 'All projects'}
+              </span>
+              <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent className="max-h-80 overflow-y-auto">
+              <DropdownMenuItem onClick={() => setSidebarProject(null)}>
+                <Check
+                  className={cn(!filterProject && 'opacity-100', filterProject && 'invisible')}
+                />
+                <SquareStack />
+                All projects
+              </DropdownMenuItem>
+              {visibleGroups.length > 0 && <DropdownMenuSeparator />}
+              {visibleGroups.map((g) => (
+                <DropdownMenuItem key={g.cwd} onClick={() => setSidebarProject(g.cwd)}>
+                  {/* The tick stays: it is the one thing on the row that says
+                      *selected*, and a mark that had to double as both would
+                      say neither. The mark goes where a list of things you pick
+                      from puts it — ahead of the name. */}
+                  <Check className={cn(filterProject !== g.cwd && 'invisible')} />
+                  <ProjectAvatar
+                    size="sm"
+                    root={g.cwd}
+                    name={projectLabel(g.cwd)}
+                    icon={projectIcons[g.cwd] ?? null}
+                  />
+                  <span className="min-w-0 truncate">{projectLabel(g.cwd)}</span>
+                  <span className="ml-auto pl-3 text-[11px] text-muted-foreground/60">
+                    {g.chats.length}
+                  </span>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+          {/* Two verbs, not one: opening a folder the app has never seen, and
+              managing the ones it has. The second is the page that answers
+              every other question about a project, so the row that names one
+              is where it belongs. */}
+          <WithTooltip label="Add a project folder">
+            <button
+              type="button"
+              onClick={() => void openProject()}
+              aria-label="Add project"
+              className="shrink-0 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
+            >
+              {/* A folder, not a bare plus: the plus alone is the new-*chat*
+                  verb one row above this. */}
+              <FolderPlus className="size-4" />
+            </button>
+          </WithTooltip>
+          <WithTooltip label="Manage projects">
+            <button
+              type="button"
+              onClick={() => openSettings('projects')}
+              aria-label="Manage projects"
+              className="shrink-0 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
+            >
+              {/* A gear, not sliders: sliders beside a filter read as "filter
+                  options", and this is the settings page. The footer's gear
+                  opens the same page's siblings — same verb, same glyph. */}
+              <Settings className="size-4" />
+            </button>
+          </WithTooltip>
+        </div>
       </div>
 
-      {/* Unsent prompts, at the very top and above even the pins: this is the
-          one section whose contents exist nowhere else, and a draft you can't
-          see is a draft you've lost. There is at most one per project, so it
-          costs the pins a row or two and never a screenful. */}
+      {/* Unsent prompts, at the very top: this is the one section whose
+          contents exist nowhere else, and a draft you can't see is a draft
+          you've lost. There is at most one per project, so it costs the list a
+          row or two and never a screenful. */}
       {draftsShown.length > 0 && (
         <div className="flex max-h-[25vh] shrink-0 flex-col">
           <div className="flex items-center gap-2 px-3.5 pt-3 pb-1">
@@ -1507,8 +1728,7 @@ export function Sidebar(): React.JSX.Element {
                 <DraftItem
                   key={draft.cwd}
                   draft={draft}
-                  // A filter has already named the project in the header.
-                  project={filterProject ? null : projectLabel(draft.cwd)}
+                  mark={markFor(draft.cwd)}
                   onOpen={() => openDraft(draft.cwd)}
                   onDiscard={() => discardProjectDraft(draft.cwd)}
                 />
@@ -1518,92 +1738,23 @@ export function Sidebar(): React.JSX.Element {
         </div>
       )}
 
-      {/* Pinned chats, above the projects and outside their scroller so they
-          stay reachable no matter how far down the project list you are. */}
+      {/* Pinned chats, and they sit **under** the filter because the filter
+          scopes them — `pinnedShown` is filtered — and a section a control
+          governs belongs below it, not above. Still outside the list's own
+          scroller, so they stay reachable however far down you are.
+
+          No heading: the rows say it themselves now. A label costs a row to
+          name a state that is a property of each chat rather than of the
+          group, and it named it once for a block whose membership you cannot
+          otherwise see — move a pin and the only thing that changes is which
+          side of a divider a row is on. The glyph travels with the chat. */}
       {pinnedShown.length > 0 && (
         <div className="flex max-h-[35vh] shrink-0 flex-col">
-          <div className="flex items-center gap-2 px-3.5 pt-3 pb-1">
-            <span className="text-[11px] font-medium tracking-wide text-muted-foreground/70">
-              Pinned
-            </span>
-          </div>
-          <div className="min-h-0 overflow-y-auto px-3">
-            {/* Matches whatever the list below does: compact indents under its
-                project rows, and has none to indent under once filtered. */}
-            <div className={cn('space-y-px', !detailed && !filterProject && 'ml-[22px]')}>
-              {pinnedShown.map(renderChatItem)}
-            </div>
+          <div className="min-h-0 overflow-y-auto px-3 pt-0.5 pb-1">
+            <div className="space-y-px">{pinnedShown.map(renderChatItem)}</div>
           </div>
         </div>
       )}
-
-      {/* Section header, and the project filter is it in BOTH modes.
-          Detailed mode has no project rows, so the filter is the only project
-          control it has — but "show me one project" is not a thing only a flat
-          list wants, and compact's answer to it was collapsing the other nine
-          rows by hand. The two modes were also already sharing the *state*:
-          `sidebarProject` persists, and the Pinned section reads it either way,
-          so a filter set in detailed used to quietly scope compact's pins with
-          no control on screen to clear it.
-
-          It's sized to be clicked — 13px, matching the chat titles beneath it
-          rather than the divider text — because it is a control, not the
-          section label it replaces. */}
-      <div className="flex items-center gap-2 px-3.5 pt-2 pb-1">
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            render={
-              <button
-                type="button"
-                aria-label="Filter by project"
-                className={cn(
-                  '-ml-1.5 flex min-w-0 items-center gap-1 rounded-md px-1.5 py-1 text-[13px] font-medium transition-colors hover:bg-sidebar-accent hover:text-foreground',
-                  filterProject ? 'text-sidebar-foreground' : 'text-sidebar-foreground/65'
-                )}
-              />
-            }
-          >
-            <span className="truncate">
-              {filterProject ? projectLabel(filterProject) : 'All projects'}
-            </span>
-            <ChevronDown className="size-3.5 shrink-0 opacity-70" />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent className="max-h-80 overflow-y-auto">
-            <DropdownMenuItem onClick={() => setSidebarProject(null)}>
-              <Check className={cn(!filterProject && 'opacity-100', filterProject && 'invisible')} />
-              All projects
-            </DropdownMenuItem>
-            {visibleGroups.length > 0 && <DropdownMenuSeparator />}
-            {visibleGroups.map((g) => (
-              <DropdownMenuItem key={g.cwd} onClick={() => setSidebarProject(g.cwd)}>
-                <Check className={cn(filterProject !== g.cwd && 'invisible')} />
-                <span className="min-w-0 truncate">{projectLabel(g.cwd)}</span>
-                <span className="ml-auto pl-3 text-[11px] text-muted-foreground/60">
-                  {g.chats.length}
-                </span>
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-        <div className="flex-1" />
-        <WithTooltip label="Add a project folder">
-          {/* One control, one size in both modes. It sits next to a section
-              label in compact and a 13px filter in detailed, but it is the same
-              button doing the same thing — sizing it off whatever happens to be
-              beside it is how you get a target that shrinks when you switch
-              modes. Labels are free to differ; controls are not. */}
-          <button
-            type="button"
-            onClick={() => void openProject()}
-            aria-label="Add project"
-            className="-mr-1.5 rounded-md p-1.5 text-sidebar-foreground/65 transition-colors hover:bg-sidebar-accent hover:text-foreground"
-          >
-            {/* A folder, not a bare plus: the plus alone is the new-*chat* verb
-                everywhere else in this sidebar, and the two sat one row apart. */}
-            <FolderPlus className="size-4" />
-          </button>
-        </WithTooltip>
-      </div>
 
       {/* Detailed mode: one flat list, newest first, bucketed by date */}
       {detailed && (
@@ -1757,12 +1908,25 @@ export function Sidebar(): React.JSX.Element {
                         className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 py-1.5 text-left transition-colors hover:bg-sidebar-accent/60"
                         aria-expanded={!isCollapsed}
                       >
-                        {/* One icon slot: folder at rest, chevron on row hover (Cursor-style). */}
-                        <span className="relative size-3.5 shrink-0">
-                          <Folder className="absolute inset-0 size-3.5 text-muted-foreground/80 transition-all duration-150 group-hover/project:scale-75 group-hover/project:opacity-0" />
+                        {/* One icon slot: the project's own mark at rest,
+                            chevron on row hover (Cursor-style). The mark is
+                            strictly better than the folder glyph it replaced —
+                            that one was identical on every row, which is the
+                            definition of a glyph carrying nothing — and the
+                            swap survives it: the row being hovered is the one
+                            row whose name you are already reading, and it is
+                            where the collapse affordance has to appear. */}
+                        <span className="relative size-4 shrink-0">
+                          <ProjectAvatar
+                            size="sm"
+                            root={group.cwd}
+                            name={projectLabel(group.cwd)}
+                            icon={projectIcons[group.cwd] ?? null}
+                            className="absolute inset-0 transition-all duration-150 group-hover/project:scale-75 group-hover/project:opacity-0"
+                          />
                           <ChevronRight
                             className={cn(
-                              'absolute inset-0 size-3.5 scale-75 text-muted-foreground/80 opacity-0 transition-all duration-150 group-hover/project:scale-100 group-hover/project:opacity-100',
+                              'absolute inset-0 size-4 scale-75 text-muted-foreground/80 opacity-0 transition-all duration-150 group-hover/project:scale-100 group-hover/project:opacity-100',
                               !isCollapsed && 'rotate-90'
                             )}
                           />
@@ -1810,7 +1974,7 @@ export function Sidebar(): React.JSX.Element {
                 {!isCollapsed && (
                   // The indent is the project row's hanging indent; with no row
                   // above them the chats sit flush, exactly as detailed's do.
-                  <div className={cn('space-y-px pb-1', headed && 'ml-[22px]')}>
+                  <div className={cn('space-y-px pb-1', headed && 'ml-[24px]')}>
                     {cappedChats.map(renderChatItem)}
                     {(hiddenChatCount > 0 || revealedBatches > 0) && (
                       <div className="flex items-center">
@@ -1865,7 +2029,12 @@ export function Sidebar(): React.JSX.Element {
             </Button>
           </WithTooltip>
           <WithTooltip label="Settings  ⌘,">
-            <Button size="icon-sm" variant="ghost" onClick={openSettings} aria-label="Open settings">
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              onClick={() => openSettings()}
+              aria-label="Open settings"
+            >
               <Settings />
             </Button>
           </WithTooltip>
@@ -1888,7 +2057,7 @@ export function Sidebar(): React.JSX.Element {
         projects={newChatProjects}
         onPick={(cwd) => newChatIn(cwd)}
         onBrowse={() => void openProject()}
-        onRemove={(cwd, count) => setRemovingProject({ cwd, count })}
+        onRemove={(cwd) => setProjectPrompt({ kind: 'remove', cwd })}
       />
 
       {/* Rename dialog */}
@@ -1923,203 +2092,14 @@ export function Sidebar(): React.JSX.Element {
         </DialogContent>
       </Dialog>
 
-      {/* Rename project dialog */}
-      <Dialog
-        open={renamingProject !== null}
-        onOpenChange={(open) => !open && setRenamingProject(null)}
-      >
-        <DialogContent>
-          <DialogTitle>Rename project</DialogTitle>
-          <DialogDescription>
-            A display name for this project in the sidebar. Leave blank to use the folder name. The
-            folder on disk is not renamed.
-          </DialogDescription>
-          <form
-            className="mt-3 space-y-3"
-            onSubmit={(e) => {
-              e.preventDefault()
-              if (renamingProject) {
-                // An empty value (or one equal to the folder name) clears the override.
-                const next =
-                  projectNameValue.trim() === basename(renamingProject) ? '' : projectNameValue
-                setProjectName(renamingProject, next)
-                setRenamingProject(null)
-              }
-            }}
-          >
-            <Input
-              value={projectNameValue}
-              onChange={(e) => setProjectNameValue(e.target.value)}
-              autoFocus
-              placeholder={renamingProject ? basename(renamingProject) : 'Project name'}
-            />
-            <div className="flex justify-end gap-2">
-              <Button variant="ghost" onClick={() => setRenamingProject(null)}>
-                Cancel
-              </Button>
-              <Button type="submit">Rename</Button>
-            </div>
-          </form>
-        </DialogContent>
-      </Dialog>
+      {/* Rename / archive / hide / remove a project — shared with
+          Settings → Projects so both places say the same thing. */}
+      <ProjectDialogs prompt={projectPrompt} onClose={() => setProjectPrompt(null)} />
 
-      {/* Remove project dialog */}
-      <Dialog
-        open={removingProject !== null}
-        onOpenChange={(open) => !open && setRemovingProject(null)}
-      >
-        <DialogContent>
-          <DialogTitle>Remove “{removingProject ? projectLabel(removingProject.cwd) : ''}”?</DialogTitle>
-          <DialogDescription>
-            The project is removed from the sidebar and its{' '}
-            {removingProject?.count === 1 ? 'chat is' : `${removingProject?.count} chats are`}{' '}
-            deleted permanently. Files on disk are not touched.
-          </DialogDescription>
-          <div className="mt-4 flex justify-end gap-2">
-            <Button variant="ghost" onClick={() => setRemovingProject(null)}>
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={() => {
-                if (removingProject) void removeProject(removingProject.cwd)
-                setRemovingProject(null)
-              }}
-            >
-              Remove project
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      {/* Archive / hide project. Deliberately NOT a destructive button: red is
-          this app's mark for data loss, and neither of these loses any — saying
-          so is what keeps the red on Remove meaningful. The way back differs by
-          mode as well as by action, so the copy is written per case rather than
-          shared: compact keeps an Archived section on screen, detailed drops the
-          project out of the flat list entirely, and a hidden project is left out
-          of the ⌘N chooser too, which leaves opening the folder as its only way
-          home. */}
-      <Dialog
-        open={confirmProject !== null}
-        onOpenChange={(open) => !open && setConfirmProject(null)}
-      >
-        <DialogContent>
-          <DialogTitle>
-            {confirmProject?.kind === 'hide' ? 'Hide' : 'Archive'} “
-            {confirmProject ? projectLabel(confirmProject.cwd) : ''}”?
-          </DialogTitle>
-          <DialogDescription>
-            The project and its{' '}
-            {confirmProject?.count === 1 ? 'chat' : `${confirmProject?.count ?? 0} chats`}{' '}
-            {confirmProject?.kind === 'hide' ? (
-              <>
-                leave the sidebar. Nothing is deleted — the project comes back when you open the
-                folder again.
-              </>
-            ) : detailed ? (
-              <>
-                leave the sidebar. Nothing is deleted — filter to the project to find it again and
-                unarchive it.
-              </>
-            ) : (
-              <>
-                move to the Archived section at the bottom of the sidebar. Nothing is deleted.
-              </>
-            )}
-          </DialogDescription>
-          <div className="mt-4 flex justify-end gap-2">
-            <Button variant="ghost" onClick={() => setConfirmProject(null)}>
-              Cancel
-            </Button>
-            <Button
-              onClick={() => {
-                if (confirmProject?.kind === 'hide') setProjectHidden(confirmProject.cwd, true)
-                else if (confirmProject) setArchived(confirmProject.cwd, true)
-                setConfirmProject(null)
-              }}
-            >
-              {confirmProject?.kind === 'hide' ? 'Hide project' : 'Archive project'}
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      {/* Worktree cleanup failed — the chat is already gone, so this reports
-          what was left behind rather than blocking anything. */}
-      <Dialog open={deleteError !== null} onOpenChange={(open) => !open && setDeleteError(null)}>
-        <DialogContent>
-          <DialogTitle>The worktree couldn’t be removed</DialogTitle>
-          <DialogDescription>
-            The chat was deleted, but its worktree is still on disk. Git said:
-          </DialogDescription>
-          <p className="mt-3 rounded-md bg-secondary/50 p-2 font-mono text-[11px] break-words text-destructive">
-            {deleteError}
-          </p>
-          <div className="mt-4 flex justify-end">
-            <Button variant="ghost" onClick={() => setDeleteError(null)}>
-              Dismiss
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      {/* Delete dialog */}
-      <Dialog open={deleting !== null} onOpenChange={(open) => !open && setDeleting(null)}>
-        <DialogContent>
-          <DialogTitle>Delete this chat?</DialogTitle>
-          <DialogDescription>
-            “{deleting?.title || 'New chat'}” and its history will be removed permanently.
-            {deleting?.worktree && (
-              <>
-                {' '}
-                It runs in the worktree{' '}
-                <span className="font-medium text-foreground">{deleting.worktree.branch}</span>.
-                {deletingWt
-                  ? atRisk
-                    ? ` It has ${atRisk} that deleting the worktree would destroy.`
-                    : ' The worktree is clean and safe to delete.'
-                  : ' Checking for uncommitted work…'}
-              </>
-            )}
-          </DialogDescription>
-          <div className="mt-4 flex justify-end gap-2">
-            <Button variant="ghost" onClick={() => setDeleting(null)}>
-              Cancel
-            </Button>
-            {deleting?.worktree && (
-              <Button
-                variant="ghost"
-                onClick={() => {
-                  if (deleting) void deleteChat(deleting.id, 'keep')
-                  setDeleting(null)
-                }}
-              >
-                Keep worktree
-              </Button>
-            )}
-            <Button
-              variant="destructive"
-              // Deleting is blocked only while we don't yet know what's at risk.
-              disabled={wtLoading}
-              onClick={() => {
-                if (!deleting) return
-                // Nothing at risk → a plain remove (git still refuses if it
-                // disagrees). Otherwise the user has read the warning and forces.
-                const disposition = !deleting.worktree ? undefined : atRisk ? 'force' : 'remove'
-                void deleteChat(deleting.id, disposition).then((res) => {
-                  // The chat is gone either way; a worktree git refused to
-                  // remove is reported here, where the user asked for it.
-                  if (!res.ok) setDeleteError(res.error)
-                })
-                setDeleting(null)
-              }}
-            >
-              {!deleting?.worktree ? 'Delete' : atRisk ? 'Delete anyway' : 'Delete with worktree'}
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+      {/* The delete confirm is shared with Settings → Archive — it is the one
+          dialog that can destroy a worktree, and what it would destroy is a
+          live git read rather than a sentence. See `ChatDeleteDialog`. */}
+      <ChatDeleteDialog chat={deleting} onClose={() => setDeleting(null)} />
       </div>
       {leaveDrop.title !== null && (
         <div

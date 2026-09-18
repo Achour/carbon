@@ -67,8 +67,15 @@ export function canvasTitleFromOutput(output: string | undefined): string | unde
  * disagree about which verbs count.
  */
 const CANVAS_VERBS = ['write', 'edit'] as const
-const CANVAS_MUTATORS = new Set(CANVAS_VERBS.map((verb) => `mcp__canvas__${verb}`))
-const GROK_MUTATOR = new RegExp(`canvas__(?:${CANVAS_VERBS.join('|')})$`)
+/**
+ * `mcp__carbon__canvas_write` is today's spelling; `mcp__canvas__write` is what
+ * chats recorded while the canvas was its own MCP server, and a transcript does
+ * not get rewritten when the servers merge.
+ */
+const CANVAS_MUTATORS = new Set(
+  CANVAS_VERBS.flatMap((verb) => [`mcp__carbon__canvas_${verb}`, `mcp__canvas__${verb}`])
+)
+const GROK_MUTATOR = new RegExp(`canvas[_]{1,2}(?:${CANVAS_VERBS.join('|')})$`)
 
 /** The canvas a call wrote, or null if it is not a canvas mutation at all. */
 export function canvasWrite(part: CanvasCallLike): CanvasRef | null {

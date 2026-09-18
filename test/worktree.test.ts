@@ -16,6 +16,7 @@ import {
   mergeWorktree,
   parseWorktreeList,
   removeWorktree,
+  resolveStaleWorktree,
   resolveWorktree,
   setupCommandFor,
   worktreePathFor,
@@ -659,5 +660,64 @@ test('createWorktree from inside a linked worktree still roots at the main check
     if (inner) await removeWorktree(repo, inner.path, inner.branch, true)
     if (outer) await removeWorktree(repo, outer.path, outer.branch, true)
     await rm(repo, { recursive: true, force: true })
+  }
+})
+
+test('resolveStaleWorktree identifies a worktree whose directory is gone', async () => {
+  const repo = await initRepo('karbun-worktree-resolve-stale-')
+  try {
+    const created = await createWorktree(repo, 'vanished')
+
+    // While it exists, the worktree answers for itself and the repo agrees.
+    assert.deepEqual(await resolveWorktree(created.path), {
+      repoRoot: await realpath(repo),
+      branch: 'vanished'
+    })
+
+    await rm(created.path, { recursive: true, force: true })
+
+    // This is the case Settings → Projects offers to clear, and the one
+    // `resolveWorktree` cannot answer: `git -C <gone> rev-parse` has nothing to
+    // run in, so the row that most needs identifying resolved to null.
+    assert.equal(await resolveWorktree(created.path), null, 'the worktree cannot answer')
+    assert.deepEqual(
+      await resolveStaleWorktree(repo, created.path),
+      { repoRoot: repo, branch: 'vanished' },
+      'the repo still knows'
+    )
+
+    // `git worktree remove` settles a prunable entry without --force, so the
+    // ordinary removal path works once the branch has been named.
+    const res = await removeWorktree(repo, created.path, 'vanished', false)
+    assert.equal(res.ok, true, res.ok ? '' : res.error)
+    assert.deepEqual(
+      parseWorktreeList(await git(repo, ['worktree', 'list', '--porcelain'])).map((w) => w.branch),
+      ['main'],
+      'the stale entry is gone'
+    )
+  } finally {
+    await rm(repo, { recursive: true, force: true })
+  }
+})
+
+test('resolveStaleWorktree verifies the repo rather than trusting it', async () => {
+  const repo = await initRepo('karbun-worktree-stale-hint-a-')
+  const other = await initRepo('karbun-worktree-stale-hint-b-')
+  try {
+    const created = await createWorktree(repo, 'gone-too')
+    await rm(created.path, { recursive: true, force: true })
+
+    // The path is real and stale, but this repo does not list it — a wrong
+    // hint must resolve nothing rather than aim a removal at another repo.
+    assert.equal(await resolveStaleWorktree(other, created.path), null)
+    // The main checkout is never a removable worktree, whatever is passed.
+    assert.equal(await resolveStaleWorktree(repo, repo), null)
+    // A path the repo has never heard of.
+    assert.equal(await resolveStaleWorktree(repo, join(repo, 'nope')), null)
+
+    await removeWorktree(repo, created.path, 'gone-too', false)
+  } finally {
+    await rm(repo, { recursive: true, force: true })
+    await rm(other, { recursive: true, force: true })
   }
 })

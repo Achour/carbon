@@ -11,9 +11,9 @@ import {
   isExitPlanTool,
   isGrokAskUserQuestionMethod,
   isGrokTranscriptUpdate,
-  isPreviewSideEffectTool,
-  isPreviewTool,
-  previewToolId,
+  carbonToolIdOf,
+  isCarbonSideEffectTool,
+  isCarbonTool,
   grokToolInput,
   toolImages,
   parseGrokQuestions,
@@ -138,31 +138,50 @@ test('isExitPlanTool matches on kind or name, not on the title', () => {
   )
 })
 
-test('previewToolId only matches the in-app preview MCP', () => {
+test('carbonToolIdOf only matches Carbon\'s own MCP server', () => {
+  // Grok reports the namespace and the name separately here, and joined into
+  // one string there; both have to land on the id the renderer already knows.
   assert.equal(
-    previewToolId({
+    carbonToolIdOf({
       toolCallId: 'c',
-      _meta: { 'x.ai/tool': { name: 'screenshot', namespace: 'preview' } }
+      _meta: { 'x.ai/tool': { name: 'preview_screenshot', namespace: 'carbon' } }
     }),
-    'mcp__preview__screenshot'
+    'mcp__carbon__preview_screenshot'
   )
   assert.equal(
-    previewToolId({ toolCallId: 'c', title: 'mcp__preview__start' }),
-    'mcp__preview__start'
+    carbonToolIdOf({ toolCallId: 'c', title: 'mcp__carbon__preview_start' }),
+    'mcp__carbon__preview_start'
   )
-  assert.equal(previewToolId({ toolCallId: 'c', title: 'preview_navigate' }), 'mcp__preview__navigate')
+  assert.equal(
+    carbonToolIdOf({ toolCallId: 'c', title: 'carbon__canvas_write' }),
+    'mcp__carbon__canvas_write'
+  )
+  assert.equal(
+    carbonToolIdOf({ toolCallId: 'c', title: 'preview_navigate' }),
+    'mcp__carbon__preview_navigate'
+  )
   // A bare "start" is not ours — Grok's own tools must not be auto-allowed.
-  assert.equal(previewToolId({ toolCallId: 'c', title: 'start' }), undefined)
-  assert.equal(isPreviewTool({ toolCallId: 'c', title: 'mcp__preview__console' }), true)
-  assert.equal(isPreviewSideEffectTool({ toolCallId: 'c', title: 'mcp__preview__start' }), true)
-  assert.equal(isPreviewSideEffectTool({ toolCallId: 'c', title: 'mcp__preview__status' }), false)
+  assert.equal(carbonToolIdOf({ toolCallId: 'c', title: 'start' }), undefined)
+  assert.equal(carbonToolIdOf({ toolCallId: 'c', title: 'write' }), undefined)
+  assert.equal(isCarbonTool({ toolCallId: 'c', title: 'mcp__carbon__preview_console' }), true)
+  assert.equal(
+    isCarbonSideEffectTool({ toolCallId: 'c', title: 'mcp__carbon__preview_start' }),
+    true
+  )
+  assert.equal(
+    isCarbonSideEffectTool({ toolCallId: 'c', title: 'mcp__carbon__preview_status' }),
+    false
+  )
+  // A canvas write touches only Carbon's database, so it is not a side effect
+  // and is not refused in plan mode.
+  assert.equal(isCarbonSideEffectTool({ toolCallId: 'c', title: 'mcp__carbon__canvas_write' }), false)
   assert.equal(
     toolName({
       toolCallId: 'c',
       title: 'screenshot',
-      _meta: { 'x.ai/tool': { name: 'screenshot', namespace: 'preview', label: 'Screenshot' } }
+      _meta: { 'x.ai/tool': { name: 'preview_screenshot', namespace: 'carbon', label: 'Screenshot' } }
     }),
-    'mcp__preview__screenshot'
+    'mcp__carbon__preview_screenshot'
   )
 })
 

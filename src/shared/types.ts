@@ -198,6 +198,106 @@ export interface ReviewCommit {
   authoredAt: string
 }
 
+/**
+ * A project's `origin`, parsed into the pieces a row can draw.
+ *
+ * Deliberately read from `git remote`, not from the `gh` CLI: `ghState` spawns
+ * a subprocess with a 20s timeout and needs a login, which is the wrong price
+ * for a *list* of projects — and "is a repository connected?" is a question the
+ * remote already answers for every host, logged in or not. The cost is that
+ * nothing here knows about pull requests; the chat's own GitHub layer still
+ * does, and that is where it belongs.
+ */
+export interface ProjectRemote {
+  /** The host as git names it — `github.com`, `gitlab.com`, an SSH alias. */
+  host: string
+  owner: string
+  repo: string
+  /**
+   * A browsable `https://` URL for the repository, or '' when the remote is
+   * not a shape that maps to one. Empty rather than absent so the row can show
+   * `owner/repo` without offering a link that goes nowhere.
+   */
+  url: string
+}
+
+/**
+ * What Settings → Projects draws per project *before* anything is expanded.
+ *
+ * Everything here is cheap — a `stat`, the icon (cached on mtime), one
+ * `symbolic-ref`, one `git remote get-url`. The expensive half (every worktree,
+ * every branch, each tree's dirty count) is `ProjectDetail`, fetched on expand,
+ * because a 15-project list must not spawn 60 git processes to open a page.
+ */
+export interface ProjectOverview {
+  /** The `projectRoot` key: the main checkout, never a worktree. */
+  root: string
+  /**
+   * The folder is still on disk. False is the flag the whole section exists
+   * for — a project whose directory was moved or deleted keeps its chats and
+   * its history, and every action that would touch the filesystem is stood
+   * down rather than left to fail.
+   */
+  exists: boolean
+  /** A git repository (a missing folder answers false, not unknown). */
+  isRepo: boolean
+  /** Branch checked out in the main checkout; null outside a repo. */
+  branch: string | null
+  remote: ProjectRemote | null
+  /**
+   * The raw `origin` URL when it parses into no `ProjectRemote` — a local path
+   * remote, an unfamiliar shape. Shown verbatim, since the honest answer to
+   * "which repo is this?" is the string git holds.
+   */
+  remoteUrl: string | null
+  /**
+   * An icon found *in the project* — its favicon, its app icon — as a `data:`
+   * URI, or null to fall back to initials. See `main/projects.ts`.
+   */
+  icon: string | null
+  /** Linked worktrees, main checkout excluded. Drives the expand affordance. */
+  worktrees: number
+  /** Local branches. 0 outside a repo. */
+  branches: number
+}
+
+/** One worktree of a project, as the expanded card lists it. */
+export interface ProjectWorktreeInfo {
+  path: string
+  branch: string
+  /** The repo's main checkout rather than a linked worktree. */
+  isMain: boolean
+  /** Branch already merged into the default branch; undefined when unknown. */
+  merged?: boolean
+  /**
+   * git still lists the worktree but its directory is gone. `listWorktrees`
+   * drops these — correct for a picker that would start a chat in one, wrong
+   * here, where cleaning them up is the point.
+   */
+  missing: boolean
+  /**
+   * Carbon created this worktree (it is under the app's own worktrees root), so
+   * Carbon may remove it. A worktree the user made with `git worktree add` is
+   * listed but never acted on: `removeWorktree` refuses it outright, and
+   * `listWorktrees` will not even prune a *stale* one, because absent is not
+   * the same as gone — someone else's worktree on an unplugged disk needs the
+   * record that pruning would destroy. So the row offers no button rather than
+   * one that answers with a refusal.
+   */
+  managed: boolean
+  /** Uncommitted files; null when the tree can't be read. */
+  dirtyFiles: number | null
+}
+
+/** A project's expanded half: every worktree and every branch. */
+export interface ProjectDetail {
+  root: string
+  worktrees: ProjectWorktreeInfo[]
+  branches: BranchRef[]
+  /** The repo's default branch, so the list can mark it. */
+  defaultBranch: string | null
+}
+
 
 export interface ChatMeta {
   id: string
@@ -258,6 +358,21 @@ export interface ChatMeta {
    * first) instead of reshuffling every time a pinned chat is used.
    */
   pinnedAt?: number
+  /**
+   * When the user archived the chat; absent means it is not. Archiving is the
+   * opposite of pinning and the same kind of fact — a *position*, not a state
+   * of the conversation — so it is stored the same way: a timestamp, because
+   * Settings → Archive orders by when you put a chat away, which is a question
+   * `updatedAt` cannot answer once a chat has been archived for a month.
+   *
+   * It is deliberately NOT `ephemeral`'s shape. An archived chat is ordinary
+   * history in every way main cares about, so `listChats` still returns it and
+   * the renderer keeps its meta in `chats` beside every other chat's; exactly
+   * one predicate (`listedChats`) takes it out of the sidebar, the chat search,
+   * ⌘N's project list and Recents. Projects still count it, because removing a
+   * project deletes it.
+   */
+  archivedAt?: number
   /**
    * A **side chat**: a scratch conversation the user opened beside a real one,
    * hosted as a right-panel tab. It is an ordinary chat in every way a session
@@ -2084,11 +2199,20 @@ export interface Api {
    * move the chat to the main checkout. Refuses while it has uncommitted work.
    */
   worktreeFinish(chatId: string): Promise<OpResult>
-  /** Remove a worktree by path (the picker's cleanup); unforced, like deletion. */
-  worktreeRemove(path: string): Promise<OpResult>
+  /**
+   * Remove a worktree by path (the picker's cleanup); unforced, like deletion.
+   *
+   * `repoRoot` is only needed for a worktree whose **directory is gone** — git
+   * still lists the entry, but the worktree cannot answer `rev-parse` about
+   * itself, so the repo has to be asked instead. It is verified against that
+   * repo's own `worktree list` rather than trusted.
+   */
+  worktreeRemove(path: string, repoRoot?: string): Promise<OpResult>
   renameChat(id: string, title: string): Promise<void>
   /** Pin/unpin a chat to the sidebar's Pinned section. */
   setChatPinned(id: string, pinned: boolean): Promise<void>
+  /** Archive or restore a chat — see `ChatMeta.archivedAt`. */
+  setChatArchived(id: string, archived: boolean): Promise<void>
   /**
    * Make chat `id` a column of thread `threadId`: it becomes a side chat of that
    * thread (`sideOf`, `ephemeral`), and so do the side chats it had. Refused for
@@ -2241,6 +2365,19 @@ export interface Api {
   /** Recent commits for the native Codex review target picker. */
   gitReviewCommits(cwd: string): Promise<ReviewCommit[]>
   gitInit(cwd: string): Promise<GitResult>
+  /**
+   * Every project's cheap half, in the order asked. `refresh` drops the icon
+   * cache, which is what Settings → Projects' Recheck does after someone adds
+   * a favicon to a repo without restarting the app.
+   */
+  projectsOverview(roots: string[], refresh?: boolean): Promise<ProjectOverview[]>
+  /**
+   * Just the marks, keyed by root — the sidebar's half of the overview.
+   * No git, so this one can be asked at launch; see `main/projects.ts`.
+   */
+  projectIcons(roots: string[]): Promise<Record<string, string | null>>
+  /** One project's worktrees and branches — the expanded card. */
+  projectDetail(root: string): Promise<ProjectDetail>
   /** GitHub state (PR + checks) for the cwd's current branch; best-effort. */
   githubState(cwd: string): Promise<GitHubState>
   /** Open the current branch's PR in the browser (`gh pr view --web`). */

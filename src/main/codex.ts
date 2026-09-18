@@ -82,22 +82,22 @@ import {
 } from './workspaceCheckpoint.ts'
 import { TITLE_SYSTEM, buildTitlePrompt, cleanTitle, deriveTitle, firstUserText } from './titles.ts'
 import { PREVIEW_SESSION_RULES } from './previewTools.ts'
+import type { CarbonMcpProvider, CarbonMcpSession } from './carbonBridge.ts'
 import { projectRoot } from '../shared/types.ts'
-import type { CanvasManager } from './canvas.ts'
 import { CANVAS_SESSION_RULES } from './canvasTools.ts'
 import { describeCanvas, describeQuote, describeSelection } from './attachmentText.ts'
 
 const OUTPUT_CAP = 100_000
 
 /**
- * Carbon has two browser surfaces and Codex can drive both: `preview` is the
+ * Carbon has two browser surfaces and Codex can drive both: `preview_*` is the
  * isolated project webview, while the user's configured Chrome/computer skill
  * owns their real signed-in browser. Naming the distinction in the turn rules
  * stops project verification from leaking into personal Chrome and stops an
  * explicit "use my Chrome" request from being answered with the preview.
  */
 const CODEX_BROWSER_SESSION_RULES =
-  "Carbon has two different browser surfaces. Use the `preview` MCP server for this project's local dev-server UI and its screenshots/console. When the user explicitly asks for their Chrome browser, an existing signed-in browser session, or a browser extension, use an enabled Chrome/browser-control skill and its configured tools instead. Do not substitute one surface for the other. Carbon renders image blocks returned by tools inline in the transcript, outside collapsed activity. Once a screenshot tool has returned the requested image, do not save, re-emit, or link another copy merely to make it visible; discuss it normally. Create an image file only when the user asks to export or save one."
+  "Carbon has two different browser surfaces. Use the `carbon` MCP server's `preview_*` tools for this project's local dev-server UI and its screenshots/console. When the user explicitly asks for their Chrome browser, an existing signed-in browser session, or a browser extension, use an enabled Chrome/browser-control skill and its configured tools instead. Do not substitute one surface for the other. Carbon renders image blocks returned by tools inline in the transcript, outside collapsed activity. Once a screenshot tool has returned the requested image, do not save, re-emit, or link another copy merely to make it visible; discuss it normally. Create an image file only when the user asks to export or save one."
 
 /**
  * One-shot Codex text turn on a throwaway read-only thread — backs the chat
@@ -482,13 +482,14 @@ export class CodexSession implements AgentSession {
   private emit: Emit
   private store: Store
   private onDead: () => void
-  private preview: {
-    mcpCodexConfig(
-      cwd: string,
-      opts?: { plan?: boolean }
-    ): Promise<Record<string, unknown> | undefined>
-  } | null
-  private canvas: CanvasManager | null
+  private preview: CarbonMcpProvider | null
+  /**
+   * Registered once and reused for every turn. `ensureThread` runs per send, so
+   * registering there would leak a context per turn — and the registration does
+   * not need repeating: the bridge holds the object, and plan mode is read
+   * through a getter rather than frozen into the config.
+   */
+  private mcp: Promise<CarbonMcpSession | null> | null = null
   private codex: CodexClientLike
   private thread: CodexThreadLike | null = null
   private threadOptionsKey: string | null = null
@@ -609,13 +610,7 @@ export class CodexSession implements AgentSession {
     // ~/.codex authentication through Carbon's bundled Codex CLI.
     codex?: CodexClientLike,
     rolloutWatcherFactory: CodexRolloutWatcherFactory = createCodexRolloutWatcher,
-    preview: {
-      mcpCodexConfig(
-        cwd: string,
-        opts?: { plan?: boolean }
-      ): Promise<Record<string, unknown> | undefined>
-    } | null = null,
-    canvas: CanvasManager | null = null
+    preview: CarbonMcpProvider | null = null
   ) {
     // Checked here rather than left to the App Server spawn: `deliver` wraps
     // session construction, so a missing or switched-off CLI becomes an error
@@ -627,7 +622,6 @@ export class CodexSession implements AgentSession {
     this.store = store
     this.onDead = onDead
     this.preview = preview
-    this.canvas = canvas
     this.codex =
       codex ??
       new CodexAppServerClient({
@@ -878,36 +872,36 @@ export class CodexSession implements AgentSession {
     }
   }
 
+  /** Registers this session's MCP context with the bridge, once. */
+  private ensureMcp(): Promise<CarbonMcpSession | null> {
+    if (!this.mcp) {
+      this.mcp =
+        this.preview?.mcpSession({
+          cwd: this.chat.cwd,
+          project: projectRoot(this.chat),
+          chatId: this.chat.id,
+          plan: () => this.chat.permissionMode === 'plan'
+        }) ?? Promise.resolve(null)
+    }
+    return this.mcp
+  }
+
   private async ensureThread(
     turn: Pick<PendingTurn, 'model' | 'permissionMode' | 'effort'>
   ): Promise<CodexThreadLike> {
     const opts = this.threadOptions(turn)
-    const previewConfig = await this.preview?.mcpCodexConfig(this.chat.cwd, {
-      plan: opts.collaborationMode === 'plan'
-    })
-    const canvasConfig = await this.canvas?.mcpCodexConfig({
-      cwd: this.chat.cwd,
-      project: projectRoot(this.chat),
-      chatId: this.chat.id
-    })
-    // Both overlays key into the same `mcp_servers` table, so they are merged
-    // rather than assigned — the second assignment would have dropped the
-    // first server entirely, which is the kind of failure that shows up as
-    // "the model just never uses the preview tools".
-    const servers = {
-      ...((previewConfig?.mcp_servers as Record<string, unknown> | undefined) ?? {}),
-      ...((canvasConfig?.mcp_servers as Record<string, unknown> | undefined) ?? {})
-    }
+    // One `carbon` server carrying both tool tables, reached over loopback HTTP
+    // — Codex reads `mcp_servers.<name>.url` and connects to the Electron
+    // process directly, where it used to spawn a relay child per server.
+    const mcp = await this.ensureMcp()
     const rules = [
       CODEX_BROWSER_SESSION_RULES,
-      previewConfig ? PREVIEW_SESSION_RULES : '',
-      canvasConfig ? CANVAS_SESSION_RULES : ''
+      mcp ? PREVIEW_SESSION_RULES : '',
+      mcp ? CANVAS_SESSION_RULES : ''
     ]
       .filter(Boolean)
       .join('\n\n')
-    if (Object.keys(servers).length) {
-      opts.extraConfig = { mcp_servers: servers }
-    }
+    if (mcp) opts.extraConfig = mcp.codexConfig
     opts.developerInstructions = rules
     const optionsKey = JSON.stringify(opts)
     if (this.thread && !this.optionsDirty && this.threadOptionsKey === optionsKey)
@@ -3025,6 +3019,7 @@ export class CodexSession implements AgentSession {
     // Preserve a plan review in ChatData. Native App Server questions belong to
     // the live JSON-RPC process and are resolved when that process is disposed.
     this.cleanupPendingTurns()
+    void this.mcp?.then((mcp) => mcp?.dispose())
     this.codex.dispose?.()
   }
 }

@@ -36,6 +36,13 @@ done
 # the sidebar's detailed rows — so the branch has to actually exist on disk.
 git -C projects/pulse worktree add -q -b rate-limits "$DEMO/worktrees/pulse-rate-limits" >/dev/null
 
+# Settings → Projects reads `origin` to say which repository a project is
+# connected to, so two of the three have one and the third does not — a project
+# with no remote is a state worth shooting too. Nothing is ever pushed: the
+# remote is only a string git holds, which is exactly what that row reads.
+git -C projects/nimbus remote add origin git@github.com:carbon-demo/nimbus.git
+git -C projects/pulse remote add origin https://github.com/carbon-demo/pulse.git
+
 echo "demo projects built. Next:"
 echo "  AIGUI_USERDATA=$DEMO/userdata npm run dev   # once, so the app writes the schema, then quit"
 echo "  node $DEMO/seed.mjs"

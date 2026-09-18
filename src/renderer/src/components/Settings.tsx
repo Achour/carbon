@@ -1,7 +1,9 @@
 import * as React from 'react'
 import {
+  Archive,
   ArrowDownToLine,
   Bell,
+  FolderGit2,
   Info,
   LayoutList,
   Loader2,
@@ -16,7 +18,8 @@ import {
   Sun,
   Terminal,
   TriangleAlert,
-  X
+  X,
+  type LucideIcon
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import {
@@ -32,6 +35,7 @@ import {
   CHATS_PER_PROJECT_DEFAULT,
   CHATS_PER_PROJECT_MAX,
   CHATS_PER_PROJECT_MIN,
+  type SettingsSectionId,
   type SidebarDensity,
   useApp
 } from '@/store'
@@ -42,18 +46,21 @@ import {
 } from '@/components/UpdateBanner'
 import { Button } from '@/components/ui/button'
 import { ProviderAvatar } from '@/components/ui/provider-mark'
+import { SwitchPill } from '@/components/ui/switch-pill'
+import { ArchiveSection } from '@/components/SettingsArchive'
+import { ProjectsSection } from '@/components/SettingsProjects'
 import { WithTooltip } from '@/components/ui/tooltip'
 import { PROVIDER_LABELS, type Provider, type ProviderCli } from '@shared/types'
 
-const SECTIONS = [
+const SECTIONS: { id: SettingsSectionId; label: string; icon: LucideIcon }[] = [
   { id: 'appearance', label: 'Appearance', icon: Palette },
   { id: 'chats', label: 'Chats', icon: MessageSquare },
+  { id: 'projects', label: 'Projects', icon: FolderGit2 },
+  { id: 'archive', label: 'Archive', icon: Archive },
   { id: 'providers', label: 'Providers', icon: Terminal },
   { id: 'notifications', label: 'Notifications', icon: Bell },
   { id: 'about', label: 'About', icon: Info }
-] as const
-
-type SectionId = (typeof SECTIONS)[number]['id']
+]
 
 function SectionHeader({
   icon: Icon,
@@ -261,46 +268,6 @@ function Toggle({
           )}
         />
       </span>
-    </button>
-  )
-}
-
-/**
- * Just the pill, for the two places that need one without `Toggle`'s row: the
- * provider's own switch, which sits inline beside its name and version, and a
- * capability switch, which needs a `disabled` state `Toggle` has no notion of.
- */
-function SwitchPill({
-  on,
-  disabled,
-  label,
-  onChange
-}: {
-  on: boolean
-  disabled?: boolean
-  label: string
-  onChange: () => void
-}): React.JSX.Element {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={on}
-      aria-label={label}
-      disabled={disabled}
-      onClick={onChange}
-      className={cn(
-        'relative h-[18px] w-8 shrink-0 rounded-full transition-colors',
-        on && !disabled ? 'bg-primary' : 'bg-secondary',
-        disabled && 'cursor-not-allowed opacity-40'
-      )}
-    >
-      <span
-        className={cn(
-          'absolute top-[2px] left-[2px] size-3.5 rounded-full bg-background shadow-sm transition-transform',
-          on && !disabled && 'translate-x-[14px]'
-        )}
-      />
     </button>
   )
 }
@@ -812,7 +779,13 @@ export function Settings(): React.JSX.Element {
   const sidebarDensity = useApp((s) => s.sidebarDensity)
   const setSidebarDensity = useApp((s) => s.setSidebarDensity)
 
-  const [section, setSection] = React.useState<SectionId>('appearance')
+  // Which section is open lives in the store: the sidebar's project menu and
+  // the dev E2E harness both open Settings *at* a section, and neither can
+  // reach a `useState` in here. Remembered across opens, so reopening lands
+  // where you were.
+  const settingsSection = useApp((s) => s.settingsSection)
+  const setSection = useApp((s) => s.setSettingsSection)
+  const section = settingsSection ?? 'appearance'
 
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
@@ -860,161 +833,175 @@ export function Settings(): React.JSX.Element {
           ))}
         </nav>
 
-        {/* Section content */}
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          <div className="mx-auto w-full max-w-2xl px-8 py-8">
-            {section === 'appearance' && (
-              <section>
-                <SectionHeader
-                  icon={Palette}
-                  title="Appearance"
-                  description="Choose a color mode and theme. Changes apply instantly."
-                />
-                <div className="mx-2 rounded-2xl border border-border bg-card/35 p-3">
-                  <div className="flex items-center gap-4">
-                    <div className="min-w-0 flex-1">
-                      <div className="text-[13px] font-medium">Color mode</div>
+        {/* Section content.
+            Projects is the one section that is not a column of settings but a
+            *collection* — it takes the whole area and splits it into its own
+            list and detail, each half scrolling independently. Everything else
+            keeps the reading measure, which is the right width for a stack of
+            labelled rows and the wrong one for a list of repositories. */}
+        {section === 'projects' ? (
+          <ProjectsSection />
+        ) : (
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <div className="mx-auto w-full max-w-2xl px-8 py-8">
+              {section === 'appearance' && (
+                <section>
+                  <SectionHeader
+                    icon={Palette}
+                    title="Appearance"
+                    description="Choose a color mode and theme. Changes apply instantly."
+                  />
+                  <div className="mx-2 rounded-2xl border border-border bg-card/35 p-3">
+                    <div className="flex items-center gap-4">
+                      <div className="min-w-0 flex-1">
+                        <div className="text-[13px] font-medium">Color mode</div>
+                        <div className="mt-0.5 text-xs text-muted-foreground">
+                          System follows your device appearance
+                        </div>
+                      </div>
+                      <ThemeModePicker value={themeMode} onChange={setThemeMode} />
+                    </div>
+                    <div className="my-3 h-px bg-border" />
+                    <div className="mb-3">
+                      <div className="text-[13px] font-medium">App theme</div>
                       <div className="mt-0.5 text-xs text-muted-foreground">
-                        System follows your device appearance
+                        Six palettes, each designed for both light and dark
                       </div>
                     </div>
-                    <ThemeModePicker value={themeMode} onChange={setThemeMode} />
+                    <ThemeGrid selected={theme} onSelect={setTheme} />
                   </div>
-                  <div className="my-3 h-px bg-border" />
-                  <div className="mb-3">
-                    <div className="text-[13px] font-medium">App theme</div>
-                    <div className="mt-0.5 text-xs text-muted-foreground">
-                      Six palettes, each designed for both light and dark
+
+                  {window.api.platform === 'darwin' && (
+                    <div className="mt-7">
+                      <Toggle
+                        label="Translucent chrome"
+                        description="Frost the sidebar and the chat so the desktop blurs through behind them"
+                        checked={translucentSidebar}
+                        onChange={setTranslucentSidebar}
+                      />
                     </div>
-                  </div>
-                  <ThemeGrid selected={theme} onSelect={setTheme} />
-                </div>
+                  )}
 
-                {window.api.platform === 'darwin' && (
-                  <div className="mt-7">
-                    <Toggle
-                      label="Translucent chrome"
-                      description="Frost the sidebar and the chat so the desktop blurs through behind them"
-                      checked={translucentSidebar}
-                      onChange={setTranslucentSidebar}
-                    />
+                  <div className="mt-8">
+                    <Row label="Code font size" description="Code blocks, the file viewer and diffs">
+                      <Stepper
+                        value={codeFontSize}
+                        min={CODE_FONT_MIN}
+                        max={CODE_FONT_MAX}
+                        suffix="px"
+                        onChange={setCodeFontSize}
+                        onReset={() => setCodeFontSize(CODE_FONT_DEFAULT)}
+                      />
+                    </Row>
+                    <pre className="mx-2 mt-1 overflow-x-auto rounded-lg border border-border bg-code px-3.5 py-2.5 font-mono leading-relaxed text-[length:var(--code-font-size)]">
+                      {'const answer = compute(42)  // preview'}
+                    </pre>
                   </div>
-                )}
+                </section>
+              )}
 
-                <div className="mt-8">
-                  <Row label="Code font size" description="Code blocks, the file viewer and diffs">
-                    <Stepper
-                      value={codeFontSize}
-                      min={CODE_FONT_MIN}
-                      max={CODE_FONT_MAX}
-                      suffix="px"
-                      onChange={setCodeFontSize}
-                      onReset={() => setCodeFontSize(CODE_FONT_DEFAULT)}
+              {section === 'chats' && (
+                <section>
+                  <SectionHeader
+                    icon={MessageSquare}
+                    title="Chats"
+                    description="How chats are organised in the sidebar."
+                  />
+                  <Row
+                    label="Sidebar rows"
+                    description="Detailed rows also show the backend answering and the branch — or the folder, outside a repo."
+                  >
+                    <SidebarDensityPicker
+                      value={sidebarDensity}
+                      onChange={setSidebarDensity}
                     />
                   </Row>
-                  <pre className="mx-2 mt-1 overflow-x-auto rounded-lg border border-border bg-code px-3.5 py-2.5 font-mono leading-relaxed text-[length:var(--code-font-size)]">
-                    {'const answer = compute(42)  // preview'}
-                  </pre>
-                </div>
-              </section>
-            )}
+                  <Row
+                    label="Recent chats per project"
+                    description="Each project shows this many recent chats. Find older ones with search."
+                  >
+                    <Stepper
+                      value={chatsPerProject}
+                      min={CHATS_PER_PROJECT_MIN}
+                      max={CHATS_PER_PROJECT_MAX}
+                      onChange={setChatsPerProject}
+                      onReset={() => setChatsPerProject(CHATS_PER_PROJECT_DEFAULT)}
+                    />
+                  </Row>
+                </section>
+              )}
 
-            {section === 'chats' && (
-              <section>
-                <SectionHeader
-                  icon={MessageSquare}
-                  title="Chats"
-                  description="How chats are organised in the sidebar."
-                />
-                <Row
-                  label="Sidebar rows"
-                  description="Detailed rows also show the backend answering and the branch — or the folder, outside a repo."
-                >
-                  <SidebarDensityPicker
-                    value={sidebarDensity}
-                    onChange={setSidebarDensity}
-                  />
-                </Row>
-                <Row
-                  label="Recent chats per project"
-                  description="Each project shows this many recent chats. Find older ones with search."
-                >
-                  <Stepper
-                    value={chatsPerProject}
-                    min={CHATS_PER_PROJECT_MIN}
-                    max={CHATS_PER_PROJECT_MAX}
-                    onChange={setChatsPerProject}
-                    onReset={() => setChatsPerProject(CHATS_PER_PROJECT_DEFAULT)}
-                  />
-                </Row>
-              </section>
-            )}
+              {/* The archive keeps the reading measure: an archived chat is a
+                  row of four facts, not a collection with a detail pane like a
+                  project. See `SettingsArchive`. */}
+              {section === 'archive' && <ArchiveSection />}
 
-            {section === 'providers' && <ProvidersSection />}
+              {section === 'providers' && <ProvidersSection />}
 
-            {section === 'notifications' && (
-              <section>
-                <SectionHeader
-                  icon={Bell}
-                  title="Notifications"
-                  description="Stay on top of long-running turns while you work elsewhere."
-                />
-                <div className="space-y-0.5">
-                  <Toggle
-                    label="Turn complete alerts"
-                    description="Notify when the agent finishes while the app is in the background"
-                    checked={notifyPrefs.finish}
-                    onChange={(finish) => setNotifyPrefs({ finish })}
+              {section === 'notifications' && (
+                <section>
+                  <SectionHeader
+                    icon={Bell}
+                    title="Notifications"
+                    description="Stay on top of long-running turns while you work elsewhere."
                   />
-                  <Toggle
-                    label="Approval alerts"
-                    description="Notify when the agent is waiting for your permission or plan review"
-                    checked={notifyPrefs.permission}
-                    onChange={(permission) => setNotifyPrefs({ permission })}
-                  />
-                  <Toggle
-                    label="Sound"
-                    description="Play a cue when a turn finishes, fails, or the agent needs your input"
-                    checked={notifyPrefs.sound}
-                    onChange={(sound) => {
-                      setNotifyPrefs({ sound })
-                      if (sound) playCue('complete', notifyPrefs.pack)
-                    }}
-                  />
-                  <SoundPicker
-                    pack={notifyPrefs.pack}
-                    enabled={notifyPrefs.sound}
-                    onSelect={(pack) => setNotifyPrefs({ pack })}
-                  />
-                </div>
-              </section>
-            )}
+                  <div className="space-y-0.5">
+                    <Toggle
+                      label="Turn complete alerts"
+                      description="Notify when the agent finishes while the app is in the background"
+                      checked={notifyPrefs.finish}
+                      onChange={(finish) => setNotifyPrefs({ finish })}
+                    />
+                    <Toggle
+                      label="Approval alerts"
+                      description="Notify when the agent is waiting for your permission or plan review"
+                      checked={notifyPrefs.permission}
+                      onChange={(permission) => setNotifyPrefs({ permission })}
+                    />
+                    <Toggle
+                      label="Sound"
+                      description="Play a cue when a turn finishes, fails, or the agent needs your input"
+                      checked={notifyPrefs.sound}
+                      onChange={(sound) => {
+                        setNotifyPrefs({ sound })
+                        if (sound) playCue('complete', notifyPrefs.pack)
+                      }}
+                    />
+                    <SoundPicker
+                      pack={notifyPrefs.pack}
+                      enabled={notifyPrefs.sound}
+                      onSelect={(pack) => setNotifyPrefs({ pack })}
+                    />
+                  </div>
+                </section>
+              )}
 
-            {section === 'about' && (
-              <section>
-                <SectionHeader
-                  icon={Info}
-                  title="About"
-                  description="Carbon — a desktop GUI for coding agents."
-                />
-                <div className="mb-3 border-b border-border pb-2">
-                  <UpdateRow />
-                </div>
-                <div className="space-y-2 px-2 text-[13px] text-muted-foreground">
-                  <p>
-                    Sessions run through your existing Claude Code or Codex login, in whatever
-                    project folder you pick — each chat uses whichever agent you chose when you
-                    started it.
-                  </p>
-                  <p>
-                    Chats are stored locally on your machine — nothing is uploaded beyond the
-                    conversation itself.
-                  </p>
-                </div>
-              </section>
-            )}
+              {section === 'about' && (
+                <section>
+                  <SectionHeader
+                    icon={Info}
+                    title="About"
+                    description="Carbon — a desktop GUI for coding agents."
+                  />
+                  <div className="mb-3 border-b border-border pb-2">
+                    <UpdateRow />
+                  </div>
+                  <div className="space-y-2 px-2 text-[13px] text-muted-foreground">
+                    <p>
+                      Sessions run through your existing Claude Code or Codex login, in whatever
+                      project folder you pick — each chat uses whichever agent you chose when you
+                      started it.
+                    </p>
+                    <p>
+                      Chats are stored locally on your machine — nothing is uploaded beyond the
+                      conversation itself.
+                    </p>
+                  </div>
+                </section>
+              )}
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
   )

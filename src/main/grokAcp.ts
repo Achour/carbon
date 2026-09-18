@@ -8,9 +8,13 @@ import { createInterface } from 'node:readline'
 import type { Attachment, ElementRef, ToolPart, UserQuestion } from '@shared/types'
 import { spawnEnv } from './parentEnv.ts'
 import { cliAvailable, providerCli } from './providerCli.ts'
-import { isPreviewToolName, type PreviewToolName } from './previewTools.ts'
 import { describeCanvas, describeQuote, describeSelection } from './attachmentText.ts'
-import type { StdioMcpServer } from './previewMcpConfig.ts'
+import {
+  carbonToolId,
+  isCarbonSideEffect,
+  parseCarbonTool,
+  type HttpMcpServer
+} from './carbonMcp.ts'
 
 /**
  * A JSON-RPC client for `grok agent stdio`, the xAI CLI's ACP transport.
@@ -243,8 +247,12 @@ export interface GrokAcpOptions {
   alwaysApprove?: boolean
   /** Auto mode for the session (`_meta.autoMode`), the safety-checked middle. */
   autoMode?: boolean
-  /** Extra MCP servers the client wants this session to connect to. */
-  mcpServers?: StdioMcpServer[]
+  /**
+   * MCP servers this session should connect to. Streamable HTTP: Grok's
+   * `initialize` advertises `mcpCapabilities.http`, so Carbon hands it a
+   * loopback URL and a bearer header instead of a child process to spawn.
+   */
+  mcpServers?: HttpMcpServer[]
   /** Appended to the session system prompt (`_meta.rules`). */
   extraRules?: string
   env?: NodeJS.ProcessEnv
@@ -656,8 +664,8 @@ function canonicalGrokToolName(wire: string | undefined): string | undefined {
  * finished card.
  */
 export function toolNameIfNamed(call: GrokToolCall): string | undefined {
-  const preview = previewToolId(call)
-  if (preview) return preview
+  const carbon = carbonToolIdOf(call)
+  if (carbon) return carbon
   const meta = call._meta?.['x.ai/tool']
   const fromMeta = canonicalGrokToolName(meta?.name) || meta?.name?.trim() || meta?.label?.trim()
   if (fromMeta) return fromMeta
@@ -665,35 +673,31 @@ export function toolNameIfNamed(call: GrokToolCall): string | undefined {
 }
 
 /**
- * Carbon's preview MCP, named the way Claude's in-process server already is
- * (`mcp__preview__start`) so the same tool card path renders it.
+ * Carbon's own MCP tools, named the way Claude's in-process server already
+ * names them (`mcp__carbon__preview_start`) so one tool card path renders a
+ * call whichever backend made it.
+ *
+ * Grok reports the namespace separately from the name when it feels like it,
+ * and spells the joined form more than one way, so both are tried:
+ * `parseCarbonTool` accepts the suffix and the pair is assembled here.
  */
-export function previewToolId(call: GrokToolCall): `mcp__preview__${PreviewToolName}` | undefined {
+export function carbonToolIdOf(call: GrokToolCall): string | undefined {
   const meta = call._meta?.['x.ai/tool']
   const ns = meta?.namespace?.trim().toLowerCase()
   const named = meta?.name?.trim().toLowerCase()
-  if (ns === 'preview' && named && isPreviewToolName(named)) return `mcp__preview__${named}`
-  return normalizePreviewTool(meta?.name) ?? normalizePreviewTool(call.title)
+  const joined = ns && named ? `${ns}_${named}` : undefined
+  const ref =
+    parseCarbonTool(joined) ?? parseCarbonTool(meta?.name) ?? parseCarbonTool(call.title)
+  return ref ? carbonToolId(ref) : undefined
 }
 
-export function isPreviewTool(call: GrokToolCall): boolean {
-  return previewToolId(call) != null
+export function isCarbonTool(call: GrokToolCall): boolean {
+  return carbonToolIdOf(call) != null
 }
 
-export function isPreviewSideEffectTool(call: GrokToolCall): boolean {
-  const id = previewToolId(call)
-  return id === 'mcp__preview__start' || id === 'mcp__preview__stop'
-}
-
-function normalizePreviewTool(raw: string | undefined): `mcp__preview__${PreviewToolName}` | undefined {
-  if (!raw) return undefined
-  const key = raw.trim().toLowerCase().replace(/[-.]/g, '_')
-  const match =
-    /(?:mcp__preview__|preview__|preview_|preview\/|preview:)(status|start|stop|navigate|screenshot|console)$/.exec(
-      key
-    )
-  if (!match || !isPreviewToolName(match[1])) return undefined
-  return `mcp__preview__${match[1]}`
+export function isCarbonSideEffectTool(call: GrokToolCall): boolean {
+  const id = carbonToolIdOf(call)
+  return id != null && isCarbonSideEffect(id)
 }
 
 /**

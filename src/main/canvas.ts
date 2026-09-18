@@ -1,19 +1,6 @@
 import type { Canvas, CanvasSummary, ChatEvent } from '@shared/types'
 import type { CanvasStore } from './canvasStore.ts'
 import type { CanvasToolHost } from './canvasTools.ts'
-import type { PreviewBridgeHandle } from './previewBridge.ts'
-import {
-  carbonCanvasCodexMcp,
-  carbonCanvasMcpServers,
-  type StdioMcpServer
-} from './previewMcpConfig.ts'
-
-/** Where a canvas belongs and which chat wrote it. Fixed at session start. */
-export interface CanvasContext {
-  cwd: string
-  project: string
-  chatId: string
-}
 
 /**
  * The canvas surface: the tool host the agents write through, and the MCP
@@ -25,25 +12,20 @@ export interface CanvasContext {
  * click, for the reason the agents panel is never auto-selected: a canvas
  * arriving mid-read would take the file they are looking at off screen.
  *
- * The loopback bridge belongs to `PreviewManager`, which starts it and is
- * handed this object as its second tool host. There is exactly one bridge and
- * one child script for both servers.
+ * The bridge belongs to `PreviewManager`, which starts it and is handed this
+ * object as its second tool host: there is one `carbon` MCP server carrying
+ * both tool tables, so the canvas needs no wiring of its own — `canvas_write`
+ * arrives on the same connection as `preview_screenshot`.
  */
 export class CanvasManager implements CanvasToolHost {
   // Explicit fields, not parameter properties — `node --test` strips types
   // without transforming, and the shorthand is a syntax error there.
   private store: CanvasStore
   private emit: (ev: ChatEvent) => void
-  private bridge: () => Promise<PreviewBridgeHandle | null>
 
-  constructor(
-    store: CanvasStore,
-    emit: (ev: ChatEvent) => void,
-    bridge: () => Promise<PreviewBridgeHandle | null>
-  ) {
+  constructor(store: CanvasStore, emit: (ev: ChatEvent) => void) {
     this.store = store
     this.emit = emit
-    this.bridge = bridge
   }
 
   list(project: string): CanvasSummary[] {
@@ -70,19 +52,5 @@ export class CanvasManager implements CanvasToolHost {
 
   delete(id: string): void {
     this.store.delete(id)
-  }
-
-  /** ACP `mcpServers` entry that gives this chat's canvas tools to Grok. */
-  async mcpServers(ctx: CanvasContext): Promise<StdioMcpServer[]> {
-    const bridge = await this.bridge()
-    if (!bridge || !ctx.project) return []
-    return carbonCanvasMcpServers(ctx, bridge)
-  }
-
-  /** Codex `config.mcp_servers.canvas` overlay for this chat. */
-  async mcpCodexConfig(ctx: CanvasContext): Promise<Record<string, unknown> | undefined> {
-    const bridge = await this.bridge()
-    if (!bridge || !ctx.project) return undefined
-    return carbonCanvasCodexMcp(ctx, bridge)
   }
 }

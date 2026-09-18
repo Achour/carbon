@@ -280,9 +280,10 @@ them. Those are steps of a run in exactly the way a sequence of reads is.
 `GROUPABLE_SERVERS` matches them by **prefix**, and that is the half a longer
 list would not have fixed: the tools are deferred behind `ToolSearch` and the
 catalog grows, so an exact set stops grouping the day one is added — silently,
-since the only symptom is a longer transcript. `mcp__preview__*` joins it (the
-same shape at smaller scale) and the three `mcp__canvas__*` names move onto it,
-so there is one rule rather than a list and a rule. `isGroupableTool` is now the
+since the only symptom is a longer transcript. `mcp__carbon__*` joins it — Carbon's own
+server, the same shape at smaller scale — as do the `mcp__preview__*` /
+`mcp__canvas__*` names it recorded before those two servers merged, so there is
+one rule rather than a list and a rule. `isGroupableTool` is now the
 single exported checkable, because `ChatView`'s `isGroupableMsg` and `Parts`'
 run-builder disagreeing about what groups is a run split in half.
 

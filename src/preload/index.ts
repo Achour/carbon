@@ -72,9 +72,12 @@ const api: Api = {
   worktreeHandoff: (chatId: string) => invoke('worktree:handoff', chatId),
   worktreeMerge: (chatId: string) => invoke('worktree:merge', chatId),
   worktreeFinish: (chatId: string) => invoke('worktree:finish', chatId),
-  worktreeRemove: (path: string) => invoke('worktree:remove', path),
+  worktreeRemove: (path: string, repoRoot?: string) =>
+    invoke('worktree:remove', path, repoRoot),
   renameChat: (id: string, title: string) => invoke('chats:rename', id, title),
   setChatPinned: (id: string, pinned: boolean) => invoke('chats:set-pinned', id, pinned),
+  setChatArchived: (id: string, archived: boolean) =>
+    invoke('chats:set-archived', id, archived),
   moveChatToThread: (id: string, threadId: string) => invoke('chats:move-to-thread', id, threadId),
   leaveThread: (id: string) => invoke('chats:leave-thread', id),
   send: (chatId: string, text: string, attachments?: Attachment[], label?: string) =>
@@ -155,6 +158,10 @@ const api: Api = {
   gitLocalBranches: (cwd: string) => invoke('git:local-branches', cwd),
   gitReviewCommits: (cwd: string) => invoke('git:review-commits', cwd),
   gitInit: (cwd: string) => invoke('git:init', cwd),
+  projectsOverview: (roots: string[], refresh?: boolean) =>
+    invoke('projects:overview', roots, refresh),
+  projectIcons: (roots: string[]) => invoke('projects:icons', roots),
+  projectDetail: (root: string) => invoke('projects:detail', root),
   githubState: (cwd: string) => invoke('github:state', cwd),
   githubOpenPr: (cwd: string) => invoke('github:open-pr', cwd),
   githubPublishInfo: (cwd: string) => invoke('github:publish-info', cwd),

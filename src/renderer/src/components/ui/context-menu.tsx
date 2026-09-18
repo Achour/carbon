@@ -37,7 +37,9 @@ function ContextMenuItem({
   return (
     <BaseContextMenu.Item
       className={cn(
-        'flex cursor-default select-none items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none data-[highlighted]:bg-accent [&_svg]:size-3.5 [&_svg]:text-muted-foreground',
+        // `--ui-row`, for the reason the dropdown's items carry it: a chat row
+        // and the menu you right-click out of it are one surface.
+        'flex cursor-default select-none items-center gap-2 rounded-md px-2 py-1.5 text-[length:var(--ui-row)] outline-none data-[highlighted]:bg-accent [&_svg]:size-3.5 [&_svg]:text-muted-foreground',
         destructive &&
           'text-destructive data-[highlighted]:bg-destructive/10 [&_svg]:text-destructive',
         className

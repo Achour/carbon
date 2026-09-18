@@ -434,16 +434,28 @@ function computeToolMeta(part: ToolPart, cwd: string): ToolMeta {
     // `AppWindow`, not `Globe`: the preview server drives *this project's* dev
     // server in a panel, which is a window rather than the web. It shared the
     // globe with `WebFetch` for as long as neither was drawn.
+    //
+    // Each of these is spelled twice: `mcp__carbon__*` is what the one `carbon`
+    // server declares today, and `mcp__preview__*` / `mcp__canvas__*` are what
+    // every chat already in the database recorded when they were two servers.
+    // Dropping the old spellings would not break a call — it would quietly turn
+    // months of history into anonymous wrenches.
+    case 'mcp__carbon__preview_status':
     case 'mcp__preview__status':
       return { icon: AppWindow, label: 'Preview', summary: 'Status' }
+    case 'mcp__carbon__preview_start':
     case 'mcp__preview__start':
       return { icon: AppWindow, label: 'Preview', summary: 'Start dev server' }
+    case 'mcp__carbon__preview_stop':
     case 'mcp__preview__stop':
       return { icon: AppWindow, label: 'Preview', summary: 'Stop dev server' }
+    case 'mcp__carbon__preview_navigate':
     case 'mcp__preview__navigate':
       return { icon: AppWindow, label: 'Preview', summary: str(input.url) }
+    case 'mcp__carbon__preview_screenshot':
     case 'mcp__preview__screenshot':
       return { icon: AppWindow, label: 'Preview', summary: 'Screenshot' }
+    case 'mcp__carbon__preview_console':
     case 'mcp__preview__console':
       return { icon: AppWindow, label: 'Preview', summary: 'Console' }
     // The canvas tools take `Preview`'s shape: one label for the server, the
@@ -451,8 +463,10 @@ function computeToolMeta(part: ToolPart, cwd: string): ToolMeta {
     // is `Artifact`'s — the two are different destinations and a shared glyph
     // would say they are the same one. The two mutations are answered by the
     // recognizer above.
+    case 'mcp__carbon__canvas_list':
     case 'mcp__canvas__list':
       return { icon: PenLine, label: 'Canvas', summary: 'List canvases' }
+    case 'mcp__carbon__canvas_read':
     case 'mcp__canvas__read':
       return { icon: PenLine, label: 'Canvas', summary: 'Read canvas' }
     default: {
@@ -1212,7 +1226,7 @@ const GROUPABLE_TOOLS = new Set([
  * arrived as separate blocks with a message-sized gap between them, which is
  * the gap grouping exists to close.
  */
-const GROUPABLE_SERVERS = [...BROWSER_PREFIXES, 'mcp__preview__', 'mcp__canvas__']
+const GROUPABLE_SERVERS = [...BROWSER_PREFIXES, 'mcp__carbon__', 'mcp__preview__', 'mcp__canvas__']
 
 /** Whether this call is a step in a run rather than a block of its own. */
 export function isGroupableTool(name: string): boolean {

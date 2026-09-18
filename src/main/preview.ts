@@ -5,13 +5,13 @@ import { join } from 'node:path'
 import type { IPty } from 'node-pty'
 import type { PreviewCommand, PreviewCommandResult, PreviewEvent, PreviewState } from '@shared/types'
 import { killTree } from './pty'
-import { startPreviewBridge, type PreviewBridgeHandle } from './previewBridge.ts'
-import type { CanvasToolHost } from './canvasTools.ts'
 import {
-  carbonPreviewCodexMcp,
-  carbonPreviewMcpServers,
-  type StdioMcpServer
-} from './previewMcpConfig.ts'
+  startCarbonBridge,
+  type CarbonBridgeHandle,
+  type CarbonMcpSession
+} from './carbonBridge.ts'
+import type { CarbonToolContext } from './carbonMcp.ts'
+import type { CanvasToolHost } from './canvasTools.ts'
 
 const nodeRequire = createRequire(import.meta.url)
 const pty = nodeRequire('node-pty') as typeof import('node-pty')
@@ -60,42 +60,40 @@ function detectRunner(cwd: string): (script: string) => string {
  */
 export class PreviewManager {
   private servers = new Map<string, Server>()
-  /** Loopback MCP front; Grok cannot take an in-process server. */
-  private readonly mcp: Promise<PreviewBridgeHandle | null>
+  /**
+   * Carbon's MCP server on loopback. Codex and Grok connect to it directly —
+   * neither can load an in-process server the way Claude's SDK can, and both
+   * speak streamable HTTP, which is what removed the two relay children a
+   * session used to spawn.
+   */
+  private readonly mcp: Promise<CarbonBridgeHandle | null>
 
   constructor(
     private emit: Emit,
     private send: SendCommand,
     /**
-     * The canvas tools ride the same loopback bridge and the same stdio child.
-     * They are passed in rather than owned because the bridge is the shared
-     * thing — one port, one token, one built script — and it is started here.
+     * The canvas tools ride the same bridge and the same `carbon` server. They
+     * are passed in rather than owned because the bridge is the shared thing —
+     * one port, one token, one tool table — and it is started here.
      */
     canvas?: CanvasToolHost
   ) {
-    this.mcp = startPreviewBridge(this, canvas).catch((err) => {
+    this.mcp = startCarbonBridge(this, canvas).catch((err) => {
       console.warn('[preview] MCP bridge failed to start:', err)
       return null
     })
   }
 
-  /** The loopback bridge, for the canvas server that shares it. */
-  bridge(): Promise<PreviewBridgeHandle | null> {
-    return this.mcp
-  }
-
-  /** ACP `mcpServers` entry that gives this project's preview to Grok. */
-  async mcpServers(cwd: string): Promise<StdioMcpServer[]> {
+  /**
+   * Register one provider session and get the endpoint its CLI connects to,
+   * plus the two config shapes that name it. Once per session — the context is
+   * held by reference, so a plan-mode change needs no new registration — and
+   * `dispose()` belongs to whoever registered it.
+   */
+  async mcpSession(ctx: CarbonToolContext): Promise<CarbonMcpSession | null> {
     const bridge = await this.mcp
-    if (!bridge || !cwd) return []
-    return carbonPreviewMcpServers(cwd, bridge)
-  }
-
-  /** Codex `config.mcp_servers.preview` overlay for this project's preview. */
-  async mcpCodexConfig(cwd: string, opts: { plan?: boolean } = {}): Promise<Record<string, unknown> | undefined> {
-    const bridge = await this.mcp
-    if (!bridge || !cwd) return undefined
-    return carbonPreviewCodexMcp(cwd, bridge, opts)
+    if (!bridge || !ctx.cwd) return null
+    return bridge.register(ctx)
   }
 
   /** The dev command inferred from package.json, or null if there isn't one. */

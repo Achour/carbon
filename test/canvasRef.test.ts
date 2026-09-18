@@ -15,8 +15,29 @@ const EDITED = `Updated canvas "Vite vs Webpack" (id: ${ID}). The panel is showi
 
 test('a direct call carries both its id and its title', () => {
   assert.deepEqual(
+    canvasWrite({
+      name: 'mcp__carbon__canvas_write',
+      input: { title: 'Vite vs Webpack' },
+      output: RESULT
+    }),
+    { id: ID, title: 'Vite vs Webpack' }
+  )
+  // The spelling from before the preview and canvas servers merged. Chats
+  // recorded it for months and a transcript is not rewritten, so the row still
+  // has to find its canvas.
+  assert.deepEqual(
     canvasWrite({ name: 'mcp__canvas__write', input: { title: 'Vite vs Webpack' }, output: RESULT }),
     { id: ID, title: 'Vite vs Webpack' }
+  )
+})
+
+test("Grok's spelling of the merged server is recognized too", () => {
+  assert.deepEqual(
+    canvasWrite({
+      name: 'use_tool',
+      input: { tool_name: 'carbon__canvas_write', tool_input: { title: 'T', id: ID } }
+    }),
+    { id: ID, title: 'T' }
   )
 })
 

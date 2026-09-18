@@ -50,6 +50,7 @@ import {
 } from '@/lib/drafts'
 import type { ComposerDraft, ProjectDraft, ProjectDraftOptions } from '@/lib/drafts'
 import { moveItem, orderByHint } from '@/lib/tabOrder'
+import { projectRoots } from '@/lib/projects'
 // One direction only: the agents store knows nothing of this one, which is
 // what lets the panel's selection be set from every route into it.
 import { chatOfRun, useAgents } from '@/agentsStore'
@@ -93,6 +94,8 @@ import type {
   PublishOpts,
   PublishResult,
   ChatOptionsPatch,
+  ProjectDetail,
+  ProjectOverview,
   Provider,
   ProviderCli,
   ProviderFeatureState,
@@ -126,6 +129,19 @@ export const CHATS_PER_PROJECT_DEFAULT = 10
  * chats on one project, one on a worktree branch and one on main.
  */
 export type SidebarDensity = 'compact' | 'detailed'
+
+/**
+ * A section of the settings page. Declared here rather than in `Settings.tsx`
+ * because the store holds which one is open — see `settingsSection`.
+ */
+export type SettingsSectionId =
+  | 'appearance'
+  | 'chats'
+  | 'projects'
+  | 'archive'
+  | 'providers'
+  | 'notifications'
+  | 'about'
 
 export interface QueuedMessage {
   id: string
@@ -473,6 +489,22 @@ export function panelFloats(
  */
 export function visibleChats(chats: ChatMeta[]): ChatMeta[] {
   return chats.filter((c) => !c.ephemeral)
+}
+
+/**
+ * What the sidebar actually lists: visible chats minus the archived ones.
+ *
+ * Two predicates rather than one, and the line between them is *who deletes
+ * what*. `visibleChats` answers "is this history?" — Settings → Projects and
+ * the project dialogs stay on it, because `removeProject` deletes every chat in
+ * the folder including the archived ones, and a confirm that counted only the
+ * listed ones would under-report what it is about to destroy. This one answers
+ * "does this belong on screen right now?", which is the sidebar's question and
+ * — through the single call site at the top of `Sidebar` — the chat search's,
+ * ⌘N's project list's, Recents' and the Pinned section's too.
+ */
+export function listedChats(chats: ChatMeta[]): ChatMeta[] {
+  return chats.filter((c) => !c.ephemeral && c.archivedAt === undefined)
 }
 
 /** One queued attachment, and the composer it is meant for (see `attachmentInbox`). */
@@ -929,6 +961,13 @@ interface AppState {
   // ---- Settings ----
   /** When true the main area shows the settings page instead of a chat. */
   settingsOpen: boolean
+  /**
+   * Which settings section to show when the page opens. It is *state* rather
+   * than the page's own `useState` because two other things now name a
+   * section: the sidebar's "Manage projects…" and `AIGUI_E2E`, neither of which
+   * can reach inside the component to click a nav button.
+   */
+  settingsSection: SettingsSectionId | null
   theme: string
   themeMode: ThemeMode
   resolvedAppearance: ResolvedAppearance
@@ -938,7 +977,9 @@ interface AppState {
   codeFontSize: number
   /** Interface text size as a percent — everything that is not code. */
   notifyPrefs: NotifyPrefs
-  openSettings(): void
+  openSettings(section?: SettingsSectionId): void
+  /** Which section the settings page shows; remembered across opens. */
+  setSettingsSection(section: SettingsSectionId): void
   closeSettings(): void
   setTheme(id: string): void
   setThemeMode(mode: ThemeMode): void
@@ -980,6 +1021,49 @@ interface AppState {
    */
   projectNames: Record<string, string>
   setProjectName(cwd: string, name: string): void
+  /**
+   * Projects collapsed into the sidebar's "Archived" section (keyed by cwd).
+   * Distinct from hidden: archived stays on screen, one fold away.
+   *
+   * It lived in `Sidebar.tsx`'s own `useState` until Settings → Projects had to
+   * toggle it too — two components over one `localStorage` key is two copies
+   * that drift the moment either writes, and the symptom (the sidebar ignoring
+   * a switch until it remounts) looks like the switch not working. Persisted,
+   * like its two neighbours.
+   */
+  archivedProjects: Record<string, boolean>
+  setProjectArchived(cwd: string, archived: boolean): void
+  /**
+   * The user's manual project order, by cwd. Projects absent from it keep their
+   * discovery order — see `projectGroups`. Lifted out of `Sidebar.tsx` with
+   * `archivedProjects`, for the same reason.
+   */
+  projectOrder: string[]
+  setProjectOrder(order: string[]): void
+  /**
+   * What is actually on disk for each project: whether the folder is still
+   * there, its branch, its remote, its icon. Keyed by root. Empty until
+   * Settings → Projects asks — nothing else needs it, and it costs git
+   * processes.
+   */
+  projects: Record<string, ProjectOverview>
+  projectsLoading: boolean
+  /** `refresh` re-reads icons too, which is what the section's Recheck does. */
+  loadProjects(refresh?: boolean): Promise<void>
+  /**
+   * Each project's own icon as a `data:` URI — null once looked for and not
+   * found, absent until it has been. The sidebar draws marks at first paint
+   * and this is the only field of the overview it needs, so it is fetched on
+   * its own (no git, see `main/projects.ts`) and `loadProjects` merges its
+   * answer in: two maps holding one fact is how the settings page and the
+   * sidebar end up drawing different pictures of the same project.
+   */
+  projectIcons: Record<string, string | null>
+  /** Resolves marks for any project that hasn't got one yet. */
+  loadProjectIcons(): Promise<void>
+  /** One project's worktrees and branches; fetched when its card is expanded. */
+  projectDetails: Record<string, ProjectDetail>
+  loadProjectDetail(root: string, refresh?: boolean): Promise<void>
 
   // ---- Files ----
   /** Whether the right-side workspace panel (tabs + file tree) is open. */
@@ -1291,6 +1375,12 @@ interface AppState {
   renameChat(id: string, title: string): Promise<void>
   /** Pin/unpin a chat; pinned chats leave their project group for the Pinned section. */
   setChatPinned(id: string, pinned: boolean): Promise<void>
+  /**
+   * Archive/restore a chat. Archiving takes it out of every list (see
+   * `listedChats`) and, if it is the chat on screen, drops to the home screen —
+   * an archived chat is never the active one.
+   */
+  setChatArchived(id: string, archived: boolean): Promise<void>
   setChatOptions(chatId: string, patch: ChatOptionsPatch): Promise<void>
   respondPermission(
     chatId: string,
@@ -2426,12 +2516,20 @@ export const useApp = create<AppState>((set, get) => ({
   // ---- Settings ----
 
   settingsOpen: false,
+  settingsSection: null,
   theme: storedTheme(),
   themeMode: initialThemeMode,
   resolvedAppearance: resolveAppearance(initialThemeMode),
 
-  openSettings() {
-    set({ settingsOpen: true, usageOpen: false })
+  openSettings(section) {
+    // A section is only *offered* when one was named: reopening Settings with
+    // no argument must land where the user last was, which is the page's own
+    // business, not this call's.
+    set({ settingsOpen: true, usageOpen: false, ...(section ? { settingsSection: section } : {}) })
+  },
+
+  setSettingsSection(section) {
+    set({ settingsSection: section })
   },
 
   closeSettings() {
@@ -2574,6 +2672,104 @@ export const useApp = create<AppState>((set, get) => ({
       localStorage.setItem('projectNames', JSON.stringify(projectNames))
       return { projectNames }
     })
+  },
+
+  archivedProjects: (() => {
+    try {
+      return JSON.parse(localStorage.getItem('archivedProjects') ?? '{}') as Record<string, boolean>
+    } catch {
+      return {}
+    }
+  })(),
+
+  setProjectArchived(cwd, archived) {
+    set((s) => {
+      const archivedProjects = { ...s.archivedProjects }
+      if (archived) archivedProjects[cwd] = true
+      else delete archivedProjects[cwd]
+      localStorage.setItem('archivedProjects', JSON.stringify(archivedProjects))
+      return { archivedProjects }
+    })
+  },
+
+  projectOrder: (() => {
+    try {
+      const raw = JSON.parse(localStorage.getItem('projectOrder') ?? '[]') as unknown
+      return Array.isArray(raw) ? (raw as string[]) : []
+    } catch {
+      return []
+    }
+  })(),
+
+  setProjectOrder(order) {
+    localStorage.setItem('projectOrder', JSON.stringify(order))
+    set({ projectOrder: order })
+  },
+
+  projects: {},
+  projectsLoading: false,
+
+  async loadProjects(refresh = false) {
+    // The roots are derived here rather than passed in, so the one definition
+    // of "which folders are projects" (`projectRoots`) is also the one the
+    // sidebar draws from — a caller free to pass its own list is a second one.
+    const s = get()
+    const roots = projectRoots(visibleChats(s.chats), s.projectOrder)
+    if (roots.length === 0) {
+      set({ projects: {}, projectsLoading: false })
+      return
+    }
+    set({ projectsLoading: true })
+    try {
+      const list = await window.api.projectsOverview(roots, refresh)
+      // Rebuilt rather than merged: a project removed while the page was open
+      // must leave, and every field in a row is re-answered by this call.
+      // The marks *are* merged, because they are drawn outside this page: a
+      // Recheck that re-read an icon has to reach the sidebar too.
+      set((s2) => ({
+        projects: Object.fromEntries(list.map((p) => [p.root, p])),
+        projectIcons: { ...s2.projectIcons, ...Object.fromEntries(list.map((p) => [p.root, p.icon])) }
+      }))
+    } catch {
+      // The section draws what it knows about a project with no overview —
+      // its name, its chats — which is strictly better than an empty page.
+    } finally {
+      set({ projectsLoading: false })
+    }
+  },
+
+  projectIcons: {},
+
+  async loadProjectIcons() {
+    const s = get()
+    // Only what is unanswered: main caches the walk, but every root asked for
+    // ships its base64 URI back across IPC, so re-asking for the whole list
+    // each time a project appears re-sends every icon the sidebar already has.
+    const roots = projectRoots(visibleChats(s.chats), s.projectOrder).filter(
+      (root) => !(root in s.projectIcons)
+    )
+    if (roots.length === 0) return
+    try {
+      const icons = await window.api.projectIcons(roots)
+      set((s2) => ({ projectIcons: { ...s2.projectIcons, ...icons } }))
+    } catch {
+      // A mark is not information the sidebar needs to function: every row
+      // falls back to its initials, which is the same mark a project with no
+      // icon gets anyway.
+    }
+  },
+
+  projectDetails: {},
+
+  async loadProjectDetail(root, refresh = false) {
+    if (!refresh && get().projectDetails[root]) return
+    try {
+      const detail = await window.api.projectDetail(root)
+      set((s) => ({ projectDetails: { ...s.projectDetails, [root]: detail } }))
+    } catch {
+      // Leave it unloaded: the card keeps its spinner-free "nothing to show"
+      // state rather than claiming a repo has no worktrees.
+    }
   },
 
   async init() {
@@ -3925,6 +4121,12 @@ export const useApp = create<AppState>((set, get) => ({
       if (get().activeId === side.sideOf) await get().reopenSideChat(id)
       return
     }
+    // Opening an archived chat restores it, and the rule lives here rather than
+    // on the Archive page's button: this is also where a notification click and
+    // a relaunch's restored chat land, and every one of them would otherwise
+    // reach the one state the sidebar cannot draw — a chat on screen with no
+    // row, no search hit and a composer still willing to send into it.
+    if (id && side?.archivedAt !== undefined) await get().setChatArchived(id, false)
     // Parked hidden-stream events are superseded: the target chat refetches
     // from main below, and events for the outgoing chat no longer apply.
     hiddenStream.length = 0
@@ -4525,6 +4727,24 @@ export const useApp = create<AppState>((set, get) => ({
     await window.api.setChatPinned(id, pinned)
   },
 
+  async setChatArchived(id, archived) {
+    // Mirrored ahead of the round trip for the reason the pin is — the row has
+    // to leave the sidebar on the click, not after it. Archiving unpins, which
+    // main also does: the flag must not be left behind on either side or the
+    // two disagree until the next relaunch.
+    const at = archived ? Date.now() : undefined
+    set((s) => ({
+      chats: s.chats.map((c) =>
+        c.id === id ? { ...c, archivedAt: at, ...(archived ? { pinnedAt: undefined } : {}) } : c
+      )
+    }))
+    // Archived and active is a state with no way back on screen: no row, no
+    // search hit, and a composer still willing to send into it. Leaving the
+    // chat is what archiving the one you are reading means.
+    if (archived && get().activeId === id) await get().openChat(null)
+    await window.api.setChatArchived(id, archived)
+  },
+
   async setChatOptions(id, patch) {
     if (!id) return
     await window.api.setChatOptions(id, patch)
@@ -4744,6 +4964,14 @@ export const useApp = create<AppState>((set, get) => ({
             ? { fastMode: omit(st.fastMode, [ev.chatId]) }
             : {})
         }))
+        // Archived and active must never hold, and this is the only way it can:
+        // the database is shared, so a second instance can archive the chat
+        // this window is reading. Every local path closes it first, and a
+        // patched-in-place flag would leave a transcript on screen with no row
+        // anywhere and a composer still willing to send into it.
+        if (ev.patch.archivedAt !== undefined && get().activeId === ev.chatId) {
+          void get().openChat(null)
+        }
         break
       }
 

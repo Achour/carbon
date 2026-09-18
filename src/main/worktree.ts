@@ -299,6 +299,69 @@ export async function checkoutWorktree(
  * Describe an existing linked worktree so a chat can attach to it. Returns null
  * when `path` is a plain checkout or not a repo at all.
  */
+/**
+ * `realpath` for a path that no longer exists.
+ *
+ * `realpathSync` throws on a missing leaf, and every caller here is asking
+ * about one — a worktree directory that was deleted behind the app's back. So
+ * the nearest ancestor that *does* exist is resolved and the remainder is put
+ * back on. Without it, `$TMPDIR/…/gone` stays `/var/folders/…` while git's own
+ * listing says `/private/var/folders/…`, and the two never match.
+ *
+ * Bounded like `gitDirOf`, and falls back to the literal string, which is the
+ * right answer whenever nothing above the path resolves either.
+ */
+function resolvedThrough(path: string): string {
+  let head = path
+  const tail: string[] = []
+  for (let i = 0; i < 64; i++) {
+    try {
+      return join(realpathSync(head), ...tail)
+    } catch {
+      // Not there — keep walking up.
+    }
+    const parent = dirname(head)
+    if (parent === head) return path
+    tail.unshift(basename(head))
+    head = parent
+  }
+  return path
+}
+
+/**
+ * `resolveWorktree` for a worktree whose **directory is gone**.
+ *
+ * `resolveWorktree` asks the worktree itself (`git -C <path> rev-parse`), which
+ * is exactly what cannot be done once the directory has been moved or deleted
+ * outside the app — so the one row that most needs identifying is the one it
+ * answers null for. The repo still knows: git keeps the administrative entry
+ * until something prunes it, and lists it as `prunable`.
+ *
+ * `repoRoot` is a *hint* from the caller and is verified rather than trusted:
+ * the answer is only returned when that repo's own `worktree list` names this
+ * path, so a wrong or hostile root resolves nothing rather than aiming a
+ * removal at another repository. The main checkout is never a match — it is not
+ * a worktree anything here may remove.
+ *
+ * Matched on **realpaths**, the same rule and for the same reason as
+ * `isManagedWorktree`: git echoes the resolved path, so a single symlink above
+ * either side makes a literal comparison silently false. `$TMPDIR` on a mac is
+ * exactly that, which is how the test for this caught it — and here neither
+ * side can be resolved directly, because by definition the directory is gone,
+ * hence `resolvedThrough`.
+ */
+export async function resolveStaleWorktree(
+  repoRoot: string,
+  path: string
+): Promise<WorktreeInfo | null> {
+  const want = resolvedThrough(path)
+  const out = await git(repoRoot, ['worktree', 'list', '--porcelain'], TIMEOUT).catch(() => '')
+  const record = parseWorktreeList(out).find(
+    (w) => !w.isMain && (w.path === path || resolvedThrough(w.path) === want)
+  )
+  return record ? { repoRoot, branch: record.branch } : null
+}
+
 export async function resolveWorktree(path: string): Promise<WorktreeInfo | null> {
   try {
     // One spawn for all three: rev-parse prints a line per query, in order.

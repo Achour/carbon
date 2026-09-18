@@ -342,9 +342,9 @@ it guards**, and put new reasoning in that file rather than back in this one.
   `lib/lspDiagnostics.ts`).
 - **`docs/review.md`** — the stacked diff review (`DiffView.tsx`,
   `MultiDiffView.tsx`, `lib/diffRows.ts`, `LazyDiffBody`).
-- **`docs/canvas.md`** — the canvas MCP server and its panel (`canvasTools.ts`,
-  `canvasStore.ts`, `CanvasPanel`, `previewBridge.ts`, `previewMcp.ts`,
-  `shared/canvasText.ts`, `lib/canvasRef.ts`).
+- **`docs/canvas.md`** — Carbon's own `carbon` MCP server and the canvas panel
+  (`carbonMcp.ts`, `carbonBridge.ts`, `canvasTools.ts`, `previewTools.ts`,
+  `canvasStore.ts`, `CanvasPanel`, `shared/canvasText.ts`, `lib/canvasRef.ts`).
 - **`docs/terminal-chats.md`** — a chat that is your shell in a pty, with the
   CLI session you start in it found and resumed (`ChatMeta.surface`,
   `main/chatTerminal.ts`, `main/termTitle.ts`, `ChatTerminal` in
@@ -360,7 +360,17 @@ it guards**, and put new reasoning in that file rather than back in this one.
 - **`docs/image-viewer.md`** — the lightbox (`ImageView.tsx`,
   `LightboxTarget`).
 - **`docs/sidebar.md`** — the two sidebar densities, the project filter, the
-  order of `chats`, and `NewChatDialog` (`Sidebar.tsx`, `SidebarDensity`).
+  order of `chats`, `NewChatDialog`, the project mark every list of projects
+  wears, and the chats that are *not* in the list:
+  archiving, Settings → Archive and the shared delete confirm
+  (`Sidebar.tsx`, `SidebarDensity`, `ChatMeta.archivedAt`, `listedChats`,
+  `SettingsArchive.tsx`, `ChatDeleteDialog.tsx`).
+- **`docs/projects.md`** — a project as a row rather than a grouping key:
+  Settings → Projects, the shared derivation and dialogs (`lib/projects.ts`,
+  `ProjectDialogs`), what is read off disk per project (`main/projects.ts` — the
+  icon scan, `parseRemoteUrl`, worktrees including the stale ones) and a
+  project's mark (`lib/projectIdentity.ts`, `ui/project-avatar.tsx`,
+  `--project-ink-*`).
 - **`docs/usage.md`** — the spend history page and its scan
   (`main/usageScan.ts`, `usageStats.ts`, `usageRates.ts`,
   `components/UsageStats.tsx`), and `--chart-*`.
@@ -489,6 +499,26 @@ Settings → Providers renders `ProviderCli[]` and re-probes on open, since the
 usual reason to be there is having just installed something in the terminal
 next to the app. Settings live in `settings.json` under `providers`, coerced
 through `knownProvider` on read like every other provider-keyed record.
+
+### Carbon's own tools (`src/main/carbonMcp.ts`, `carbonBridge.ts`)
+
+Carbon gives every session one MCP server, `carbon`, carrying both its tool
+tables: `preview_*` drives this project's dev server and the in-app browser,
+`canvas_*` writes the documents the user reads beside the chat. One server and
+one declaration is what makes a call `mcp__carbon__canvas_write` on all three
+providers, so nothing downstream can tell which backend produced a row.
+
+**Only the transport differs, and none of them spawns anything.** Claude takes
+JavaScript handlers through `createSdkMcpServer` — in-process, no port, no hop.
+Codex and Grok cannot do that, but both speak **streamable-HTTP MCP** (verified
+against codex-cli 0.155.0 and grok 1.0.34, whose ACP `initialize` advertises
+`mcpCapabilities.http`), so they connect to `carbonBridge.ts` on loopback with a
+bearer header. That replaced two stdio relay children *per session* — each an
+Electron binary running as node, ~68 MB RSS, forwarding JSON-RPC to a server in
+the process that spawned it. Codex reads `mcp_servers.carbon.url` with
+`http_headers`; Grok gets the same URL in `session/new`. The bridge's own
+reasoning, the tool rename it forced, and what still answers to the pre-merge
+names live in `docs/canvas.md`.
 
 ### Normalizing the three backends
 

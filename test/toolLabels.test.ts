@@ -40,8 +40,8 @@ test('Grok\'s deferred wrapper becomes the tool the renderer already draws', () 
     { name: 'mcp__claude-in-chrome__navigate', input: { url: 'https://example.com' } }
   )
   // Already namespaced: passed through, since `mcp__mcp__…` matches no case.
-  assert.deepEqual(unwrapGrokTool('use_tool', { tool_name: 'mcp__preview__stop' }), {
-    name: 'mcp__preview__stop',
+  assert.deepEqual(unwrapGrokTool('use_tool', { tool_name: 'mcp__carbon__preview_stop' }), {
+    name: 'mcp__carbon__preview_stop',
     input: {}
   })
 })

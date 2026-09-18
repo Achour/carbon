@@ -8,8 +8,9 @@ directory.*
 
 A **canvas** is a document the agent wrote to be *read* — a comparison, a
 report, an architecture note — rendered beside the chat and listed per project.
-It is Carbon's second MCP server, and the first one whose interesting decision
-is where the document *isn't*.
+It is half of Carbon's one MCP server — `carbon`, whose other half is the
+preview — and the first surface whose interesting decision is where the document
+*isn't*.
 
 **A canvas is a tool call, not a file, and that is the whole design.** The
 obvious implementation is to have the agent write `docs/foo.html` and render it;
@@ -20,12 +21,47 @@ feature would make the assistant measurably worse at its actual job the more it
 was used. Going through a tool means Carbon owns the storage, which is also
 what makes the Recents list one indexed query rather than a directory scan.
 
-- **One bridge, one child script, two namespaces.** `previewBridge.ts` routes on
-  a `server` field in the POST body (defaulted to `preview`, so the older shape
-  still lands where it did) and `previewMcp.ts` picks its tool table off
-  `CARBON_MCP_SERVER`. A second script would have meant a second entry in
-  `electron.vite.config` and a second built artifact to resolve beside the
-  compiled main, for a file differing only in its table.
+- **One server, one endpoint, no child process.** The canvas and the preview
+  were two MCP servers, and on Codex and Grok that cost *two* stdio children per
+  session — each an Electron binary running as node (measured: ~68 MB RSS
+  apiece) whose whole job was to relay a JSON-RPC call to a loopback HTTP server
+  **inside the process that spawned it**. Both CLIs turned out to speak
+  streamable-HTTP MCP — verified against codex-cli 0.155.0
+  (`mcp_servers.<name>.url`) and grok 1.0.34, whose ACP `initialize` advertises
+  `mcpCapabilities.http` — so `carbonBridge.ts` *is* the server they connect to
+  and `previewMcp.ts` is gone, along with its `electron.vite.config` entry.
+  Claude never paid for a child and still doesn't: its SDK takes JavaScript
+  handlers directly, so it gets the same tools with no port and no hop. What
+  makes that one server rather than three implementations is `carbonMcp.ts` —
+  the tool table, the JSON Schema, the name parser and the JSON-RPC handlers all
+  live there, and each provider is wiring.
+- **The merge renamed every tool, which is the real cost of it.**
+  `mcp__preview__start` and `mcp__canvas__write` became
+  `mcp__carbon__preview_start` and `mcp__carbon__canvas_write`. Nothing decides
+  behaviour from a prefix any more (`isCarbonSideEffect` reads the table, so the
+  next tool added cannot land on the permissive side of the permission gate by
+  default), but three things still have to know the old spellings: `ToolCard`'s
+  label switch, `canvasRef.ts`'s mutator set and `toolLabels`. A chat recorded
+  months of `mcp__canvas__write` rows and a transcript is not rewritten — drop
+  the old names and that history renders as anonymous wrenches. The **session
+  rules** are the one place that cannot be made backward-compatible: Claude
+  records `CANVAS_SESSION_RULES` into the conversation's system prompt
+  (`snapshot: true`), so a chat resumed from before the merge is told about a
+  `canvas` server that no longer exists until it starts fresh or compacts. The
+  live tool list is sent every request and is correct, so the model reaches for
+  the right name anyway; aliasing the old ids onto the new server would have
+  polluted every *new* chat's tool surface to spare that one stale sentence.
+- **Plan mode is read at the call, not frozen at spawn.** The child took
+  `CARBON_PREVIEW_PLAN` in its environment, so Codex could only learn of a change
+  by rebuilding its thread and Grok never learned at all — its `preview_start`
+  ran in plan mode where Claude's was refused. The registered context carries a
+  `plan()` getter instead, so the bridge asks at the moment of the call and all
+  three providers refuse the same thing.
+- **Each session registers its own endpoint** (`bridge.register(ctx)` →
+  `/mcp/<uuid>`), once per session rather than once per turn — `ensureThread`
+  runs on every send, and registering there would leak a context per turn. The
+  path segment is what makes the context addressable, so `dispose()` on the
+  provider session takes the endpoint down with it.
 - **The body caps are per-server, and that asymmetry is the point.** A preview
   call carries a URL, so 64 KB bounds a request with no business being large; a
   canvas call carries the whole document. Capping both at 64 KB would have
@@ -83,15 +119,17 @@ what makes the Recents list one indexed query rather than a directory scan.
     this repo renders.
   - **One argument is described once** (`CANVAS_TOOL_INFO.params`). It is
     spelled three ways downstream — zod for Claude's in-process server, JSON
-    Schema for the stdio child Codex and Grok read, a field pick in the
-    bridge — and hand-copying them drifted within the commit that added
+    Schema for the `tools/list` Codex and Grok read over HTTP, and a coercion in
+    `carbonToolInput` — and hand-copying them drifted within the commit that added
     `edit`: `id` was described two different ways and `old_string`'s "omit only
     when renaming" reached Claude alone. All three are now derived, so the next
     argument cannot arrive on one provider and not the others.
 - **Nothing is gated.** A canvas tool writes only Carbon's own database — no
-  file, no process, nothing outside the app — so `mcp__canvas__` is auto-allowed
-  beside `mcp__preview__`, in plan mode included: a plan that produces a
-  document is still a plan.
+  file, no process, nothing outside the app — so it is auto-allowed beside the
+  preview's read tools, in plan mode included: a plan that produces a document
+  is still a plan. Only `preview_start` and `preview_stop` are refused there,
+  and the permission gate asks the tool table which those are rather than
+  matching a name.
 - **The session rules have to disambiguate against `Artifact`.** Carbon sets
   `CLAUDE_CODE_ARTIFACT`, so a Claude session has *two* "make a document" tools
   and the other one publishes to claude.ai. Left unsaid, "make me a page
@@ -126,8 +164,8 @@ fact about this app specifically:** Carbon ships no CSP, and `about:srcdoc`
 inherits the embedder's policy container — so adding one later would render
 every interactive canvas silently inert, with no error anywhere to say why.
 
-**The tool rows had to be taught the tool, in two places.** An `mcp__canvas__*`
-call is not in `GROUPABLE_TOOLS` by default, and the run that produces a canvas
+**The tool rows had to be taught the tool, in two places.** A
+`mcp__carbon__canvas_*` call is not in `GROUPABLE_TOOLS` by default, and the run that produces a canvas
 is almost always `ToolSearch` + `write` — so the two arrived as two separate
 `AssistantBlock`s with a message-sized gap between them, which is the gap
 grouping exists to close. `toolMeta` gives them `Preview`'s shape (one label for
@@ -140,7 +178,7 @@ a glyph would say they are one.
 **A canvas needs a way in from the transcript, and grouping is what took it
 away.** The turn's own prose names the document ("Canvas is up: TanStack Start
 vs Next.js") and that text is inert, so the only link lived on the
-`mcp__canvas__write` row — which, once the run collapsed, was one expand away
+`canvas_write` row — which, once the run collapsed, was one expand away
 from a reader who had just been told a document existed. The link therefore
 lands twice: `ToolMeta.open` gains a `canvas` kind, so the title on the tool row
 opens it (the descriptor already existed for files and previews); and
@@ -150,9 +188,11 @@ one, beside the status, the way a published artifact's link rides a `ToolCard`.
 call the server tool by name; **Grok defers MCP tools behind its own
 `use_tool`**, so the card arrives named `use_tool` with the real tool name and
 arguments in the input — and an empty result text, so there is no id to scrape
-either. Matched on `mcp__canvas__write` alone, a Grok canvas drew as an unnamed
+either. Matched on the direct name alone, a Grok canvas drew as an unnamed
 `use_tool` row with no way into the document it had just written. `canvasRef.ts`
-is the one recognizer (`test/canvasRef.test.ts`): it reads both spellings, takes
+is the one recognizer (`test/canvasRef.test.ts`): it reads Grok's spelling
+(`carbon__canvas_write`, observed off the running CLI), today's direct name and
+the pre-merge `mcp__canvas__write`, takes
 the id from the result prose the way `Artifact` does — written to yield nothing
 rather than to trust a shape — and falls back to resolving the **title** against
 the project's own list, which is the only handle a Grok call leaves behind.

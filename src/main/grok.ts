@@ -45,8 +45,8 @@ import {
   removeGrokTempFiles,
   resolveGrokBinary,
   grokToolInput,
-  isPreviewSideEffectTool,
-  isPreviewTool,
+  isCarbonSideEffectTool,
+  isCarbonTool,
   toolImages,
   toolName,
   toolNameIfNamed,
@@ -65,10 +65,10 @@ import {
 import { requireCliPath } from './providerCli.ts'
 import { deriveTitle } from './titles.ts'
 import { USD_PER_TICK } from './usageScan.ts'
-import type { PreviewManager } from './preview.ts'
-import { PREVIEW_SESSION_RULES, PREVIEW_TOOL_INFO, PREVIEW_TOOL_NAMES } from './previewTools.ts'
+import { PREVIEW_SESSION_RULES } from './previewTools.ts'
+import type { CarbonMcpProvider, CarbonMcpSession } from './carbonBridge.ts'
+import { CARBON_MCP_NAME, carbonMcpTools } from './carbonMcp.ts'
 import { projectRoot } from '../shared/types.ts'
-import type { CanvasManager } from './canvas.ts'
 import { CANVAS_SESSION_RULES } from './canvasTools.ts'
 
 /**
@@ -184,8 +184,12 @@ export class GrokSession implements AgentSession {
    * `ClaudeSession` has for effort.
    */
   private optionsKey: string
-  /** True once this session handed Grok the in-app preview MCP server. */
-  private previewAttached = false
+  /**
+   * Registered with the bridge once and reused across respawns. A permission or
+   * effort change restarts the agent, and re-registering there would leave the
+   * old context behind for the life of the app.
+   */
+  private mcp: Promise<CarbonMcpSession | null> | null = null
 
   private readonly deltas = new DeltaCoalescer(
     (event) => this.emit(event),
@@ -200,8 +204,7 @@ export class GrokSession implements AgentSession {
     store: Store,
     onDead: () => void,
     onCommands: (commands: SlashCommand[]) => void = () => {},
-    private preview: PreviewManager | null = null,
-    private canvas: CanvasManager | null = null
+    private preview: CarbonMcpProvider | null = null
   ) {
     // Fail here rather than at the ACP spawn: `deliver` wraps session
     // construction, so a missing or switched-off CLI lands in the chat as an
@@ -269,17 +272,28 @@ export class GrokSession implements AgentSession {
     return this.starting
   }
 
+  /** Registers this session's MCP context with the bridge, once. */
+  private ensureMcp(): Promise<CarbonMcpSession | null> {
+    if (!this.mcp) {
+      this.mcp =
+        this.preview?.mcpSession({
+          cwd: this.chat.cwd,
+          project: projectRoot(this.chat),
+          chatId: this.chat.id,
+          plan: () => this.chat.permissionMode === 'plan'
+        }) ?? Promise.resolve(null)
+    }
+    return this.mcp
+  }
+
   private async startClient(): Promise<GrokAcpClient> {
     const baseline = grokPermissionBaseline(this.chat.permissionMode)
-    const previewServers = (await this.preview?.mcpServers(this.chat.cwd)) ?? []
-    const canvasServers =
-      (await this.canvas?.mcpServers({
-        cwd: this.chat.cwd,
-        project: projectRoot(this.chat),
-        chatId: this.chat.id
-      })) ?? []
-    const mcpServers = [...previewServers, ...canvasServers]
-    this.previewAttached = previewServers.length > 0
+    // One `carbon` server over loopback HTTP. Grok's `initialize` advertises
+    // `mcpCapabilities.http`, so the two stdio children this used to spawn — one
+    // per server, each an Electron binary relaying to the same process — are
+    // gone.
+    const mcp = await this.ensureMcp()
+    const mcpServers = mcp ? [mcp.acpServer] : []
     const client = new GrokAcpClient({
       cwd: this.chat.cwd,
       model: this.launchModel(),
@@ -287,10 +301,7 @@ export class GrokSession implements AgentSession {
       alwaysApprove: baseline === 'yolo',
       autoMode: baseline === 'auto',
       mcpServers,
-      extraRules:
-        [previewServers.length ? PREVIEW_SESSION_RULES : '', canvasServers.length ? CANVAS_SESSION_RULES : '']
-          .filter(Boolean)
-          .join('\n\n') || undefined,
+      extraRules: mcp ? [PREVIEW_SESSION_RULES, CANVAS_SESSION_RULES].join('\n\n') : undefined,
       callbacks: {
         onUpdate: (update) => this.handleUpdate(update),
         onPermission: (request) => this.handlePermission(request),
@@ -369,6 +380,7 @@ export class GrokSession implements AgentSession {
     this.rejectAllPermissions()
     this.client?.dispose()
     this.client = null
+    void this.mcp?.then((mcp) => mcp?.dispose())
     this.deadFlag = true
   }
 
@@ -733,8 +745,8 @@ export class GrokSession implements AgentSession {
    * method can fire instead of showing an Allow/Deny card for a question.
    */
   private handlePermission(request: GrokPermissionRequest): Promise<string | null> {
-    if (isPreviewTool(request.toolCall)) {
-      if (isPreviewSideEffectTool(request.toolCall) && this.chat.permissionMode === 'plan') {
+    if (isCarbonTool(request.toolCall)) {
+      if (isCarbonSideEffectTool(request.toolCall) && this.chat.permissionMode === 'plan') {
         const reject =
           request.options.find((option) => option.kind === 'reject_once' || option.kind === 'reject_always') ??
           request.options[request.options.length - 1]
@@ -1018,17 +1030,16 @@ export class GrokSession implements AgentSession {
   }
 
   async mcpStatus(): Promise<McpServerInfo[]> {
-    if (!this.previewAttached) return []
+    // Asked of the registration itself rather than a flag beside it: a second
+    // boolean tracking "did this session get the server" is a second thing to
+    // keep true.
+    if (!(await this.ensureMcp())) return []
     return [
       {
-        name: 'preview',
+        name: CARBON_MCP_NAME,
         status: 'connected',
         scope: 'local',
-        tools: PREVIEW_TOOL_NAMES.map((name) => ({
-          name,
-          description: PREVIEW_TOOL_INFO[name].description,
-          readOnly: PREVIEW_TOOL_INFO[name].readOnly
-        }))
+        tools: carbonMcpTools()
       }
     ]
   }

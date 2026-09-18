@@ -10,7 +10,7 @@ import {
   shell
 } from 'electron'
 import { randomUUID } from 'node:crypto'
-import { writeFileSync } from 'node:fs'
+import { existsSync, writeFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type {
@@ -62,6 +62,7 @@ import { faviconImage, siteFavicon } from './favicons'
 import { LspManager } from './lsp'
 import * as gitOps from './git'
 import * as githubOps from './github'
+import * as projectOps from './projects'
 import { getPermissionRules, removePermissionRule } from './permissions'
 import { PreviewManager } from './preview'
 import { CanvasManager } from './canvas.ts'
@@ -82,6 +83,7 @@ import {
   listWorktrees,
   mergeWorktree,
   removeWorktree,
+  resolveStaleWorktree,
   resolveWorktree,
   setupCommandFor,
   worktreeStatus
@@ -704,16 +706,29 @@ function registerIpc(): void {
     })
   }
 
-  ipcMain.handle('worktree:remove', async (_e, path: string): Promise<OpResult> => {
-    // Removing a directory a chat is living in would strand it, and the chat's
-    // own delete flow is the supported way to do that.
-    if (store.hasOtherChatIn(path)) {
-      return { ok: false, error: 'A chat is still working in this worktree.' }
+  ipcMain.handle(
+    'worktree:remove',
+    async (_e, path: string, repoRoot?: string): Promise<OpResult> => {
+      // Removing a directory a chat is living in would strand it, and the chat's
+      // own delete flow is the supported way to do that. A directory that is
+      // already **gone** strands nothing further — the chat is orphaned either
+      // way — and refusing there would make git's stale entry unclearable
+      // without first deleting a chat, which is the one state this page exists
+      // to help out of.
+      if (existsSync(path) && store.hasOtherChatIn(path)) {
+        return { ok: false, error: 'A chat is still working in this worktree.' }
+      }
+      // A worktree whose directory is gone cannot answer for itself, and that is
+      // the one Settings → Projects offers to clear — so fall back to asking the
+      // repo, which still lists the entry as prunable. `git worktree remove`
+      // settles a prunable entry without `--force`, so nothing below changes.
+      const info =
+        (await resolveWorktree(path)) ??
+        (repoRoot ? await resolveStaleWorktree(repoRoot, path) : null)
+      if (!info) return { ok: false, error: 'Not a git worktree.' }
+      return removeWorktree(info.repoRoot, path, info.branch, false)
     }
-    const info = await resolveWorktree(path)
-    if (!info) return { ok: false, error: 'Not a git worktree.' }
-    return removeWorktree(info.repoRoot, path, info.branch, false)
-  })
+  )
 
   ipcMain.handle('worktree:notice', async (_e, chatId: string): Promise<WorktreeNotice> => {
     const chat = store.getMeta(chatId)
@@ -748,6 +763,31 @@ function registerIpc(): void {
     else delete chat.pinnedAt
     store.saveChat(id)
     emit({ type: 'meta', chatId: id, patch: { pinnedAt: chat.pinnedAt } })
+  })
+
+  // Archiving takes a chat out of the sidebar without deleting anything. A side
+  // chat is already out of every list this would remove it from, and is reached
+  // only through its thread — archiving one would hide it from the one place it
+  // can be reopened, so the flag is refused rather than silently written.
+  ipcMain.handle('chats:set-archived', (_e, id: string, archived: boolean) => {
+    const chat = store.getChat(id)
+    if (!chat || chat.ephemeral) return
+    if (archived) {
+      chat.archivedAt = Date.now()
+      // A pin is a position in the sidebar, and an archived chat has none. Left
+      // standing it would come back pinned months later, at the top of a list
+      // the user no longer expects it in — the same reasoning as the thread
+      // move above.
+      delete chat.pinnedAt
+    } else {
+      delete chat.archivedAt
+    }
+    store.saveChat(id)
+    emit({
+      type: 'meta',
+      chatId: id,
+      patch: { archivedAt: chat.archivedAt, ...(archived ? { pinnedAt: undefined } : {}) }
+    })
   })
 
   // A chat dragged into another thread becomes one of its columns. Ownership is
@@ -1087,6 +1127,11 @@ function registerIpc(): void {
     gitOps.gitBranchChanges(cwd, baseBranch)
   )
   ipcMain.handle('git:init', (_e, cwd: string) => gitOps.gitInit(cwd))
+  ipcMain.handle('projects:overview', (_e, roots: string[], refresh?: boolean) =>
+    projectOps.projectsOverview(roots, refresh)
+  )
+  ipcMain.handle('projects:icons', (_e, roots: string[]) => projectOps.projectIcons(roots))
+  ipcMain.handle('projects:detail', (_e, root: string) => projectOps.projectDetail(root))
   ipcMain.handle('github:state', (_e, cwd: string) => githubOps.ghState(cwd))
   ipcMain.handle('github:open-pr', (_e, cwd: string) => githubOps.openPrWeb(cwd))
   ipcMain.handle('github:publish-info', (_e, cwd: string) => githubOps.ghPublishInfo(cwd))
@@ -1131,7 +1176,7 @@ app.whenReady().then(() => {
   // both tool namespaces and takes this as its second host. The bridge thunk is
   // what breaks the cycle: it is not called until an MCP config is built, long
   // after both objects exist.
-  canvas = new CanvasManager(store.canvases, emit, () => preview.bridge())
+  canvas = new CanvasManager(store.canvases, emit)
   preview = new PreviewManager(emitPreview, sendPreviewCommand, canvas)
   manager = new ChatManager(store, emit, preview, canvas)
   terminals = new TerminalManager(emitTerminal)

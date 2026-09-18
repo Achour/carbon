@@ -40,7 +40,10 @@ function DropdownMenuItem({
   return (
     <Menu.Item
       className={cn(
-        'flex cursor-default select-none items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none data-[highlighted]:bg-accent [&_svg]:size-3.5 [&_svg]:text-muted-foreground',
+        // `--ui-row`, not `text-sm`: a menu is chrome, and 14px rows hanging
+        // off a 13px sidebar is the same control reading at two sizes
+        // depending on whether it is open.
+        'flex cursor-default select-none items-center gap-2 rounded-md px-2 py-1.5 text-[length:var(--ui-row)] outline-none data-[highlighted]:bg-accent [&_svg]:size-3.5 [&_svg]:text-muted-foreground',
         destructive &&
           'text-destructive data-[highlighted]:bg-destructive/10 [&_svg]:text-destructive',
         className

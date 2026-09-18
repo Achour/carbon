@@ -83,8 +83,9 @@ export function humanizeShellCommand(command: string, cwd: string): HumanizedCom
  * remove, minus the tools it could not name because they are not Grok's.
  *
  * The answer is a *rename into the shape the renderer already knows*
- * (`mcp__<server>__<tool>`) rather than a case per server: `canvas__write`
- * becomes `mcp__canvas__write` and matches the case that was already there, and
+ * (`mcp__<server>__<tool>`) rather than a case per server: `carbon__canvas_write`
+ * becomes `mcp__carbon__canvas_write` and matches the case that was already
+ * there, and
  * a server nobody has heard of still lands on the generic MCP row under its own
  * name instead of under Grok's plumbing. `canvasWrite` keeps its own reading of
  * the wrapper — it answers "is this a canvas mutation" for grouping and for the
@@ -100,7 +101,7 @@ export function unwrapGrokTool(
   const args = input.tool_input
   return {
     // Already-namespaced spellings pass through: the CLI has spelled this more
-    // than one way, and `mcp__mcp__canvas__write` matches nothing at all.
+    // than one way, and `mcp__mcp__carbon__canvas_write` matches nothing at all.
     name: tool.startsWith('mcp__') ? tool : `mcp__${tool}`,
     input: args !== null && typeof args === 'object' ? (args as Record<string, unknown>) : {}
   }

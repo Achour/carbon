@@ -82,6 +82,22 @@
   --chart-grok: oklch(0.4 0.08 336);
 
   /*
+   * A project's identity disc, for the projects that have no icon of their own
+   * (Settings → Projects). One *hue* is picked per project in
+   * `lib/projectIdentity.ts`; lightness and chroma live here, so a single hue
+   * number reads on both grounds instead of needing a second colour stored per
+   * project for dark mode.
+   *
+   * A third value, not a re-use: `--chart-*` is a legend for three named series
+   * and `--icon-*` is a file-type vocabulary, both fixed sets. This is an open
+   * set keyed on a hash, so it needs a *rule* rather than entries — and the
+   * rule is the one that keeps twelve arbitrary hues readable at 28px: enough
+   * chroma to be a colour, held at a lightness that clears the sheet behind it.
+   */
+  --project-ink-l: 0.52;
+  --project-ink-c: 0.13;
+
+  /*
    * The providers' own marks, wherever a logo is drawn (the sidebar's detailed
    * rows). Distinct from `--chart-*` above: those are *assigned* hues, a legend
    * for two series, free to be warm/cool because a chart's colors only have to
@@ -178,6 +194,10 @@
   --chart-claude: oklch(0.664 0.143 46.5);
   --chart-codex: oklch(0.644 0.141 252.7);
   --chart-grok: oklch(0.55 0.08 336);
+  /* Lifted for the dark sheet and de-saturated with it: full chroma at this
+     lightness reads as neon rather than as an identity. */
+  --project-ink-l: 0.78;
+  --project-ink-c: 0.11;
   --brand-claude: oklch(0.7 0.135 46);
   --brand-codex: oklch(0.95 0 0);
   --brand-grok: oklch(0.95 0 0);

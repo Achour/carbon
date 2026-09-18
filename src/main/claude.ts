@@ -70,16 +70,18 @@ import {
 import { AGENT_TOOLS } from '@shared/agentRuns'
 import type { Store } from './store'
 import type { PreviewManager } from './preview'
-import { runPreviewTool } from './previewTools.ts'
+import { PREVIEW_TOOL_INFO, runPreviewTool } from './previewTools.ts'
+import {
+  CARBON_MCP_NAME,
+  CARBON_TOOL_REFS,
+  carbonToolName,
+  isCarbonSideEffect,
+  isCarbonToolId,
+  type CarbonToolInput
+} from './carbonMcp.ts'
 import { projectRoot } from '../shared/types.ts'
 import type { CanvasManager } from './canvas.ts'
-import {
-  CANVAS_SESSION_RULES,
-  CANVAS_TOOL_INFO,
-  CANVAS_TOOL_NAMES,
-  runCanvasTool,
-  type CanvasToolInput
-} from './canvasTools.ts'
+import { CANVAS_SESSION_RULES, CANVAS_TOOL_INFO, runCanvasTool } from './canvasTools.ts'
 import { CodexSession, fetchCodexFeatures, fetchCodexModels, generateCodexText } from './codex'
 import { CodexAppServerClient } from './codexAppServer'
 import { fetchGrokModels, forkGrokBefore, generateGrokText, GrokSession } from './grok'
@@ -121,18 +123,32 @@ import {
 const GUI_SYSTEM_APPEND = `You are running inside a desktop GUI (not a terminal). The GUI renders any \`\`\`mermaid fenced code block as a real rendered diagram — this applies to your chat replies AND to plan documents you write for ExitPlanMode. When a diagram would make an explanation or a plan clearer (flows, sequences, architecture, state), draw it with a Mermaid fenced block (e.g. flowchart, sequenceDiagram) rather than ASCII art or box-drawing characters. Keep diagrams valid and reasonably small; label nodes clearly.\n\n${CANVAS_SESSION_RULES}`
 
 /**
- * An in-process MCP server giving the agent control of the live preview for the
- * chat's project: start/stop the dev server, navigate, screenshot the running
- * page, and read its console — so it can verify its own edits end-to-end.
+ * **Carbon's `carbon` MCP server, in-process.**
+ *
+ * The preview tools (drive this project's dev server, screenshot the running
+ * page, read its console) and the canvas tools (save an HTML document the user
+ * reads beside the chat) are one server with one tool table — the same table
+ * `carbonBridge.ts` serves to Codex and Grok over HTTP, so a tool is
+ * `mcp__carbon__preview_start` on all three and nothing downstream has to know
+ * which backend produced a card.
+ *
+ * Claude is the one provider that does *not* go through the bridge: its SDK
+ * takes JavaScript handlers directly, so there is no port, no token and no hop
+ * — only the shared declaration. `cwd`, `project` and `chatId` are closed over
+ * rather than taken as tool arguments: they are facts about the session, and a
+ * model able to name its own project could write into another one's canvas
+ * list. `project` is the repo root, so a worktree chat's canvas survives the
+ * branch.
  */
-function buildPreviewServer(
-  cwd: string,
-  preview: PreviewManager
+function buildCarbonServer(
+  ctx: { cwd: string; project: string; chatId: string },
+  preview: PreviewManager,
+  canvas: CanvasManager
 ): ReturnType<typeof createSdkMcpServer> {
   const text = (t: string): { content: Array<{ type: 'text'; text: string }> } => ({
     content: [{ type: 'text', text: t }]
   })
-  const previewToolResult = (
+  const previewResult = (
     result: Awaited<ReturnType<typeof runPreviewTool>>
   ):
     | { content: Array<{ type: 'text'; text: string }> }
@@ -141,71 +157,26 @@ function buildPreviewServer(
       ? { content: [{ type: 'image' as const, data: result.data, mimeType: result.mimeType }] }
       : text(result.text)
   return createSdkMcpServer({
-    name: 'preview',
+    name: CARBON_MCP_NAME,
     version: '1.0.0',
-    tools: [
-      tool(
-        'status',
-        'Get the dev-server preview status for this project: whether it is running and its local URL.',
-        {},
-        async () => previewToolResult(await runPreviewTool(preview, cwd, 'status'))
-      ),
-      tool(
-        'start',
-        'Start this project\'s dev server (command auto-detected from package.json). Waits until the local URL is ready and opens the in-app preview. Use before screenshotting.',
-        {},
-        async () => previewToolResult(await runPreviewTool(preview, cwd, 'start'))
-      ),
-      tool('stop', 'Stop this project\'s dev server.', {}, async () =>
-        previewToolResult(await runPreviewTool(preview, cwd, 'stop'))
-      ),
-      tool(
-        'navigate',
-        'Point the in-app preview browser at a URL (e.g. a specific route of the running app).',
-        { url: z.string().describe('The URL to load in the preview.') },
-        async ({ url }) => previewToolResult(await runPreviewTool(preview, cwd, 'navigate', { url }))
-      ),
-      tool(
-        'screenshot',
-        'Capture a screenshot of the current preview page to see the running app as the user sees it. Start the dev server first if it is not running.',
-        {},
-        async () => previewToolResult(await runPreviewTool(preview, cwd, 'screenshot'))
-      ),
-      tool(
-        'console',
-        'Read recent console output and errors from the running preview app (browser console + dev-server errors).',
-        {},
-        async () => previewToolResult(await runPreviewTool(preview, cwd, 'console'))
-      )
-    ]
-  })
-}
-
-/**
- * An in-process MCP server letting the agent save a canvas — a self-contained
- * HTML document the user reads beside the chat.
- *
- * `project` and `chatId` are closed over rather than taken as tool arguments,
- * the way `cwd` is on the preview server: they are facts about the session, and
- * a model able to name its own project could write into another one's list.
- * `project` is the repo root, so a worktree chat's canvas survives the branch.
- */
-function buildCanvasServer(
-  ctx: { project: string; chatId: string },
-  canvas: CanvasManager
-): ReturnType<typeof createSdkMcpServer> {
-  const text = (t: string): { content: Array<{ type: 'text'; text: string }> } => ({
-    content: [{ type: 'text', text: t }]
-  })
-  return createSdkMcpServer({
-    name: 'canvas',
-    version: '1.0.0',
-    // Built from `CANVAS_TOOL_INFO`'s parameter table, the same table the stdio
-    // child's JSON Schema is built from, so Claude and the other two providers
-    // cannot be told different things about one argument. Written out by hand
-    // they already had been.
-    tools: CANVAS_TOOL_NAMES.map((name) => {
-      const info = CANVAS_TOOL_INFO[name]
+    // Built from the two tool tables rather than written out by hand — as they
+    // had been, until `id` was described one way here and another way in the
+    // schema the other providers read. That is the silent provider asymmetry
+    // this codebase keeps ruling out, arriving by the mechanism it warns about.
+    tools: CARBON_TOOL_REFS.map((ref) => {
+      const name = carbonToolName(ref)
+      if (ref.kind === 'preview') {
+        const info = PREVIEW_TOOL_INFO[ref.name]
+        const shape: ZodRawShape = info.url
+          ? { url: z.string().describe('The URL to load in the preview.') }
+          : {}
+        return tool(name, info.description, shape, async (args) =>
+          previewResult(
+            await runPreviewTool(preview, ctx.cwd, ref.name, args as { url?: string })
+          )
+        )
+      }
+      const info = CANVAS_TOOL_INFO[ref.name]
       const shape: ZodRawShape = Object.fromEntries(
         Object.entries(info.params).map(([key, p]) => {
           const base = p.type === 'boolean' ? z.boolean() : z.string()
@@ -215,7 +186,14 @@ function buildCanvasServer(
       // The handler's argument type is the table's, which the compiler cannot
       // infer from a value — and `runCanvasTool` validates every field anyway.
       return tool(name, info.description, shape, async (args) =>
-        text(runCanvasTool(canvas, ctx, name, args as CanvasToolInput).text)
+        text(
+          runCanvasTool(
+            canvas,
+            { project: ctx.project, chatId: ctx.chatId },
+            ref.name,
+            args as CarbonToolInput
+          ).text
+        )
       )
     })
   })
@@ -804,32 +782,31 @@ class ClaudeSession implements AgentSession {
         // session's markers down to every session it starts.
         env: spawnEnv(claudeFeatureEnv()),
         mcpServers: {
-          preview: buildPreviewServer(chat.cwd, preview),
-          canvas: buildCanvasServer(
-            { project: projectRoot(chat), chatId: chat.id },
+          [CARBON_MCP_NAME]: buildCarbonServer(
+            { cwd: chat.cwd, project: projectRoot(chat), chatId: chat.id },
+            preview,
             canvas
           )
         },
         canUseTool: async (toolName, input, opts) => {
-          // The preview tools are safe, local, and app-mediated — never prompt.
-          // Exception: starting/stopping the dev server is a side effect, so it's
-          // blocked in plan mode (read-only) until the plan is approved.
-          if (toolName.startsWith('mcp__preview__')) {
-            const sideEffecting =
-              toolName === 'mcp__preview__start' || toolName === 'mcp__preview__stop'
-            if (sideEffecting && this.chat.permissionMode === 'plan') {
+          // Carbon's own tools are safe, local and app-mediated — a screenshot
+          // of the in-app preview, a canvas written to Carbon's database, never
+          // a file or a process — so they are not worth a prompt, in plan mode
+          // included: a plan that produces a document is still a plan.
+          //
+          // The exception is starting or stopping the dev server, which is a
+          // side effect and is refused while the plan is unapproved. Read from
+          // the tool table (`isCarbonSideEffect`) rather than a name written
+          // here, so the next tool added to the server cannot land on the
+          // permissive side of this branch by default.
+          if (isCarbonToolId(toolName)) {
+            if (isCarbonSideEffect(toolName) && this.chat.permissionMode === 'plan') {
               return {
                 behavior: 'deny',
                 message:
                   'Starting or stopping the dev server is a side effect and is not allowed in plan mode. Note it in the plan — it can run once the plan is approved.'
               }
             }
-            return { behavior: 'allow', updatedInput: input }
-          }
-          // A canvas tool writes only Carbon's own database — no file, no
-          // process, nothing outside the app — so there is nothing to gate, in
-          // plan mode included: a plan that produces a document is still a plan.
-          if (toolName.startsWith('mcp__canvas__')) {
             return { behavior: 'allow', updatedInput: input }
           }
           return this.requestPermission(toolName, input, opts)
@@ -3093,8 +3070,7 @@ export class ChatManager {
             onDead,
             undefined,
             undefined,
-            this.preview,
-            this.canvas
+            this.preview
           )
         : chat.provider === 'grok'
           ? new GrokSession(
@@ -3103,8 +3079,7 @@ export class ChatManager {
               this.store,
               onDead,
               (commands) => this.commandsByCwd.set(commandsKey(chat.cwd, 'grok'), commands),
-              this.preview,
-              this.canvas
+              this.preview
             )
           : new ClaudeSession(
               chat,

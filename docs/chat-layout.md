@@ -114,6 +114,10 @@ What remains is the part that was never about scaling:
   the file viewer, diffs and code blocks are a document being read rather than
   the app being read — and zoom, which moves both together, is exactly why
   someone who wants small code in a large window still needs this one.
+- **Menus carry it too.** `DropdownMenuItem` and `ContextMenuItem` were
+  shadcn's `text-sm` — 14px rows hanging off a 13px surface, so a control read
+  at one size closed and another open, and a chat row's right-click menu was a
+  size larger than the row it came from. One token, one size.
 - **`--ui-row` is one size, and file lists have no second one.** The
   source-control tree, the file tree and the review's stacked headers put every
   label at it — a file name, a folder name, the directory beside a name, the
