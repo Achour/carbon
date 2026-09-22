@@ -261,7 +261,7 @@ that the strip scrolls sideways rather than crushing a transcript.
   narrow column they overflowed into each other rather than truncating — the
   model trigger drew its effort over the permission chip. The model name stays;
   the effort and the permission's words are one click away.
-- **The sidebar row is the thread's.** `ThreadMark` counts its open chats, and
+- **The sidebar row is the thread's.** `ThreadProviders` draws one provider mark per open chat, and
   the row's activity is `projectActivity` over all of them, so "needs your input"
   on a row means some column in that thread does.
 

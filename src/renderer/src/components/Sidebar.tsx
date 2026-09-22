@@ -7,7 +7,6 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
-  Columns2,
   EyeOff,
   Folder,
   FolderGit2,
@@ -264,10 +263,20 @@ function PinMark({ active }: { active: boolean }): React.JSX.Element {
   )
 }
 
-function RowProvider({ chat, active }: { chat: ChatMeta; active: boolean }): React.JSX.Element {
+function RowProvider({
+  chat,
+  active,
+  titled = false
+}: {
+  chat: ChatMeta
+  active: boolean
+  /** Name the chat in the tooltip — for a thread's marks, which stand for different chats. */
+  titled?: boolean
+}): React.JSX.Element {
   const terminal = chat.surface === 'terminal' && !chat.sessionId
+  const label = terminal ? 'Terminal' : PROVIDER_LABELS[chat.provider]
   return (
-    <WithTooltip label={terminal ? 'Terminal' : PROVIDER_LABELS[chat.provider]}>
+    <WithTooltip label={titled ? `${label} · ${chat.title || 'New chat'}` : label}>
       <span
         className={cn(
           'flex shrink-0 items-center transition-opacity',
@@ -291,7 +300,7 @@ function ChatItemRow({
   active,
   activity,
   titling,
-  threadCount,
+  sides,
   detail,
   mark,
   projectMenu,
@@ -304,8 +313,8 @@ function ChatItemRow({
   /** Across every open column of this chat's thread — see `ThreadView`. */
   activity: ChatActivity
   titling: boolean
-  /** Chats open in this row's thread; 1 is a plain chat and draws nothing. */
-  threadCount: number
+  /** The other chats open in this row's thread, in column order; empty for a plain chat. */
+  sides: ChatMeta[]
   /** Second line for a detailed row; null renders the compact single-line row. */
   detail: ChatDetail | null
   /**
@@ -453,14 +462,13 @@ function ChatItemRow({
                 row. `ml-auto` and not a spacer: with all three absent the
                 cluster takes no space at all. */}
             <span className="ml-auto flex shrink-0 items-center gap-2 pl-2">
-              <ThreadMark count={threadCount} active={active} />
               {/* A chat you cannot type into has to be recognizable before you
                   open it, and the mark beside it is the provider's once a CLI
                   session has been found. */}
               {chat.surface === 'terminal' && chat.sessionId && (
                 <TerminalMark active={active} />
               )}
-              <RowProvider chat={chat} active={active} />
+              <ThreadProviders chat={chat} sides={sides} active={active} />
             </span>
           </span>
         </button>
@@ -497,7 +505,7 @@ function ChatItemRow({
           )}
           {chat.surface === 'terminal' && <TerminalMark active={active} />}
           <span className={titleClass}>{chat.title || 'New chat'}</span>
-          <ThreadMark count={threadCount} active={active} />
+          {sides.length > 0 && <ThreadProviders chat={chat} sides={sides} active={active} />}
           {trailing}
         </button>
       )}
@@ -605,7 +613,7 @@ const ChatItem = React.memo(
     prev.chat === next.chat &&
     prev.active === next.active &&
     prev.titling === next.titling &&
-    prev.threadCount === next.threadCount &&
+    sameSides(prev.sides, next.sides) &&
     prev.actions === next.actions &&
     sameActivity(prev.activity, next.activity) &&
     (prev.activity.kind !== 'idle' ||
@@ -957,25 +965,33 @@ function NewChatDialog({
 }
 
 /**
- * How many chats the row's thread has open. The row is the thread, so without
- * this a chat with four columns reads the same as one with none — and the
- * activity beside it, which covers all of them, would look misattributed.
+ * One provider mark per chat open in the row's thread. The row is the thread,
+ * so without this a chat with four columns reads the same as one with none —
+ * and the activity beside it, which covers all of them, would look
+ * misattributed. Marks rather than a count: the count said *how many* and left
+ * *which* one click away, where the marks say both.
  */
-function ThreadMark({ count, active }: { count: number; active: boolean }): React.JSX.Element | null {
-  if (count < 2) return null
+function ThreadProviders({
+  chat,
+  sides,
+  active
+}: {
+  chat: ChatMeta
+  sides: ChatMeta[]
+  active: boolean
+}): React.JSX.Element {
+  if (!sides.length) return <RowProvider chat={chat} active={active} />
   return (
-    <WithTooltip label={`${count} chats in this thread`} side="right">
-      <span
-        className={cn(
-          'flex shrink-0 items-center gap-0.5 text-[11px] tabular-nums transition-colors',
-          active ? 'text-sidebar-foreground/70' : 'text-sidebar-foreground/40'
-        )}
-      >
-        <Columns2 className="size-3" />
-        {count}
-      </span>
-    </WithTooltip>
+    <span className="flex shrink-0 items-center gap-1">
+      {[chat, ...sides].map((c) => (
+        <RowProvider key={c.id} chat={c} active={active} titled />
+      ))}
+    </span>
   )
+}
+
+function sameSides(a: ChatMeta[], b: ChatMeta[]): boolean {
+  return a.length === b.length && a.every((c, i) => c === b[i])
 }
 
 /**
@@ -1177,6 +1193,7 @@ export function Sidebar(): React.JSX.Element {
   // and loops React into a crash — the same trap `NO_PERMISSIONS` exists for.
   const allChats = useApp((s) => s.chats)
   const chats = React.useMemo(() => listedChats(allChats), [allChats])
+  const chatsById = React.useMemo(() => new Map(allChats.map((c) => [c.id, c])), [allChats])
   const activeId = useApp((s) => s.activeId)
   const statuses = useApp((s) => s.statuses)
   const sideColumns = useApp((s) => s.sideColumns)
@@ -1544,7 +1561,7 @@ export function Sidebar(): React.JSX.Element {
         active={chat.id === activeId}
         activity={activity}
         titling={!!titling[chat.id]}
-        threadCount={1 + columns.length}
+        sides={columns.flatMap((id) => chatsById.get(id) ?? [])}
         detail={detailed ? chatDetail(chat) : null}
         mark={mark}
         // Whenever no project row is on screen to carry the project's actions —
