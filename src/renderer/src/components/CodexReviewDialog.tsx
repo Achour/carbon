@@ -1,10 +1,10 @@
 import * as React from 'react'
+import { DotSpinner } from '@/components/ui/dot-spinner'
 import {
   ArrowLeft,
   FileDiff,
   GitCommitHorizontal,
   GitCompare,
-  LoaderCircle,
   PenLine,
   Search,
   X
@@ -329,7 +329,7 @@ export function CodexReviewMenu({
             <div className="max-h-64 overflow-y-auto rounded-lg border border-border p-1">
               {loading ? (
                 <div className="flex items-center justify-center gap-2 py-8 text-xs text-muted-foreground">
-                  <LoaderCircle className="size-3.5 animate-spin" /> Loading branches…
+                  <DotSpinner className="size-3.5" /> Loading branches…
                 </div>
               ) : visibleBranches.length ? (
                 visibleBranches.map((branch) => (
@@ -358,7 +358,7 @@ export function CodexReviewMenu({
                 disabled={!query.trim() || submitting}
                 onClick={() => void start({ type: 'baseBranch', branch: query.trim() })}
               >
-                {submitting && <LoaderCircle className="animate-spin" />}
+                {submitting && <DotSpinner />}
                 Review branch
               </Button>
             </div>
@@ -387,7 +387,7 @@ export function CodexReviewMenu({
             <div className="max-h-72 overflow-y-auto rounded-lg border border-border p-1">
               {loading ? (
                 <div className="flex items-center justify-center gap-2 py-8 text-xs text-muted-foreground">
-                  <LoaderCircle className="size-3.5 animate-spin" /> Loading commits…
+                  <DotSpinner className="size-3.5" /> Loading commits…
                 </div>
               ) : visibleCommits.length ? (
                 visibleCommits.map((commit) => (
@@ -433,7 +433,7 @@ export function CodexReviewMenu({
                   disabled={!validTypedSha || submitting}
                   onClick={() => void start({ type: 'commit', sha: typedSha, title: null })}
                 >
-                  {submitting && <LoaderCircle className="animate-spin" />}
+                  {submitting && <DotSpinner />}
                   Review SHA
                 </Button>
               </div>
@@ -466,7 +466,7 @@ export function CodexReviewMenu({
                 {instructions.length.toLocaleString()} / 4,000
               </span>
               <Button type="submit" disabled={!instructions.trim() || submitting}>
-                {submitting && <LoaderCircle className="animate-spin" />}
+                {submitting && <DotSpinner />}
                 Start review
               </Button>
             </div>

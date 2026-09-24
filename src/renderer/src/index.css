@@ -480,6 +480,33 @@
   border-radius: 8px;
 }
 
+/* `DotSpinner`: each dot flashes full and fades to a dim floor in eighths of
+   a lap; the stagger in the component turns eight of these into a head chasing
+   round the ring. Stepped rather than smooth — all eight dots change on the
+   same tick, ~8 times a second, which is the look (a terminal-style chase) and
+   also far fewer composited frames than a continuous fade. */
+.dot-chase {
+  animation: dot-chase 960ms step-end infinite;
+}
+@keyframes dot-chase {
+  0% {
+    opacity: 1;
+  }
+  12.5% {
+    opacity: 0.7;
+  }
+  25% {
+    opacity: 0.45;
+  }
+  37.5% {
+    opacity: 0.28;
+  }
+  50%,
+  100% {
+    opacity: 0.16;
+  }
+}
+
 /* Shimmering status text */
 .shimmer-text {
   background: linear-gradient(
@@ -789,6 +816,7 @@
 /* A hidden window (minimized, covered, another Space) paints nothing — stop
    every loading animation so the GPU stays idle. */
 :root[data-window-visible='false'] .animate-spin,
+:root[data-window-visible='false'] .dot-chase,
 :root[data-window-visible='false'] .animate-pulse,
 :root[data-window-visible='false'] .animate-pulse-soft,
 :root[data-window-visible='false'] .shimmer-text,
@@ -833,6 +861,7 @@
   .animate-spin,
   .animate-pulse,
   .animate-pulse-soft,
+  .dot-chase,
   .shimmer-text,
   .title-forming {
     animation: none !important;

@@ -4,7 +4,6 @@ import {
   AlertTriangle,
   Bot,
   CircleUser,
-  Loader2,
   Power,
   RefreshCw,
   Server,

@@ -1,5 +1,6 @@
 import * as React from 'react'
-import { Check, ChevronDown, Circle, ListTodo, Loader2 } from 'lucide-react'
+import { DotSpinner } from '@/components/ui/dot-spinner'
+import { Check, ChevronDown, Circle, ListTodo } from 'lucide-react'
 import { useTaskList } from '@/taskListStore'
 import type { TaskItem } from '@/lib/taskList'
 import { cn } from '@/lib/utils'
@@ -81,7 +82,7 @@ export function TaskDock({ chatId }: { chatId: string }): React.JSX.Element | nu
                 {task.status === 'completed' ? (
                   <Check className="size-3.5 text-success" strokeWidth={2.5} />
                 ) : task.status === 'in_progress' ? (
-                  <Loader2 className="size-3.5 animate-spin text-primary" />
+                  <DotSpinner className="size-3.5 text-primary" />
                 ) : (
                   <Circle className="size-3.5 text-muted-foreground/40" strokeWidth={2} />
                 )}

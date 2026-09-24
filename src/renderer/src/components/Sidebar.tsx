@@ -13,7 +13,6 @@ import {
   FolderOpen,
   FolderPlus,
   GitBranch,
-  Loader2,
   MessageCircleQuestion,
   MessageSquarePlus,
   MoreHorizontal,
@@ -52,6 +51,7 @@ import { chatMeta, columnsOf, listedChats, useApp } from '@/store'
 import { UpdateBanner } from '@/components/UpdateBanner'
 import { UsagePanel } from '@/components/UsagePanel'
 import { Button } from '@/components/ui/button'
+import { DotSpinner } from '@/components/ui/dot-spinner'
 import {
   Dialog,
   DialogContent,
@@ -1061,7 +1061,7 @@ function ActivityIndicator({ activity }: { activity: ChatActivity }): React.JSX.
         ) : activity.kind === 'background' ? (
           <Bot className="size-3.5 animate-pulse-soft text-primary" />
         ) : (
-          <Loader2 className="size-3 animate-spin text-primary" />
+          <DotSpinner className="text-primary" />
         )}
       </span>
     </WithTooltip>

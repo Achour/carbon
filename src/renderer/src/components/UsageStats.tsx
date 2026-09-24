@@ -1,5 +1,6 @@
 import * as React from 'react'
-import { Loader2, RefreshCw, X } from 'lucide-react'
+import { DotSpinner } from '@/components/ui/dot-spinner'
+import { RefreshCw, X } from 'lucide-react'
 import { USAGE_RANGES } from '@shared/types'
 import type { Provider, UsageDay, UsageReport, UsageTotals } from '@shared/types'
 import { cn } from '@/lib/utils'
@@ -609,7 +610,7 @@ export function UsageStats(): React.JSX.Element {
       <div className="min-h-0 flex-1 overflow-y-auto">
         {!report ? (
           <div className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="size-4 animate-spin" />
+            <DotSpinner className="size-4" />
             Reading session logs…
           </div>
         ) : (

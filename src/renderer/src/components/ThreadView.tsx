@@ -1,11 +1,11 @@
 import * as React from 'react'
+import { DotSpinner } from '@/components/ui/dot-spinner'
 import {
   ArrowLeftRight,
   Bot,
   Columns3,
   GitMerge,
   LayoutGrid,
-  Loader2,
   Maximize2,
   MessageCircleQuestion,
   Minimize2,
@@ -587,7 +587,7 @@ function ChatMark({ id, labelled = false }: { id: string; labelled?: boolean }):
     return <Bot aria-label="Background jobs running" className="size-3 shrink-0 animate-pulse-soft text-primary" />
   }
   if (mark === 'working') {
-    return <Loader2 aria-label="Working" className="size-3 shrink-0 animate-spin text-primary" />
+    return <DotSpinner aria-label="Working" className="size-3 shrink-0 text-primary" />
   }
   if (mark === 'unread') {
     return (

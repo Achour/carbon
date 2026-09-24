@@ -1,5 +1,6 @@
 import * as React from 'react'
-import { Activity, Bot, Boxes, Loader2, SquareTerminal, Workflow } from 'lucide-react'
+import { DotSpinner } from '@/components/ui/dot-spinner'
+import { Activity, Bot, Boxes, SquareTerminal, Workflow } from 'lucide-react'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Button } from '@/components/ui/button'
 import { useApp } from '@/store'
@@ -88,7 +89,7 @@ export function BackgroundJobs({ chatId }: { chatId: string }): React.JSX.Elemen
             className="no-drag h-7 shrink-0 gap-1.5 rounded-md border border-border bg-secondary/50 px-2 text-xs font-normal text-muted-foreground hover:text-foreground"
             aria-label={`${jobs.length} background job${jobs.length === 1 ? '' : 's'} running`}
           >
-            <Loader2 className="size-3 animate-spin text-primary" />
+            <DotSpinner className="size-3 text-primary" />
             <span className="tabular-nums">
               {jobs.length} running
             </span>

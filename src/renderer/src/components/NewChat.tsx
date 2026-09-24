@@ -1,4 +1,5 @@
 import * as React from 'react'
+import { DotSpinner } from '@/components/ui/dot-spinner'
 import {
   FileDiff,
   Folder,
@@ -6,7 +7,6 @@ import {
   FolderTree,
   GitBranch,
   Globe,
-  Loader2,
   PanelLeft,
   PanelRight,
   Shapes,
@@ -85,7 +85,7 @@ function OpenTerminalPill({
   return (
     <WithTooltip label="Open a terminal chat here. Start claude, codex or grok in it; Carbon resumes that session when you come back.">
       <button type="button" onClick={onOpen} disabled={disabled} className={contextPillButton}>
-        {starting ? <Loader2 className="animate-spin" /> : <SquareTerminal />}
+        {starting ? <DotSpinner /> : <SquareTerminal />}
         <span className="whitespace-nowrap">Terminal</span>
       </button>
     </WithTooltip>
@@ -430,7 +430,7 @@ export function NewChat(): React.JSX.Element {
                 </div>
                 {starting && creatingWorktree && (
                   <p className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
-                    <Loader2 className="size-3 animate-spin" />
+                    <DotSpinner className="size-3" />
                     Creating worktree…
                   </p>
                 )}

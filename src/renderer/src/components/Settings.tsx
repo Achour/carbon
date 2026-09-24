@@ -1,4 +1,5 @@
 import * as React from 'react'
+import { DotSpinner } from '@/components/ui/dot-spinner'
 import {
   Archive,
   ArrowDownToLine,
@@ -6,7 +7,6 @@ import {
   FolderGit2,
   Info,
   LayoutList,
-  Loader2,
   MessageSquare,
   Minus,
   Monitor,
@@ -157,7 +157,7 @@ function UpdateRow(): React.JSX.Element {
           // A brew install has nothing to download, so the check button stays —
           // re-checking is the only button-shaped action left to it.
           <Button size="sm" variant="secondary" disabled={checking} onClick={() => void run()}>
-            {checking && <Loader2 className="animate-spin" />}
+            {checking && <DotSpinner />}
             Check for updates
           </Button>
         )}
@@ -479,7 +479,7 @@ function ProvidersSection(): React.JSX.Element {
           Just installed one? Recheck picks it up without a restart.
         </span>
         <Button size="sm" variant="secondary" onClick={() => void recheck()} disabled={rechecking}>
-          {rechecking ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+          {rechecking ? <DotSpinner /> : <RefreshCw />}
           Recheck
         </Button>
       </div>

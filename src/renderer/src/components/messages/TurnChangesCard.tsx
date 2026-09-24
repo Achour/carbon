@@ -1,6 +1,7 @@
 import * as React from 'react'
+import { DotSpinner } from '@/components/ui/dot-spinner'
 import { Collapsible } from '@base-ui/react/collapsible'
-import { ChevronRight, FileDiff, Folder, Loader2, RotateCcw } from 'lucide-react'
+import { ChevronRight, FileDiff, Folder, RotateCcw } from 'lucide-react'
 import type { AssistantMessage, GitFileChange, RewindResult } from '@shared/types'
 import { cn } from '@/lib/utils'
 import { changedPathsFromParts, groupChanges, type ChangedFile } from '@/lib/turnChanges'
@@ -171,7 +172,7 @@ export const TurnChangesCard = React.memo(function TurnChangesCard({
                 <div className="text-[13px] font-medium">Undo this turn’s file changes?</div>
                 {busy && !preview ? (
                   <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
-                    <Loader2 className="size-3.5 animate-spin" /> Checking workspace…
+                    <DotSpinner className="size-3.5" /> Checking workspace…
                   </div>
                 ) : preview?.canRewind ? (
                   <>
@@ -184,7 +185,7 @@ export const TurnChangesCard = React.memo(function TurnChangesCard({
                         Cancel
                       </Button>
                       <Button size="sm" disabled={busy} onClick={() => void applyUndo()}>
-                        {busy ? <Loader2 className="animate-spin" /> : <RotateCcw />} Undo changes
+                        {busy ? <DotSpinner /> : <RotateCcw />} Undo changes
                       </Button>
                     </div>
                   </>

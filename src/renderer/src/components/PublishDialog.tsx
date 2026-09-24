@@ -1,4 +1,5 @@
 import * as React from 'react'
+import { DotSpinner } from '@/components/ui/dot-spinner'
 import {
   Check,
   ChevronDown,
@@ -7,7 +8,6 @@ import {
   ExternalLink,
   GitBranch,
   Globe,
-  Loader2,
   Lock,
   Plus,
   TriangleAlert
@@ -556,7 +556,7 @@ export function PublishDialog(): React.JSX.Element | null {
               </Button>
               {step === 'summary' ? (
                 <Button disabled={busy || !name} onClick={() => void publish()}>
-                  {busy && <Loader2 className="size-3.5 animate-spin" />}
+                  {busy && <DotSpinner className="size-3.5" />}
                   {busy ? 'Publishing…' : 'Publish'}
                 </Button>
               ) : (

@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { Loader2 } from 'lucide-react'
+import { DotSpinner } from '@/components/ui/dot-spinner'
 import type { ChatMeta, OpResult } from '@shared/types'
 import { basename } from '@/lib/format'
 import { useApp } from '@/store'
@@ -94,7 +94,7 @@ function ConfirmOpDialog({
               Cancel
             </Button>
             <Button onClick={() => void go()} disabled={busy}>
-              {busy && <Loader2 className="size-3 animate-spin" />}
+              {busy && <DotSpinner className="size-3" />}
               {confirmLabel}
             </Button>
           </div>

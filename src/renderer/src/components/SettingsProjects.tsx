@@ -1,4 +1,5 @@
 import * as React from 'react'
+import { DotSpinner } from '@/components/ui/dot-spinner'
 import {
   Archive,
   Ellipsis,
@@ -7,7 +8,6 @@ import {
   GitBranch,
   Image,
   Layers,
-  Loader2,
   MessageSquare,
   Pencil,
   Plus,
@@ -286,7 +286,7 @@ function WorktreeRow({
             aria-label={`Remove worktree ${wt.branch}`}
             onClick={() => void remove()}
           >
-            {busy ? <Loader2 className="animate-spin" /> : <Trash2 />}
+            {busy ? <DotSpinner /> : <Trash2 />}
           </Button>
         </WithTooltip>
       )}
@@ -683,7 +683,7 @@ function ProjectDetailPane({
             <Group title="Worktrees" count={detail ? linked.length : undefined}>
               {!detail ? (
                 <div className="flex items-center gap-2 py-1 text-[12px] text-muted-foreground">
-                  <Loader2 className="size-3.5 animate-spin" /> Reading the repository…
+                  <DotSpinner className="size-3.5" /> Reading the repository…
                 </div>
               ) : linked.length === 0 ? (
                 <div className="rounded-lg border border-dashed border-border px-3 py-4 text-center text-[12px] text-muted-foreground">
@@ -894,7 +894,7 @@ export function ProjectsSection(): React.JSX.Element {
             disabled={projectsLoading}
             onClick={() => void loadProjects(true)}
           >
-            {projectsLoading ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+            {projectsLoading ? <DotSpinner /> : <RefreshCw />}
             Recheck all
           </Button>
         </div>

@@ -1,5 +1,6 @@
 import * as React from 'react'
-import { Archive, ArchiveRestore, GitBranch, Loader2, SquareTerminal, Trash2 } from 'lucide-react'
+import { DotSpinner } from '@/components/ui/dot-spinner'
+import { Archive, ArchiveRestore, GitBranch, SquareTerminal, Trash2 } from 'lucide-react'
 import type { ChatMeta } from '@shared/types'
 import { PROVIDER_LABELS, projectRoot } from '@shared/types'
 import { cn } from '@/lib/utils'
@@ -106,7 +107,7 @@ function ArchivedRow({
             <span className="min-w-0 truncate text-[13px]">{chat.title || 'New chat'}</span>
             {activity.kind !== 'idle' && (
               <span className="flex shrink-0 items-center gap-1 text-[11px] text-primary">
-                <Loader2 className="size-3 animate-spin" />
+                <DotSpinner className="size-3" />
                 {activity.label}
               </span>
             )}

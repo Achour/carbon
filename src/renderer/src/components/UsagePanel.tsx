@@ -1,5 +1,6 @@
 import * as React from 'react'
-import { Loader2, RefreshCw } from 'lucide-react'
+import { DotSpinner } from '@/components/ui/dot-spinner'
+import { RefreshCw } from 'lucide-react'
 import type { ProviderUsage, UsageOverview } from '@shared/types'
 import { PROVIDER_SHORT_LABELS } from '@shared/types'
 import { cn } from '@/lib/utils'
@@ -190,7 +191,7 @@ export function UsagePanel(): React.JSX.Element {
         <div className="space-y-4 p-3">
           {!overview ? (
             <div className="flex items-center gap-2 py-2 text-[11px] text-muted-foreground">
-              <Loader2 className="size-3.5 animate-spin" />
+              <DotSpinner className="size-3.5" />
               Reading plan limits…
             </div>
           ) : (

@@ -1,4 +1,5 @@
 import * as React from 'react'
+import { DotSpinner } from '@/components/ui/dot-spinner'
 import { Collapsible } from '@base-ui/react/collapsible'
 import {
   AlertTriangle,
@@ -9,7 +10,6 @@ import {
   Code2,
   Copy,
   FileText,
-  Loader2,
   MessageSquareQuote,
   MousePointerClick,
   Pencil,
@@ -172,7 +172,7 @@ function MessageEditor({
             Cancel
           </Button>
           <Button size="sm" disabled={busy || !text.trim()} onClick={() => void submit()}>
-            {busy ? <Loader2 className="size-3.5 animate-spin" /> : 'Resend'}
+            {busy ? <DotSpinner className="size-3.5" /> : 'Resend'}
           </Button>
         </div>
       </div>
@@ -625,7 +625,7 @@ export const EventRow = React.memo(function EventRow({
           </span>
           <span className="shrink-0">
             {pending ? (
-              <Loader2 className="size-3.5 animate-spin text-warning" />
+              <DotSpinner className="size-3.5 text-warning" />
             ) : (
               <Check className="size-3.5 text-success" />
             )}

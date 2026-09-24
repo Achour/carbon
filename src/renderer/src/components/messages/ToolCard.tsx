@@ -1,4 +1,5 @@
 import * as React from 'react'
+import { DotSpinner } from '@/components/ui/dot-spinner'
 import { Collapsible } from '@base-ui/react/collapsible'
 import {
   AppWindow,
@@ -19,7 +20,6 @@ import {
   Layers,
   Link,
   ListChecks,
-  Loader2,
   MessageCircleQuestion,
   MousePointerClick,
   Notebook,
@@ -690,7 +690,7 @@ function ActivityStatus({ part }: { part: ToolPart }): React.JSX.Element | null 
   switch (part.status) {
     case 'pending':
     case 'running':
-      return <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground/60" />
+      return <DotSpinner className="size-3.5 shrink-0 text-muted-foreground" />
     case 'error':
       return <X className="size-3.5 shrink-0 text-destructive" />
     case 'success':
@@ -703,7 +703,7 @@ function StatusIcon({ part }: { part: ToolPart }): React.JSX.Element {
   switch (part.status) {
     case 'pending':
     case 'running':
-      return <Loader2 className="size-3.5 animate-spin text-warning" />
+      return <DotSpinner className="size-3.5 text-warning" />
     case 'success':
       return <Check className="size-3.5 text-success" />
     case 'error':
@@ -1395,7 +1395,7 @@ export const ToolGroup = React.memo(function ToolGroup({
           <ChevronRight className={ACTIVITY_CHEVRON} />
           <span className="flex-1" />
           {running ? (
-            <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground/60" />
+            <DotSpinner className="size-3.5 shrink-0 text-muted-foreground" />
           ) : errored ? (
             <X className="size-3.5 shrink-0 text-destructive" />
           ) : null}
@@ -1580,7 +1580,7 @@ function AgentCard({ part }: { part: ToolPart; cwd: string }): React.JSX.Element
       )}
       <span className="shrink-0">
         {running ? (
-          <Loader2 className="size-3.5 animate-spin text-warning" />
+          <DotSpinner className="size-3.5 text-warning" />
         ) : (
           <StatusIcon part={part} />
         )}

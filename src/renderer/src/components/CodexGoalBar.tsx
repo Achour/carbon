@@ -1,7 +1,7 @@
 import * as React from 'react'
+import { DotSpinner } from '@/components/ui/dot-spinner'
 import {
   Check,
-  Loader2,
   MoreHorizontal,
   Pause,
   Pencil,
@@ -49,7 +49,7 @@ function StatusMark({
   status: CodexGoalStatus
   working: boolean
 }): React.JSX.Element {
-  if (working) return <Loader2 className="size-3 animate-spin text-primary" />
+  if (working) return <DotSpinner className="size-3 text-primary" />
   if (status === 'complete') return <Check className="size-3 text-success" strokeWidth={2.5} />
   return (
     <span
@@ -190,7 +190,7 @@ export function CodexGoalBar({
               onClick={() => void updateStatus('paused')}
               aria-label="Pause goal"
             >
-              {pending === 'status' ? <Loader2 className="animate-spin" /> : <Pause />}
+              {pending === 'status' ? <DotSpinner /> : <Pause />}
             </Button>
           </WithTooltip>
         ) : canResume ? (
@@ -202,7 +202,7 @@ export function CodexGoalBar({
               onClick={() => void updateStatus('active')}
               aria-label="Resume goal"
             >
-              {pending === 'status' ? <Loader2 className="animate-spin" /> : <Play />}
+              {pending === 'status' ? <DotSpinner /> : <Play />}
             </Button>
           </WithTooltip>
         ) : null}
@@ -216,7 +216,7 @@ export function CodexGoalBar({
                 disabled={pending !== null}
                 aria-label="Goal actions"
               >
-                {pending === 'clear' ? <Loader2 className="animate-spin" /> : <MoreHorizontal />}
+                {pending === 'clear' ? <DotSpinner /> : <MoreHorizontal />}
               </Button>
             }
           />
@@ -291,7 +291,7 @@ export function CodexGoalBar({
               Cancel
             </Button>
             <Button size="sm" disabled={pending !== null || !objective.trim()} onClick={saveEdit}>
-              {pending === 'edit' ? <Loader2 className="animate-spin" /> : <Check />}
+              {pending === 'edit' ? <DotSpinner /> : <Check />}
               Save
             </Button>
           </div>
