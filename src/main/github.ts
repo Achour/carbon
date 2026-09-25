@@ -30,7 +30,7 @@ const GH_ENV = {
   NO_COLOR: '1'
 }
 
-async function gh(cwd: string, args: string[], timeout = 20_000): Promise<string> {
+export async function gh(cwd: string, args: string[], timeout = 20_000): Promise<string> {
   const { stdout } = await execFileP('gh', args, {
     cwd,
     env: GH_ENV,
@@ -44,7 +44,7 @@ function isEnoent(err: unknown): boolean {
   return (err as { code?: string }).code === 'ENOENT'
 }
 
-function errText(err: unknown): string {
+export function errText(err: unknown): string {
   const e = err as { stderr?: string; stdout?: string; message?: string; killed?: boolean }
   if (e.killed) return 'GitHub CLI timed out — check your network or gh login.'
   const msg = (e.stderr || e.stdout || e.message || 'gh failed').trim()
@@ -73,7 +73,7 @@ const FAIL = new Set([
 ])
 
 /** Classifies a single rollup entry into pass / fail / pending. */
-function classify(entry: RollupEntry): 'pass' | 'fail' | 'pending' {
+export function classify(entry: RollupEntry): 'pass' | 'fail' | 'pending' {
   // A check run that hasn't completed is pending regardless of conclusion.
   if (entry.status && entry.status !== 'COMPLETED') return 'pending'
   const v = (entry.conclusion || entry.state || '').toUpperCase()

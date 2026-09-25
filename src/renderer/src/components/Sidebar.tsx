@@ -23,6 +23,7 @@ import {
   PinOff,
   Plus,
   Search,
+  GitPullRequest,
   Settings,
   SquareStack,
   SquareTerminal,
@@ -1266,6 +1267,8 @@ export function Sidebar(): React.JSX.Element {
 
   const openSettings = useApp((s) => s.openSettings)
   const openUsage = useApp((s) => s.openUsage)
+  const openPulls = useApp((s) => s.openPulls)
+  const pullsOpen = useApp((s) => s.pullsOpen)
   const searchOpen = useApp((s) => s.searchOpen)
   const setSearchOpen = useApp((s) => s.setSearchOpen)
   const newChatOpen = useApp((s) => s.newChatOpen)
@@ -1632,6 +1635,18 @@ export function Sidebar(): React.JSX.Element {
           <Search className="size-4 shrink-0 text-muted-foreground" />
           Search
           <Kbd className="ml-auto opacity-0 transition-opacity group-hover:opacity-100">⌘K</Kbd>
+        </button>
+        <button
+          type="button"
+          onClick={openPulls}
+          aria-pressed={pullsOpen}
+          className={cn(
+            'group flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] text-sidebar-foreground transition-colors hover:bg-sidebar-accent/60',
+            pullsOpen && 'bg-sidebar-accent'
+          )}
+        >
+          <GitPullRequest className="size-4 shrink-0 text-muted-foreground" />
+          Pull requests
         </button>
         {/* The project filter, as the third primary row rather than a heading
             over the list.

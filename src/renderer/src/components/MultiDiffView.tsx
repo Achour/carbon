@@ -65,7 +65,7 @@ const SCROLL_REQUEST_TTL = 2000
  * Mounting everything while the find bar is open is the honest answer: the one
  * gesture that needs the whole document in the DOM is also the one that asks.
  */
-function LazyDiffBody({
+export function LazyDiffBody({
   sectionKey,
   scroller,
   rows,

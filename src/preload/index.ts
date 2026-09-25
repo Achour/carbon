@@ -14,6 +14,8 @@ import type {
   PreviewCommandResult,
   PreviewEvent,
   PublishOpts,
+  PullEdit,
+  PullMergeMethod,
   Provider,
   ProviderCliConfig,
   ChatOptionsPatch,
@@ -169,6 +171,16 @@ const api: Api = {
   githubOpenPr: (cwd: string) => invoke('github:open-pr', cwd),
   githubPublishInfo: (cwd: string) => invoke('github:publish-info', cwd),
   githubPublish: (cwd: string, opts: PublishOpts) => invoke('github:publish', cwd, opts),
+  pullsList: () => invoke('pulls:list'),
+  pullDetail: (repo: string, number: number) => invoke('pulls:detail', repo, number),
+  pullDiff: (repo: string, number: number) => invoke('pulls:diff', repo, number),
+  pullMerge: (repo: string, number: number, method: PullMergeMethod) =>
+    invoke('pulls:merge', repo, number, method),
+  pullEdit: (repo: string, number: number, edit: PullEdit) =>
+    invoke('pulls:edit', repo, number, edit),
+  pullProjects: (roots: string[]) => invoke('pulls:projects', roots),
+  pullCheckout: (root: string, repo: string, number: number, headRef: string) =>
+    invoke('pulls:checkout', root, repo, number, headRef),
   getDefaults: () => invoke('app:get-defaults'),
   providerClis: (refresh?: boolean) => invoke('providers:list', refresh),
   setProviderCli: (provider: Provider, patch: ProviderCliConfig) =>

@@ -28,6 +28,8 @@ import type {
   PreviewCommandResult,
   PreviewEvent,
   PublishOpts,
+  PullEdit,
+  PullMergeMethod,
   WorktreeNotice,
   Provider,
   ProviderCli,
@@ -62,6 +64,7 @@ import { faviconImage, siteFavicon } from './favicons'
 import { LspManager } from './lsp'
 import * as gitOps from './git'
 import * as githubOps from './github'
+import * as pullOps from './pulls'
 import * as projectOps from './projects'
 import { setProjectIcon } from './projectIconPicker'
 import {
@@ -1150,6 +1153,19 @@ function registerIpc(): void {
   ipcMain.handle('github:publish-info', (_e, cwd: string) => githubOps.ghPublishInfo(cwd))
   ipcMain.handle('github:publish', (_e, cwd: string, opts: PublishOpts) =>
     githubOps.publishRepo(cwd, opts)
+  )
+  ipcMain.handle('pulls:list', () => pullOps.listPulls())
+  ipcMain.handle('pulls:detail', (_e, repo: string, n: number) => pullOps.pullDetail(repo, n))
+  ipcMain.handle('pulls:diff', (_e, repo: string, n: number) => pullOps.pullDiff(repo, n))
+  ipcMain.handle('pulls:merge', (_e, repo: string, n: number, method: PullMergeMethod) =>
+    pullOps.pullMerge(repo, n, method)
+  )
+  ipcMain.handle('pulls:edit', (_e, repo: string, n: number, edit: PullEdit) =>
+    pullOps.pullEdit(repo, n, edit)
+  )
+  ipcMain.handle('pulls:projects', (_e, roots: string[]) => pullOps.pullProjects(roots))
+  ipcMain.handle('pulls:checkout', (_e, root: string, repo: string, n: number, headRef: string) =>
+    pullOps.pullCheckout(root, repo, n, headRef)
   )
 }
 

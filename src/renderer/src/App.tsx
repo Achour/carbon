@@ -17,6 +17,7 @@ import { preloadHeavyChunks } from '@/lib/preloadHeavy'
 import { warmCues } from '@/lib/sounds'
 import { Settings } from '@/components/Settings'
 import { UsageStats } from '@/components/UsageStats'
+import { PullRequests } from '@/components/PullRequests'
 import { isChatTerminalId } from '@shared/types'
 import { useApp } from '@/store'
 import { previewForCwd } from '@/lib/previewRegistry'
@@ -198,10 +199,11 @@ export default function App(): React.JSX.Element {
   const homeCwd = useApp((s) => s.selectedCwd)
   const settingsOpen = useApp((s) => s.settingsOpen)
   const usageOpen = useApp((s) => s.usageOpen)
+  const pullsOpen = useApp((s) => s.pullsOpen)
   const panelFullscreen = useApp((s) => s.panelOpen && s.panelMaximized)
   // Both are full-window pages that stand in for the chat, and both hide the
   // right panel — a diff or file tab belongs to a chat, and neither page has one.
-  const pageOpen = settingsOpen || usageOpen
+  const pageOpen = settingsOpen || usageOpen || pullsOpen
 
   return (
     <TooltipProvider delay={500}>
@@ -220,6 +222,8 @@ export default function App(): React.JSX.Element {
               <Settings />
             ) : usageOpen ? (
               <UsageStats />
+            ) : pullsOpen ? (
+              <PullRequests />
             ) : panelFullscreen ? null : loading ? (
               <div className="flex flex-1 items-center justify-center bg-background">
                 <span className="shimmer-text text-sm font-medium">Loading…</span>

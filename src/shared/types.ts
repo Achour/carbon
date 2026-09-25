@@ -1961,6 +1961,93 @@ export interface GitHubState {
   pr?: PrInfo
 }
 
+// ---------- Pull requests page ----------
+
+/** Why the viewer is looking at a pull request; one PR can be both. */
+export type PullRole = 'authored' | 'reviewing'
+
+/** Rolled-up CI state of a PR's head commit; '' when it has no checks. */
+export type PullCheckState = 'SUCCESS' | 'FAILURE' | 'PENDING' | ''
+
+/** One row of the Pull requests list — everything the row draws, nothing more. */
+export interface PullSummary {
+  /** `owner/name`. Together with `number`, the PR's identity. */
+  repo: string
+  number: number
+  title: string
+  url: string
+  /** ISO timestamp; the list is sorted on it. */
+  updatedAt: string
+  state: 'OPEN' | 'MERGED' | 'CLOSED'
+  isDraft: boolean
+  additions: number
+  deletions: number
+  headRef: string
+  baseRef: string
+  author: string
+  authorAvatar?: string
+  checks: PullCheckState
+  reviewDecision: PrInfo['reviewDecision']
+  roles: PullRole[]
+}
+
+export type PullListResult =
+  | { ok: true; login: string; pulls: PullSummary[] }
+  /** `missing`: no gh binary. `auth`: gh is not logged in. */
+  | { ok: false; reason: 'missing' | 'auth' | 'error'; error: string }
+
+export interface PullReviewer {
+  /** A user's login, or a team's name. */
+  login: string
+  avatar?: string
+  state: 'REQUESTED' | 'APPROVED' | 'CHANGES_REQUESTED' | 'COMMENTED' | 'DISMISSED' | 'PENDING'
+}
+
+export interface PullCheck {
+  name: string
+  state: 'pass' | 'fail' | 'pending'
+  url?: string
+}
+
+export type PullMergeMethod = 'merge' | 'squash' | 'rebase'
+
+/** The detail pane: the summary row plus what only an opened PR needs. */
+export interface PullDetail extends PullSummary {
+  body: string
+  createdAt: string
+  changedFiles: number
+  /** Head lives in a fork — its branch is not on the base repo's remote. */
+  isCrossRepository: boolean
+  mergeable: 'MERGEABLE' | 'CONFLICTING' | 'UNKNOWN'
+  /** GitHub's `mergeStateStatus` (CLEAN, BLOCKED, BEHIND, DIRTY, …). */
+  mergeState: string
+  reviewers: PullReviewer[]
+  /** Conversation comments plus review threads. */
+  comments: number
+  checkRuns: PullCheck[]
+  checkSummary?: PrChecks
+  /** Methods the repository allows, the repo's preferred one first. */
+  mergeMethods: PullMergeMethod[]
+  /** The viewer may edit the title, body and draft state. */
+  canUpdate: boolean
+}
+
+export interface PullEdit {
+  title?: string
+  body?: string
+  /** true = mark ready for review, false = convert to draft. */
+  ready?: boolean
+  addReviewer?: string
+}
+
+/**
+ * Where a chat about a PR starts: the local project that has the repository as
+ * a remote, and the worktree target for the PR's head branch there.
+ */
+export type PullCheckoutResult =
+  | { ok: true; root: string; target: WorktreeTarget }
+  | { ok: false; error: string }
+
 /**
  * Everything the publish dialog needs before it can ask its questions: who the
  * repository could belong to, and what publishing would actually upload. One
@@ -2410,6 +2497,20 @@ export interface Api {
   githubPublishInfo(cwd: string): Promise<PublishInfo>
   /** Create the GitHub repository, wire it up as `origin`, and push to it. */
   githubPublish(cwd: string, opts: PublishOpts): Promise<PublishResult>
+  /** Open PRs the viewer authored or is asked to review, across every repo. */
+  pullsList(): Promise<PullListResult>
+  pullDetail(repo: string, number: number): Promise<PullDetail | { error: string }>
+  /** The PR's unified diff (`gh pr diff`). */
+  pullDiff(repo: string, number: number): Promise<GitResult>
+  pullMerge(repo: string, number: number, method: PullMergeMethod): Promise<GitResult>
+  pullEdit(repo: string, number: number, edit: PullEdit): Promise<GitResult>
+  /**
+   * Local projects (by root) that have `repo` as a remote. `roots` are the
+   * candidates — the renderer's project list.
+   */
+  pullProjects(roots: string[]): Promise<Record<string, string>>
+  /** Make the PR's head branch available in `root` and say where a chat should run. */
+  pullCheckout(root: string, repo: string, number: number, headRef: string): Promise<PullCheckoutResult>
   getDefaults(): Promise<AppDefaults>
   /**
    * Every provider's CLI status. `refresh` re-probes the disk and re-reads each

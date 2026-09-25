@@ -958,6 +958,16 @@ interface AppState {
   /** `refresh` re-reads every session log instead of trusting the file cache. */
   loadUsageReport(days?: number, refresh?: boolean): Promise<void>
 
+  // ---- Pull requests page ----
+  /**
+   * When true the main area shows the Pull requests page — the third
+   * full-window page, exclusive with `usageOpen` and `settingsOpen`. Its data
+   * is the page's own (`components/PullRequests.tsx`): nothing else reads it.
+   */
+  pullsOpen: boolean
+  openPulls(): void
+  closePulls(): void
+
   // ---- Settings ----
   /** When true the main area shows the settings page instead of a chat. */
   settingsOpen: boolean
@@ -1372,6 +1382,13 @@ interface AppState {
    * this is how a Codex chat picks up a worktree a Claude chat created.
    */
   startInWorktree(path: string, worktree: WorktreeInfo): Promise<void>
+  /**
+   * The Pull requests page's "Chat": the home screen in the project holding the
+   * PR's repository, aimed at its head branch, with the PR named in the box.
+   * The text is only written into an *empty* draft — a sentence already typed
+   * there is the user's and outranks a convenience.
+   */
+  chatAboutPull(root: string, target: WorktreeTarget, text: string): Promise<void>
   /**
    * Target the next new chat should adopt. NewChat isn't mounted when the
    * sidebar picks a worktree, so the selection waits here until it is.
@@ -2495,7 +2512,7 @@ export const useApp = create<AppState>((set, get) => ({
   usageReportLoading: false,
 
   openUsage() {
-    set({ usageOpen: true, settingsOpen: false })
+    set({ usageOpen: true, settingsOpen: false, pullsOpen: false })
     void get().loadUsageReport()
   },
 
@@ -2521,6 +2538,18 @@ export const useApp = create<AppState>((set, get) => ({
     }
   },
 
+  // ---- Pull requests page ----
+
+  pullsOpen: false,
+
+  openPulls() {
+    set({ pullsOpen: true, usageOpen: false, settingsOpen: false })
+  },
+
+  closePulls() {
+    set({ pullsOpen: false })
+  },
+
   // ---- Settings ----
 
   settingsOpen: false,
@@ -2533,7 +2562,7 @@ export const useApp = create<AppState>((set, get) => ({
     // A section is only *offered* when one was named: reopening Settings with
     // no argument must land where the user last was, which is the page's own
     // business, not this call's.
-    set({ settingsOpen: true, usageOpen: false, ...(section ? { settingsSection: section } : {}) })
+    set({ settingsOpen: true, usageOpen: false, pullsOpen: false, ...(section ? { settingsSection: section } : {}) })
   },
 
   setSettingsSection(section) {
@@ -4203,6 +4232,7 @@ export const useApp = create<AppState>((set, get) => ({
         planPanel: null,
         settingsOpen: false,
         usageOpen: false,
+        pullsOpen: false,
         panelMaximized: false,
         // The right panel is per chat; a fresh/draft chat starts collapsed.
         panelOpen: false
@@ -4232,6 +4262,7 @@ export const useApp = create<AppState>((set, get) => ({
       ...canvasScopePatch(s, { activeId: id, chats: s.chats, selectedCwd: s.selectedCwd }),
       settingsOpen: false,
       usageOpen: false,
+      pullsOpen: false,
       panelMaximized: false,
       // Panel visibility is per chat; unvisited chats start closed.
       panelOpen: s.panelOpenByChat[id] ?? false
@@ -4361,6 +4392,7 @@ export const useApp = create<AppState>((set, get) => ({
         planPanel: null,
         settingsOpen: false,
         usageOpen: false,
+        pullsOpen: false,
         panelMaximized: false,
         // A terminal chat mirrors only the folder into the defaults — the same
         // line `chats:create` draws: nobody chose its model, the pickers are
@@ -4408,6 +4440,31 @@ export const useApp = create<AppState>((set, get) => ({
 
   clearPendingTarget() {
     set({ pendingTarget: null })
+  },
+
+  async chatAboutPull(root, target, text) {
+    // The home screen is keyed by the folder it composes in, and a chat on an
+    // existing worktree composes in that worktree — so the draft goes there.
+    const cwd = target.kind === 'existing' ? target.path : root
+    const current = get().projectDrafts[cwd]
+    if (!current?.text.trim()) {
+      const d = get().defaults
+      get().saveProjectDraft(
+        cwd,
+        { text, attachments: current?.attachments ?? [] },
+        {
+          provider: current?.provider ?? d?.modelProvider ?? 'claude',
+          model: current?.model ?? d?.model,
+          effort: current?.effort ?? d?.effort,
+          serviceTier: current?.serviceTier ?? d?.serviceTier,
+          permissionMode: current?.permissionMode ?? d?.permissionMode,
+          target: target.kind === 'local' ? undefined : target
+        }
+      )
+    }
+    set({ pullsOpen: false, pendingTarget: target })
+    await get().openChat(null)
+    get().setSelectedCwd(cwd)
   },
 
   async startInWorktree(path, { repoRoot, branch }) {

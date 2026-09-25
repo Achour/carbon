@@ -377,6 +377,9 @@ it guards**, and put new reasoning in that file rather than back in this one.
 - **`docs/worktrees.md`** — running a chat in a worktree (`main/worktree.ts`,
   `WorktreePicker.tsx`, `BranchPicker.tsx`, `branchVsDefault`) and publishing a
   project (`main/github.ts`, `PublishDialog.tsx`, `ensureRootCommit`).
+- **`docs/pull-requests.md`** — the Pull requests page: every open PR you
+  authored or review, across repos, with summary, diff, merge and a chat on the
+  PR's branch (`main/pulls.ts`, `PullRequests.tsx`, `lib/prDiff.ts`).
 - **`docs/sounds.md`** — the three generated alert cues (`lib/sounds.ts`).
 
 ## Provider integration
