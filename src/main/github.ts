@@ -23,17 +23,20 @@ const execFileP = promisify(execFile)
 
 // GH_PROMPT_DISABLED stops gh from ever blocking on an interactive prompt (it
 // errors fast instead); NO_COLOR / update-notifier keep stdout clean and quick.
-const GH_ENV = {
+// Built per call, not at module load: this module is imported before
+// `hydrateShellPath` runs, and a snapshot taken then carries a Dock launch's
+// bare PATH — so a gh in ~/.local/bin or /opt/homebrew/bin reads as missing.
+const ghEnv = (): NodeJS.ProcessEnv => ({
   ...process.env,
   GH_PROMPT_DISABLED: '1',
   GH_NO_UPDATE_NOTIFIER: '1',
   NO_COLOR: '1'
-}
+})
 
 export async function gh(cwd: string, args: string[], timeout = 20_000): Promise<string> {
   const { stdout } = await execFileP('gh', args, {
     cwd,
-    env: GH_ENV,
+    env: ghEnv(),
     timeout,
     maxBuffer: 10 * 1024 * 1024
   })

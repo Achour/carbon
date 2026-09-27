@@ -7,7 +7,12 @@ import { promisify } from 'node:util'
 import type { RewindResult, TurnFileChange } from '@shared/types'
 
 const execFileP = promisify(execFile)
-const GIT_ENV = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' }
+// Per call, not at load — see `ghEnv` in github.ts for why a snapshot misses the shell PATH.
+const gitEnv = (): NodeJS.ProcessEnv => ({
+  ...process.env,
+  GIT_TERMINAL_PROMPT: '0',
+  GIT_OPTIONAL_LOCKS: '0'
+})
 
 export interface WorkspaceTree {
   root: string
@@ -22,7 +27,7 @@ export interface WorkspaceCheckpoint {
 async function gitText(
   cwd: string,
   args: string[],
-  env: NodeJS.ProcessEnv = GIT_ENV
+  env: NodeJS.ProcessEnv = gitEnv()
 ): Promise<string> {
   const { stdout } = await execFileP('git', args, {
     cwd,
@@ -36,7 +41,7 @@ async function gitText(
 async function gitBuffer(cwd: string, args: string[]): Promise<Buffer> {
   const { stdout } = await execFileP('git', args, {
     cwd,
-    env: GIT_ENV,
+    env: gitEnv(),
     encoding: 'buffer',
     timeout: 30_000,
     maxBuffer: 100 * 1024 * 1024
@@ -57,7 +62,7 @@ export async function captureWorkspaceTree(cwd: string): Promise<WorkspaceTree |
   }
 
   const index = join(tmpdir(), `karbun-checkpoint-${randomUUID()}.index`)
-  const env = { ...GIT_ENV, GIT_INDEX_FILE: index }
+  const env = { ...gitEnv(), GIT_INDEX_FILE: index }
   try {
     try {
       await gitText(root, ['read-tree', 'HEAD'], env)

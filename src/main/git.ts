@@ -17,12 +17,17 @@ const execFileP = promisify(execFile)
 // GIT_TERMINAL_PROMPT=0 makes remote ops fail fast instead of hanging on a
 // credential prompt; GIT_OPTIONAL_LOCKS=0 keeps status reads from fighting
 // over the index while an agent is running git in the same repo.
-const GIT_ENV = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' }
+// Per call, not at load — see `ghEnv` in github.ts for why a snapshot misses the shell PATH.
+const gitEnv = (): NodeJS.ProcessEnv => ({
+  ...process.env,
+  GIT_TERMINAL_PROMPT: '0',
+  GIT_OPTIONAL_LOCKS: '0'
+})
 
 export async function git(cwd: string, args: string[], timeout = 15_000): Promise<string> {
   const { stdout } = await execFileP('git', args, {
     cwd,
-    env: GIT_ENV,
+    env: gitEnv(),
     timeout,
     maxBuffer: 20 * 1024 * 1024
   })
