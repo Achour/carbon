@@ -583,6 +583,7 @@ function registerIpc(): void {
       ...(opts.surface === 'terminal' ? { surface: 'terminal' as const } : {}),
       createdAt: now,
       updatedAt: now,
+      sortKey: now,
       messages: []
     }
     // A terminal chat has no messages, so nothing downstream will ever title it.
@@ -787,6 +788,18 @@ function registerIpc(): void {
     })
   })
 
+  // A drag in the chat list. The renderer picks the key — it is the side that
+  // knows which two rows the chat was dropped between — and a pin dropped into
+  // the list leaves the Pinned section, which is where it was dragged out of.
+  ipcMain.handle('chats:place', (_e, id: string, sortKey: number) => {
+    const chat = store.getChat(id)
+    if (!chat || !Number.isFinite(sortKey)) return
+    chat.sortKey = sortKey
+    delete chat.pinnedAt
+    store.saveChat(id)
+    emit({ type: 'meta', chatId: id, patch: { sortKey, pinnedAt: undefined } })
+  })
+
   // Archiving takes a chat out of the sidebar without deleting anything. A side
   // chat is already out of every list this would remove it from, and is reached
   // only through its thread — archiving one would hide it from the one place it
@@ -855,14 +868,20 @@ function registerIpc(): void {
     if (!chat.sideOf) return { ok: false, error: 'That chat is not in a thread.' }
     delete chat.sideOf
     delete chat.ephemeral
-    // Its sidebar row sorts on `updatedAt`, and leaving is the moment it becomes
-    // a row at all — without this it would land wherever its last turn was.
+    // Leaving is the moment it becomes a row at all, so it lands at the top the
+    // way a new chat does — without this it would sit wherever it was made.
     chat.updatedAt = Date.now()
+    chat.sortKey = chat.updatedAt
     store.saveChat(id)
     emit({
       type: 'meta',
       chatId: id,
-      patch: { sideOf: undefined, ephemeral: undefined, updatedAt: chat.updatedAt }
+      patch: {
+        sideOf: undefined,
+        ephemeral: undefined,
+        updatedAt: chat.updatedAt,
+        sortKey: chat.sortKey
+      }
     })
     return { ok: true }
   })

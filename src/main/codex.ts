@@ -956,9 +956,9 @@ export class CodexSession implements AgentSession {
    * Codex chat that has a thread. Wrapped in `beginGoalControl`/
    * `finishGoalControl` like the mutators, merely opening such a chat emitted
    * `streaming` and then `idle`, and the renderer reads the first of those as
-   * the start of a turn: `hoistChat` moved the row to the top of the sidebar
-   * and stamped its `updatedAt` to now, so a chat from yesterday sat above
-   * today's saying "now" without anyone having sent anything. The `idle` half
+   * the start of a turn: it stamped the row's `updatedAt` to now (and, back
+   * when a turn moved rows, hoisted it to the top of the sidebar), so a chat
+   * from yesterday said "now" without anyone having sent anything. The `idle` half
    * is no cheaper — it drains the queue and refreshes usage (a CLI process per
    * provider), branches and git. `idle` is computed from `running`/`pending`
    * rather than from the emitted status, so the read still sequences correctly

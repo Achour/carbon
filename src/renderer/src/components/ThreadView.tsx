@@ -687,8 +687,8 @@ function ClosedSideChats({
   const confirmSideChatDelete = useApp((s) => s.confirmSideChatDelete)
   // A side chat carries the thread it belongs to (`sideOf`), which is the only
   // handle a *closed* one leaves. Sorted on `updatedAt` rather than on array
-  // position: metas restored at boot arrive newest-first and `hoistChat` moves
-  // a row on every turn start, so position says nothing about recency.
+  // position: the array is the sidebar's hand-made order (`ChatMeta.sortKey`),
+  // so position says nothing about recency.
   const closed = React.useMemo(
     () =>
       chats

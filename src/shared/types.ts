@@ -369,6 +369,14 @@ export interface ChatMeta {
    */
   pinnedAt?: number
   /**
+   * Where the chat sits in the sidebar's lists, higher first. Set once when the
+   * chat is made and moved only by dragging its row — never by a turn — so the
+   * list is the order the user left it in. Databases from before it existed are
+   * seeded from `updatedAt` (`Store.seedSortKeys`), which is the order they were
+   * last drawn in.
+   */
+  sortKey?: number
+  /**
    * When the user archived the chat; absent means it is not. Archiving is the
    * opposite of pinning and the same kind of fact — a *position*, not a state
    * of the conversation — so it is stored the same way: a timestamp, because
@@ -2314,6 +2322,8 @@ export interface Api {
    * among the pins is how it gets pinned at that spot.
    */
   setPinnedOrder(ids: string[]): Promise<void>
+  /** Move a chat in the sidebar list to `sortKey`, unpinning it if it was pinned. */
+  placeChat(id: string, sortKey: number): Promise<void>
   /** Archive or restore a chat — see `ChatMeta.archivedAt`. */
   setChatArchived(id: string, archived: boolean): Promise<void>
   /**

@@ -23,8 +23,8 @@ provider/model pair and, for a `new` worktree target, runs `git worktree add` â€
 a real checkout and branch on disk. A prompt you never sent must leave neither
 behind, so a draft stays pre-creation state and becomes a chat at send, where
 that work already happens. It also keeps `chats` out of it: that array *is* the
-sidebar order and moves only on create/delete/turn-start (`hoistChat`), and a row
-that never starts a turn has no defined position in it.
+sidebar order and moves only on create, delete and drag (`ChatMeta.sortKey`), and
+a chat that was never created has no position in it to hold.
 
 - **The text lives in the composer, not the store.** Typing has to be instant, and
   routing keystrokes through zustand re-renders every subscriber. The store sees a

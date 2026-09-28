@@ -167,9 +167,9 @@ export function ArchiveSection(): React.JSX.Element {
   const [deleting, setDeleting] = React.useState<ChatMeta | null>(null)
 
   // Newest archived first. Sorted here rather than read off `chats` — that
-  // array is the *sidebar's* order (`hoistChat` moves a row when a turn
-  // starts), which is an order about work in progress and means nothing to a
-  // list of chats that are done.
+  // array is the *sidebar's* order (`ChatMeta.sortKey`, arranged by hand),
+  // which is an order about work in progress and means nothing to a list of
+  // chats that are done.
   const archived = React.useMemo(
     () =>
       chats

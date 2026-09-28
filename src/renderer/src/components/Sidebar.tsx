@@ -38,7 +38,8 @@ import { ProviderMark, PROVIDER_COLOR } from '@/components/ui/provider-mark'
 import { ChatDeleteDialog } from '@/components/ChatDeleteDialog'
 import { ProjectDialogs, type ProjectPrompt } from '@/components/ProjectDialogs'
 import { cn, missingTag, MISSING_TITLE } from '@/lib/utils'
-import { dateGroup, relativeTime, shortenPath } from '@/lib/format'
+import { relativeTime, shortenPath } from '@/lib/format'
+import { keyForDrop } from '@/lib/chatOrder'
 import { REVEAL_LABEL } from '@/lib/platform'
 import { chatActivity, projectActivity, type ChatActivity } from '@/lib/chatActivity'
 import {
@@ -1291,6 +1292,7 @@ export function Sidebar(): React.JSX.Element {
   const [renameValue, setRenameValue] = React.useState('')
   const setChatPinned = useApp((s) => s.setChatPinned)
   const setPinnedOrder = useApp((s) => s.setPinnedOrder)
+  const placeChat = useApp((s) => s.placeChat)
   const setChatArchived = useApp((s) => s.setChatArchived)
   const startInWorktree = useApp((s) => s.startInWorktree)
   /**
@@ -1387,9 +1389,9 @@ export function Sidebar(): React.JSX.Element {
   }
 
   // Group chats by project folder. Chats within a project keep the order they
-  // arrive in — `chats` *is* the sidebar order (store.ts `hoistChat`), which
-  // moves only when a turn starts — and the PROJECT order is fixed by the
-  // user's saved order, so a chat bump yanks neither the row nor its project to
+  // arrive in — `chats` *is* the sidebar order (`ChatMeta.sortKey`), which
+  // moves only when a row is dragged — and the PROJECT order is fixed by the
+  // user's saved order, so a turn yanks neither the row nor its project to
   // the top. Projects not yet in the saved order keep their discovery order.
   // Pinned chats are pulled out into a section of their own at the top, so they
   // render once, not twice — but they stay in `group.chats`, which is what the
@@ -1405,14 +1407,18 @@ export function Sidebar(): React.JSX.Element {
   const pinnedChats = chats
     .filter((c) => c.pinnedAt !== undefined)
     .sort((a, b) => (a.pinnedAt ?? 0) - (b.pinnedAt ?? 0))
-  // **The pins are the one list you arrange by hand.** Every other list is in
-  // `chats` order, which `hoistChat` rewrites whenever a chat starts a turn —
-  // a position placed there would last until that chat next ran. `pinnedAt`
-  // is only ever a sort key, so a drop just rewrites it for the whole section.
-  // Computed against every pin, not `pinnedShown`: under a project filter the
-  // other projects' pins are off screen and must keep their places.
-  // `pinDrop.id` null is the strip drawn when there are no pins yet.
-  const [pinDrop, setPinDrop] = React.useState<{ id: string | null; after: boolean } | null>(null)
+  // **Every list is arranged by hand.** A row dragged within the chat list
+  // moves there (`placeChat` — one key between its two new neighbours, see
+  // `lib/chatOrder.ts`); dragged among the pins it is reordered or pinned
+  // (`setPinnedOrder`); a pin dragged into the list is unpinned where it lands.
+  // Both are computed against the whole list, never the rows on screen: under a
+  // project filter the other projects' chats are off screen and must keep their
+  // places. `rowDrop.id` null is the strip drawn when there are no pins yet.
+  const [rowDrop, setRowDrop] = React.useState<{
+    zone: 'pins' | 'list'
+    id: string | null
+    after: boolean
+  } | null>(null)
   const [rowDrag, setRowDrag] = React.useState<string | null>(null)
   React.useEffect(() => {
     const start = (e: DragEvent): void => {
@@ -1423,7 +1429,7 @@ export function Sidebar(): React.JSX.Element {
     }
     const end = (): void => {
       setRowDrag(null)
-      setPinDrop(null)
+      setRowDrop(null)
     }
     document.addEventListener('dragstart', start)
     document.addEventListener('dragend', end)
@@ -1443,28 +1449,49 @@ export function Sidebar(): React.JSX.Element {
     if (ordered.length === current.length && ordered.every((id, k) => id === current[k])) return
     void setPinnedOrder(ordered)
   }
-  const pinDropHandlers = (
+  const moveInList = (from: string, to: string, after: boolean): void => {
+    const list = chats.filter((c) => !c.ephemeral && c.pinnedAt === undefined)
+    const key = keyForDrop(list, from, to, after)
+    if (key !== null) void placeChat(from, key)
+  }
+  // Compact draws each project's chats under its own row, so a drop onto
+  // another project's chat would move the row nowhere it can be seen.
+  const acceptsDrop = (zone: 'pins' | 'list', target: string | null, from: string): boolean => {
+    if (from === target) return false
+    if (zone === 'pins' || detailed || !target) return true
+    const a = chatsById.get(from)
+    const b = chatsById.get(target)
+    return !!a && !!b && projectRoot(a) === projectRoot(b)
+  }
+  const dropHandlers = (
+    zone: 'pins' | 'list',
     target: string | null
   ): Pick<React.HTMLAttributes<HTMLElement>, 'onDragOver' | 'onDragLeave' | 'onDrop'> => ({
     onDragOver: (e) => {
       const from = draggedRow()
-      if (!from || from === target || !e.dataTransfer.types.includes(CHAT_ROW_MIME)) return
+      if (!from || !e.dataTransfer.types.includes(CHAT_ROW_MIME)) return
+      if (!acceptsDrop(zone, target, from)) return
       e.preventDefault()
       e.dataTransfer.dropEffect = 'move'
       const rect = e.currentTarget.getBoundingClientRect()
       const after = e.clientY > rect.top + rect.height / 2
-      if (pinDrop?.id !== target || pinDrop.after !== after) setPinDrop({ id: target, after })
+      if (rowDrop?.zone !== zone || rowDrop.id !== target || rowDrop.after !== after) {
+        setRowDrop({ zone, id: target, after })
+      }
     },
     onDragLeave: (e) => {
       if (e.currentTarget.contains(e.relatedTarget as Node | null)) return
-      setPinDrop((d) => (d?.id === target ? null : d))
+      setRowDrop((d) => (d?.zone === zone && d.id === target ? null : d))
     },
     onDrop: (e) => {
       const from = draggedRow()
       if (!from || !e.dataTransfer.types.includes(CHAT_ROW_MIME)) return
+      if (!acceptsDrop(zone, target, from)) return
       e.preventDefault()
-      movePin(from, target, pinDrop?.id === target ? pinDrop.after : false)
-      setPinDrop(null)
+      const after = rowDrop?.zone === zone && rowDrop.id === target ? rowDrop.after : false
+      if (zone === 'pins') movePin(from, target, after)
+      else if (target) moveInList(from, target, after)
+      setRowDrop(null)
     }
   })
 
@@ -1555,24 +1582,13 @@ export function Sidebar(): React.JSX.Element {
     (draft) => !hiddenProjects[draft.cwd] && (!filterProject || draft.cwd === filterProject)
   )
   // Take the rows from `chats` rather than from the groups: `chats` is already
-  // in sidebar order (store.ts `hoistChat`) and flattening the groups would
+  // in sidebar order (`ChatMeta.sortKey`) and flattening the groups would
   // impose the project grouping this mode exists to not have. Order is the
-  // store's business — the list re-sorts when a turn starts, and at no other
-  // time, so a streaming chat no longer walks up and down the sidebar.
+  // user's — it moves when a row is dragged and at no other time.
   const flatCwds = new Set(flatSource.map((g) => g.cwd))
   const flatChats = chats.filter((c) => c.pinnedAt === undefined && flatCwds.has(projectRoot(c)))
   const flatShown = flatChats.slice(0, FLAT_BATCH * (flatBatches + 1))
   const flatHidden = flatChats.length - flatShown.length
-  // Keyed by label, not by adjacency: order is frozen between turns while
-  // `updatedAt` keeps moving, so a chat can outlive its bucket (a turn running
-  // across midnight) and print a second "Yesterday" under the first.
-  const flatSections: { label: string; chats: ChatMeta[] }[] = []
-  for (const chat of flatShown) {
-    const label = dateGroup(chat.updatedAt, now)
-    const section = flatSections.find((s) => s.label === label)
-    if (section) section.chats.push(chat)
-    else flatSections.push({ label, chats: [chat] })
-  }
 
   // Everything you can do to a project, in one definition — the project row's
   // menu in compact mode, and the tail of a chat row's menu in detailed mode,
@@ -1655,6 +1671,28 @@ export function Sidebar(): React.JSX.Element {
       />
     )
   }
+
+  // Every listed row is a drop target — the pins and the chat list alike. The
+  // target wraps the row rather than living in it: `ChatItem`'s memo
+  // comparator would have to learn every prop the insertion line needs, or
+  // never repaint it.
+  const renderDropRow = (chat: ChatMeta, zone: 'pins' | 'list'): React.JSX.Element => (
+    <div
+      key={chat.id}
+      className={cn('relative', rowDrag === chat.id && 'opacity-50')}
+      {...dropHandlers(zone, chat.id)}
+    >
+      {rowDrop?.zone === zone && rowDrop.id === chat.id && rowDrag && rowDrag !== chat.id && (
+        <div
+          className={cn(
+            'pointer-events-none absolute inset-x-1.5 z-10 h-0.5 rounded-full bg-primary',
+            rowDrop.after ? '-bottom-px' : '-top-px'
+          )}
+        />
+      )}
+      {renderChatItem(chat)}
+    </div>
+  )
 
   const leaveDrop = useLeaveThreadDrop()
 
@@ -1870,26 +1908,7 @@ export function Sidebar(): React.JSX.Element {
         <div className="flex max-h-[35vh] shrink-0 flex-col">
           <div className="min-h-0 overflow-y-auto px-2 pt-0.5 pb-1">
             <div className="space-y-px">
-              {pinnedShown.map((chat) => (
-                // The drop target wraps the row rather than living in it:
-                // `ChatItem`'s memo comparator would have to learn every
-                // prop the insertion line needs, or never repaint it.
-                <div
-                  key={chat.id}
-                  className={cn('relative', rowDrag === chat.id && 'opacity-50')}
-                  {...pinDropHandlers(chat.id)}
-                >
-                  {pinDrop?.id === chat.id && rowDrag && rowDrag !== chat.id && (
-                    <div
-                      className={cn(
-                        'pointer-events-none absolute inset-x-1.5 z-10 h-0.5 rounded-full bg-primary',
-                        pinDrop.after ? '-bottom-px' : '-top-px'
-                      )}
-                    />
-                  )}
-                  {renderChatItem(chat)}
-                </div>
-              ))}
+              {pinnedShown.map((chat) => renderDropRow(chat, 'pins'))}
             </div>
           </div>
         </div>
@@ -1900,10 +1919,10 @@ export function Sidebar(): React.JSX.Element {
       {pinnedShown.length === 0 && rowDrag && (
         <div className="shrink-0 px-2 pt-0.5 pb-1">
           <div
-            {...pinDropHandlers(null)}
+            {...dropHandlers('pins', null)}
             className={cn(
               'flex items-center gap-1.5 rounded-md border border-dashed px-2 py-1.5 text-[12px] transition-colors',
-              pinDrop?.id === null
+              rowDrop?.zone === 'pins' && rowDrop.id === null
                 ? 'border-primary/60 bg-primary/10 text-sidebar-foreground'
                 : 'border-sidebar-border text-muted-foreground'
             )}
@@ -1914,7 +1933,7 @@ export function Sidebar(): React.JSX.Element {
         </div>
       )}
 
-      {/* Detailed mode: one flat list, newest first, bucketed by date */}
+      {/* Detailed mode: one flat list, in the user's order */}
       {detailed && (
         <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
           {flatChats.length === 0 && pinnedShown.length === 0 && (
@@ -1924,21 +1943,9 @@ export function Sidebar(): React.JSX.Element {
                 : 'Open a project to get started.'}
             </div>
           )}
-          {flatSections.map((section, i) => (
-            <React.Fragment key={section.label}>
-              {/* "Today" goes unlabelled: the top of a newest-first list is today
-                  by definition, so the heading would cost a row to say nothing. */}
-              {section.label !== 'Today' && (
-                <div className={cn('flex items-center gap-2 px-2 pb-0.5', i === 0 ? 'pt-1' : 'pt-4')}>
-                  <span className="text-[10px] font-semibold tracking-wider text-muted-foreground/60 uppercase">
-                    {section.label}
-                  </span>
-                  <div className="h-px flex-1 bg-sidebar-border" />
-                </div>
-              )}
-              <div className="space-y-px">{section.chats.map(renderChatItem)}</div>
-            </React.Fragment>
-          ))}
+          {/* No date headings: the order is the user's, so a row they placed
+              by hand would sit under a date that isn't its own. */}
+          <div className="space-y-px">{flatShown.map((chat) => renderDropRow(chat, 'list'))}</div>
           {flatHidden > 0 && (
             <button
               type="button"
@@ -2133,7 +2140,7 @@ export function Sidebar(): React.JSX.Element {
                   // The indent is the project row's hanging indent; with no row
                   // above them the chats sit flush, exactly as detailed's do.
                   <div className={cn('space-y-px pb-1', headed && 'ml-[24px]')}>
-                    {cappedChats.map(renderChatItem)}
+                    {cappedChats.map((chat) => renderDropRow(chat, 'list'))}
                     {(hiddenChatCount > 0 || revealedBatches > 0) && (
                       <div className="flex items-center">
                         {hiddenChatCount > 0 && (

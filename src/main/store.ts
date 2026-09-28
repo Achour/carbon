@@ -498,6 +498,7 @@ export class Store {
     this.prepare()
     this.canvases = new CanvasStore(this.db)
     this.migrate()
+    this.seedSortKeys()
     // unref: a heartbeat must never be the reason the process stays alive.
     this.heartbeat = setInterval(() => this.beat(), HEARTBEAT_MS)
     this.heartbeat.unref?.()
@@ -687,6 +688,29 @@ export class Store {
       db.exec('ALTER TABLE chats ADD COLUMN rev INTEGER NOT NULL DEFAULT 0')
     }
     return db
+  }
+
+  /**
+   * Give every chat without a `sortKey` one, from the `updated_at` it was last
+   * drawn by — so the first launch that orders the sidebar by hand keeps the
+   * list exactly as it was, and a turn run afterwards cannot move it on the
+   * next launch. Runs every open rather than once: a build from before the
+   * field shares this database and writes metas without it. Nothing is
+   * resident yet, so no live object holds a meta this could disagree with.
+   */
+  private seedSortKeys(): void {
+    try {
+      this.db
+        .prepare(
+          "UPDATE chats SET meta = json_set(meta, '$.sortKey', updated_at)" +
+            " WHERE json_valid(meta) AND json_extract(meta, '$.sortKey') IS NULL"
+        )
+        .run()
+    } catch (err) {
+      // listChats falls back to `updatedAt`, so the cost of a failed seed is
+      // only that the order does not stick across launches.
+      console.error('Could not seed sidebar sort keys:', err)
+    }
   }
 
   private prepare(): void {
@@ -1123,7 +1147,13 @@ export class Store {
     // once. One of them forgetting the predicate is a throwaway conversation
     // showing up as history, which is the one thing an ephemeral chat must not
     // do. The renderer holds its side chats' metas separately.
-    return out.filter((m) => !m.ephemeral).sort((a, b) => b.updatedAt - a.updatedAt)
+    // In `sortKey` order, which is the sidebar's (see `ChatMeta.sortKey`); a meta
+    // written by an older build since this launch's seed falls back to its
+    // `updatedAt`, pinned for the session by being written onto the copy.
+    return out
+      .filter((m) => !m.ephemeral)
+      .map((m) => (m.sortKey === undefined ? { ...m, sortKey: m.updatedAt } : m))
+      .sort((a, b) => (b.sortKey ?? 0) - (a.sortKey ?? 0))
   }
 
   /**

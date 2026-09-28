@@ -108,8 +108,8 @@ behind it.
   background). The one you close is very often the one you want two minutes
   later. The `+` in the thread header turns into a
   popover listing **Closed chats** once there is one, sorted on `updatedAt`
-  (metas restored at boot arrive newest-first and `hoistChat` moves rows on every
-  turn start, so array position says nothing), each with the activity dot a
+  (the array is the sidebar's hand-made order, `ChatMeta.sortKey`, so array
+  position says nothing about recency), each with the activity dot a
   closed chat mid-turn would otherwise have nowhere to show. **One thing deletes
   one: the ✕ on a row there, and it asks first** (`SideChatDeleteDialog`,
   rendered by `App` because the popover closes on the click).

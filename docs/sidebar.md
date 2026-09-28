@@ -39,29 +39,44 @@ other:
   by the user's saved project order.
 - **Detailed** — three lines: the project and the time, then the title as the
   row's headline, then the branch (or the folder path, outside a repo) with the
-  row's marks — in one **flat, newest-first list** bucketed by date. Grouping by project here would
-  print the same folder, and in a repo where nothing is isolated the same
-  branch, once per row; the date buckets structure the list by what actually
-  varies down it. "Today" goes unlabelled — the top of a newest-first list is
-  today by definition.
+  row's marks — in one **flat list, in the user's order**. Grouping by project
+  here would print the same folder, and in a repo where nothing is isolated the
+  same branch, once per row. It used to be bucketed by date ("Yesterday",
+  "Previous 30 days"); the buckets went when the order became hand-made, since a
+  row dragged above a newer one would sit under a date that isn't its own.
 
-**The order is the array, and the array moves once per turn.** `chats` in the
-renderer store is held *in sidebar order*: seeded newest-first by `listChats`,
-then mutated only when a chat is created, deleted, or **starts a turn**
-(`hoistChat` — to the front, timestamp bumped with it so a row can't sit above a
-newer one carrying an older date bucket). Re-sorting on `updatedAt` as messages
-arrived meant a running turn reordered the sidebar several times a second, and
-two streaming chats simply traded places forever. Compact mode hid most of it —
-a bump only shuffled within a project, and the project order was already
-pinned — but detailed mode is one flat list, so every bump crossed the whole
-sidebar. `updatedAt` still tracks the last message: it is what a row's timestamp
-shows and how the next launch seeds the order. It just no longer decides
-position while you're looking at it.
+**The order is the user's: `ChatMeta.sortKey`, and only a drag moves it.** A
+new chat gets `now`, so it lands on top; after that its row stays where it is
+until it is dragged (`placeChat`, `lib/chatOrder.ts`). Dropped between two rows,
+a chat takes the midpoint of their keys — one meta write, where renumbering the
+list would hydrate every chat in main — and that midpoint is taken against the
+*whole* list, not the rows on screen, so a drop under a project filter lands
+beside its target in the unfiltered list too. In compact mode a drop is
+accepted only within the dragged chat's own project, since its row is drawn
+under that project wherever it sorts.
 
-**A `status` event is therefore a promise, and main is the only side that can
-keep it: a chat may publish one exactly when a turn starts.** The renderer has
-no way to tell a real turn from a faked one, so a control-plane request that
-borrows turn state moves a row the user never touched. `codexGoalGet` did:
+This replaced an order that moved **once per turn** (`hoistChat`: a chat
+starting a turn went to the front). That was itself the fix for re-sorting on
+`updatedAt` as messages arrived, which reordered the sidebar several times a
+second and had two streaming chats trading places forever. But once per turn
+still meant any order was temporary: the complaint was simply "I can't reorder
+chats", and a drag that snaps back the next time the chat runs does not
+answer it. Pins alone were tried first and were not enough — someone with no
+pins, in detailed mode, drags a chat to a new spot in the list and expects it
+to stay.
+
+`updatedAt` still tracks the last message and a turn start still stamps it —
+it is what a row's timestamp shows. It decides nothing else. Databases from
+before `sortKey` are seeded from `updated_at` on open (`Store.seedSortKeys`),
+so the first launch keeps the list exactly as it was last drawn; the seed runs
+every open because an older build sharing the database writes metas without
+the field.
+
+**A `status` event is a promise, and main is the only side that can keep it: a
+chat may publish one exactly when a turn starts.** The renderer has no way to
+tell a real turn from a faked one, so a control-plane request that borrows turn
+state stamps a row the user never touched (and, while a turn start still moved
+rows, moved it). `codexGoalGet` did:
 `CodexGoalBar`'s mount effect reads the goal on every open of a Codex chat that
 has a thread, and the read was wrapped in the same `beginGoalControl` /
 `finishGoalControl` as the two mutators — so opening a chat from yesterday
@@ -127,18 +142,16 @@ mark on a compact one, which also means a pinned chat is recognizable anywhere
 it is drawn. The block stays outside the list's own scroller: the point of a pin
 is to be reachable however far down you have scrolled.
 
-**The pins are the one list you arrange by hand.** Drag a pin to move it, or
-drop any other row among them to pin it at that spot; with no pins yet, a drag
-draws a "Drop to pin" strip where the section would be, since otherwise the
-gesture would need a menu-pin first. Every other list stays in `chats` order,
-which `hoistChat` rewrites when a chat starts a turn, so a hand-placed
-position there would survive only until that chat next ran. `pinnedAt` was
-already only a sort key, so a drop rewrites it for the whole section
+**The pins are arranged by hand too.** Drag a pin to move it, drop any other
+row among them to pin it at that spot, or drag a pin into the list to unpin it
+there; with no pins yet, a drag draws a "Drop to pin" strip where the section
+would be, since otherwise the gesture would need a menu-pin first. `pinnedAt`
+was already only a sort key, so a drop rewrites it for the whole section
 (`setPinnedOrder`) with values just below now, and a pin made from the menu
 afterwards still lands at the bottom. The move is computed against *every* pin
 rather than `pinnedShown`, or a reorder under a project filter would reshuffle
-the pins it cannot see. The drop targets wrap the rows in `Sidebar` rather than
-living in `ChatItem`, whose hand-written memo comparator would otherwise have
+the pins it cannot see. Every drop target — pins and list alike, `renderDropRow` — wraps the row in
+`Sidebar` rather than living in `ChatItem`, whose hand-written memo comparator would otherwise have
 to learn the insertion line's props. Rows carry a `CHAT_ROW_MIME` payload apart
 from the thread one, so a terminal chat, which can never join a thread, can
 still be pinned and moved.
@@ -316,7 +329,7 @@ and `ProjectDialogs`' "Remove project deletes N chats" counts with it — becaus
 confirm that quoted the shorter number would under-report what it destroys.
 `listedChats` answers "does this belong on screen now?", and is called at exactly
 one place: the top of `Sidebar`. That single call is what takes an archived chat
-out of the groups, the pins, the date buckets, the chat search, ⌘N's project list
+out of the groups, the pins, the flat list, the chat search, ⌘N's project list
 and the drafts, and it is the reason they cannot disagree about it.
 
 **Archived is stored the way pinned is** — `archivedAt`, a timestamp on the meta,
@@ -329,8 +342,7 @@ and the Archive row is then the only place that turn is visible, so it says so.
 
 **Opening an archived chat restores it, and that rule lives in `openChat`.** The
 alternative is a chat on screen with no row anywhere — not in the sidebar, not in
-search, with a composer still willing to send into it, and `hoistChat` reordering
-a list it is not in. Putting the rule at the page's button would leave the two
+search, with a composer still willing to send into it. Putting the rule at the page's button would leave the two
 other ways in (a notification's click, a thread column) reaching exactly that
 state. Archiving the chat you are *reading* therefore drops to the home screen — and so
 does a `meta` event archiving it, which is the one way the pair could arrive from

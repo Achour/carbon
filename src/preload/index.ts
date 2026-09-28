@@ -79,6 +79,7 @@ const api: Api = {
   renameChat: (id: string, title: string) => invoke('chats:rename', id, title),
   setChatPinned: (id: string, pinned: boolean) => invoke('chats:set-pinned', id, pinned),
   setPinnedOrder: (ids: string[]) => invoke('chats:set-pinned-order', ids),
+  placeChat: (id: string, sortKey: number) => invoke('chats:place', id, sortKey),
   setChatArchived: (id: string, archived: boolean) =>
     invoke('chats:set-archived', id, archived),
   moveChatToThread: (id: string, threadId: string) => invoke('chats:move-to-thread', id, threadId),

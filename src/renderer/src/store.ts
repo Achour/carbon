@@ -12,6 +12,7 @@ import {
   storedThemeMode,
   storedTranslucent
 } from '@/lib/themes'
+import { sortChats } from '@/lib/chatOrder'
 import type { ResolvedAppearance, ThemeMode } from '@/lib/themes'
 import { loadNotifyPrefs, notify, saveNotifyPrefs, type NotifyPrefs } from '@/lib/notify'
 import { playCue } from '@/lib/sounds'
@@ -1401,6 +1402,7 @@ interface AppState {
   /** Pin/unpin a chat; pinned chats leave their project group for the Pinned section. */
   setChatPinned(id: string, pinned: boolean): Promise<void>
   setPinnedOrder(ids: string[]): Promise<void>
+  placeChat(id: string, sortKey: number): Promise<void>
   /**
    * Archive/restore a chat. Archiving takes it out of every list (see
    * `listedChats`) and, if it is the chat on screen, drops to the home screen —
@@ -1496,28 +1498,16 @@ function notifyTurnDone(
 }
 
 /**
- * Move one chat to the front of the list, leaving every other row where it is.
+ * Stamp a chat whose turn just started, leaving it where it is.
  *
- * `chats` is stored in *sidebar order*, not re-sorted on read: it arrives from
- * `listChats` newest-first and is then only ever mutated at moments the user can
- * attribute — a chat created (prepended), deleted (removed), or starting a turn
- * (this). Sorting by `updatedAt` on every incoming message is what it replaces,
- * and that read as constant churn in detailed mode, where one flat list means a
- * bump crosses the *whole* sidebar rather than shuffling within one project.
- * `updatedAt` is still kept current — it is what a row's timestamp shows and how
- * the next launch seeds the order — it just no longer drives position live.
+ * `chats` is stored in *sidebar order* — `sortKey`, which only a new chat and a
+ * drag ever set (`lib/chatOrder.ts`). A turn used to hoist its chat to the top
+ * here, which made any order the user arranged last exactly until that chat
+ * next ran. `updatedAt` still moves: it is the time the row shows, and a turn
+ * that dies before its first message would otherwise leave a stale one.
  */
-function hoistChat(chats: ChatMeta[], id: string): ChatMeta[] {
-  const i = chats.findIndex((c) => c.id === id)
-  if (i === -1) return chats
-  const next = chats.slice()
-  const [chat] = next.splice(i, 1)
-  // Position and timestamp move together, so the row can never sit above a
-  // newer one carrying an older date — which is what the date buckets in
-  // detailed mode read off. A turn that dies before its first message would
-  // otherwise leave a stale date at the top of the list.
-  next.unshift({ ...chat, updatedAt: Date.now() })
-  return next
+function touchChat(chats: ChatMeta[], id: string): ChatMeta[] {
+  return chats.map((c) => (c.id === id ? { ...c, updatedAt: Date.now() } : c))
 }
 
 /**
@@ -3079,10 +3069,11 @@ export const useApp = create<AppState>((set, get) => ({
     set((st) => {
       const meta = chatMeta(st, chatId)
       if (!meta) return {}
-      const left = { ...meta, sideOf: undefined, ephemeral: undefined, updatedAt: Date.now() }
+      const now = Date.now()
+      const left = { ...meta, sideOf: undefined, ephemeral: undefined, updatedAt: now, sortKey: now }
       return {
         // To the top of the list, where a chat that just became a row belongs —
-        // the array's order is the sidebar's (see `hoistChat`).
+        // main gave it the same key a new chat gets (see `ChatMeta.sortKey`).
         chats: [left, ...st.chats.filter((c) => c.id !== chatId)],
         ...(st.activeId === threadId ? closeSideColumn(st, chatId) : {}),
         sideColumnsByChat: stripSideStashes(st.sideColumnsByChat, new Set([chatId])),
@@ -4844,6 +4835,15 @@ export const useApp = create<AppState>((set, get) => ({
     await window.api.setPinnedOrder(ids)
   },
 
+  async placeChat(id, sortKey) {
+    set((s) => ({
+      chats: sortChats(
+        s.chats.map((c) => (c.id === id ? { ...c, sortKey, pinnedAt: undefined } : c))
+      )
+    }))
+    await window.api.placeChat(id, sortKey)
+  },
+
   async setChatArchived(id, archived) {
     // Mirrored ahead of the round trip for the reason the pin is — the row has
     // to leave the sidebar on the click, not after it. Archiving unpins, which
@@ -4962,7 +4962,7 @@ export const useApp = create<AppState>((set, get) => ({
         // render pass rather than two — and often neither, see below.
         //
         // `updatedAt` moves, the row does NOT. The array's own order is the
-        // sidebar's order (see `hoistChat`) — re-sorting here is what made a
+        // sidebar's order (see `touchChat`) — re-sorting here is what made a
         // running turn shuffle the list under the cursor several times a
         // second, and with two chats streaming they simply traded places
         // forever.
@@ -5072,7 +5072,12 @@ export const useApp = create<AppState>((set, get) => ({
           // Patch in place. A title landing, a model change or a branch switch
           // is not a reason to move the row — and sorting on `updatedAt` here
           // would replay all the churn `message` no longer causes.
-          chats: st.chats.map((c) => (c.id === ev.chatId ? { ...c, ...ev.patch } : c)),
+          // A `sortKey` is the one field that *is* a position — a drop, or a
+          // chat leaving its thread — so that patch alone re-sorts.
+          chats:
+            'sortKey' in ev.patch
+              ? sortChats(st.chats.map((c) => (c.id === ev.chatId ? { ...c, ...ev.patch } : c)))
+              : st.chats.map((c) => (c.id === ev.chatId ? { ...c, ...ev.patch } : c)),
           // Any options patch invalidates a Fast reading — it always carries the
           // tier, and a model change can flip Fast support on its own. Drop it
           // and wait for the session to report again; it re-inits on a live
@@ -5187,13 +5192,11 @@ export const useApp = create<AppState>((set, get) => ({
         set((st) => ({
           ...(finishedUnseen ? { unreadChats: { ...st.unreadChats, [ev.chatId]: true as const } } : {}),
           statuses: { ...st.statuses, [ev.chatId]: ev.status },
-          // The one moment a chat is allowed to change place: the start of a
-          // turn — which is the user's own send, so the move is theirs and
-          // lands before they look away. Everything after it (every streamed
-          // message, every tool result) leaves the list exactly as it was.
+          // A turn starting stamps the row's time and nothing else — the row
+          // stays where the user put it (see `touchChat`).
           chats:
             ev.status !== 'idle' && (st.statuses[ev.chatId] ?? 'idle') === 'idle'
-              ? hoistChat(st.chats, ev.chatId)
+              ? touchChat(st.chats, ev.chatId)
               : st.chats
         }))
         // Any non-idle status means a live session (a new chat's first turn is
