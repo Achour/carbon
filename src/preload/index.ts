@@ -16,6 +16,7 @@ import type {
   PublishOpts,
   PullEdit,
   PullMergeMethod,
+  PullState,
   Provider,
   ProviderCliConfig,
   ChatOptionsPatch,
@@ -173,7 +174,7 @@ const api: Api = {
   githubOpenPr: (cwd: string) => invoke('github:open-pr', cwd),
   githubPublishInfo: (cwd: string) => invoke('github:publish-info', cwd),
   githubPublish: (cwd: string, opts: PublishOpts) => invoke('github:publish', cwd, opts),
-  pullsList: () => invoke('pulls:list'),
+  pullsList: (state?: PullState) => invoke('pulls:list', state),
   pullDetail: (repo: string, number: number) => invoke('pulls:detail', repo, number),
   pullDiff: (repo: string, number: number) => invoke('pulls:diff', repo, number),
   pullMerge: (repo: string, number: number, method: PullMergeMethod) =>

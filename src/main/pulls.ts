@@ -10,6 +10,7 @@ import type {
   PullMergeMethod,
   PullReviewer,
   PullRole,
+  PullState,
   PullSummary,
   WorktreeTarget
 } from '@shared/types'
@@ -44,15 +45,25 @@ const ROW_FIELDS = `
   commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
 `
 
-const LIST_QUERY = `query {
-  authored: search(query: "is:pr is:open archived:false author:@me sort:updated-desc", type: ISSUE, first: 50) {
+/**
+ * The two searches for one state. "Reviewing" means *asked* while a PR is open,
+ * but a merged or closed PR has no pending request left — GitHub clears it on
+ * review — so there it means *reviewed*.
+ */
+export function listQuery(state: PullState): string {
+  const scope =
+    state === 'open' ? 'is:open' : state === 'merged' ? 'is:merged' : 'is:closed is:unmerged'
+  const reviewer = state === 'open' ? 'review-requested:@me' : 'reviewed-by:@me'
+  const search = (who: string): string =>
+    `search(query: "is:pr ${scope} archived:false ${who} sort:updated-desc", type: ISSUE, first: 50) {
     nodes { ... on PullRequest { ${ROW_FIELDS} } }
-  }
-  reviewing: search(query: "is:pr is:open archived:false review-requested:@me sort:updated-desc", type: ISSUE, first: 50) {
-    nodes { ... on PullRequest { ${ROW_FIELDS} } }
-  }
+  }`
+  return `query {
+  authored: ${search('author:@me')}
+  reviewing: ${search(reviewer)}
   viewer { login }
 }`
+}
 
 interface RawRow {
   number?: number
@@ -136,10 +147,10 @@ function isEnoent(err: unknown): boolean {
   return (err as { code?: string }).code === 'ENOENT'
 }
 
-export async function listPulls(): Promise<PullListResult> {
+export async function listPulls(state: PullState = 'open'): Promise<PullListResult> {
   let out: string
   try {
-    out = await gh(HOME, ['api', 'graphql', '-f', `query=${LIST_QUERY}`], 30_000)
+    out = await gh(HOME, ['api', 'graphql', '-f', `query=${listQuery(state)}`], 30_000)
   } catch (err) {
     if (isEnoent(err)) {
       return { ok: false, reason: 'missing', error: 'The GitHub CLI (gh) is not installed.' }
@@ -232,7 +243,13 @@ interface RawRepo {
   pullRequest?: RawDetail | null
 }
 
-const REVIEW_STATES = new Set(['APPROVED', 'CHANGES_REQUESTED', 'COMMENTED', 'DISMISSED', 'PENDING'])
+const REVIEW_STATES = new Set([
+  'APPROVED',
+  'CHANGES_REQUESTED',
+  'COMMENTED',
+  'DISMISSED',
+  'PENDING'
+])
 
 /**
  * Reviewers as one list: whoever has reviewed, with their latest verdict, then

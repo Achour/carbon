@@ -6,12 +6,16 @@ import {
   ChevronsDownUp,
   ChevronsUpDown,
   Circle,
+  CircleCheck,
   CircleDot,
   ExternalLink,
+  FolderGit2,
   GitBranch,
   GitMerge,
   GitPullRequest,
+  GitPullRequestClosed,
   GitPullRequestDraft,
+  ListFilter,
   MessageSquare,
   MessagesSquare,
   Pencil,
@@ -28,6 +32,7 @@ import type {
   PullListResult,
   PullMergeMethod,
   PullReviewer,
+  PullState,
   PullSummary
 } from '@shared/types'
 import { cn } from '@/lib/utils'
@@ -45,6 +50,9 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
 import { Markdown } from '@/components/Markdown'
@@ -70,14 +78,31 @@ import { countRows } from '@/lib/diffRows'
 
 type Tab = 'all' | 'reviewing' | 'authored'
 
+/** The Status filter. A draft is an open PR, so Draft fetches `open` and narrows. */
+type Status = 'open' | 'draft' | 'merged' | 'closed'
+
+const STATUSES: { id: Status; label: string }[] = [
+  { id: 'open', label: 'Open' },
+  { id: 'draft', label: 'Draft' },
+  { id: 'merged', label: 'Merged' },
+  { id: 'closed', label: 'Closed' }
+]
+
+const fetchState = (status: Status): PullState => (status === 'draft' ? 'open' : status)
+
 const cache: {
-  list: PullListResult | null
+  lists: Map<PullState, PullListResult>
+  status: Status
+  /** Repositories the list is narrowed to; empty means every one. */
+  repos: string[]
   details: Map<string, PullDetail>
   diffs: Map<string, string>
   selected: string | null
   tab: Tab
 } = {
-  list: null,
+  lists: new Map(),
+  status: 'open',
+  repos: [],
   details: new Map(),
   diffs: new Map(),
   selected: null,
@@ -99,7 +124,14 @@ const ago = (iso: string): string => {
  * wears the draft glyph instead of any dot.
  */
 function PullMark({ pr, className }: { pr: PullSummary; className?: string }): React.JSX.Element {
-  const Icon = pr.state === 'MERGED' ? GitMerge : pr.isDraft ? GitPullRequestDraft : GitPullRequest
+  const Icon =
+    pr.state === 'MERGED'
+      ? GitMerge
+      : pr.state === 'CLOSED'
+        ? GitPullRequestClosed
+        : pr.isDraft
+          ? GitPullRequestDraft
+          : GitPullRequest
   const dot =
     pr.state !== 'OPEN' || pr.isDraft
       ? null
@@ -481,6 +513,9 @@ function Summary({
   onEdit: (edit: Parameters<typeof window.api.pullEdit>[2]) => Promise<boolean>
 }): React.JSX.Element {
   const [bodyOpen, setBodyOpen] = React.useState(true)
+  // GitHub hides HTML comments — bots park their bookkeeping in them — so the
+  // reading view does too. The editor still gets the raw body, comments intact.
+  const shownBody = React.useMemo(() => detail.body.replace(/<!--[\s\S]*?-->/g, ''), [detail.body])
   const editable = detail.canUpdate && detail.state === 'OPEN'
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-6 px-8 py-6">
@@ -562,8 +597,8 @@ function Summary({
             multiline
             onSave={editable ? (body) => onEdit({ body }) : null}
           >
-            {detail.body.trim() ? (
-              <Markdown text={detail.body} className="pr-8" />
+            {shownBody.trim() ? (
+              <Markdown text={shownBody} className="pr-8" />
             ) : (
               <p className="text-[13px] text-muted-foreground">No description.</p>
             )}
@@ -970,6 +1005,104 @@ function Detail({
   )
 }
 
+// ---------- Filter ----------
+
+function FilterMenu({
+  status,
+  onStatus,
+  repos,
+  repoOptions,
+  onToggleRepo,
+  filtered,
+  onClear
+}: {
+  status: Status
+  onStatus: (s: Status) => void
+  repos: string[]
+  repoOptions: string[]
+  onToggleRepo: (repo: string) => void
+  filtered: boolean
+  onClear: () => void
+}): React.JSX.Element {
+  const tick = (on: boolean): React.ReactNode => (
+    <Check className={cn('ml-auto', !on && 'invisible')} />
+  )
+  return (
+    <DropdownMenu>
+      <WithTooltip label="Filter">
+        <DropdownMenuTrigger
+          render={
+            <Button
+              size="icon"
+              variant="ghost"
+              aria-label="Filter"
+              className={cn('relative shrink-0', filtered && 'bg-accent text-foreground')}
+            />
+          }
+        >
+          <ListFilter />
+          {filtered && (
+            <span
+              aria-hidden
+              className="absolute top-1.5 right-1.5 size-1.5 rounded-full bg-primary"
+            />
+          )}
+        </DropdownMenuTrigger>
+      </WithTooltip>
+      <DropdownMenuContent align="end" className="w-48">
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger>
+            <CircleCheck />
+            Status
+            <span className="ml-auto text-muted-foreground">
+              {STATUSES.find((x) => x.id === status)!.label}
+            </span>
+          </DropdownMenuSubTrigger>
+          <DropdownMenuContent side="right" align="start" className="w-40">
+            {STATUSES.map((x) => (
+              <DropdownMenuItem key={x.id} onClick={() => onStatus(x.id)}>
+                {x.label}
+                {tick(status === x.id)}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenuSub>
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger>
+            <FolderGit2 />
+            Repository
+            {repos.length > 0 && (
+              <span className="ml-auto text-muted-foreground tabular-nums">{repos.length}</span>
+            )}
+          </DropdownMenuSubTrigger>
+          <DropdownMenuContent side="right" align="start" className="max-h-80 w-64 overflow-y-auto">
+            {repoOptions.length === 0 ? (
+              <DropdownMenuItem disabled>No repositories</DropdownMenuItem>
+            ) : (
+              repoOptions.map((r) => (
+                // Stays open: picking several repositories is the common case.
+                <DropdownMenuItem key={r} closeOnClick={false} onClick={() => onToggleRepo(r)}>
+                  <span className="min-w-0 truncate">{r}</span>
+                  {tick(repos.includes(r))}
+                </DropdownMenuItem>
+              ))
+            )}
+          </DropdownMenuContent>
+        </DropdownMenuSub>
+        {filtered && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={onClear}>
+              <X />
+              Clear filters
+            </DropdownMenuItem>
+          </>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
 // ---------- Page ----------
 
 function EmptyState({ list }: { list: Extract<PullListResult, { ok: false }> }): React.JSX.Element {
@@ -997,7 +1130,12 @@ export function PullRequests(): React.JSX.Element {
   const closePulls = useApp((s) => s.closePulls)
   const chats = useApp((s) => s.chats)
   const projectOrder = useApp((s) => s.projectOrder)
-  const [list, setList] = React.useState<PullListResult | null>(cache.list)
+  const [status, setStatusState] = React.useState<Status>(cache.status)
+  const [repos, setReposState] = React.useState<string[]>(cache.repos)
+  const state = fetchState(status)
+  const [list, setList] = React.useState<PullListResult | null>(
+    () => cache.lists.get(fetchState(cache.status)) ?? null
+  )
   const [loading, setLoading] = React.useState(false)
   const [tab, setTabState] = React.useState<Tab>(cache.tab)
   const [query, setQuery] = React.useState('')
@@ -1012,17 +1150,34 @@ export function PullRequests(): React.JSX.Element {
     cache.selected = k
     setSelectedState(k)
   }
+  const setStatus = (next: Status): void => {
+    if (next === status) return
+    cache.status = next
+    setStatusState(next)
+    // A selection from the other list would otherwise stay on screen through
+    // the detail cache, beside a list it is not in.
+    setSelected(null)
+    setList(cache.lists.get(fetchState(next)) ?? null)
+  }
+  const setRepos = (next: string[]): void => {
+    cache.repos = next
+    setReposState(next)
+  }
+  const toggleRepo = (repo: string): void =>
+    setRepos(repos.includes(repo) ? repos.filter((r) => r !== repo) : [...repos, repo])
 
   const refresh = React.useCallback(async () => {
     setLoading(true)
     try {
-      const res = await window.api.pullsList()
-      cache.list = res
-      setList(res)
+      const res = await window.api.pullsList(state)
+      cache.lists.set(state, res)
+      // The status moved while this was in flight: the answer is cached for
+      // when it comes back, and not drawn under the wrong filter.
+      if (fetchState(cache.status) === state) setList(res)
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [state])
 
   React.useEffect(() => {
     void refresh()
@@ -1055,9 +1210,18 @@ export function PullRequests(): React.JSX.Element {
   }, [closePulls])
 
   const pulls = list?.ok ? list.pulls : []
+  // Every repository the current status has a PR in, so the menu never offers
+  // one that would empty the list. A picked repo stays offered even when it
+  // has none here, or it could never be unticked.
+  const repoOptions = [...new Set([...pulls.map((p) => p.repo), ...repos])].sort((a, b) =>
+    a.localeCompare(b, undefined, { sensitivity: 'base' })
+  )
+  const filtered = status !== 'open' || repos.length > 0
   const q = query.trim().toLowerCase()
   const visible = pulls.filter(
     (p) =>
+      (status !== 'draft' || p.isDraft) &&
+      (repos.length === 0 || repos.includes(p.repo)) &&
       (tab === 'all' || p.roles.includes(tab)) &&
       (!q ||
         p.title.toLowerCase().includes(q) ||
@@ -1150,25 +1314,44 @@ export function PullRequests(): React.JSX.Element {
                   </button>
                 ))}
               </div>
-              <div className="relative">
-                <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Search pull requests"
-                  className="h-8 pl-8 text-[13px]"
+              <div className="flex items-center gap-1.5">
+                <div className="relative min-w-0 flex-1">
+                  <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    placeholder="Search pull requests"
+                    className="h-8 pl-8 text-[13px]"
+                  />
+                </div>
+                <FilterMenu
+                  status={status}
+                  onStatus={setStatus}
+                  repos={repos}
+                  repoOptions={repoOptions}
+                  onToggleRepo={toggleRepo}
+                  filtered={filtered}
+                  onClear={() => {
+                    setStatus('open')
+                    setRepos([])
+                  }}
                 />
               </div>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-3">
               {visible.length === 0 ? (
                 <p className="px-3 py-6 text-center text-[13px] text-muted-foreground">
-                  {q ? 'No pull requests match.' : 'No open pull requests.'}
+                  {q || repos.length > 0
+                    ? 'No pull requests match.'
+                    : `No ${STATUSES.find((x) => x.id === status)!.label.toLowerCase()} pull requests.`}
                 </p>
               ) : tab === 'all' ? (
                 <>
                   {reviewing.length > 0 && (
-                    <Section label="Review requested" count={reviewing.length}>
+                    <Section
+                      label={state === 'open' ? 'Review requested' : 'Reviewed'}
+                      count={reviewing.length}
+                    >
                       {renderRows(reviewing)}
                     </Section>
                   )}

@@ -11,6 +11,12 @@ it is a page and not a right-panel tab.
   diff size nor check state, and the rows draw both. `mergeRows` folds a PR present
   in both searches into one row with both roles; under *All* it is listed once,
   under Review requested.
+- **Filter** (the funnel beside search): *Status* picks which list is fetched —
+  Open, Merged, Closed, or Draft, which is the open list narrowed client-side —
+  and *Repository* narrows to any number of repos offered from the current list.
+  Merged/closed search `reviewed-by:@me` for the reviewing half, since GitHub
+  clears a review request once it is answered. Each status's list is cached
+  separately.
 - **The data is the page's, not the store's.** A module-level cache in
   `PullRequests.tsx` keeps a reopen instant while every open refetches behind it.
   A PR merged from the page drops out of the open-only list on the refresh that

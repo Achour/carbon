@@ -1976,6 +1976,9 @@ export interface GitHubState {
 /** Why the viewer is looking at a pull request; one PR can be both. */
 export type PullRole = 'authored' | 'reviewing'
 
+/** Which PRs the list fetches. Draft is an *open* PR, filtered in the page. */
+export type PullState = 'open' | 'merged' | 'closed'
+
 /** Rolled-up CI state of a PR's head commit; '' when it has no checks. */
 export type PullCheckState = 'SUCCESS' | 'FAILURE' | 'PENDING' | ''
 
@@ -2516,7 +2519,7 @@ export interface Api {
   /** Create the GitHub repository, wire it up as `origin`, and push to it. */
   githubPublish(cwd: string, opts: PublishOpts): Promise<PublishResult>
   /** Open PRs the viewer authored or is asked to review, across every repo. */
-  pullsList(): Promise<PullListResult>
+  pullsList(state?: PullState): Promise<PullListResult>
   pullDetail(repo: string, number: number): Promise<PullDetail | { error: string }>
   /** The PR's unified diff (`gh pr diff`). */
   pullDiff(repo: string, number: number): Promise<GitResult>

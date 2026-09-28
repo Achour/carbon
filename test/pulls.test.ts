@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mergeMethods, mergeRows, parseReviewers, rollupState } from '../src/main/pulls.ts'
+import { listQuery, mergeMethods, mergeRows, parseReviewers, rollupState } from '../src/main/pulls.ts'
 
 const row = (repo: string, number: number, updatedAt: string) => ({
   number,
@@ -64,4 +64,10 @@ test("merge methods lead with the viewer's default and omit disallowed ones", ()
     mergeMethods({ squashMergeAllowed: true, rebaseMergeAllowed: false, viewerDefaultMergeMethod: 'SQUASH' }),
     ['squash', 'merge']
   )
+})
+
+test('a closed PR has no pending request, so reviewing means reviewed-by there', () => {
+  assert.match(listQuery('open'), /is:open [^"]*review-requested:@me/)
+  assert.match(listQuery('merged'), /is:merged [^"]*reviewed-by:@me/)
+  assert.match(listQuery('closed'), /is:closed is:unmerged [^"]*author:@me/)
 })

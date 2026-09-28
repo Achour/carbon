@@ -30,6 +30,7 @@ import type {
   PublishOpts,
   PullEdit,
   PullMergeMethod,
+  PullState,
   WorktreeNotice,
   Provider,
   ProviderCli,
@@ -1186,7 +1187,7 @@ function registerIpc(): void {
   ipcMain.handle('github:publish', (_e, cwd: string, opts: PublishOpts) =>
     githubOps.publishRepo(cwd, opts)
   )
-  ipcMain.handle('pulls:list', () => pullOps.listPulls())
+  ipcMain.handle('pulls:list', (_e, state?: PullState) => pullOps.listPulls(state))
   ipcMain.handle('pulls:detail', (_e, repo: string, n: number) => pullOps.pullDetail(repo, n))
   ipcMain.handle('pulls:diff', (_e, repo: string, n: number) => pullOps.pullDiff(repo, n))
   ipcMain.handle('pulls:merge', (_e, repo: string, n: number, method: PullMergeMethod) =>

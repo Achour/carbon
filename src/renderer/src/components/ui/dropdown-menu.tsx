@@ -1,5 +1,6 @@
 import * as React from 'react'
 import { Menu } from '@base-ui/react/menu'
+import { ChevronRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 const DropdownMenu = Menu.Root
@@ -60,8 +61,32 @@ function DropdownMenuSeparator({
   return <Menu.Separator className={cn('my-1 h-px bg-border', className)} {...props} />
 }
 
+const DropdownMenuSub = Menu.SubmenuRoot
+
+/** A row that opens a nested menu; pair with a `DropdownMenuContent side="right"`. */
+function DropdownMenuSubTrigger({
+  className,
+  children,
+  ...props
+}: React.ComponentProps<typeof Menu.SubmenuTrigger>): React.JSX.Element {
+  return (
+    <Menu.SubmenuTrigger
+      className={cn(
+        'flex cursor-default select-none items-center gap-2 rounded-md px-2 py-1.5 text-[length:var(--ui-row)] outline-none data-[highlighted]:bg-accent data-[popup-open]:bg-accent [&_svg]:size-3.5 [&_svg]:text-muted-foreground',
+        className
+      )}
+      {...props}
+    >
+      {children}
+      <ChevronRight className="ml-auto" />
+    </Menu.SubmenuTrigger>
+  )
+}
+
 export {
   DropdownMenu,
+  DropdownMenuSub,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
   DropdownMenuContent,
   DropdownMenuItem,
