@@ -35,3 +35,20 @@ export function setDraggedColumn(id: string | null): void {
 export function draggedColumn(): string | null {
   return draggedCol
 }
+
+/**
+ * Any sidebar chat row being dragged — the Pinned section's reorder keys on
+ * this, not on the thread type, because a terminal chat can be pinned and
+ * moved but can never join a thread, so its drag carries only this one.
+ */
+export const CHAT_ROW_MIME = 'application/x-carbon-chat-row'
+
+let draggedRowId: string | null = null
+
+export function setDraggedRow(id: string | null): void {
+  draggedRowId = id
+}
+
+export function draggedRow(): string | null {
+  return draggedRowId
+}

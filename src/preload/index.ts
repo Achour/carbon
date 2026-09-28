@@ -78,6 +78,7 @@ const api: Api = {
     invoke('worktree:remove', path, repoRoot),
   renameChat: (id: string, title: string) => invoke('chats:rename', id, title),
   setChatPinned: (id: string, pinned: boolean) => invoke('chats:set-pinned', id, pinned),
+  setPinnedOrder: (ids: string[]) => invoke('chats:set-pinned-order', ids),
   setChatArchived: (id: string, archived: boolean) =>
     invoke('chats:set-archived', id, archived),
   moveChatToThread: (id: string, threadId: string) => invoke('chats:move-to-thread', id, threadId),

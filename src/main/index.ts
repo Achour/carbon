@@ -774,6 +774,19 @@ function registerIpc(): void {
     emit({ type: 'meta', chatId: id, patch: { pinnedAt: chat.pinnedAt } })
   })
 
+  // A drag in the Pinned section. The values sit just *below* now, so a pin
+  // made from the menu afterwards (`Date.now()`) still lands at the bottom.
+  ipcMain.handle('chats:set-pinned-order', (_e, ids: string[]) => {
+    const base = Date.now() - ids.length
+    ids.forEach((id, i) => {
+      const chat = store.getChat(id)
+      if (!chat) return
+      chat.pinnedAt = base + i
+      store.saveChat(id)
+      emit({ type: 'meta', chatId: id, patch: { pinnedAt: chat.pinnedAt } })
+    })
+  })
+
   // Archiving takes a chat out of the sidebar without deleting anything. A side
   // chat is already out of every list this would remove it from, and is reached
   // only through its thread — archiving one would hide it from the one place it

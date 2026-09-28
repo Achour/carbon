@@ -1400,6 +1400,7 @@ interface AppState {
   renameChat(id: string, title: string): Promise<void>
   /** Pin/unpin a chat; pinned chats leave their project group for the Pinned section. */
   setChatPinned(id: string, pinned: boolean): Promise<void>
+  setPinnedOrder(ids: string[]): Promise<void>
   /**
    * Archive/restore a chat. Archiving takes it out of every list (see
    * `listedChats`) and, if it is the chat on screen, drops to the home screen —
@@ -4830,6 +4831,17 @@ export const useApp = create<AppState>((set, get) => ({
     const at = pinned ? Date.now() : undefined
     set((s) => ({ chats: s.chats.map((c) => (c.id === id ? { ...c, pinnedAt: at } : c)) }))
     await window.api.setChatPinned(id, pinned)
+  },
+
+  async setPinnedOrder(ids) {
+    // Same local-first mirror as a pin: a drop that waits a round trip draws
+    // the row back where it came from for a frame. Main writes its own values.
+    const base = Date.now() - ids.length
+    const at = new Map(ids.map((id, i) => [id, base + i]))
+    set((s) => ({
+      chats: s.chats.map((c) => (at.has(c.id) ? { ...c, pinnedAt: at.get(c.id) } : c))
+    }))
+    await window.api.setPinnedOrder(ids)
   },
 
   async setChatArchived(id, archived) {

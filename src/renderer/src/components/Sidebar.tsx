@@ -45,7 +45,10 @@ import {
   COLUMN_DRAG_MIME,
   draggedColumn,
   setDraggedThread,
-  THREAD_DRAG_MIME
+  THREAD_DRAG_MIME,
+  CHAT_ROW_MIME,
+  draggedRow,
+  setDraggedRow
 } from '@/lib/threadDrag'
 import { draftSummary, sortedProjectDrafts, type ProjectDraft } from '@/lib/drafts'
 import { chatMeta, columnsOf, listedChats, useApp } from '@/store'
@@ -395,14 +398,23 @@ function ChatItemRow({
         render={
           <div
             // A chat row can be dragged into the thread on screen, to become one
-            // of its columns (see `ThreadView`'s drop target).
-            draggable={chat.surface !== 'terminal'}
+            // of its columns (see `ThreadView`'s drop target), and among the
+            // pins to reorder or pin it (`Sidebar`'s `pinDropHandlers`). A
+            // terminal chat can't be a column, so its drag says only the latter.
+            draggable
             onDragStart={(e) => {
-              e.dataTransfer.setData(THREAD_DRAG_MIME, chat.id)
+              e.dataTransfer.setData(CHAT_ROW_MIME, chat.id)
+              if (chat.surface !== 'terminal') {
+                e.dataTransfer.setData(THREAD_DRAG_MIME, chat.id)
+                setDraggedThread(chat.id)
+              }
               e.dataTransfer.effectAllowed = 'move'
-              setDraggedThread(chat.id)
+              setDraggedRow(chat.id)
             }}
-            onDragEnd={() => setDraggedThread(null)}
+            onDragEnd={() => {
+              setDraggedThread(null)
+              setDraggedRow(null)
+            }}
             className={cn(
               'group relative rounded-md transition-colors',
               // Active fill is a foreground-tinted overlay, not the sidebar-accent
@@ -1278,6 +1290,7 @@ export function Sidebar(): React.JSX.Element {
   const [deleting, setDeleting] = React.useState<ChatMeta | null>(null)
   const [renameValue, setRenameValue] = React.useState('')
   const setChatPinned = useApp((s) => s.setChatPinned)
+  const setPinnedOrder = useApp((s) => s.setPinnedOrder)
   const setChatArchived = useApp((s) => s.setChatArchived)
   const startInWorktree = useApp((s) => s.startInWorktree)
   /**
@@ -1392,6 +1405,69 @@ export function Sidebar(): React.JSX.Element {
   const pinnedChats = chats
     .filter((c) => c.pinnedAt !== undefined)
     .sort((a, b) => (a.pinnedAt ?? 0) - (b.pinnedAt ?? 0))
+  // **The pins are the one list you arrange by hand.** Every other list is in
+  // `chats` order, which `hoistChat` rewrites whenever a chat starts a turn —
+  // a position placed there would last until that chat next ran. `pinnedAt`
+  // is only ever a sort key, so a drop just rewrites it for the whole section.
+  // Computed against every pin, not `pinnedShown`: under a project filter the
+  // other projects' pins are off screen and must keep their places.
+  // `pinDrop.id` null is the strip drawn when there are no pins yet.
+  const [pinDrop, setPinDrop] = React.useState<{ id: string | null; after: boolean } | null>(null)
+  const [rowDrag, setRowDrag] = React.useState<string | null>(null)
+  React.useEffect(() => {
+    const start = (e: DragEvent): void => {
+      // A frame late: re-rendering the list inside `dragstart` (the strip
+      // below shifts every row) can make Chromium abort the drag it began.
+      const id = draggedRow()
+      if (id && e.dataTransfer?.types.includes(CHAT_ROW_MIME)) setTimeout(() => setRowDrag(id), 0)
+    }
+    const end = (): void => {
+      setRowDrag(null)
+      setPinDrop(null)
+    }
+    document.addEventListener('dragstart', start)
+    document.addEventListener('dragend', end)
+    document.addEventListener('drop', end)
+    return () => {
+      document.removeEventListener('dragstart', start)
+      document.removeEventListener('dragend', end)
+      document.removeEventListener('drop', end)
+    }
+  }, [])
+  const movePin = (from: string, to: string | null, after: boolean): void => {
+    if (from === to) return
+    const current = pinnedChats.map((c) => c.id)
+    const ordered = current.filter((id) => id !== from)
+    const i = to ? ordered.indexOf(to) : -1
+    ordered.splice(i === -1 ? ordered.length : after ? i + 1 : i, 0, from)
+    if (ordered.length === current.length && ordered.every((id, k) => id === current[k])) return
+    void setPinnedOrder(ordered)
+  }
+  const pinDropHandlers = (
+    target: string | null
+  ): Pick<React.HTMLAttributes<HTMLElement>, 'onDragOver' | 'onDragLeave' | 'onDrop'> => ({
+    onDragOver: (e) => {
+      const from = draggedRow()
+      if (!from || from === target || !e.dataTransfer.types.includes(CHAT_ROW_MIME)) return
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'move'
+      const rect = e.currentTarget.getBoundingClientRect()
+      const after = e.clientY > rect.top + rect.height / 2
+      if (pinDrop?.id !== target || pinDrop.after !== after) setPinDrop({ id: target, after })
+    },
+    onDragLeave: (e) => {
+      if (e.currentTarget.contains(e.relatedTarget as Node | null)) return
+      setPinDrop((d) => (d?.id === target ? null : d))
+    },
+    onDrop: (e) => {
+      const from = draggedRow()
+      if (!from || !e.dataTransfer.types.includes(CHAT_ROW_MIME)) return
+      e.preventDefault()
+      movePin(from, target, pinDrop?.id === target ? pinDrop.after : false)
+      setPinDrop(null)
+    }
+  })
+
   // Pinned chats included: `group.chats` is the whole project, which is what
   // leaves the sidebar and so what the three project dialogs have to report.
   const projectChatCount = (cwd: string): number =>
@@ -1793,7 +1869,47 @@ export function Sidebar(): React.JSX.Element {
       {pinnedShown.length > 0 && (
         <div className="flex max-h-[35vh] shrink-0 flex-col">
           <div className="min-h-0 overflow-y-auto px-2 pt-0.5 pb-1">
-            <div className="space-y-px">{pinnedShown.map(renderChatItem)}</div>
+            <div className="space-y-px">
+              {pinnedShown.map((chat) => (
+                // The drop target wraps the row rather than living in it:
+                // `ChatItem`'s memo comparator would have to learn every
+                // prop the insertion line needs, or never repaint it.
+                <div
+                  key={chat.id}
+                  className={cn('relative', rowDrag === chat.id && 'opacity-50')}
+                  {...pinDropHandlers(chat.id)}
+                >
+                  {pinDrop?.id === chat.id && rowDrag && rowDrag !== chat.id && (
+                    <div
+                      className={cn(
+                        'pointer-events-none absolute inset-x-1.5 z-10 h-0.5 rounded-full bg-primary',
+                        pinDrop.after ? '-bottom-px' : '-top-px'
+                      )}
+                    />
+                  )}
+                  {renderChatItem(chat)}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+      {/* With no pins there are no rows to drop between, so a drag offers the
+          section it would create — otherwise pinning by drag would only work
+          once something had been pinned from the menu. */}
+      {pinnedShown.length === 0 && rowDrag && (
+        <div className="shrink-0 px-2 pt-0.5 pb-1">
+          <div
+            {...pinDropHandlers(null)}
+            className={cn(
+              'flex items-center gap-1.5 rounded-md border border-dashed px-2 py-1.5 text-[12px] transition-colors',
+              pinDrop?.id === null
+                ? 'border-primary/60 bg-primary/10 text-sidebar-foreground'
+                : 'border-sidebar-border text-muted-foreground'
+            )}
+          >
+            <Pin className="size-3.5 shrink-0" />
+            Drop to pin
           </div>
         </div>
       )}

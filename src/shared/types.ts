@@ -363,7 +363,9 @@ export interface ChatMeta {
   /**
    * When the user pinned the chat; absent means unpinned. A timestamp rather
    * than a flag so the sidebar's Pinned section has a stable order (oldest pin
-   * first) instead of reshuffling every time a pinned chat is used.
+   * first) instead of reshuffling every time a pinned chat is used. Dragging a
+   * pin rewrites these as a sort key (`setPinnedOrder`), so after a reorder it
+   * is a position that happens to be spelled in milliseconds, not a date.
    */
   pinnedAt?: number
   /**
@@ -2306,6 +2308,12 @@ export interface Api {
   renameChat(id: string, title: string): Promise<void>
   /** Pin/unpin a chat to the sidebar's Pinned section. */
   setChatPinned(id: string, pinned: boolean): Promise<void>
+  /**
+   * The Pinned section's order, top first: each id's `pinnedAt` is rewritten
+   * to that position, pinning any id that was not — dropping an unpinned row
+   * among the pins is how it gets pinned at that spot.
+   */
+  setPinnedOrder(ids: string[]): Promise<void>
   /** Archive or restore a chat — see `ChatMeta.archivedAt`. */
   setChatArchived(id: string, archived: boolean): Promise<void>
   /**

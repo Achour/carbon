@@ -127,6 +127,22 @@ mark on a compact one, which also means a pinned chat is recognizable anywhere
 it is drawn. The block stays outside the list's own scroller: the point of a pin
 is to be reachable however far down you have scrolled.
 
+**The pins are the one list you arrange by hand.** Drag a pin to move it, or
+drop any other row among them to pin it at that spot; with no pins yet, a drag
+draws a "Drop to pin" strip where the section would be, since otherwise the
+gesture would need a menu-pin first. Every other list stays in `chats` order,
+which `hoistChat` rewrites when a chat starts a turn, so a hand-placed
+position there would survive only until that chat next ran. `pinnedAt` was
+already only a sort key, so a drop rewrites it for the whole section
+(`setPinnedOrder`) with values just below now, and a pin made from the menu
+afterwards still lands at the bottom. The move is computed against *every* pin
+rather than `pinnedShown`, or a reorder under a project filter would reshuffle
+the pins it cannot see. The drop targets wrap the rows in `Sidebar` rather than
+living in `ChatItem`, whose hand-written memo comparator would otherwise have
+to learn the insertion line's props. Rows carry a `CHAT_ROW_MIME` payload apart
+from the thread one, so a terminal chat, which can never join a thread, can
+still be pinned and moved.
+
 **A filtered compact list drops its project row.** The header already names the
 project; a row repeating it 30px lower is the sidebar saying it twice, its
 collapse toggle would empty the sidebar, and its drag handle has nothing to
