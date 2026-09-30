@@ -4,7 +4,9 @@ import {
   Archive,
   ArrowDownToLine,
   Bell,
+  Brain,
   FolderGit2,
+  History,
   Info,
   LayoutList,
   MessageSquare,
@@ -12,6 +14,7 @@ import {
   Monitor,
   Moon,
   Palette,
+  Pin,
   Plus,
   RefreshCw,
   Rows3,
@@ -19,6 +22,7 @@ import {
   Terminal,
   TriangleAlert,
   X,
+  Zap,
   type LucideIcon
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -45,12 +49,32 @@ import {
   UPDATE_VIA_HOMEBREW
 } from '@/components/UpdateBanner'
 import { Button } from '@/components/ui/button'
-import { ProviderAvatar } from '@/components/ui/provider-mark'
+import { ProviderAvatar, ProviderMark } from '@/components/ui/provider-mark'
 import { SwitchPill } from '@/components/ui/switch-pill'
 import { ArchiveSection } from '@/components/SettingsArchive'
 import { ProjectsSection } from '@/components/SettingsProjects'
 import { WithTooltip } from '@/components/ui/tooltip'
-import { PROVIDER_LABELS, type Provider, type ProviderCli } from '@shared/types'
+import {
+  PROVIDER_LABELS,
+  modelDisplayName,
+  providerForRememberedModel,
+  resolvedModelName,
+  type EffortId,
+  type PermissionModeId,
+  type Provider,
+  type ProviderCli,
+  type ServiceTier
+} from '@shared/types'
+import { CompactSelect } from '@/components/ui/select'
+import { availableProviders } from '@/lib/modelCatalog'
+import {
+  assembleModelOptions,
+  canonicalModelId,
+  effortOptionsFor,
+  rememberedEffortForModel,
+  serviceTierOptionsFor
+} from '@/lib/models'
+import { PROVIDER_PERMISSION_MODES, permissionAppearance } from '@/lib/permissionModes'
 
 const SECTIONS: { id: SettingsSectionId; label: string; icon: LucideIcon }[] = [
   { id: 'appearance', label: 'Appearance', icon: Palette },
@@ -502,6 +526,190 @@ const SIDEBAR_DENSITIES = [
  * Compact vs detailed sidebar rows. No preview here on purpose — the sidebar is
  * open next to this control, so it previews itself the moment you click.
  */
+/** New-chat defaults: remembered from the last pick, or fixed here. */
+const DEFAULTS_MODES: { id: 'last' | 'fixed'; label: string; icon: LucideIcon }[] = [
+  { id: 'last', label: 'Last used', icon: History },
+  { id: 'fixed', label: 'Fixed', icon: Pin }
+]
+
+const pickerTrigger =
+  'h-8 max-w-56 border border-border bg-background px-2.5 text-foreground hover:bg-accent'
+
+/**
+ * What a new chat — and a thread's new column — starts on. The same four
+ * choices the composer offers, written straight into `AppDefaults`. In "Last
+ * used" they still move with every pick in a chat, so this is also where the
+ * current defaults can be read; "Fixed" stops that (see `AppDefaults.fixed`).
+ */
+function NewChatDefaults(): React.JSX.Element | null {
+  const defaults = useApp((s) => s.defaults)
+  const setDefaults = useApp((s) => s.setDefaults)
+  const dynamicModels = useApp((s) => s.models)
+  const codexConfigModel = useApp((s) => s.codexConfigModel)
+  const providerClis = useApp((s) => s.providerClis)
+  const loadModels = useApp((s) => s.loadModels)
+  const loadCodexConfigModel = useApp((s) => s.loadCodexConfigModel)
+  const selectedCwd = useApp((s) => s.selectedCwd)
+  React.useEffect(() => {
+    void loadCodexConfigModel()
+    void loadModels(undefined, selectedCwd ?? undefined)
+  }, [loadCodexConfigModel, loadModels, selectedCwd])
+
+  if (!defaults) return null
+  const models = assembleModelOptions(
+    dynamicModels,
+    codexConfigModel,
+    availableProviders(providerClis)
+  )
+  const provider = providerForRememberedModel(defaults.model, defaults.modelProvider, dynamicModels)
+  const model = canonicalModelId(defaults.model ?? '', models)
+  const option = models.find((o) => o.provider === provider && o.id === model)
+  // Ids are unique only within a provider (`''` is Claude's Default row), and
+  // a select value of `''` reads as empty — so key every row by both.
+  const key = (p: Provider, id: string): string => `${p}:${id}`
+  const modelOptions = models.map((o) => ({
+    value: key(o.provider, o.id),
+    label: o.label,
+    description: resolvedModelName(o.resolvedModel) ?? o.description,
+    group: PROVIDER_LABELS[o.provider]
+  }))
+  // A default on a provider since switched off still has to read as itself.
+  if (!option) {
+    modelOptions.unshift({
+      value: key(provider, model),
+      label: modelDisplayName(model, provider, models),
+      description: 'Not available — check Settings → Providers',
+      group: PROVIDER_LABELS[provider]
+    })
+  }
+
+  const efforts = effortOptionsFor(option, provider)
+  const effort = efforts.some((e) => e.id === defaults.effort) ? (defaults.effort ?? '') : ''
+  const tiers = serviceTierOptionsFor(option, provider, dynamicModels)
+  const tier = tiers.some((t) => t.id === defaults.serviceTier) ? defaults.serviceTier! : 'standard'
+  const permissions = PROVIDER_PERMISSION_MODES[provider]
+  const permission = permissions.some((m) => m.id === defaults.permissionMode)
+    ? defaults.permissionMode
+    : 'default'
+  const permissionLook = permissionAppearance(permission, provider === 'codex')
+
+  // One patch per pick, and a model pick carries everything it invalidates: the
+  // provider always, plus an effort, speed or mode the new model lacks.
+  const changeModel = (value: string): void => {
+    const next = models.find((o) => key(o.provider, o.id) === value)
+    if (!next) return
+    const nextEfforts = effortOptionsFor(next, next.provider)
+    const remembered = rememberedEffortForModel(defaults.modelEfforts, next.id, models)
+    const nextEffort =
+      remembered !== undefined && nextEfforts.some((e) => e.id === remembered)
+        ? remembered
+        : nextEfforts.some((e) => e.id === effort)
+          ? effort
+          : ''
+    const nextTiers = serviceTierOptionsFor(next, next.provider, dynamicModels)
+    const nextPermissions = PROVIDER_PERMISSION_MODES[next.provider]
+    void setDefaults({
+      model: next.id,
+      modelProvider: next.provider,
+      effort: nextEffort,
+      serviceTier: nextTiers.some((t) => t.id === tier) ? tier : 'standard',
+      permissionMode: nextPermissions.some((m) => m.id === permission) ? permission : 'default'
+    })
+  }
+
+  const fixed = !!defaults.fixed
+  return (
+    <>
+      <Row
+        label="New chats start with"
+        description={
+          fixed
+            ? 'Always the choices below. A pick in a chat stays in that chat.'
+            : 'Whatever you picked last. Change it here or from any chat.'
+        }
+      >
+        <div
+          role="group"
+          aria-label="New chat defaults"
+          className="grid shrink-0 grid-cols-2 gap-1 rounded-xl bg-secondary p-1"
+        >
+          {DEFAULTS_MODES.map((m) => (
+            <button
+              key={m.id}
+              type="button"
+              aria-pressed={(m.id === 'fixed') === fixed}
+              onClick={() => void setDefaults({ fixed: m.id === 'fixed' })}
+              className={cn(
+                'flex h-8 items-center justify-center gap-1.5 rounded-lg px-2.5 text-xs font-medium outline-none transition-all focus-visible:ring-2 focus-visible:ring-ring',
+                (m.id === 'fixed') === fixed
+                  ? 'bg-background text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
+              )}
+            >
+              <m.icon className="size-3.5" />
+              {m.label}
+            </button>
+          ))}
+        </div>
+      </Row>
+      <Row label="Model" description="The model, and so the provider, a new chat runs on.">
+        <CompactSelect
+          side="bottom"
+          value={key(provider, model)}
+          onValueChange={changeModel}
+          options={modelOptions}
+          icon={<ProviderMark provider={provider} className="size-3.5" />}
+          className={pickerTrigger}
+        />
+      </Row>
+      <Row label="Reasoning" description="How hard the model thinks before it answers.">
+        <CompactSelect
+          side="bottom"
+          value={effort || 'default'}
+          onValueChange={(v) => void setDefaults({ effort: v === 'default' ? '' : (v as EffortId) })}
+          options={efforts.map((e) => ({
+            value: e.id || 'default',
+            label: e.label,
+            description: e.description
+          }))}
+          icon={<Brain className="size-3.5" />}
+          className={pickerTrigger}
+        />
+      </Row>
+      {tiers.length > 1 && (
+        <Row label="Speed" description="Fast answers sooner and uses more of your plan.">
+          <CompactSelect
+            side="bottom"
+            value={tier}
+            onValueChange={(v) => void setDefaults({ serviceTier: v as ServiceTier })}
+            options={tiers.map((t) => ({ value: t.id, label: t.label, description: t.description }))}
+            icon={<Zap className="size-3.5" />}
+            className={pickerTrigger}
+          />
+        </Row>
+      )}
+      <Row label="Permissions" description="What the agent may do without asking first.">
+        <CompactSelect
+          side="bottom"
+          value={permission}
+          onValueChange={(v) => void setDefaults({ permissionMode: v as PermissionModeId })}
+          options={permissions.map((m) => {
+            const look = permissionAppearance(m.id, provider === 'codex')
+            return {
+              value: m.id,
+              label: m.label,
+              description: m.description,
+              icon: <look.Icon className={cn('size-3.5', look.iconClassName)} />
+            }
+          })}
+          icon={<permissionLook.Icon className={cn('size-3.5', permissionLook.iconClassName)} />}
+          className={pickerTrigger}
+        />
+      </Row>
+    </>
+  )
+}
+
 function SidebarDensityPicker({
   value,
   onChange
@@ -905,8 +1113,10 @@ export function Settings(): React.JSX.Element {
                   <SectionHeader
                     icon={MessageSquare}
                     title="Chats"
-                    description="How chats are organised in the sidebar."
+                    description="What a new chat starts with, and how chats are organised in the sidebar."
                   />
+                  <NewChatDefaults />
+                  <div className="mx-2 my-3 border-t border-border" />
                   <Row
                     label="Sidebar rows"
                     description="Detailed rows also show the backend answering and the branch — or the folder, outside a repo."

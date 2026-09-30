@@ -185,6 +185,7 @@ const api: Api = {
   pullCheckout: (root: string, repo: string, number: number, headRef: string) =>
     invoke('pulls:checkout', root, repo, number, headRef),
   getDefaults: () => invoke('app:get-defaults'),
+  setDefaults: (patch) => invoke('app:set-defaults', patch),
   providerClis: (refresh?: boolean) => invoke('providers:list', refresh),
   setProviderCli: (provider: Provider, patch: ProviderCliConfig) =>
     invoke('providers:set', provider, patch),

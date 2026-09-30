@@ -67,6 +67,7 @@ import { canvasText } from '@shared/canvasText'
 import type {
   CanvasSummary,
   AppDefaults,
+  DefaultsPatch,
   AssistantMessage,
   Attachment,
   BranchChanges,
@@ -780,6 +781,8 @@ interface AppState {
   togglePanelFloating(): void
 
   defaults: AppDefaults | null
+  /** Settings → Chats: write the new-chat defaults directly (see `AppDefaults.fixed`). */
+  setDefaults(patch: DefaultsPatch): Promise<void>
   loading: boolean
   sidebarOpen: boolean
   toggleSidebar(): void
@@ -3130,6 +3133,7 @@ export const useApp = create<AppState>((set, get) => ({
       provider: defaults?.modelProvider,
       model: defaults?.model,
       effort: defaults?.effort,
+      serviceTier: defaults?.serviceTier,
       permissionMode: defaults?.permissionMode
     })
     set((st) => {
@@ -4394,6 +4398,14 @@ export const useApp = create<AppState>((set, get) => ({
               ...s.defaults,
               recentDirs: [cwd, ...s.defaults.recentDirs.filter((d) => d !== cwd)].slice(0, 8)
             }
+          : s.defaults?.fixed
+          ? // Fixed defaults answer only to Settings; main skips the same
+            // fields in `rememberOptions`, so both halves agree on relaunch.
+            {
+              ...s.defaults,
+              recentDirs: [cwd, ...s.defaults.recentDirs.filter((d) => d !== cwd)].slice(0, 8),
+              modelEfforts
+            }
           : s.defaults
           ? {
               ...s.defaults,
@@ -4862,6 +4874,11 @@ export const useApp = create<AppState>((set, get) => ({
     await window.api.setChatArchived(id, archived)
   },
 
+  async setDefaults(patch) {
+    const defaults = await window.api.setDefaults(patch)
+    set({ defaults })
+  },
+
   async setChatOptions(id, patch) {
     if (!id) return
     await window.api.setChatOptions(id, patch)
@@ -4885,6 +4902,8 @@ export const useApp = create<AppState>((set, get) => ({
         modelEfforts = { ...(modelEfforts ?? {}) }
         modelEfforts[key] = patch.effort
       }
+      // Fixed defaults: only the per-model effort memory moves, as in main.
+      if (s.defaults.fixed) return { defaults: { ...s.defaults, modelEfforts } }
       return {
         defaults: {
           ...s.defaults,

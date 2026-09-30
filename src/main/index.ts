@@ -14,6 +14,7 @@ import { existsSync, writeFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type {
+  DefaultsPatch,
   Attachment,
   ChatData,
   ChatEvent,
@@ -984,6 +985,7 @@ function registerIpc(): void {
   })
 
   ipcMain.handle('app:get-defaults', () => store.getDefaults())
+  ipcMain.handle('app:set-defaults', (_e, patch: DefaultsPatch) => store.setDefaults(patch))
   ipcMain.handle('providers:list', (_e, refresh?: boolean) => providerClis(refresh))
   ipcMain.handle(
     'providers:set',

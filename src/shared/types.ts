@@ -1467,6 +1467,25 @@ export interface AppDefaults {
    * above stays the global fallback for a model with no remembered value yet.
    */
   modelEfforts?: Record<string, EffortId | ''>
+  /**
+   * Settings → Chats → "New chats: Fixed". When set, the options above are
+   * only ever changed from Settings — picking a model or a mode in a chat no
+   * longer carries over to the next one. Absent means the original behavior:
+   * the last explicit pick becomes the default. `modelEfforts` keeps updating
+   * either way; it is the composer's per-model memory, not a default.
+   */
+  fixed?: boolean
+}
+
+/** What Settings can write into `AppDefaults` directly. */
+export interface DefaultsPatch {
+  model?: string
+  /** Travels with `model`, always — see `providerForRememberedModel`. */
+  modelProvider?: Provider
+  effort?: EffortId | ''
+  serviceTier?: ServiceTier
+  permissionMode?: PermissionModeId
+  fixed?: boolean
 }
 
 /** A live change to a chat's inference options. */
@@ -2533,6 +2552,8 @@ export interface Api {
   /** Make the PR's head branch available in `root` and say where a chat should run. */
   pullCheckout(root: string, repo: string, number: number, headRef: string): Promise<PullCheckoutResult>
   getDefaults(): Promise<AppDefaults>
+  /** Settings' own write to the new-chat defaults; answers with the result. */
+  setDefaults(patch: DefaultsPatch): Promise<AppDefaults>
   /**
    * Every provider's CLI status. `refresh` re-probes the disk and re-reads each
    * `--version`, which is what the Providers section's refresh does after the

@@ -16,6 +16,7 @@ import { knownProvider } from '../shared/types.ts'
 import { CanvasStore } from './canvasStore.ts'
 import type {
   AppDefaults,
+  DefaultsPatch,
   ChatData,
   ChatMessage,
   ChatMeta,
@@ -2174,6 +2175,31 @@ export class Store {
   }
 
   /**
+   * Write the new-chat defaults from Settings. Unlike `rememberOptions` this
+   * applies whether or not the defaults are `fixed` — it is the one writer a
+   * fixed set answers to. A model and effort set together are also recorded as
+   * that model's remembered effort, so the pair Settings shows is the pair the
+   * composer restores when switching back to it.
+   */
+  setDefaults(patch: DefaultsPatch): AppDefaults {
+    const defaults = this.settings.defaults
+    if (patch.fixed !== undefined) defaults.fixed = patch.fixed || undefined
+    if (patch.permissionMode !== undefined) defaults.permissionMode = patch.permissionMode
+    if (patch.model !== undefined) {
+      defaults.model = patch.model || undefined
+      if (patch.modelProvider !== undefined) defaults.modelProvider = patch.modelProvider
+    }
+    if (patch.effort !== undefined) {
+      defaults.effort = patch.effort || undefined
+      const key = patch.model ?? defaults.model ?? ''
+      defaults.modelEfforts = { ...(defaults.modelEfforts ?? {}), [key]: patch.effort }
+    }
+    if (patch.serviceTier !== undefined) defaults.serviceTier = patch.serviceTier
+    this.writeSettings()
+    return defaults
+  }
+
+  /**
    * Remember the user's last chosen options as the defaults for new chats.
    * `currentModel` is the model the effort was chosen under (the chat's model
    * when the patch itself carries none), so effort can also be remembered
@@ -2190,16 +2216,19 @@ export class Store {
     currentModel?: string
   ): void {
     const defaults = this.settings.defaults
-    if (patch.permissionMode !== undefined) defaults.permissionMode = patch.permissionMode
-    if (patch.model !== undefined) {
+    // Fixed defaults answer only to Settings (`setDefaults`). The per-model
+    // effort memory below still records, since it is not a default at all.
+    const fixed = !!defaults.fixed
+    if (!fixed && patch.permissionMode !== undefined) defaults.permissionMode = patch.permissionMode
+    if (!fixed && patch.model !== undefined) {
       defaults.model = patch.model || undefined
       // `modelProvider` is additive for dynamic model ids. Preserve the last
       // known provider when an older or future caller changes only the model;
       // otherwise a partial patch silently destroys routing information.
       if (patch.modelProvider !== undefined) defaults.modelProvider = patch.modelProvider
     }
-    if (patch.effort !== undefined) defaults.effort = patch.effort || undefined
-    if (patch.serviceTier !== undefined) defaults.serviceTier = patch.serviceTier
+    if (!fixed && patch.effort !== undefined) defaults.effort = patch.effort || undefined
+    if (!fixed && patch.serviceTier !== undefined) defaults.serviceTier = patch.serviceTier
     if (patch.effort !== undefined) {
       const key = patch.model !== undefined ? patch.model || '' : currentModel || ''
       const map = { ...(defaults.modelEfforts ?? {}) }
