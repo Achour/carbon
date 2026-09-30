@@ -21,7 +21,8 @@ import { availableProviders } from '@/lib/modelCatalog'
 import {
   assembleModelOptions,
   canonicalModelId,
-  rememberedEffortForModel
+  rememberedEffortForModel,
+  visibleModelOptions
 } from '@/lib/models'
 import { Button } from '@/components/ui/button'
 import { CompactSelect } from '@/components/ui/select'
@@ -46,6 +47,7 @@ export function PlanContent({
   const codexConfigModel = useApp((s) => s.codexConfigModel)
   const providerClis = useApp((s) => s.providerClis)
   const modelEfforts = useApp((s) => s.defaults?.modelEfforts)
+  const hiddenModels = useApp((s) => s.defaults?.hiddenModels)
   const [feedback, setFeedback] = React.useState('')
   const [autoAccept, setAutoAccept] = React.useState(false)
   const [busy, setBusy] = React.useState(false)
@@ -75,6 +77,9 @@ export function PlanContent({
   const currentModel = chat ? canonicalModelId(chat.model ?? '', buildOptions) : ''
   const buildModel = buildPick ?? currentModel
   const buildModelOption = buildOptions.find((option) => option.id === buildModel)
+  // What the menu lists: Settings → Models trims it, never the chat's own model
+  // nor the one already picked.
+  const buildMenu = visibleModelOptions(buildOptions, hiddenModels, [currentModel, buildModel])
   const resolvedBuildModelOption = buildOptions.find(
     (option) => option.id === buildModelOption?.resolvedModel
   )
@@ -160,7 +165,7 @@ export function PlanContent({
             className="no-drag block w-full resize-none rounded-lg border border-input bg-transparent px-2.5 py-2 text-[13px] outline-none select-text placeholder:text-muted-foreground/60 focus-visible:border-ring"
           />
           <div className="flex flex-wrap items-center gap-2">
-            {buildOptions.length > 1 && (
+            {buildMenu.length > 1 && (
               <div
                 className="flex items-center gap-1"
                 title="Model that implements the approved plan"
@@ -169,7 +174,7 @@ export function PlanContent({
                 <CompactSelect
                   value={buildModel}
                   onValueChange={changeBuildModel}
-                  options={buildOptions.map((option) => ({
+                  options={buildMenu.map((option) => ({
                     value: option.id,
                     label: option.label,
                     description: option.description

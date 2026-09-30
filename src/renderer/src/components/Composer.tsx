@@ -11,11 +11,13 @@ import {
   PenLine,
   Sparkles,
   Square,
+  Search,
   Zap,
   X
 } from 'lucide-react'
 import {
   EFFORT_OPTIONS,
+  PROVIDERS,
   PROVIDER_LABELS,
   PROVIDER_SHORT_LABELS,
   SERVICE_TIER_OPTIONS,
@@ -40,8 +42,11 @@ import {
   assembleModelOptions,
   canonicalModelId,
   effortOptionsFor,
+  matchesModelQuery,
+  modelKey,
   rememberedEffortForModel,
-  serviceTierOptionsFor
+  serviceTierOptionsFor,
+  visibleModelOptions
 } from '@/lib/models'
 import {
   PROVIDER_PERMISSION_MODES,
@@ -383,6 +388,12 @@ function ModelSettingsPicker({
   onOpenChange?: (open: boolean) => void
 }): React.JSX.Element {
   const [uncontrolledOpen, setUncontrolledOpen] = React.useState(false)
+  const [query, setQuery] = React.useState('')
+  // The keyboard's row in the filtered list; the mouse moves it too, so the
+  // highlight is always the row Enter would pick.
+  const [active, setActive] = React.useState(0)
+  const searchRef = React.useRef<HTMLInputElement>(null)
+  const listRef = React.useRef<HTMLDivElement>(null)
   const [effortOpen, setEffortOpen] = React.useState(false)
   const [speedOpen, setSpeedOpen] = React.useState(false)
   const open = controlledOpen ?? uncontrolledOpen
@@ -401,8 +412,40 @@ function ModelSettingsPicker({
   const selectedEffort = efforts.find((option) => option.id === effort)
   const selectedTier = serviceTiers.find((option) => option.id === serviceTier)
   const groups = (['claude', 'codex', 'grok'] as Provider[])
-    .map((group) => ({ group, models: models.filter((option) => option.provider === group) }))
+    .map((group) => ({
+      group,
+      models: models.filter(
+        (option) => option.provider === group && matchesModelQuery(option, query)
+      )
+    }))
     .filter(({ models: options }) => options.length > 0)
+  // The rows in the order they are drawn, for the arrow keys. Disabled rows are
+  // drawn but never landed on.
+  const flat = groups.flatMap(({ models: options }) => options).filter((o) => !o.disabled)
+  const activeOption = flat[Math.min(active, flat.length - 1)]
+  const pick = (option: ModelOption): void => {
+    onModelChange(option.id, option.provider)
+    setOpen(false)
+  }
+  // Every open starts on a clear search, at the selected model — keyed on
+  // `open` rather than done in `onOpenChange`, since `/model` opens it too.
+  React.useEffect(() => {
+    if (!open) return
+    setQuery('')
+    const at = models
+      .filter((o) => !o.disabled)
+      .sort((a, b) => PROVIDERS.indexOf(a.provider) - PROVIDERS.indexOf(b.provider))
+      .findIndex((o) => o.id === model)
+    setActive(Math.max(0, at))
+    // Only the moment of opening; the list changing under an open menu must
+    // not throw away what is being typed.
+  }, [open])
+  React.useEffect(() => {
+    if (!activeOption) return
+    listRef.current
+      ?.querySelector(`[data-model-key="${CSS.escape(modelKey(activeOption.provider, activeOption.id))}"]`)
+      ?.scrollIntoView({ block: 'nearest' })
+  }, [activeOption])
 
   return (
     <Popover
@@ -412,6 +455,7 @@ function ModelSettingsPicker({
         if (!nextOpen) {
           setEffortOpen(false)
           setSpeedOpen(false)
+          setQuery('')
         }
       }}
     >
@@ -453,11 +497,48 @@ function ModelSettingsPicker({
       </PopoverTrigger>
       {/* w-80, not w-72: the Default row carries a label, the model it resolves
           to, and a context badge, which truncates the label at the narrower width. */}
-      <PopoverContent side="top" align="start" className="w-80 overflow-hidden p-0">
+      <PopoverContent
+        side="top"
+        align="start"
+        className="w-80 overflow-hidden p-0"
+        initialFocus={searchRef}
+      >
+        {/* Outside the scrolling list, so it stays put while the list moves. */}
+        <div className="flex items-center gap-2 border-b border-border px-3">
+          <Search className="size-3.5 shrink-0 text-muted-foreground" />
+          <input
+            ref={searchRef}
+            value={query}
+            onChange={(e) => {
+              setQuery(e.target.value)
+              setActive(0)
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                e.preventDefault()
+                if (!flat.length) return
+                const step = e.key === 'ArrowDown' ? 1 : -1
+                setActive((i) => (Math.min(i, flat.length - 1) + step + flat.length) % flat.length)
+              } else if (e.key === 'Enter') {
+                e.preventDefault()
+                if (activeOption) pick(activeOption)
+              }
+            }}
+            placeholder="Search models"
+            aria-label="Search models"
+            spellCheck={false}
+            className="h-9 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+          />
+        </div>
         {/* px-1 with no *top* padding: the headers are sticky, and a padded
             scrollport is a band above the pinned header that rows scroll
             through in plain sight. The first header's own pt-2 replaces it. */}
-        <div className="max-h-72 overflow-y-auto px-1 pb-1">
+        <div ref={listRef} className="max-h-72 overflow-y-auto px-1 pb-1">
+          {groups.length === 0 && (
+            <div className="px-2 py-6 text-center text-xs text-muted-foreground">
+              No models match “{query.trim()}”
+            </div>
+          )}
           {groups.map(({ group, models: options }, gi) => (
             // The rule is the separator, and it belongs to the *group* rather
             // than to its header: on the header it would pin along with it and
@@ -490,15 +571,18 @@ function ModelSettingsPicker({
                     disabled={option.disabled}
                     title={option.description}
                     aria-pressed={option.id === model}
+                    data-model-key={modelKey(option.provider, option.id)}
                     onMouseEnter={() => {
                       setEffortOpen(false)
                       setSpeedOpen(false)
+                      const at = flat.indexOf(option)
+                      if (at >= 0) setActive(at)
                     }}
-                    onClick={() => {
-                      onModelChange(option.id, option.provider)
-                      setOpen(false)
-                    }}
-                    className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-sm outline-none transition-colors hover:bg-accent focus-visible:bg-accent disabled:opacity-45"
+                    onClick={() => pick(option)}
+                    className={cn(
+                      'flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-sm outline-none transition-colors focus-visible:bg-accent disabled:opacity-45',
+                      option === activeOption && 'bg-accent'
+                    )}
                   >
                     <span className="min-w-0 flex-1 truncate">{option.label}</span>
                     {resolved && resolved !== option.label && (
@@ -779,6 +863,12 @@ export function Composer({
   const selectedModel = React.useMemo(
     () => canonicalModelId(model, modelOptions),
     [modelOptions, model]
+  )
+  // Settings → Models trims the menu; the chat's own model always stays in it.
+  const hiddenModels = useApp((s) => s.defaults?.hiddenModels)
+  const pickerModels = React.useMemo(
+    () => visibleModelOptions(modelOptions, hiddenModels, [selectedModel]),
+    [modelOptions, hiddenModels, selectedModel]
   )
 
   const isCodex = provider === 'codex'
@@ -1131,7 +1221,7 @@ export function Composer({
       <ModelSettingsPicker
         model={selectedModel}
         onModelChange={handleModelChange}
-        models={modelOptions}
+        models={pickerModels}
         effort={effortValue}
         onEffortChange={onEffortChange}
         efforts={effortOptions}

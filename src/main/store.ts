@@ -2195,6 +2195,8 @@ export class Store {
       defaults.modelEfforts = { ...(defaults.modelEfforts ?? {}), [key]: patch.effort }
     }
     if (patch.serviceTier !== undefined) defaults.serviceTier = patch.serviceTier
+    if (patch.hiddenModels !== undefined)
+      defaults.hiddenModels = patch.hiddenModels.length ? patch.hiddenModels : undefined
     this.writeSettings()
     return defaults
   }

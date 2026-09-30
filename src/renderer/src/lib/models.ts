@@ -84,3 +84,51 @@ export function serviceTierOptionsFor(
     ? SERVICE_TIER_OPTIONS.filter((tier) => tier.id === 'standard')
     : SERVICE_TIER_OPTIONS
 }
+
+/**
+ * A model row's identity across providers. Ids are unique only within one —
+ * `''` is Claude's Default row — so anything keyed by model across the whole
+ * picker keys by both.
+ */
+export function modelKey(provider: Provider, id: string): string {
+  return `${provider}:${id}`
+}
+
+/**
+ * The rows a picker offers: everything but what Settings → Models switched
+ * off. `keep` names the ids currently selected, which stay listed even when
+ * hidden — hiding a model declutters the menu, it does not strand a chat
+ * already running on it with a picker that cannot name its own model.
+ */
+export function visibleModelOptions(
+  options: ModelOption[],
+  hidden: string[] | undefined,
+  keep: string[] = []
+): ModelOption[] {
+  if (!hidden?.length) return options
+  const off = new Set(hidden)
+  return options.filter(
+    (option) => keep.includes(option.id) || !off.has(modelKey(option.provider, option.id))
+  )
+}
+
+/**
+ * The model picker's search: every word typed must appear somewhere in the
+ * row — its label, the model it resolves to, its id, or its provider's name —
+ * so "opus 5", "codex" and "gpt-5" all find what they should.
+ */
+export function matchesModelQuery(option: ModelOption, query: string): boolean {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean)
+  if (!words.length) return true
+  const hay = [
+    option.label,
+    option.resolvedModel,
+    option.id,
+    option.description,
+    PROVIDER_LABELS[option.provider]
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
+  return words.every((word) => hay.includes(word))
+}

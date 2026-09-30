@@ -142,6 +142,7 @@ export type SettingsSectionId =
   | 'projects'
   | 'archive'
   | 'providers'
+  | 'models'
   | 'notifications'
   | 'about'
 

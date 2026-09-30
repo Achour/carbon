@@ -18,6 +18,7 @@ import {
   Plus,
   RefreshCw,
   Rows3,
+  Sparkles,
   Sun,
   Terminal,
   TriangleAlert,
@@ -49,17 +50,20 @@ import {
   UPDATE_VIA_HOMEBREW
 } from '@/components/UpdateBanner'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { ProviderAvatar, ProviderMark } from '@/components/ui/provider-mark'
 import { SwitchPill } from '@/components/ui/switch-pill'
 import { ArchiveSection } from '@/components/SettingsArchive'
 import { ProjectsSection } from '@/components/SettingsProjects'
 import { WithTooltip } from '@/components/ui/tooltip'
 import {
+  PROVIDERS,
   PROVIDER_LABELS,
   modelDisplayName,
   providerForRememberedModel,
   resolvedModelName,
   type EffortId,
+  type ModelOption,
   type PermissionModeId,
   type Provider,
   type ProviderCli,
@@ -71,8 +75,11 @@ import {
   assembleModelOptions,
   canonicalModelId,
   effortOptionsFor,
+  modelKey,
+  matchesModelQuery,
   rememberedEffortForModel,
-  serviceTierOptionsFor
+  serviceTierOptionsFor,
+  visibleModelOptions
 } from '@/lib/models'
 import { PROVIDER_PERMISSION_MODES, permissionAppearance } from '@/lib/permissionModes'
 
@@ -82,6 +89,7 @@ const SECTIONS: { id: SettingsSectionId; label: string; icon: LucideIcon }[] = [
   { id: 'projects', label: 'Projects', icon: FolderGit2 },
   { id: 'archive', label: 'Archive', icon: Archive },
   { id: 'providers', label: 'Providers', icon: Terminal },
+  { id: 'models', label: 'Models', icon: Sparkles },
   { id: 'notifications', label: 'Notifications', icon: Bell },
   { id: 'about', label: 'About', icon: Info }
 ]
@@ -453,6 +461,214 @@ function ProviderRow({ cli }: { cli: ProviderCli }): React.JSX.Element {
  * place the moment one is missing, sits somewhere unusual, or should be hidden
  * from the model picker.
  */
+/**
+ * Which rows the model pickers offer, laid out like Projects: providers down
+ * the left, the picked one's models on the right, each row a switch. Off hides
+ * a model from the composer, the plan review's "Build with" and the new-chat
+ * default — never from a chat already running on it (`visibleModelOptions`).
+ */
+function ModelsSection(): React.JSX.Element {
+  const defaults = useApp((s) => s.defaults)
+  const setDefaults = useApp((s) => s.setDefaults)
+  const dynamicModels = useApp((s) => s.models)
+  const codexConfigModel = useApp((s) => s.codexConfigModel)
+  const providerClis = useApp((s) => s.providerClis)
+  const loadModels = useApp((s) => s.loadModels)
+  const loadCodexConfigModel = useApp((s) => s.loadCodexConfigModel)
+  const selectedCwd = useApp((s) => s.selectedCwd)
+  const openSettings = useApp((s) => s.openSettings)
+  const [picked, setPicked] = React.useState<Provider | null>(null)
+  const [query, setQuery] = React.useState('')
+  React.useEffect(() => {
+    void loadCodexConfigModel()
+    void loadModels(undefined, selectedCwd ?? undefined)
+  }, [loadCodexConfigModel, loadModels, selectedCwd])
+
+  const models = assembleModelOptions(
+    dynamicModels,
+    codexConfigModel,
+    availableProviders(providerClis)
+  )
+  const hidden = new Set(defaults?.hiddenModels ?? [])
+  const write = (next: Set<string>): void => void setDefaults({ hiddenModels: [...next] })
+  const groups = PROVIDERS.map((provider) => ({
+    provider,
+    rows: models.filter((o) => o.provider === provider)
+  })).filter((g) => g.rows.length > 0)
+  const shownOf = (rows: ModelOption[]): number =>
+    rows.filter((o) => !hidden.has(modelKey(o.provider, o.id))).length
+
+  // Falls back rather than being stored, as in Projects: a provider can be
+  // switched off under the selection.
+  const selected = groups.find((g) => g.provider === picked) ?? groups[0]
+  const rows = selected ? selected.rows.filter((o) => matchesModelQuery(o, query)) : []
+  const keys = selected ? selected.rows.map((o) => modelKey(o.provider, o.id)) : []
+
+  return (
+    <div className="flex min-h-0 min-w-0 flex-1">
+      <div className="flex w-[264px] shrink-0 flex-col border-r border-border">
+        <h2 className="px-4 pt-4 pb-2.5 text-[12px] font-medium text-muted-foreground">
+          {groups.length} {groups.length === 1 ? 'provider' : 'providers'}
+        </h2>
+        <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto px-2 pb-2">
+          {groups.map((g) => {
+            const shown = shownOf(g.rows)
+            return (
+              <button
+                key={g.provider}
+                type="button"
+                aria-pressed={g === selected}
+                onClick={() => {
+                  setPicked(g.provider)
+                  setQuery('')
+                }}
+                className={cn(
+                  'flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left transition-colors',
+                  g === selected ? 'bg-accent' : 'hover:bg-accent/50'
+                )}
+              >
+                <ProviderAvatar provider={g.provider} />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[13px] font-medium">
+                    {PROVIDER_LABELS[g.provider]}
+                  </div>
+                  <div className="text-[11px] text-muted-foreground">
+                    {shown === g.rows.length
+                      ? `${g.rows.length} models`
+                      : `${shown} of ${g.rows.length} shown`}
+                  </div>
+                </div>
+              </button>
+            )
+          })}
+          {groups.length === 0 && (
+            <div className="px-2 py-6 text-center text-[12px] text-muted-foreground">
+              No provider is available.
+            </div>
+          )}
+        </div>
+        <div className="shrink-0 border-t border-border px-3 py-2.5">
+          <Button
+            size="sm"
+            variant="ghost"
+            className="w-full justify-start text-muted-foreground"
+            onClick={() => openSettings('providers')}
+          >
+            <Terminal />
+            Manage providers
+          </Button>
+        </div>
+      </div>
+
+      {selected ? (
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <div className="shrink-0 px-6 pt-5 pb-3">
+            <div className="flex items-center gap-2.5">
+              <ProviderAvatar provider={selected.provider} className="rounded-md" />
+              <h2 className="flex-1 text-[15px] font-semibold">
+                {PROVIDER_LABELS[selected.provider]}
+              </h2>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="text-xs"
+                disabled={shownOf(selected.rows) === selected.rows.length}
+                onClick={() => write(new Set([...hidden].filter((k) => !keys.includes(k))))}
+              >
+                Show all
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="text-xs"
+                disabled={shownOf(selected.rows) === 0}
+                onClick={() => write(new Set([...hidden, ...keys]))}
+              >
+                Hide all
+              </Button>
+            </div>
+            <p className="mt-1 text-[13px] text-muted-foreground">
+              Switch a model off to keep it out of the model picker. A chat already on it keeps it.
+            </p>
+            <Input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Filter…"
+              aria-label="Filter models"
+              className="mt-3 h-8 text-[13px]"
+            />
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6">
+            <div className="overflow-hidden rounded-lg border border-border">
+              {rows.map((o, i) => {
+                const key = modelKey(o.provider, o.id)
+                const on = !hidden.has(key)
+                const resolved = resolvedModelName(o.resolvedModel)
+                const toggle = (): void => {
+                  const next = new Set(hidden)
+                  if (on) next.add(key)
+                  else next.delete(key)
+                  write(next)
+                }
+                return (
+                  <div
+                    key={key}
+                    onClick={toggle}
+                    className={cn(
+                      'flex cursor-default items-center gap-3 px-3 py-2 transition-colors hover:bg-accent/40',
+                      i > 0 && 'border-t border-border'
+                    )}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-baseline gap-2 text-[13px]">
+                        <span className={cn('truncate', !on && 'text-muted-foreground')}>
+                          {o.label}
+                        </span>
+                        {resolved && resolved !== o.label && (
+                          <span className="shrink-0 text-[11px] text-muted-foreground/70">
+                            {resolved}
+                          </span>
+                        )}
+                      </div>
+                      {o.description && (
+                        <div className="truncate text-xs text-muted-foreground">
+                          {o.description}
+                        </div>
+                      )}
+                    </div>
+                    <div onClick={(e) => e.stopPropagation()}>
+                      <SwitchPill
+                        on={on}
+                        label={`Show ${o.label} in the model picker`}
+                        onChange={toggle}
+                      />
+                    </div>
+                  </div>
+                )
+              })}
+              {rows.length === 0 && (
+                <div className="px-3 py-6 text-center text-[12px] text-muted-foreground">
+                  Nothing matches “{query}”.
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="flex min-h-0 flex-1 items-center justify-center px-8">
+          <div className="max-w-sm text-center">
+            <Sparkles className="mx-auto size-7 text-muted-foreground/60" />
+            <p className="mt-3 text-[13px] font-medium">No provider available</p>
+            <p className="mt-1 text-[12px] text-muted-foreground">
+              Install or turn on a provider in Providers and its models appear here.
+            </p>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function ProvidersSection(): React.JSX.Element {
   const providerClis = useApp((s) => s.providerClis)
   const loadProviderClis = useApp((s) => s.loadProviderClis)
@@ -567,7 +783,7 @@ function NewChatDefaults(): React.JSX.Element | null {
   // Ids are unique only within a provider (`''` is Claude's Default row), and
   // a select value of `''` reads as empty — so key every row by both.
   const key = (p: Provider, id: string): string => `${p}:${id}`
-  const modelOptions = models.map((o) => ({
+  const modelOptions = visibleModelOptions(models, defaults.hiddenModels, [model]).map((o) => ({
     value: key(o.provider, o.id),
     label: o.label,
     description: resolvedModelName(o.resolvedModel) ?? o.description,
@@ -1049,6 +1265,8 @@ export function Settings(): React.JSX.Element {
             labelled rows and the wrong one for a list of repositories. */}
         {section === 'projects' ? (
           <ProjectsSection />
+        ) : section === 'models' ? (
+          <ModelsSection />
         ) : (
           <div className="min-h-0 flex-1 overflow-y-auto">
             <div className="mx-auto w-full max-w-2xl px-8 py-8">
@@ -1147,6 +1365,7 @@ export function Settings(): React.JSX.Element {
               {section === 'archive' && <ArchiveSection />}
 
               {section === 'providers' && <ProvidersSection />}
+
 
               {section === 'notifications' && (
                 <section>

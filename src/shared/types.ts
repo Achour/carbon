@@ -1475,6 +1475,12 @@ export interface AppDefaults {
    * either way; it is the composer's per-model memory, not a default.
    */
   fixed?: boolean
+  /**
+   * Model rows switched off in Settings → Models, as `provider:id` keys (see
+   * `modelKey`). Hidden from every picker, never from a chat already on one:
+   * the selected model always stays listed, so a chip never reads blank.
+   */
+  hiddenModels?: string[]
 }
 
 /** What Settings can write into `AppDefaults` directly. */
@@ -1486,6 +1492,7 @@ export interface DefaultsPatch {
   serviceTier?: ServiceTier
   permissionMode?: PermissionModeId
   fixed?: boolean
+  hiddenModels?: string[]
 }
 
 /** A live change to a chat's inference options. */
