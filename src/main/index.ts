@@ -10,6 +10,7 @@ import {
   shell
 } from 'electron'
 import { randomUUID } from 'node:crypto'
+import { forgetChat, noteJobs, noteStatus, setKeepAwake } from './keepAwake'
 import { existsSync, writeFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -119,7 +120,10 @@ let resolvedDark = true
 
 function emit(ev: ChatEvent): void {
   win?.webContents.send('chat:event', ev)
-  if (ev.type === 'status') notifyOnStatus(ev.chatId, ev.status)
+  if (ev.type === 'status') {
+    notifyOnStatus(ev.chatId, ev.status)
+    noteStatus(ev.chatId, ev.status)
+  } else if (ev.type === 'background-jobs') noteJobs(ev.chatId, ev.jobs.length)
 }
 
 // Native "turn finished" / "needs approval" notifications, but only while the
@@ -662,10 +666,12 @@ function registerIpc(): void {
         // recoverable; a stuck chat row is not.
         store.deleteChat(chatId)
         lastStatus.delete(chatId)
+        forgetChat(chatId)
       }
       for (const sideId of store.sideChatIdsOf(id)) forget(sideId)
       store.deleteChat(id)
       lastStatus.delete(id)
+      forgetChat(id)
       return result
     }
   )
@@ -986,7 +992,11 @@ function registerIpc(): void {
   })
 
   ipcMain.handle('app:get-defaults', () => store.getDefaults())
-  ipcMain.handle('app:set-defaults', (_e, patch: DefaultsPatch) => store.setDefaults(patch))
+  ipcMain.handle('app:set-defaults', (_e, patch: DefaultsPatch) => {
+    const defaults = store.setDefaults(patch)
+    setKeepAwake(!!defaults.keepAwake)
+    return defaults
+  })
   ipcMain.handle('providers:list', (_e, refresh?: boolean) => providerClis(refresh))
   ipcMain.handle(
     'providers:set',
@@ -1259,13 +1269,14 @@ app.whenReady().then(() => {
   // resolution that ran against an empty config would cache the wrong answer
   // for a provider the user has switched off or pointed elsewhere.
   configureProviderClis(store.getProviderClis())
+  setKeepAwake(!!store.getDefaults().keepAwake)
   // Constructed before the preview because the preview's loopback bridge serves
   // both tool namespaces and takes this as its second host. The bridge thunk is
   // what breaks the cycle: it is not called until an MCP config is built, long
   // after both objects exist.
   canvas = new CanvasManager(store.canvases, emit)
   preview = new PreviewManager(emitPreview, sendPreviewCommand, canvas)
-  manager = new ChatManager(store, emit, preview, canvas)
+  manager = new ChatManager(store, emit, preview, canvas, forgetChat)
   terminals = new TerminalManager(emitTerminal)
   chatTerminals = new ChatTerminalManager(terminals, store, emitTerminal, emit)
   registerIpc()

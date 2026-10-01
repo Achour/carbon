@@ -2883,7 +2883,12 @@ export class ChatManager {
     private store: Store,
     private emit: Emit,
     private preview: PreviewManager,
-    private canvas: CanvasManager
+    private canvas: CanvasManager,
+    /**
+     * A disposed session emits no final status, so anything keeping per-chat
+     * activity off `status` events (the keep-awake hold) is told here instead.
+     */
+    private onDispose: (chatId: string) => void = () => {}
   ) {}
 
   private sessionFor(chatId: string): AgentSession | null {
@@ -4247,10 +4252,14 @@ export class ChatManager {
   disposeChat(chatId: string): void {
     this.sessions.get(chatId)?.dispose()
     this.sessions.delete(chatId)
+    this.onDispose(chatId)
   }
 
   disposeAll(): void {
-    for (const session of this.sessions.values()) session.dispose()
+    for (const [chatId, session] of this.sessions) {
+      session.dispose()
+      this.onDispose(chatId)
+    }
     this.sessions.clear()
   }
 }

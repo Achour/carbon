@@ -225,6 +225,21 @@ Path aliases: `@` → `src/renderer/src`, `@shared` → `src/shared` (renderer a
   - **Thinking now ships with its text withheld.** The block arrives as `thinking: ""` plus a signature, and the only thing that streams is an `estimated_tokens` on each delta — itself a *delta*, which the CLI's own handler calls `estimatedTokensDelta`, so it accumulates. The last one is `null`, and that is where the corrected total arrives instead, on the `thinking_tokens` system message; `setThinkingTokens` applies it upward-only, because the count restarts at ~50 per thought and a reading landing before its block opened would otherwise overwrite the finished thought above it. **The count is kept and deliberately not drawn.** It was a row for a while — the reasoning it replaced is invisible, and a silent twenty-second pause reads as a hang — but the row was the wrong answer twice over: "Thought · 450 tokens" is a number the reader can act on in no way, and one lands between *every* pair of tool calls, so a ten-call sequence rendered as ten cards with a token tally wedged between each pair, the run-grouping broken by the very thing that had nothing to say. The turn's own **"Thinking…" / "Working…"** indicator at the foot of the transcript already covers the live case, for exactly as long as the turn runs, so a withheld thought now draws nothing at all and leaves no trace in history. That makes it blank *everywhere* — `isBlankMsg`, `isGroupableMsg` (transparent to it, so a `[thinking, tool]` message still joins the run) and `AssistantBlock`; a filter that kept it in one of the three would put the row back. `ThinkingPart.tokens` stays on the contract because main already accumulates it correctly and it is the only handle a redacted thought has, should one be wanted.
 - **Claude in Chrome needs `CLAUDE_CODE_ENABLE_CFC`, and it is the CLI that decides.** `shouldEnableClaudeInChrome` bails on `!isInteractive()` *before* it reads `claudeInChromeDefaultEnabled`, so the browser tools a user paired in the terminal reach no session the SDK spawns — the setting they flipped is never consulted. That env var is the one check sitting above the bail (the `--chrome` flag, which the SDK cannot pass, is the other), so Carbon sets it — from **Settings → Providers** now rather than unconditionally (see "Per-provider capabilities"), defaulting to on. `=0` in the environment is still the opt-out, since the CLI reads it as a boolean. `env` **replaces** the subprocess environment rather than merging it, hence the `process.env` spread — and that spread is what carries the PATH `shellEnv` hydrated. The tools arrive as an MCP server named `claude-in-chrome` and go through the ordinary permission prompt; only `mcp__preview__*` is auto-allowed. Wiring it also makes the CLI rewrite `~/.claude/chrome/chrome-native-host` to point at whichever binary wired it last — Carbon's bundled one here, the user's `~/.local/share/claude/versions/…` after their next interactive run. It is one global file the two rewrite back and forth, and each repair is a session start, so the failure mode is self-healing rather than sticky.
 
+### Keep awake (`src/main/keepAwake.ts`)
+
+Settings → Chats → "Keep computer awake" (`AppDefaults.keepAwake`, off by
+default) holds `powerSaveBlocker`'s `prevent-app-suspension` — Chromium's
+`kIOPMAssertionTypeNoIdleSleep`, listed by `pmset -g assertions` as
+`NoIdleSleepAssertion named: "Electron"` (grep for *that*, not
+`PreventUserIdleSystemSleep`) — while any chat is working. **Working is a live
+turn or a non-empty background-job set**: Claude goes `idle` while a
+backgrounded shell or agent carries on, and that work is suspended by sleep just
+the same — so a dev server the agent left running holds it too. Waiting on an
+approval does not count. A disposed session emits no final status, so
+`ChatManager`'s `onDispose` (and chat deletion) release the chat explicitly;
+without it a hand-off refused mid-turn kept the Mac up until quit. Fed from
+`emit` in `index.ts`, the one chokepoint for `status` and `background-jobs`.
+
 ### Grok Build (`src/main/grokAcp.ts`, `grok.ts`)
 
 The third provider is the one with **no SDK**, so the protocol itself is the

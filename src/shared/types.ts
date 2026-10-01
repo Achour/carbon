@@ -1510,6 +1510,12 @@ export interface AppDefaults {
    * the selected model always stays listed, so a chip never reads blank.
    */
   hiddenModels?: string[]
+  /**
+   * Settings → Chats → "Keep computer awake": block idle system sleep while
+   * any chat is working (`main/keepAwake.ts`). An app setting rather than a
+   * new-chat default; it lives here because this is the record Settings writes.
+   */
+  keepAwake?: boolean
 }
 
 /** What Settings can write into `AppDefaults` directly. */
@@ -1522,6 +1528,7 @@ export interface DefaultsPatch {
   permissionMode?: PermissionModeId
   fixed?: boolean
   hiddenModels?: string[]
+  keepAwake?: boolean
 }
 
 /** A live change to a chat's inference options. */

@@ -2197,6 +2197,7 @@ export class Store {
     if (patch.serviceTier !== undefined) defaults.serviceTier = patch.serviceTier
     if (patch.hiddenModels !== undefined)
       defaults.hiddenModels = patch.hiddenModels.length ? patch.hiddenModels : undefined
+    if (patch.keepAwake !== undefined) defaults.keepAwake = patch.keepAwake || undefined
     this.writeSettings()
     return defaults
   }

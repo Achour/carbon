@@ -1412,6 +1412,8 @@ export function Settings(): React.JSX.Element {
   const setChatsPerProject = useApp((s) => s.setChatsPerProject)
   const sidebarDensity = useApp((s) => s.sidebarDensity)
   const setSidebarDensity = useApp((s) => s.setSidebarDensity)
+  const keepAwake = useApp((s) => !!s.defaults?.keepAwake)
+  const setDefaults = useApp((s) => s.setDefaults)
 
   // Which section is open lives in the store: the sidebar's project menu and
   // the dev E2E harness both open Settings *at* a section, and neither can
@@ -1568,6 +1570,13 @@ export function Settings(): React.JSX.Element {
                       onReset={() => setChatsPerProject(CHATS_PER_PROJECT_DEFAULT)}
                     />
                   </Row>
+                  <div className="mx-2 my-3 border-t border-border" />
+                  <Toggle
+                    label="Keep computer awake"
+                    description="Stop the Mac from idle-sleeping while an agent is working. The display can still turn off, and closing the lid still sleeps it."
+                    checked={keepAwake}
+                    onChange={(on) => void setDefaults({ keepAwake: on })}
+                  />
                 </section>
               )}
 
