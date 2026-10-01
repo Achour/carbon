@@ -12,6 +12,8 @@ import type {
   PermissionRule,
   PreviewCommand,
   PreviewCommandResult,
+  PreviewEmulation,
+  PreviewSourceFrame,
   PreviewEvent,
   PublishOpts,
   PullEdit,
@@ -240,9 +242,16 @@ const api: Api = {
     invoke('preview:start', cwd, command),
   previewStop: (cwd: string) => invoke('preview:stop', cwd),
   previewLogs: (cwd: string) => invoke('preview:logs', cwd),
-  previewReportConsole: (cwd: string, line: string) => {
-    void invoke('preview:report-console', cwd, line)
+  previewGuestAttach: (paneId: string, cwd: string, webContentsId: number) =>
+    invoke('preview:guest-attach', paneId, cwd, webContentsId),
+  previewGuestDetach: (paneId: string) => {
+    void invoke('preview:guest-detach', paneId)
   },
+  previewEmulate: (paneId: string, emulation: PreviewEmulation) =>
+    invoke('preview:emulate', paneId, emulation),
+  previewLocalServers: () => invoke('preview:local-servers'),
+  previewResolveSource: (cwd: string, frame: PreviewSourceFrame) =>
+    invoke('preview:resolve-source', cwd, frame),
   previewCommandResult: (result: PreviewCommandResult) => {
     void invoke('preview:command-result', result)
   },

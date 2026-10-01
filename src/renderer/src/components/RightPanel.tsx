@@ -1331,16 +1331,21 @@ export function RightPanel(): React.JSX.Element | null {
               </React.Suspense>
             </div>
           ))}
-          {/* A hidden webview remains a live Chromium renderer. Mount only the
-              selected preview so background tabs cannot run timers/WebGL. */}
-          {currentIsPreview &&
-            previews
-              .filter((p) => p.id === current)
-              .map((p) => (
-                <div key={p.id} className="absolute inset-0">
-                  <BrowserPane id={p.id} active cwd={p.cwd} />
-                </div>
-              ))}
+          {/* Every preview stays mounted while its tab exists, like a browser's
+              background tabs: history, scroll, form state and the agent's
+              handle on the page survive a tab switch. A hidden guest is
+              throttled the way a background tab is — measured: timers drop to
+              ~1/s and requestAnimationFrame stops — so a background preview
+              costs no frames. `visibility`, not `display:none`, which reloads
+              a <webview> when it comes back. */}
+          {previews.map((p) => (
+            <div
+              key={p.id}
+              className={cn('absolute inset-0', current !== p.id && 'invisible pointer-events-none')}
+            >
+              <BrowserPane id={p.id} active={current === p.id} cwd={p.cwd} />
+            </div>
+          ))}
         </div>
         {dockOpen &&
           !isEmpty &&

@@ -2,22 +2,45 @@ import * as React from 'react'
 import {
   ArrowLeft,
   ArrowRight,
+  Bug,
   Check,
+  Ellipsis,
   ExternalLink,
+  MonitorSmartphone,
   MousePointerClick,
   Play,
   RotateCw,
+  RotateCwSquare,
   ScrollText,
+  Server,
   Square,
   X
 } from 'lucide-react'
-import type { Attachment, ElementRef } from '@shared/types'
+import type { Attachment, ElementRef, LocalServer, PreviewEmulation } from '@shared/types'
+import {
+  applyViewportPatch,
+  describeViewport,
+  FILL_VIEWPORT,
+  PREVIEW_DEVICES,
+  viewportSize,
+  type PreviewColorScheme,
+  type PreviewViewport
+} from '@shared/previewDevices'
 import { cn } from '@/lib/utils'
 import { useApp } from '@/store'
-import { registerPreview, unregisterPreview } from '@/lib/previewRegistry'
+import { registerPreview, unregisterPreview, type PreviewHandle } from '@/lib/previewRegistry'
 import { classifyInk } from '@/lib/faviconInk'
 import { Button } from '@/components/ui/button'
 import { WithTooltip } from '@/components/ui/tooltip'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger
+} from '@/components/ui/dropdown-menu'
 
 /** Minimal shape of Electron's <webview> tag — enough for what we drive here. */
 interface WV extends HTMLElement {
@@ -31,6 +54,8 @@ interface WV extends HTMLElement {
   canGoBack(): boolean
   canGoForward(): boolean
   executeJavaScript(code: string): Promise<unknown>
+  getWebContentsId(): number
+  openDevTools(): void
   capturePage(rect?: { x: number; y: number; width: number; height: number }): Promise<{
     toDataURL(): string
     isEmpty(): boolean
@@ -47,29 +72,24 @@ interface PickPayload {
   label?: string
   html?: string
   source?: { file: string; line?: number; column?: number } | null
+  /** React 19: where the element was created, as a served-module frame to resolve. */
+  frame?: { url: string; line: number; column: number } | null
+  component?: string | null
   rect: { x: number; y: number; width: number; height: number }
 }
 
 /**
  * Runs inside the guest page (main world, so it can read React fibers). Draws a
  * hover highlight, and on click posts the element's location + source via
- * console.log with a magic prefix the host listens for. Also forwards uncaught
- * errors to the console so the host can surface them to the agent. Stringified
- * and injected on every dom-ready, so it survives navigations.
+ * console.log with a magic prefix the host listens for. Stringified and
+ * injected on every dom-ready, so it survives navigations. (Uncaught errors
+ * reach the agent through CDP in main now, whoever started the server.)
  */
 function karbunPicker(): void {
   const w = window as unknown as Record<string, unknown>
   if (w.__karbunPickInstalled) return
   w.__karbunPickInstalled = true
   const PREFIX = '__KARBUN_PICK__'
-  window.addEventListener('error', (e) => {
-    // eslint-disable-next-line no-console
-    console.error('[uncaught] ' + (e.message || e.error))
-  })
-  window.addEventListener('unhandledrejection', (e) => {
-    // eslint-disable-next-line no-console
-    console.error('[unhandledrejection] ' + ((e as PromiseRejectionEvent).reason ?? ''))
-  })
   const overlay = document.createElement('div')
   overlay.style.cssText =
     'position:fixed;z-index:2147483647;pointer-events:none;box-sizing:border-box;' +
@@ -110,6 +130,45 @@ function karbunPicker(): void {
           line: s.lineNumber as number | undefined,
           column: s.columnNumber as number | undefined
         }
+      }
+      f = f.return as Record<string, unknown> | null
+    }
+    return null
+  }
+  // **React 19 dropped `_debugSource`.** What a dev fiber keeps instead is
+  // `_debugStack`, an Error captured where the element was created; its first
+  // frame outside React and the bundler is the user's JSX — as a *served*
+  // module position, which the host resolves through the dev server's source
+  // map (`main/previewSource.ts`).
+  const LIB = /node_modules|\/\.vite\/deps\/|jsx-dev-runtime|jsx-runtime|react-dom|react-refresh|\/@vite\/|next\/dist|\[turbopack\]|turbopack\/|react-server-dom/i
+  const frameOf = (el: Element): PickPayload['frame'] => {
+    let f = fiberOf(el)
+    let guard = 0
+    while (f && guard < 200) {
+      guard++
+      const stack = (f._debugStack as { stack?: string } | undefined)?.stack
+      if (stack) {
+        for (const line of stack.split('\n').slice(1)) {
+          const m = /^\s*at\s+(?:.*?\s+\()?(.+?):(\d+):(\d+)\)?\s*$/.exec(line)
+          if (m && !LIB.test(m[1]) && /^(https?|webpack-internal|webpack|file):/i.test(m[1])) {
+            return { url: m[1], line: Number(m[2]), column: Number(m[3]) }
+          }
+        }
+      }
+      f = f.return as Record<string, unknown> | null
+    }
+    return null
+  }
+  /** The nearest component above the element: what a person would call it. */
+  const componentOf = (el: Element): string | null => {
+    let f = fiberOf(el)
+    let guard = 0
+    while (f && guard < 200) {
+      guard++
+      const t = f.type as { displayName?: string; name?: string; render?: { name?: string }; type?: { name?: string } } | string | null
+      if (t && typeof t !== 'string') {
+        const name = t.displayName || t.name || t.render?.name || t.type?.name
+        if (name && /^[A-Z]/.test(name)) return name
       }
       f = f.return as Record<string, unknown> | null
     }
@@ -189,8 +248,11 @@ function karbunPicker(): void {
         label,
         html: (el.outerHTML || '').slice(0, 600),
         source: sourceOf(el),
+        frame: null,
+        component: componentOf(el),
         rect
       }
+      if (!payload.source) payload.frame = frameOf(el)
       setEnabled(false)
       // eslint-disable-next-line no-console
       console.log(PREFIX + JSON.stringify(payload))
@@ -239,6 +301,10 @@ function normalizeUrl(input: string): string {
 }
 
 function attachmentName(p: PickPayload): string {
+  if (p.component && p.source?.file) {
+    const base = p.source.file.split('/').pop() ?? p.source.file
+    return `<${p.component}> · ${base}${p.source.line != null ? `:${p.source.line}` : ''}`
+  }
   if (p.source?.file) {
     const base = p.source.file.split('/').pop() ?? p.source.file
     return `${p.tag} · ${base}${p.source.line != null ? `:${p.source.line}` : ''}`
@@ -263,8 +329,26 @@ export function BrowserPane({
   const devState = useApp((s) => (cwd ? s.previewStates[cwd] : undefined))
   const startPreview = useApp((s) => s.startPreview)
   const stopPreview = useApp((s) => s.stopPreview)
+  const viewport = useApp((s) => s.previews.find((p) => p.id === id)?.viewport) ?? FILL_VIEWPORT
 
+  const rootRef = React.useRef<HTMLDivElement>(null)
+  const stageRef = React.useRef<HTMLDivElement>(null)
+  const coverRef = React.useRef<HTMLDivElement>(null)
   const hostRef = React.useRef<HTMLDivElement>(null)
+  // Mirrors `active` for the imperative handle, and when it last was.
+  const activeRef = React.useRef(active)
+  const lastActiveRef = React.useRef(active ? Date.now() : 0)
+  // Resolves once main holds this pane's guest; replaced when the guest is.
+  const attachRef = React.useRef<{ promise: Promise<boolean>; resolve: (v: boolean) => void; wcId: number | null } | null>(
+    null
+  )
+  if (!attachRef.current) {
+    let resolve: (v: boolean) => void = () => {}
+    const promise = new Promise<boolean>((r) => (resolve = r))
+    attachRef.current = { promise, resolve, wcId: null }
+  }
+  const viewportRef = React.useRef(viewport)
+  viewportRef.current = viewport
   const wvRef = React.useRef<WV | null>(null)
   const readyRef = React.useRef(false)
   // Mirrors `loading` for the imperative capture() closure (which can't read
@@ -304,6 +388,8 @@ export function BrowserPane({
   const [picked, setPicked] = React.useState(false)
   const [logsOpen, setLogsOpen] = React.useState(false)
   const [logs, setLogs] = React.useState('')
+  const [stage, setStage] = React.useState({ width: 0, height: 0 })
+  const [servers, setServers] = React.useState<LocalServer[] | null>(null)
   const pickedTimer = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   const setInspect = (v: boolean): void => {
@@ -346,6 +432,21 @@ export function BrowserPane({
     } catch {
       // ignore
     }
+  }
+
+  /**
+   * Tells main what this pane's guest should emulate. The size itself is the
+   * `<webview>`'s own (laid out below); what CDP adds is what a sized box
+   * cannot give — the pixel ratio, touch, a mobile user agent and
+   * `prefers-color-scheme`. Re-sent on every attach, since a new guest starts
+   * with none of it.
+   */
+  const applyEmulation = async (v: PreviewViewport): Promise<void> => {
+    const size = viewportSize(v)
+    const emulation: PreviewEmulation = size
+      ? { width: size.width, height: size.height, dpr: size.dpr, mobile: size.mobile, os: size.os, colorScheme: v.colorScheme }
+      : { colorScheme: v.colorScheme }
+    await window.api.previewEmulate(id, emulation).catch(() => {})
   }
 
   const publishIcon = React.useCallback(
@@ -398,13 +499,21 @@ export function BrowserPane({
     } catch {
       // Screenshot is a bonus; the text description is what matters.
     }
+    if (!p.source && p.frame && cwd) {
+      const frame = p.frame
+      p.source = await Promise.race([
+        window.api.previewResolveSource(cwd, frame).catch(() => null),
+        new Promise<null>((r) => setTimeout(() => r(null), 3000))
+      ])
+    }
     const element: ElementRef = {
       url: p.url,
       tag: p.tag,
       selector: p.selector,
       label: p.label || undefined,
       html: p.html || undefined,
-      source: p.source ?? undefined
+      source: p.source ?? undefined,
+      component: p.component ?? undefined
     }
     const att: Attachment = {
       id: crypto.randomUUID(),
@@ -420,16 +529,23 @@ export function BrowserPane({
     setPicked(true)
     clearTimeout(pickedTimer.current)
     pickedTimer.current = setTimeout(() => setPicked(false), 1100)
-  }, [])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cwd])
 
   // Create the <webview> once and wire its events. It outlives tab switches
-  // (the pane is hidden, not unmounted) so page state survives.
+  // (every preview tab stays mounted, the inactive ones hidden) so page state
+  // survives.
   React.useEffect(() => {
     const host = hostRef.current
     if (!host) return
     const wv = document.createElement('webview') as unknown as WV
     wv.setAttribute('partition', 'persist:karbun-preview')
-    wv.setAttribute('allowpopups', 'false')
+    // Popups on, on purpose: `allowpopups` is a boolean attribute, so the old
+    // `="false"` turned them on anyway, and the window-open handler in main is
+    // what makes them safe — it loads a `target=_blank` link or `window.open`
+    // in this pane and refuses the new window. With popups off those links
+    // would silently do nothing.
+    wv.setAttribute('allowpopups', '')
     wv.style.width = '100%'
     wv.style.height = '100%'
     wv.style.border = '0'
@@ -447,6 +563,33 @@ export function BrowserPane({
     const onDomReady = (): void => {
       readyRef.current = true
       syncNav()
+      // Hand the guest to main so the agent can drive it and its console and
+      // network are recorded. Fires on every navigation; main makes repeats a
+      // no-op, and a new guest (after a crash) re-attaches here.
+      let wcId: number | null = null
+      try {
+        wcId = wv.getWebContentsId()
+      } catch {
+        wcId = null
+      }
+      const attach = attachRef.current!
+      if (wcId !== null && wcId !== attach.wcId && cwd) {
+        if (attach.wcId !== null) {
+          let resolve: (v: boolean) => void = () => {}
+          const promise = new Promise<boolean>((r) => (resolve = r))
+          attachRef.current = { promise, resolve, wcId }
+        } else {
+          attach.wcId = wcId
+        }
+        const current = attachRef.current!
+        void window.api
+          .previewGuestAttach(id, cwd, wcId)
+          .then((ok) => {
+            current.resolve(ok)
+            if (ok) void applyEmulation(viewportRef.current)
+          })
+          .catch(() => current.resolve(false))
+      }
       void wv
         .executeJavaScript(PICKER_JS)
         .then(() => {
@@ -568,10 +711,7 @@ export function BrowserPane({
         }
         return
       }
-      // Forward warnings/errors so the agent's preview.console tool can see them.
-      if (cwd && ((ev.level ?? 0) >= 2 || /error|warn|fail|uncaught|exception/i.test(msg))) {
-        window.api.previewReportConsole(cwd, msg)
-      }
+      // Everything else reaches the agent through CDP in main.
     }
 
     wv.addEventListener('dom-ready', onDomReady)
@@ -584,10 +724,20 @@ export function BrowserPane({
     wv.addEventListener('page-favicon-updated', onFavicon)
     host.appendChild(wv)
 
-    // Expose an imperative handle so agent-driven commands (navigate/screenshot)
-    // can reach this pane by project folder.
-    registerPreview(id, {
+    const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+    const frames = (): Promise<void> =>
+      new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))
+    const visibleNow = (): boolean => activeRef.current && useApp.getState().panelOpen
+    const root = (): HTMLDivElement | null => rootRef.current
+
+    // Expose an imperative handle so agent commands can reach this pane by
+    // project folder. Page work happens in main over CDP; this answers only for
+    // what the renderer owns.
+    const handle: PreviewHandle = {
       cwd,
+      isVisible: visibleNow,
+      lastActive: () => lastActiveRef.current,
+      attached: () => attachRef.current!.promise,
       getURL: () => {
         try {
           return wv.getURL()
@@ -598,42 +748,62 @@ export function BrowserPane({
       loadURL: (url) => {
         manualNavRef.current = true
         setAddress(url)
+        setError(null)
         loadOrSrc(url)
       },
       capture: async () => {
-        // The pane may have just been mounted/activated for this very capture,
-        // so wait for the guest to attach (dom-ready) and for the page to stop
+        // Wait for the guest to attach (dom-ready) and for the page to stop
         // loading before shooting — capturing mid-navigation is what makes the
         // guest-view compositor throw UnknownVizError.
-        const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
         const deadline = Date.now() + 8000
         while ((!readyRef.current || loadingRef.current) && Date.now() < deadline) {
           await sleep(120)
         }
         if (!readyRef.current) return null
 
-        // Preferred path: the webview's own capture. capturePage() can *hang*
-        // (the main-process guest-view handler throws and never replies) or
-        // return an empty frame, so bound each attempt and retry a few times.
-        for (let i = 0; i < 3 && Date.now() < deadline; i++) {
-          const img = await Promise.race([
-            wv.capturePage().catch(() => null),
-            sleep(1500).then(() => null)
-          ])
-          if (img && !img.isEmpty()) {
-            const url = img.toDataURL()
-            // A real screenshot is a sizeable data URI; a blank frame is tiny.
-            if (url && url.length > 1024) return url.replace(/^data:[^;]*;base64,/, '')
-          }
-          await sleep(200)
+        // **A hidden pane is shot where it is, under a cover.** A guest whose
+        // pane is `visibility: hidden` produces no frames, so its capture
+        // never resolves; the old answer was to switch the user's panel to the
+        // preview tab and leave it there. Measured instead: the guest's own
+        // `capturePage()` succeeds while an opaque cover sits *over* it, so
+        // the pane is made visible beneath its cover (and beneath the tab the
+        // user is looking at) for the length of the shot, then hidden again.
+        const hidden = !visibleNow()
+        const el = root()
+        if (hidden && el) {
+          if (coverRef.current) coverRef.current.style.display = 'block'
+          el.style.visibility = 'visible'
+          el.style.zIndex = '-1'
+          await frames()
         }
+        try {
+          // capturePage() can *hang* (the main-process guest-view handler
+          // throws and never replies) or return an empty frame, so bound each
+          // attempt and retry a few times.
+          for (let i = 0; i < 3 && Date.now() < deadline + 3000; i++) {
+            const img = await Promise.race([wv.capturePage().catch(() => null), sleep(1500).then(() => null)])
+            if (img && !img.isEmpty()) {
+              const url = img.toDataURL()
+              // A real screenshot is a sizeable data URI; a blank frame is tiny.
+              if (url && url.length > 1024) return url.replace(/^data:[^;]*;base64,/, '')
+            }
+            await sleep(200)
+          }
+        } finally {
+          if (hidden && el) {
+            el.style.visibility = ''
+            el.style.zIndex = ''
+            if (coverRef.current) coverRef.current.style.display = 'none'
+          }
+        }
+        if (hidden) return null
 
         // Fallback: the guest is composited into the app window, so crop the
         // window's capture to this pane's on-screen rect. Reliable even when the
-        // webview's own capturePage is wedged.
-        const host = hostRef.current
-        if (host) {
-          const r = host.getBoundingClientRect()
+        // webview's own capturePage is wedged — but only for a pane on screen.
+        const guestBox = hostRef.current
+        if (guestBox) {
+          const r = guestBox.getBoundingClientRect()
           if (r.width > 2 && r.height > 2) {
             return window.api.previewCaptureWindow({
               x: r.x,
@@ -645,12 +815,30 @@ export function BrowserPane({
         }
         return null
       },
-      activate: () => {
-        const s = useApp.getState()
-        s.setActiveTab(id)
-        if (!s.panelOpen) s.togglePanel()
+      reveal: async () => {
+        const el = root()
+        if (!el || visibleNow()) return
+        el.style.visibility = 'visible'
+        el.style.zIndex = '30'
+        await frames()
+        await sleep(80)
+      },
+      conceal: () => {
+        const el = root()
+        if (!el) return
+        el.style.visibility = ''
+        el.style.zIndex = ''
+      },
+      setViewport: async (patch) => {
+        const next = applyViewportPatch(viewportRef.current, patch)
+        useApp.getState().setPreviewViewport(id, next)
+        viewportRef.current = next
+        await frames()
+        await applyEmulation(next)
+        return next
       }
-    })
+    }
+    registerPreview(id, handle)
 
     return () => {
       wv.removeEventListener('dom-ready', onDomReady)
@@ -671,7 +859,8 @@ export function BrowserPane({
       // picker "doing nothing" — the crosshair and the highlight are in the
       // copy nobody can see.
       wv.remove()
-      unregisterPreview(id)
+      unregisterPreview(id, handle)
+      window.api.previewGuestDetach(id)
       clearTimeout(pickedTimer.current)
       wvRef.current = null
       readyRef.current = false
@@ -694,9 +883,51 @@ export function BrowserPane({
 
   // Leaving the tab cancels an in-progress pick so it doesn't linger armed.
   React.useEffect(() => {
+    activeRef.current = active
+    if (active) lastActiveRef.current = Date.now()
     if (!active && inspectRef.current) setInspect(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active])
+
+  // A viewport change from the device menu (the agent's goes through the
+  // handle, which applies it itself).
+  const viewportKey = JSON.stringify(viewport)
+  const firstViewport = React.useRef(true)
+  React.useEffect(() => {
+    if (firstViewport.current) {
+      firstViewport.current = false
+      return
+    }
+    void applyEmulation(viewport)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewportKey])
+
+  // The stage's size, for fitting a device viewport larger than the pane.
+  React.useEffect(() => {
+    const el = stageRef.current
+    if (!el) return
+    const ro = new ResizeObserver(() => {
+      const r = el.getBoundingClientRect()
+      setStage((prev) =>
+        Math.round(prev.width) === Math.round(r.width) && Math.round(prev.height) === Math.round(r.height)
+          ? prev
+          : { width: r.width, height: r.height }
+      )
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
+  const refreshServers = React.useCallback((): void => {
+    void window.api
+      .previewLocalServers()
+      .then(setServers)
+      .catch(() => setServers([]))
+  }, [])
+  // A failed load is usually "nothing on that port" — offer what *is* running.
+  React.useEffect(() => {
+    if (error) refreshServers()
+  }, [error, refreshServers])
 
   // Poll dev-server logs while the drawer is open.
   React.useEffect(() => {
@@ -728,6 +959,7 @@ export function BrowserPane({
 
   const status = devState?.status ?? 'stopped'
   const serverRunning = status === 'running' || status === 'starting'
+  const external = serverRunning && devState?.external === true
   const dotClass =
     status === 'running'
       ? 'bg-emerald-500'
@@ -737,27 +969,51 @@ export function BrowserPane({
           ? 'bg-destructive'
           : 'bg-muted-foreground/40'
 
+  const size = viewportSize(viewport)
+  // Leave a margin round a device so its edge reads as an edge; never enlarge.
+  const fit =
+    size && stage.width > 0 && stage.height > 0
+      ? Math.min(1, (stage.width - 24) / size.width, (stage.height - 44) / size.height)
+      : 1
+  const scale = Math.max(0.1, fit)
+  const setViewport = (v: PreviewViewport): void => useApp.getState().setPreviewViewport(id, v)
+  const pickDevice = (device: string): void =>
+    setViewport({ ...(device === 'fill' ? { device } : { device, rotated: viewport.device === device ? viewport.rotated : undefined }), colorScheme: viewport.colorScheme })
+  const pickScheme = (colorScheme: PreviewColorScheme | undefined): void =>
+    setViewport(colorScheme ? { ...viewport, colorScheme } : { ...viewport, colorScheme: undefined })
+  const groups = [
+    { label: 'Phones', devices: PREVIEW_DEVICES.filter((d) => d.group === 'phone') },
+    { label: 'Tablets', devices: PREVIEW_DEVICES.filter((d) => d.group === 'tablet') },
+    { label: 'Desktop', devices: PREVIEW_DEVICES.filter((d) => d.group === 'desktop') }
+  ]
+  const tick = (on: boolean): React.JSX.Element => <Check className={cn(!on && 'invisible')} />
+
   return (
-    <div className="flex h-full min-h-0 flex-col bg-card/20">
+    <div ref={rootRef} className="relative flex h-full min-h-0 flex-col bg-card/20">
       {/* Toolbar */}
       <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border px-1.5">
         <WithTooltip
           label={
-            serverRunning
-              ? status === 'starting'
-                ? 'Starting dev server…'
-                : 'Stop dev server'
-              : 'Run dev server'
+            external
+              ? `Using ${devState?.command ?? 'a server started outside Carbon'} — stop it where it runs`
+              : serverRunning
+                ? status === 'starting'
+                  ? 'Starting dev server…'
+                  : 'Stop dev server'
+                : 'Run dev server'
           }
         >
           <Button
             size="icon-sm"
             variant="ghost"
             className="relative shrink-0"
-            aria-label={serverRunning ? 'Stop dev server' : 'Run dev server'}
-            onClick={() => (serverRunning ? void stopPreview(cwd) : void startPreview(cwd))}
+            aria-label={external ? 'Dev server started outside Carbon' : serverRunning ? 'Stop dev server' : 'Run dev server'}
+            onClick={() => {
+              if (external) return
+              void (serverRunning ? stopPreview(cwd) : startPreview(cwd))
+            }}
           >
-            {serverRunning ? <Square className="fill-current" /> : <Play />}
+            {external ? <Server /> : serverRunning ? <Square className="fill-current" /> : <Play />}
             <span
               className={cn(
                 'absolute right-0.5 bottom-0.5 size-1.5 rounded-full ring-1 ring-background',
@@ -832,6 +1088,66 @@ export function BrowserPane({
             editing ? 'border-ring/60' : 'border-transparent hover:border-border'
           )}
         />
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                className={cn('shrink-0', (size || viewport.colorScheme) && 'bg-primary/15 text-primary')}
+                aria-label={`Viewport: ${describeViewport(viewport)}`}
+                title={`Viewport: ${describeViewport(viewport)}`}
+              >
+                <MonitorSmartphone />
+              </Button>
+            }
+          />
+          <DropdownMenuContent align="end" className="min-w-52">
+            <DropdownMenuItem onClick={() => pickDevice('fill')}>
+              {tick(viewport.device === 'fill')}
+              Fill the pane
+            </DropdownMenuItem>
+            {groups.map((g) => (
+              <DropdownMenuSub key={g.label}>
+                <DropdownMenuSubTrigger>
+                  {tick(g.devices.some((d) => d.id === viewport.device))}
+                  {g.label}
+                </DropdownMenuSubTrigger>
+                <DropdownMenuContent side="right" className="min-w-52">
+                  {g.devices.map((d) => (
+                    <DropdownMenuItem key={d.id} onClick={() => pickDevice(d.id)}>
+                      {tick(viewport.device === d.id)}
+                      <span className="flex-1">{d.label}</span>
+                      <span className="font-mono text-[10px] text-muted-foreground">
+                        {d.width}×{d.height}
+                      </span>
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenuSub>
+            ))}
+            <DropdownMenuItem
+              disabled={!size}
+              onClick={() => setViewport({ ...viewport, rotated: viewport.rotated ? undefined : true })}
+            >
+              <RotateCwSquare />
+              {viewport.rotated ? 'Portrait' : 'Landscape'}
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={() => pickScheme(undefined)}>
+              {tick(!viewport.colorScheme)}
+              System color scheme
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => pickScheme('light')}>
+              {tick(viewport.colorScheme === 'light')}
+              Light
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => pickScheme('dark')}>
+              {tick(viewport.colorScheme === 'dark')}
+              Dark
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
         <WithTooltip label={inspect ? 'Cancel select (Esc)' : 'Select an element to attach'}>
           <Button
             size="icon-sm"
@@ -860,22 +1176,101 @@ export function BrowserPane({
             <ScrollText />
           </Button>
         </WithTooltip>
-        <WithTooltip label="Open in browser">
-          <Button
-            size="icon-sm"
-            variant="ghost"
-            className="shrink-0"
-            aria-label="Open in external browser"
-            onClick={() => window.open(callWV((wv) => wv.getURL()) || address, '_blank')}
-          >
-            <ExternalLink />
-          </Button>
-        </WithTooltip>
+        <DropdownMenu
+          onOpenChange={(open) => {
+            if (open) refreshServers()
+          }}
+        >
+          <DropdownMenuTrigger
+            render={
+              <Button size="icon-sm" variant="ghost" className="shrink-0" aria-label="More" title="More">
+                <Ellipsis />
+              </Button>
+            }
+          />
+          <DropdownMenuContent align="end" className="min-w-56">
+            <DropdownMenuItem onClick={() => callWV((wv) => wv.openDevTools())}>
+              <Bug />
+              Open DevTools
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => window.open(callWV((wv) => wv.getURL()) || address, '_blank')}>
+              <ExternalLink />
+              Open in browser
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <div className="px-2 pt-1 pb-0.5 text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
+              Local servers
+            </div>
+            {servers === null ? (
+              <div className="px-2 py-1.5 text-xs text-muted-foreground">Looking…</div>
+            ) : servers.length === 0 ? (
+              <div className="px-2 py-1.5 text-xs text-muted-foreground">None found</div>
+            ) : (
+              servers.map((srv) => (
+                <DropdownMenuItem key={srv.port} onClick={() => go(srv.url)}>
+                  <Server />
+                  <span className="flex min-w-0 flex-1 flex-col">
+                    <span className="truncate">
+                      localhost:{srv.port}
+                      {srv.title ? <span className="text-muted-foreground"> · {srv.title}</span> : null}
+                    </span>
+                    <span className="truncate text-[10px] text-muted-foreground">
+                      {srv.command}
+                      {srv.cwd ? ` · ${srv.cwd.split('/').slice(-2).join('/')}` : ''}
+                    </span>
+                  </span>
+                </DropdownMenuItem>
+              ))
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
       {/* Guest surface */}
-      <div className="relative min-h-0 flex-1">
-        <div ref={hostRef} className="absolute inset-0 [&>webview]:h-full [&>webview]:w-full" />
+      <div
+        ref={stageRef}
+        className={cn(
+          'relative min-h-0 flex-1 overflow-hidden',
+          size && 'bg-[radial-gradient(var(--border)_1px,transparent_1px)] [background-size:14px_14px]'
+        )}
+      >
+        <div
+          className={cn(!size && 'absolute inset-0')}
+          style={
+            size
+              ? {
+                  position: 'absolute',
+                  left: Math.max(0, (stage.width - size.width * scale) / 2),
+                  top: 12,
+                  width: size.width * scale,
+                  height: size.height * scale
+                }
+              : undefined
+          }
+        >
+          <div
+            ref={hostRef}
+            className={cn(
+              '[&>webview]:h-full [&>webview]:w-full',
+              size ? 'overflow-hidden rounded-md shadow-lg ring-1 ring-border' : 'absolute inset-0'
+            )}
+            style={
+              size
+                ? { width: size.width, height: size.height, transform: `scale(${scale})`, transformOrigin: '0 0' }
+                : undefined
+            }
+          />
+        </div>
+        {size && (
+          <div className="pointer-events-none absolute inset-x-0 bottom-1.5 flex justify-center">
+            <div className="rounded-full bg-popover/90 px-2 py-0.5 font-mono text-[10px] text-muted-foreground shadow ring-1 ring-border">
+              {describeViewport(viewport)}
+              {scale < 1 ? ` · ${Math.round(scale * 100)}%` : ''}
+            </div>
+          </div>
+        )}
+        {/* Covers the guest while a hidden pane is captured (see `capture`). */}
+        <div ref={coverRef} className="absolute inset-0 z-40 hidden bg-background" />
         {inspect && (
           <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex justify-center p-2">
             <div className="rounded-full bg-primary px-3 py-1 text-[11px] font-medium text-primary-foreground shadow-lg">
@@ -904,6 +1299,19 @@ export function BrowserPane({
                 <RotateCw className="size-3.5" /> Retry
               </Button>
             </div>
+            {servers && servers.length > 0 && (
+              <div className="mt-3 flex max-w-sm flex-col items-center gap-1.5">
+                <p className="text-[11px] text-muted-foreground/80">Running on this machine</p>
+                <div className="flex flex-wrap justify-center gap-1.5">
+                  {servers.slice(0, 6).map((srv) => (
+                    <Button key={srv.port} size="sm" variant="outline" className="h-6 px-2 text-[11px]" onClick={() => go(srv.url)}>
+                      <Server className="size-3" /> localhost:{srv.port}
+                      {srv.title ? <span className="max-w-28 truncate text-muted-foreground">{srv.title}</span> : null}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
         {/* Dev-server log drawer */}
@@ -925,7 +1333,10 @@ export function BrowserPane({
               </button>
             </div>
             <pre className="min-h-0 flex-1 overflow-auto px-2.5 py-1.5 font-mono text-[10px] leading-relaxed whitespace-pre-wrap text-muted-foreground select-text">
-              {logs || 'No output yet. Press ▶ to run the dev server.'}
+              {logs ||
+                (external
+                  ? 'This server was started outside Carbon, so its output is in the terminal that runs it.'
+                  : 'No output yet. Press ▶ to run the dev server.')}
             </pre>
           </div>
         )}

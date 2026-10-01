@@ -85,7 +85,7 @@ import { PREVIEW_SESSION_RULES } from './previewTools.ts'
 import type { CarbonMcpProvider, CarbonMcpSession } from './carbonBridge.ts'
 import { projectRoot } from '../shared/types.ts'
 import { CANVAS_SESSION_RULES } from './canvasTools.ts'
-import { describeCanvas, describeQuote, describeSelection } from './attachmentText.ts'
+import { describeCanvas, describeElement, describeQuote, describeSelection } from './attachmentText.ts'
 
 const OUTPUT_CAP = 100_000
 
@@ -97,7 +97,7 @@ const OUTPUT_CAP = 100_000
  * explicit "use my Chrome" request from being answered with the preview.
  */
 const CODEX_BROWSER_SESSION_RULES =
-  "Carbon has two different browser surfaces. Use the `carbon` MCP server's `preview_*` tools for this project's local dev-server UI and its screenshots/console. When the user explicitly asks for their Chrome browser, an existing signed-in browser session, or a browser extension, use an enabled Chrome/browser-control skill and its configured tools instead. Do not substitute one surface for the other. Carbon renders image blocks returned by tools inline in the transcript, outside collapsed activity. Once a screenshot tool has returned the requested image, do not save, re-emit, or link another copy merely to make it visible; discuss it normally. Create an image file only when the user asks to export or save one."
+  "Carbon has two different browser surfaces. Use the `carbon` MCP server's `preview_*` tools for this project's local dev-server UI — reading it (`preview_snapshot`), acting on it (`preview_click`, `preview_type`), screenshots, console and network. When the user explicitly asks for their Chrome browser, an existing signed-in browser session, or a browser extension, use an enabled Chrome/browser-control skill and its configured tools instead. Do not substitute one surface for the other. Carbon renders image blocks returned by tools inline in the transcript, outside collapsed activity. Once a screenshot tool has returned the requested image, do not save, re-emit, or link another copy merely to make it visible; discuss it normally. Create an image file only when the user asks to export or save one."
 
 /**
  * One-shot Codex text turn on a throwaway read-only thread — backs the chat
@@ -437,21 +437,6 @@ function cleanupStaleTempFiles(): void {
   } catch {
     // tmpdir unreadable — nothing to clean
   }
-}
-
-/** Renders a picked UI element as a text block the agent can act on. */
-function describeElement(el: ElementRef): string {
-  const lines = [`Selected UI element from the running app (${el.url}):`]
-  if (el.source?.file) {
-    const col = el.source.column != null ? `:${el.source.column}` : ''
-    const loc =
-      el.source.line != null ? `${el.source.file}:${el.source.line}${col}` : el.source.file
-    lines.push(`- Source: ${loc}`)
-  }
-  if (el.label) lines.push(`- Text: ${JSON.stringify(el.label)}`)
-  if (el.selector) lines.push(`- Selector: ${el.selector}`)
-  if (el.html) lines.push(`- HTML: ${el.html}`)
-  return lines.join('\n')
 }
 
 /**

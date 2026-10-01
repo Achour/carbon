@@ -112,6 +112,18 @@ function str(v: unknown): string | undefined {
   return typeof v === 'string' && v.length > 0 ? v : undefined
 }
 
+/** What a preview click or scroll aimed at, as the row names it. */
+function previewTarget(input: Record<string, unknown>): string | undefined {
+  const text = str(input.text)
+  if (text) return JSON.stringify(text)
+  const selector = str(input.selector)
+  if (selector) return selector
+  const ref = str(input.ref)
+  if (ref) return ref
+  if (typeof input.x === 'number' && typeof input.y === 'number') return `(${input.x}, ${input.y})`
+  return undefined
+}
+
 /** The row for a canvas write or edit, whichever provider spelled the call. */
 function canvasMeta(part: ToolPart): ToolMeta {
   const written = canvasWrite(part)
@@ -450,14 +462,49 @@ function computeToolMeta(part: ToolPart, cwd: string): ToolMeta {
     case 'mcp__preview__stop':
       return { icon: AppWindow, label: 'Preview', summary: 'Stop dev server' }
     case 'mcp__carbon__preview_navigate':
-    case 'mcp__preview__navigate':
-      return { icon: AppWindow, label: 'Preview', summary: str(input.url) }
+    case 'mcp__preview__navigate': {
+      const action = str(input.action)
+      const summary = action ? action.charAt(0).toUpperCase() + action.slice(1) : str(input.url)
+      return { icon: AppWindow, label: 'Preview', summary }
+    }
     case 'mcp__carbon__preview_screenshot':
     case 'mcp__preview__screenshot':
-      return { icon: AppWindow, label: 'Preview', summary: 'Screenshot' }
+      return { icon: AppWindow, label: 'Preview', summary: input.full_page === true ? 'Full-page screenshot' : 'Screenshot' }
     case 'mcp__carbon__preview_console':
     case 'mcp__preview__console':
       return { icon: AppWindow, label: 'Preview', summary: 'Console' }
+    // Only one spelling each: these arrived after the merge into `carbon`.
+    case 'mcp__carbon__preview_network':
+      return { icon: AppWindow, label: 'Preview', summary: input.failed_only === true ? 'Failed requests' : 'Network' }
+    case 'mcp__carbon__preview_snapshot':
+      return { icon: AppWindow, label: 'Preview', summary: 'Read page' }
+    case 'mcp__carbon__preview_click':
+      return { icon: AppWindow, label: 'Preview', summary: `Click ${previewTarget(input) ?? ''}`.trim() }
+    case 'mcp__carbon__preview_type': {
+      const text = str(input.text)
+      return { icon: AppWindow, label: 'Preview', summary: text !== undefined ? `Type ${JSON.stringify(text)}` : 'Type' }
+    }
+    case 'mcp__carbon__preview_press':
+      return { icon: AppWindow, label: 'Preview', summary: `Press ${str(input.key) ?? ''}`.trim() }
+    case 'mcp__carbon__preview_scroll': {
+      const to = str(input.to)
+      return { icon: AppWindow, label: 'Preview', summary: to ? `Scroll to ${to}` : `Scroll ${previewTarget(input) ?? ''}`.trim() }
+    }
+    case 'mcp__carbon__preview_wait_for':
+      return {
+        icon: AppWindow,
+        label: 'Preview',
+        summary: `Wait for ${str(input.text) ? JSON.stringify(str(input.text)) : (str(input.selector) ?? '')}${input.gone === true ? ' to go' : ''}`
+      }
+    case 'mcp__carbon__preview_evaluate':
+      return { icon: AppWindow, label: 'Preview', summary: 'Run script' }
+    case 'mcp__carbon__preview_resize': {
+      const device = str(input.device)
+      const scheme = str(input.color_scheme)
+      const size = typeof input.width === 'number' && typeof input.height === 'number' ? `${input.width}×${input.height}` : undefined
+      const summary = [device ?? size, scheme && scheme !== 'system' ? scheme : undefined].filter(Boolean).join(', ')
+      return { icon: AppWindow, label: 'Preview', summary: summary ? `Viewport ${summary}` : 'Viewport' }
+    }
     // The canvas tools take `Preview`'s shape: one label for the server, the
     // call's own subject as the summary. `PenLine` rather than `Shapes`, which
     // is `Artifact`'s — the two are different destinations and a shared glyph

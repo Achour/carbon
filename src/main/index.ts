@@ -28,7 +28,9 @@ import type {
   PermissionRule,
   PreviewCommand,
   PreviewCommandResult,
+  PreviewEmulation,
   PreviewEvent,
+  PreviewSourceFrame,
   PublishOpts,
   PullEdit,
   PullMergeMethod,
@@ -77,6 +79,9 @@ import {
 } from './projectIconStore'
 import { getPermissionRules, removePermissionRule } from './permissions'
 import { PreviewManager } from './preview'
+import { scanLocalServers } from './localServers.ts'
+import { resolveFrame } from './previewSource.ts'
+import { configurePreviewSession } from './previewSession.ts'
 import { CanvasManager } from './canvas.ts'
 import { Store } from './store'
 import { TerminalManager } from './terminal'
@@ -638,6 +643,9 @@ function registerIpc(): void {
         // Another chat may be working in the same worktree (the "new chat in
         // this worktree" path); removing it would pull the rug out from under it.
         if (!store.hasOtherChatIn(chat.cwd, id)) {
+          // A dev server running in the worktree would outlive its directory
+          // and hold the port until quit.
+          preview.stopUnder(chat.cwd)
           result = await removeWorktree(wt.repoRoot, chat.cwd, wt.branch, disposition === 'force')
         }
       }
@@ -745,6 +753,7 @@ function registerIpc(): void {
         (await resolveWorktree(path)) ??
         (repoRoot ? await resolveStaleWorktree(repoRoot, path) : null)
       if (!info) return { ok: false, error: 'Not a git worktree.' }
+      preview.stopUnder(path)
       return removeWorktree(info.repoRoot, path, info.branch, false)
     }
   )
@@ -1146,8 +1155,16 @@ function registerIpc(): void {
   ipcMain.handle('preview:start', (_e, cwd: string, command?: string) => preview.start(cwd, command))
   ipcMain.handle('preview:stop', (_e, cwd: string) => preview.stop(cwd))
   ipcMain.handle('preview:logs', (_e, cwd: string) => preview.logs(cwd))
-  ipcMain.handle('preview:report-console', (_e, cwd: string, line: string) =>
-    preview.reportConsole(cwd, line)
+  ipcMain.handle('preview:guest-attach', (_e, paneId: string, cwd: string, webContentsId: number) =>
+    preview.guestAttach(paneId, cwd, webContentsId)
+  )
+  ipcMain.handle('preview:guest-detach', (_e, paneId: string) => preview.guestDetach(paneId))
+  ipcMain.handle('preview:emulate', (_e, paneId: string, emulation: PreviewEmulation) =>
+    preview.emulate(paneId, emulation)
+  )
+  ipcMain.handle('preview:local-servers', () => scanLocalServers({ excludePids: [process.pid] }))
+  ipcMain.handle('preview:resolve-source', (_e, cwd: string, frame: PreviewSourceFrame) =>
+    resolveFrame(frame, cwd).catch(() => null)
   )
   // Fallback screenshot: a <webview>'s own capturePage() is flaky (it can hang
   // or throw UnknownVizError), but the guest is composited into the app window,
@@ -1276,6 +1293,11 @@ app.whenReady().then(() => {
   // after both objects exist.
   canvas = new CanvasManager(store.canvases, emit)
   preview = new PreviewManager(emitPreview, sendPreviewCommand, canvas)
+  configurePreviewSession(() => win)
+  // Dev-only probe handle, main's counterpart to the renderer's `window.__app`:
+  // with `electron-vite dev --inspect`, an e2e script drives the agent's
+  // preview tools through the main inspector without a provider turn.
+  if (!app.isPackaged) (globalThis as Record<string, unknown>).__carbonPreview = preview
   manager = new ChatManager(store, emit, preview, canvas, forgetChat)
   terminals = new TerminalManager(emitTerminal)
   chatTerminals = new ChatTerminalManager(terminals, store, emitTerminal, emit)

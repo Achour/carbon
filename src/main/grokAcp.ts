@@ -8,7 +8,7 @@ import { createInterface } from 'node:readline'
 import type { Attachment, ElementRef, ToolPart, UserQuestion } from '@shared/types'
 import { spawnEnv } from './parentEnv.ts'
 import { cliAvailable, providerCli } from './providerCli.ts'
-import { describeCanvas, describeQuote, describeSelection } from './attachmentText.ts'
+import { describeCanvas, describeElement, describeQuote, describeSelection } from './attachmentText.ts'
 import {
   carbonToolId,
   isCarbonSideEffect,
@@ -946,20 +946,6 @@ export function removeGrokTempFiles(paths: string[]): void {
       // Already gone.
     }
   }
-}
-
-/** Renders a picked UI element as a text block the agent can act on. */
-export function describeElement(el: ElementRef): string {
-  const lines = [`Selected UI element from the running app (${el.url}):`]
-  if (el.source?.file) {
-    const col = el.source.column != null ? `:${el.source.column}` : ''
-    const loc = el.source.line != null ? `${el.source.file}:${el.source.line}${col}` : el.source.file
-    lines.push(`- Source: ${loc}`)
-  }
-  if (el.label) lines.push(`- Text: ${JSON.stringify(el.label)}`)
-  if (el.selector) lines.push(`- Selector: ${el.selector}`)
-  if (el.html) lines.push(`- HTML: ${el.html}`)
-  return lines.join('\n')
 }
 
 /**

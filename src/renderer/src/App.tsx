@@ -20,23 +20,7 @@ import { UsageStats } from '@/components/UsageStats'
 import { PullRequests } from '@/components/PullRequests'
 import { isChatTerminalId } from '@shared/types'
 import { useApp } from '@/store'
-import { previewForCwd } from '@/lib/previewRegistry'
-
-const tick = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
-
-/** Poll the registry until a preview pane for `cwd` has mounted, or time out. */
-async function waitForPreview(
-  cwd: string,
-  ms: number
-): Promise<ReturnType<typeof previewForCwd>> {
-  const deadline = Date.now() + ms
-  let p = previewForCwd(cwd)
-  while (!p && Date.now() < deadline) {
-    await tick(100)
-    p = previewForCwd(cwd)
-  }
-  return p
-}
+import { installPreviewCommands } from '@/lib/previewCommands'
 
 export default function App(): React.JSX.Element {
   const init = useApp((s) => s.init)
@@ -77,51 +61,9 @@ export default function App(): React.JSX.Element {
       // pane is unmounted, and the refresh belongs to the chat, not the pane.
       else if (ev.type === 'activity') useApp.getState().terminalActivity(ev.chatId)
     })
-    // The agent (via main) asks the renderer to drive the live <webview>:
-    // navigate it, or capture a screenshot to see what it built.
-    const offPreviewCmd = window.api.onPreviewCommand(async (cmd) => {
-      try {
-        if (cmd.kind === 'navigate' && cmd.url) {
-          let p = previewForCwd(cmd.cwd)
-          if (!p) {
-            useApp.getState().openPreview(cmd.url, cmd.cwd)
-            p = await waitForPreview(cmd.cwd, 2500)
-          }
-          p?.handle.loadURL(cmd.url)
-          window.api.previewCommandResult({
-            id: cmd.id,
-            ok: !!p,
-            error: p ? undefined : 'No preview open'
-          })
-          return
-        }
-        if (cmd.kind === 'screenshot') {
-          let p = previewForCwd(cmd.cwd)
-          if (!p && cmd.url) {
-            useApp.getState().openPreview(cmd.url, cmd.cwd)
-            p = await waitForPreview(cmd.cwd, 2500)
-          }
-          if (!p) {
-            window.api.previewCommandResult({ id: cmd.id, ok: false, error: 'No preview open' })
-            return
-          }
-          // Bring the pane to the front, then capture — capture() waits for the
-          // guest to be ready and painted and retries blank frames on its own.
-          p.handle.activate()
-          const data = await p.handle.capture()
-          window.api.previewCommandResult({
-            id: cmd.id,
-            ok: !!data,
-            data: data ?? undefined,
-            error: data ? undefined : 'Capture failed'
-          })
-          return
-        }
-        window.api.previewCommandResult({ id: cmd.id, ok: false, error: 'Unknown command' })
-      } catch (err) {
-        window.api.previewCommandResult({ id: cmd.id, ok: false, error: String(err) })
-      }
-    })
+    // The agent (via main) asks the renderer for what it owns: which pane is a
+    // project's preview, its pixels, its viewport (`lib/previewCommands.ts`).
+    const offPreviewCmd = installPreviewCommands()
     const onKey = (e: KeyboardEvent): void => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'n') {
         e.preventDefault()

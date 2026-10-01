@@ -1,4 +1,4 @@
-import type { CanvasRef, QuoteRef, SelectionRef } from '@shared/types'
+import type { CanvasRef, ElementRef, QuoteRef, SelectionRef } from '@shared/types'
 
 /**
  * A fence long enough to survive the snippet's own backticks.
@@ -106,4 +106,23 @@ export function describeQuote(ref: QuoteRef): string {
     ref.text,
     fence
   ].join('\n')
+}
+
+/**
+ * A UI element picked in the preview. It was four copies — one per provider,
+ * Antigravity borrowing Grok's — and a field added to the pick (the component
+ * name) would otherwise reach whichever ones someone remembered.
+ */
+export function describeElement(el: ElementRef): string {
+  const lines = [`Selected UI element from the running app (${el.url}):`]
+  if (el.source?.file) {
+    const col = el.source.column != null ? `:${el.source.column}` : ''
+    const loc = el.source.line != null ? `${el.source.file}:${el.source.line}${col}` : el.source.file
+    lines.push(`- Source: ${loc}`)
+  }
+  if (el.component) lines.push(`- Component: <${el.component}>`)
+  if (el.label) lines.push(`- Text: ${JSON.stringify(el.label)}`)
+  if (el.selector) lines.push(`- Selector: ${el.selector}`)
+  if (el.html) lines.push(`- HTML: ${el.html}`)
+  return lines.join('\n')
 }

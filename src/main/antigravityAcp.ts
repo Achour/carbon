@@ -4,9 +4,8 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { Attachment, PermissionModeId, ToolPart, UserQuestion } from '@shared/types'
 import { AcpMethodNotFound, AcpRpc, AcpRpcError } from './acpRpc.ts'
-import { describeCanvas, describeQuote, describeSelection } from './attachmentText.ts'
+import { describeCanvas, describeElement, describeQuote, describeSelection } from './attachmentText.ts'
 import { carbonToolId, parseCarbonTool, type HttpMcpServer } from './carbonMcp.ts'
-import { describeElement } from './grokAcp.ts'
 import { spawnEnv } from './parentEnv.ts'
 import { providerCli } from './providerCli.ts'
 
@@ -374,6 +373,11 @@ export function agyToolName(call: AgyToolCall): string | undefined {
   }
   if (call.kind === 'execute') return 'Bash'
   const wire = agyWireToolName(call)
+  // An MCP tool the server calls natively arrives as "Running preview_status"
+  // with no `_meta` at all (measured, 1.2.1), so Carbon's own are recognized by
+  // name — the server prefix is gone, the `preview_`/`canvas_` one is not.
+  const carbon = parseCarbonTool(wire)
+  if (carbon) return carbonToolId(carbon)
   if (wire) return AGY_TOOL_NAMES[wire] ?? wire
   return call.title?.trim() || undefined
 }
@@ -551,6 +555,42 @@ export function agyToolImages(
     }
   }
   return images.length ? images : undefined
+}
+
+// ---------- Model errors and retries ----------
+
+/**
+ * The server's harness retries a failed model request (Google's backend
+ * answering 500, or 503 "No capacity available for model …" — measured on a
+ * free-tier account against 1.2.1) and says so only by failing whatever tool
+ * the attempt had open with this text.
+ */
+export function isAgyRetryNotice(output: string | undefined): boolean {
+  return !!output && /^Encountered retryable error from model provider/.test(output)
+}
+
+/**
+ * True when `delta` starts the answer over rather than continuing it. A retried
+ * attempt re-streams from its first word with no marker on the wire — not even
+ * the retry notice above, every time — so a chunk that opens with the same
+ * words the part already opens with is the restart, and appending it would
+ * print the abandoned half glued to the new answer.
+ */
+export function agyRestartsText(current: string, delta: string): boolean {
+  const n = Math.min(current.length, delta.length, 32)
+  return n >= 8 && current.slice(0, n) === delta.slice(0, n)
+}
+
+/**
+ * The server ends a turn whose retries ran out with an *agent message*, not an
+ * error: "Agent execution error: Error 503, Message: No capacity available …".
+ * Recognized so it lands as an error card rather than as the agent's reply.
+ */
+export function agyExecutionError(text: string): string | null {
+  if (!/^Agent execution error:/.test(text)) return null
+  const match = /Error (\d+), Message: (.+?)(?:, Status:|\n|$)/.exec(text)
+  const what = match ? `${match[1]}: ${match[2].trim()}` : text.replace(/^Agent execution error:\s*/, '').split('\n')[0]
+  return `Google's model backend failed (${what}). Nothing on this machine went wrong — send again, or switch to another Gemini model.`
 }
 
 // ---------- Questions ----------

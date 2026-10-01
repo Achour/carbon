@@ -1,3 +1,5 @@
+import type { PreviewColorScheme, PreviewViewport, PreviewViewportPatch } from './previewDevices'
+
 export const PROVIDERS = ['claude', 'codex', 'grok', 'antigravity'] as const
 
 export type Provider = (typeof PROVIDERS)[number]
@@ -585,8 +587,13 @@ export interface ElementRef {
   label?: string
   /** Truncated outerHTML of the element. */
   html?: string
-  /** Source file:line resolved from the React fiber (dev builds only). */
+  /**
+   * Source file:line resolved from the React fiber (dev builds only) — through
+   * the dev server's source map on React 19, which no longer keeps it.
+   */
   source?: { file: string; line?: number; column?: number }
+  /** The React component that rendered the element, e.g. "Counter". */
+  component?: string
 }
 
 /**
@@ -2261,18 +2268,37 @@ export interface PreviewState {
   url?: string
   /** Short summary when status is 'error' (spawn failure or early exit). */
   error?: string
+  /**
+   * The server was already running when Carbon looked — started in the user's
+   * own terminal — so Carbon points the preview at it and will not stop it.
+   */
+  external?: boolean
 }
 
 /** main → renderer dev-server lifecycle updates. */
 export type PreviewEvent = { type: 'state'; state: PreviewState }
 
-/** main → renderer request to act on a live preview (agent read-back / navigation). */
+/**
+ * main → renderer request to act on a live preview. Main does the page work
+ * itself over CDP; what it needs from the renderer is only what the renderer
+ * owns — which pane, its tab, and its pixels.
+ *
+ * - `ensure`: find this project's preview pane — opening or showing its tab
+ *   when none is mounted, at `url` if one has to be opened — and answer with
+ *   its `paneId` once its guest is attached in main.
+ * - `navigate`: `ensure`, then load `url` in it.
+ * - `screenshot`: the pane's visible viewport, without switching tabs.
+ * - `reveal` / `conceal`: put a hidden pane on screen for a capture CDP can
+ *   only take from a painted guest (a full-page shot), then put it back.
+ * - `viewport`: set the pane's viewport (device, size, color scheme).
+ */
 export interface PreviewCommand {
   id: string
   cwd: string
-  kind: 'screenshot' | 'navigate'
-  /** navigate: target URL. screenshot: URL to open one at if none exists yet. */
+  kind: 'ensure' | 'navigate' | 'screenshot' | 'reveal' | 'conceal' | 'viewport'
+  paneId?: string
   url?: string
+  viewport?: PreviewViewportPatch
 }
 
 export interface PreviewCommandResult {
@@ -2280,7 +2306,45 @@ export interface PreviewCommandResult {
   ok: boolean
   /** screenshot: base64 PNG, no data: prefix. */
   data?: string
+  /** ensure/navigate: the pane that answered. */
+  paneId?: string
+  /** viewport: the pane's viewport after the change. */
+  viewport?: PreviewViewport
   error?: string
+}
+
+/** A local web server found by port scan (`main/localServers.ts`). */
+export interface LocalServer {
+  port: number
+  /** `http://localhost:<port>`. */
+  url: string
+  pid: number
+  /** The owning process's name, e.g. "node". */
+  command: string
+  /** The owning process's working directory, when the OS would say. */
+  cwd?: string
+  /** The page's `<title>`, when it has one. */
+  title?: string
+}
+
+/** What the renderer asks main to emulate for a pane's guest. */
+export interface PreviewEmulation {
+  /** Layout size; absent for a pane that fills its slot. */
+  width?: number
+  height?: number
+  /** Device pixel ratio; 0 or absent keeps the screen's. */
+  dpr?: number
+  mobile?: boolean
+  /** Which mobile user agent a `mobile` device sends. */
+  os?: 'ios' | 'android'
+  colorScheme?: PreviewColorScheme
+}
+
+/** A served-module stack frame the element picker wants resolved to source. */
+export interface PreviewSourceFrame {
+  url: string
+  line: number
+  column: number
 }
 
 // ---------- Slash commands ----------
@@ -2743,9 +2807,24 @@ export interface Api {
   previewStop(cwd: string): Promise<PreviewState>
   /** Buffered dev-server output (ANSI-stripped). */
   previewLogs(cwd: string): Promise<string>
-  /** Renderer forwards guest console lines so agent read-back can surface them. */
-  previewReportConsole(cwd: string, line: string): void
-  /** Renderer's reply to a PreviewCommand (screenshot/navigate). */
+  /**
+   * A pane's guest is attached (its `dom-ready`), so main can drive it over
+   * CDP and record its console and network for the agent. Resolves once main
+   * holds it; repeated calls for the same guest are cheap no-ops.
+   */
+  previewGuestAttach(paneId: string, cwd: string, webContentsId: number): Promise<boolean>
+  /** The pane unmounted; main drops its guest. */
+  previewGuestDetach(paneId: string): void
+  /** Applies a pane's device / color-scheme emulation to its guest. */
+  previewEmulate(paneId: string, emulation: PreviewEmulation): Promise<void>
+  /** Local web servers that answer with a page, found by port scan. */
+  previewLocalServers(): Promise<LocalServer[]>
+  /** A React 19 element's creation frame, resolved to source via the dev server's map. */
+  previewResolveSource(
+    cwd: string,
+    frame: PreviewSourceFrame
+  ): Promise<{ file: string; line?: number; column?: number } | null>
+  /** Renderer's reply to a PreviewCommand. */
   previewCommandResult(result: PreviewCommandResult): void
   /**
    * Fallback screenshot: crop the app window's capture to a pane rect (in CSS

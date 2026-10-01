@@ -13,7 +13,7 @@ import {
   type SDKMessage,
   type SDKUserMessage
 } from '@anthropic-ai/claude-agent-sdk'
-import { z, type ZodRawShape } from 'zod'
+import { z, type ZodRawShape, type ZodTypeAny } from 'zod'
 import type {
   AccountInfo,
   AgentInfo,
@@ -73,13 +73,15 @@ import {
 import { AGENT_TOOLS } from '@shared/agentRuns'
 import type { Store } from './store'
 import type { PreviewManager } from './preview'
-import { PREVIEW_TOOL_INFO, runPreviewTool } from './previewTools.ts'
+import { PREVIEW_TOOL_INFO, previewPlanBlock, runPreviewTool, type PreviewParam } from './previewTools.ts'
 import {
   CARBON_MCP_NAME,
   CARBON_TOOL_REFS,
+  carbonToolInput,
   carbonToolName,
   isCarbonSideEffect,
   isCarbonToolId,
+  parseCarbonTool,
   type CarbonToolInput
 } from './carbonMcp.ts'
 import { projectRoot } from '../shared/types.ts'
@@ -109,7 +111,7 @@ import {
   type Emit
 } from './session'
 import { DeltaCoalescer } from './deltaCoalescer'
-import { describeCanvas, describeQuote, describeSelection } from './attachmentText.ts'
+import { describeCanvas, describeElement, describeQuote, describeSelection } from './attachmentText.ts'
 import { parsePartialJson } from './partialJson'
 import { TITLE_SYSTEM, buildTitlePrompt, cleanTitle, deriveTitle, firstUserText } from './titles'
 import {
@@ -134,6 +136,19 @@ import {
  * enough. See "the one option that changes on neither axis" in CLAUDE.md.
  */
 const GUI_SYSTEM_APPEND = `You are running inside a desktop GUI (not a terminal). The GUI renders any \`\`\`mermaid fenced code block as a real rendered diagram — this applies to your chat replies AND to plan documents you write for ExitPlanMode. When a diagram would make an explanation or a plan clearer (flows, sequences, architecture, state), draw it with a Mermaid fenced block (e.g. flowchart, sequenceDiagram) rather than ASCII art or box-drawing characters. Keep diagrams valid and reasonably small; label nodes clearly.\n\n${CANVAS_SESSION_RULES}`
+
+/** A preview tool parameter as the zod field Claude's in-process server takes. */
+function previewZod(p: PreviewParam): ZodTypeAny {
+  const base =
+    p.type === 'boolean'
+      ? z.boolean()
+      : p.type === 'number'
+        ? z.number()
+        : p.enum
+          ? z.enum(p.enum as [string, ...string[]])
+          : z.string()
+  return (p.required ? base : base.optional()).describe(p.description)
+}
 
 /**
  * **Carbon's `carbon` MCP server, in-process.**
@@ -180,12 +195,14 @@ function buildCarbonServer(
       const name = carbonToolName(ref)
       if (ref.kind === 'preview') {
         const info = PREVIEW_TOOL_INFO[ref.name]
-        const shape: ZodRawShape = info.url
-          ? { url: z.string().describe('The URL to load in the preview.') }
-          : {}
+        const shape: ZodRawShape = Object.fromEntries(
+          Object.entries(info.params).map(([key, p]) => [key, previewZod(p)])
+        )
+        // Through the same coercion the HTTP path uses, so a model's arguments
+        // mean one thing whichever provider sent them.
         return tool(name, info.description, shape, async (args) =>
           previewResult(
-            await runPreviewTool(preview, ctx.cwd, ref.name, args as { url?: string })
+            await runPreviewTool(preview, ctx.cwd, ref.name, carbonToolInput(args), { caller: ctx.chatId })
           )
         )
       }
@@ -363,20 +380,6 @@ function advisorOutcome(content: unknown): { output: string; error: boolean } {
     default:
       return { output: applied, error: false }
   }
-}
-
-/** Renders a picked UI element as a text block the agent can act on. */
-function describeElement(el: ElementRef): string {
-  const lines = [`Selected UI element from the running app (${el.url}):`]
-  if (el.source?.file) {
-    const col = el.source.column != null ? `:${el.source.column}` : ''
-    const loc = el.source.line != null ? `${el.source.file}:${el.source.line}${col}` : el.source.file
-    lines.push(`- Source: ${loc}`)
-  }
-  if (el.label) lines.push(`- Text: ${JSON.stringify(el.label)}`)
-  if (el.selector) lines.push(`- Selector: ${el.selector}`)
-  if (el.html) lines.push(`- HTML: ${el.html}`)
-  return lines.join('\n')
 }
 
 interface InputQueue {
@@ -807,17 +810,20 @@ class ClaudeSession implements AgentSession {
           // a file or a process — so they are not worth a prompt, in plan mode
           // included: a plan that produces a document is still a plan.
           //
-          // The exception is starting or stopping the dev server, which is a
-          // side effect and is refused while the plan is unapproved. Read from
+          // The exceptions are starting or stopping the dev server and acting
+          // on the running app (click, type, press, evaluate), which are side
+          // effects and are refused while the plan is unapproved. Read from
           // the tool table (`isCarbonSideEffect`) rather than a name written
           // here, so the next tool added to the server cannot land on the
           // permissive side of this branch by default.
           if (isCarbonToolId(toolName)) {
             if (isCarbonSideEffect(toolName) && this.chat.permissionMode === 'plan') {
+              const ref = parseCarbonTool(toolName)
               return {
                 behavior: 'deny',
                 message:
-                  'Starting or stopping the dev server is a side effect and is not allowed in plan mode. Note it in the plan — it can run once the plan is approved.'
+                  (ref?.kind === 'preview' ? previewPlanBlock(ref.name, true) : null) ??
+                  'This is a side effect and is not allowed in plan mode. Note it in the plan.'
               }
             }
             return { behavior: 'allow', updatedInput: input }

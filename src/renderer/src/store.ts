@@ -64,6 +64,7 @@ import {
   providerForRememberedModel
 } from '@shared/types'
 import { canvasText } from '@shared/canvasText'
+import type { PreviewViewport } from '@shared/previewDevices'
 import type {
   CanvasSummary,
   AppDefaults,
@@ -207,6 +208,8 @@ export interface PreviewTab {
   /** Whether that mark is a dark glyph needing inverting on a dark ground —
    * measured beside the fetch so the tab's first paint is already right. */
   faviconInkDark?: boolean
+  /** Device size and color scheme; absent fills the pane with no emulation. */
+  viewport?: PreviewViewport
 }
 
 export interface PlanPanelState {
@@ -872,6 +875,8 @@ interface AppState {
   setPreviewUrl(id: string, url: string): void
   /** The site's mark for a preview tab; null clears it back to the globe. */
   setPreviewFavicon(id: string, uri: string | null, inkDark?: boolean): void
+  /** A preview tab's viewport — set from its device menu or by the agent's `preview_resize`. */
+  setPreviewViewport(id: string, viewport: PreviewViewport): void
   /** Dev-server state per project folder, keyed by cwd. */
   previewStates: Record<string, PreviewState>
   applyPreviewState(state: PreviewState): void
@@ -2380,6 +2385,12 @@ export const useApp = create<AppState>((set, get) => ({
         previews: s.previews.map((p) => (p.id === id ? { ...p, favicon, faviconInkDark: ink } : p))
       }
     })
+  },
+
+  setPreviewViewport(id, viewport) {
+    set((s) => ({
+      previews: s.previews.map((p) => (p.id === id ? { ...p, viewport } : p))
+    }))
   },
 
   // ---- Composer inbox ----
@@ -4379,12 +4390,23 @@ export const useApp = create<AppState>((set, get) => ({
         // we fetched belongs to a view that no longer exists.
         const now = surfaceOf(s, id)
         if (!now || now.hiddenBefore !== before.hiddenBefore) return {}
-        return (
+        const patch =
           patchSurface(s, id, {
             messages: [...older.messages, ...now.messages],
             hiddenBefore: older.from
           }) ?? {}
-        )
+        // A window that opened mid-turn drew that turn's work unfolded — it had
+        // no prompt to fold under. The prepend supplies the prompt, and a
+        // settled turn would then fold away the very rows the reader is
+        // scrolling through (measured: a 1,079px jump under the cursor). It
+        // was open on screen, so it stays open.
+        if (now.messages[0] && now.messages[0].role !== 'user') {
+          const prompt = older.messages.findLast((m) => m.role === 'user')
+          if (prompt && !s.expandedTurns.has(prompt.id)) {
+            return { ...patch, expandedTurns: new Set(s.expandedTurns).add(prompt.id) }
+          }
+        }
+        return patch
       })
     } finally {
       setLoading(false)

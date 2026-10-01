@@ -127,9 +127,10 @@ what makes the Recents list one indexed query rather than a directory scan.
 - **Nothing is gated.** A canvas tool writes only Carbon's own database — no
   file, no process, nothing outside the app — so it is auto-allowed beside the
   preview's read tools, in plan mode included: a plan that produces a document
-  is still a plan. Only `preview_start` and `preview_stop` are refused there,
-  and the permission gate asks the tool table which those are rather than
-  matching a name.
+  is still a plan. Only starting/stopping the dev server and acting on the
+  page (`preview_click`, `type`, `press`, `evaluate`) are refused there, and
+  the permission gate asks the tool table which those are rather than matching
+  a name (see `docs/preview.md`).
 - **The session rules have to disambiguate against `Artifact`.** Carbon sets
   `CLAUDE_CODE_ARTIFACT`, so a Claude session has *two* "make a document" tools
   and the other one publishes to claude.ai. Left unsaid, "make me a page

@@ -7,12 +7,15 @@ import {
   type CanvasToolName
 } from './canvasTools.ts'
 import {
+  PREVIEW_PARAM_TYPES,
   PREVIEW_TOOL_INFO,
   PREVIEW_TOOL_NAMES,
   isPreviewSideEffect,
   previewPlanBlock,
   runPreviewTool,
+  type PreviewParam,
   type PreviewToolHost,
+  type PreviewToolInput,
   type PreviewToolName,
   type PreviewToolResult
 } from './previewTools.ts'
@@ -95,11 +98,13 @@ export function isCarbonToolId(name: string): boolean {
 }
 
 /**
- * The only carbon tools that touch anything outside the app: starting and
- * stopping a dev server. Everything else — a screenshot, a console read, a
- * canvas write — is app-local, which is why the permission gate can allow the
- * rest without asking. A *table*, not a prefix test: a prefix says "this server
- * is safe" and would silently auto-allow the next tool added to it.
+ * The carbon tools plan mode refuses: starting or stopping a dev server, and
+ * acting on the running app (a click or a script can change its data).
+ * Everything else — a snapshot, a screenshot, a console read, a canvas write —
+ * changes nothing the user would have to undo, which is why the permission
+ * gate can allow the rest without asking. A *table*, not a prefix test: a
+ * prefix says "this server is safe" and would silently auto-allow the next
+ * tool added to it.
  */
 export function isCarbonSideEffect(name: string): boolean {
   const ref = parseCarbonTool(name)
@@ -123,16 +128,16 @@ export function carbonToolList(opts: { canvas?: boolean } = {}): CarbonToolSchem
   return CARBON_TOOL_REFS.filter((ref) => canvas || ref.kind === 'preview').map((ref) => {
     if (ref.kind === 'preview') {
       const info = PREVIEW_TOOL_INFO[ref.name]
-      const properties: Record<string, unknown> = {}
-      const required: string[] = []
-      if (info.url) {
-        properties.url = { type: 'string', description: 'The URL to load in the preview.' }
-        required.push('url')
-      }
+      const entries = Object.entries(info.params)
+      const required = entries.filter(([, p]) => p.required).map(([key]) => key)
       return {
         name: carbonToolName(ref),
         description: info.description,
-        inputSchema: { type: 'object', properties, ...(required.length ? { required } : {}) }
+        inputSchema: {
+          type: 'object',
+          properties: Object.fromEntries(entries.map(([key, p]) => [key, previewParamSchema(p)])),
+          ...(required.length ? { required } : {})
+        }
       }
     }
     const info = CANVAS_TOOL_INFO[ref.name]
@@ -164,21 +169,44 @@ export function carbonMcpTools(): { name: string; description: string; readOnly:
   })
 }
 
+/** A preview parameter as JSON Schema. */
+function previewParamSchema(p: PreviewParam): Record<string, unknown> {
+  return { type: p.type, description: p.description, ...(p.enum ? { enum: [...p.enum] } : {}) }
+}
+
 /** The union of both tool tables' arguments. */
-export type CarbonToolInput = CanvasToolInput & { url?: string }
+export type CarbonToolInput = CanvasToolInput & PreviewToolInput
 
 /**
  * Coerced in one place rather than at each call site: the arguments arrive as
  * untyped JSON from a model, and a field picked in the HTTP path but forgotten
  * in Claude's is precisely how the two providers came to be told different
- * things about one tool before.
+ * things about one tool before. The preview half is read off its own table, so
+ * a parameter added there is coerced here without a second edit.
+ *
+ * Numbers arrive as strings often enough (`"300"`) that a strict check would
+ * drop them; a string that is not a finite number is still dropped.
  */
 export function carbonToolInput(raw: unknown): CarbonToolInput {
   const input = (raw ?? {}) as Record<string, unknown>
   const str = (value: unknown): string | undefined =>
     typeof value === 'string' ? value : undefined
+  const preview: Record<string, unknown> = {}
+  for (const [key, type] of Object.entries(PREVIEW_PARAM_TYPES)) {
+    const value = input[key]
+    if (value === undefined || value === null) continue
+    if (type === 'string') {
+      if (typeof value === 'string') preview[key] = value
+    } else if (type === 'boolean') {
+      if (value === true || value === 'true') preview[key] = true
+      else if (value === false || value === 'false') preview[key] = false
+    } else {
+      const n = typeof value === 'number' ? value : typeof value === 'string' && value.trim() ? Number(value) : NaN
+      if (Number.isFinite(n)) preview[key] = n
+    }
+  }
   return {
-    url: str(input.url),
+    ...(preview as PreviewToolInput),
     title: str(input.title),
     html: str(input.html),
     id: str(input.id),
@@ -223,7 +251,10 @@ export async function runCarbonTool(
     const blocked = previewPlanBlock(ref.name, ctx.plan?.() === true)
     if (blocked) return { ok: false, error: blocked }
     if (!ctx.cwd) return { ok: false, error: 'cwd is required.' }
-    return { ok: true, ...(await runPreviewTool(hosts.preview, ctx.cwd, ref.name, input)) }
+    return {
+      ok: true,
+      ...(await runPreviewTool(hosts.preview, ctx.cwd, ref.name, input, { caller: ctx.chatId ?? ctx.cwd }))
+    }
   }
   if (!hosts.canvas) return { ok: false, error: 'Canvas is not available.' }
   if (!ctx.project) return { ok: false, error: 'project is required.' }

@@ -12,18 +12,19 @@ import {
   runCarbonTool
 } from '../src/main/carbonMcp.ts'
 import type { CanvasToolHost } from '../src/main/canvasTools.ts'
-import type { PreviewToolHost } from '../src/main/previewTools.ts'
+import { PREVIEW_TOOL_NAMES, type PreviewToolHost } from '../src/main/previewTools.ts'
 
 function previewHost(): PreviewToolHost {
   return {
-    state: (cwd) => ({ cwd, status: 'stopped' }),
+    status: async (cwd) => JSON.stringify({ cwd, status: 'stopped' }),
     startAndWait: async (cwd) => ({ cwd, status: 'running', url: 'http://localhost:3000' }),
     stop: (cwd) => ({ cwd, status: 'stopped' }),
-    navigate: async () => ({ id: '1', ok: true }),
     screenshot: async () => 'abc',
-    recentConsole: () => 'from preview'
+    page: async (_cwd, _caller, op) => (op === 'console' ? 'from preview' : `did ${op}`)
   }
 }
+
+const PREVIEW_COUNT = PREVIEW_TOOL_NAMES.length
 
 function canvasHost(saved: Array<Record<string, unknown>> = []): CanvasToolHost & {
   saved: Array<Record<string, unknown>>
@@ -51,12 +52,7 @@ test('one server carries both tool tables, each name saying which half it is', (
   assert.deepEqual(
     tools.map((tool) => tool.name),
     [
-      'preview_status',
-      'preview_start',
-      'preview_stop',
-      'preview_navigate',
-      'preview_screenshot',
-      'preview_console',
+      ...PREVIEW_TOOL_NAMES.map((name) => `preview_${name}`),
       'canvas_write',
       'canvas_edit',
       'canvas_list',
@@ -65,9 +61,11 @@ test('one server carries both tool tables, each name saying which half it is', (
   )
   const byName = Object.fromEntries(tools.map((tool) => [tool.name, tool]))
   assert.deepEqual(
-    (byName.preview_navigate.inputSchema as { required?: string[] }).required,
-    ['url']
+    (byName.preview_evaluate.inputSchema as { required?: string[] }).required,
+    ['expression']
   )
+  // navigate takes a url *or* an action, so neither is required on the wire.
+  assert.equal((byName.preview_navigate.inputSchema as { required?: string[] }).required, undefined)
   assert.deepEqual((byName.canvas_write.inputSchema as { required?: string[] }).required, [
     'title',
     'html'
@@ -82,7 +80,7 @@ test('one server carries both tool tables, each name saying which half it is', (
   )
   // A build with no canvas host advertises the preview half rather than four
   // tools that answer "not available" to every call.
-  assert.equal(carbonToolList({ canvas: false }).length, 6)
+  assert.equal(carbonToolList({ canvas: false }).length, PREVIEW_COUNT)
 })
 
 test('a tool name is recognized however the provider spelled it', () => {
@@ -129,13 +127,13 @@ test('handleMcpMessage answers initialize, tools/list, and refuses the rest by n
   assert.equal(result.protocolVersion, '2025-11-25')
 
   const list = handleMcpMessage({ jsonrpc: '2.0', id: 2, method: 'tools/list' })
-  assert.equal((list?.result as { tools: unknown[] }).tools.length, 10)
+  assert.equal((list?.result as { tools: unknown[] }).tools.length, PREVIEW_COUNT + 4)
   assert.equal(
     (
       handleMcpMessage({ jsonrpc: '2.0', id: 3, method: 'tools/list' }, { canvas: false })
         ?.result as { tools: unknown[] }
     ).tools.length,
-    6
+    PREVIEW_COUNT
   )
 
   // Grok opens with `server/discover`, which is not MCP. Answered `-32601`
@@ -269,7 +267,7 @@ test('the bridge speaks streamable-HTTP MCP behind a bearer token', async () => 
     assert.equal(notified.status, 202)
 
     const list = await rpc(bridge, session.url, { jsonrpc: '2.0', id: 1, method: 'tools/list' })
-    assert.equal((list.json as { result: { tools: unknown[] } }).result.tools.length, 10)
+    assert.equal((list.json as { result: { tools: unknown[] } }).result.tools.length, PREVIEW_COUNT + 4)
 
     const shot = await rpc(bridge, session.url, {
       jsonrpc: '2.0',
