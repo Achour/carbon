@@ -19,7 +19,7 @@ import {
 import type { CarbonToolContext } from './carbonMcp.ts'
 import type { CanvasToolHost } from './canvasTools.ts'
 import { PreviewDriver } from './previewDriver.ts'
-import { cwdBelongsTo, descendsFrom, processParents, scanLocalServers } from './localServers.ts'
+import { cwdBelongsTo, descendsFrom, probeHttp, processParents, scanLocalServers } from './localServers.ts'
 import { viewportPatch, type PreviewPageOp, type PreviewToolHost, type PreviewToolInput } from './previewTools.ts'
 import { detectDevPlan, planLabel } from './devServerPlan.ts'
 
@@ -48,10 +48,15 @@ const URL_FALLBACK_AFTER_MS = 4000
 const URL_FALLBACK_EVERY_MS = 1500
 const URL_FALLBACK_FOR_MS = 120_000
 
+/** Page operations that act on the page, and so must act on the page they were asked about. */
+const ACTING_OPS = new Set<PreviewPageOp>(['click', 'type', 'press', 'evaluate'])
+
 type Emit = (ev: PreviewEvent) => void
 type SendCommand = (cmd: Omit<PreviewCommand, 'id'>) => Promise<PreviewCommandResult>
 
 interface Server {
+  /** Distinct per process Carbon started, so a reader's cursor belongs to one. */
+  id: number
   proc: IPty | null
   state: PreviewState
   log: string[]
@@ -62,6 +67,8 @@ interface Server {
   sniff: string
   waiters: Array<(s: PreviewState) => void>
   fallback?: ReturnType<typeof setInterval>
+  /** An adopted server's address, as the scan reached it — what its liveness check probes. */
+  probeHost?: string
 }
 
 // How much recent stripped output to retain for URL sniffing. Big enough to
@@ -78,6 +85,19 @@ export class PreviewManager implements PreviewToolHost {
   private servers = new Map<string, Server>()
   /** In-flight starts, so a click and an agent call landing together start one server. */
   private starting = new Map<string, Promise<PreviewState>>()
+  /**
+   * Bumped by every stop, so a start still awaiting its port scan — or a
+   * fallback scan still awaiting `lsof` — finds the project stopped under it
+   * and gives up instead of spawning or publishing a URL afterwards.
+   */
+  private generation = new Map<string, number>()
+  private disposed = false
+  private gen(cwd: string): number {
+    return this.generation.get(cwd) ?? 0
+  }
+  private bump(cwd: string): void {
+    this.generation.set(cwd, this.gen(cwd) + 1)
+  }
   /** Per caller, per project: how many dev-server chunks its console reads have seen. */
   private serverCursors = new Map<string, number>()
   readonly driver = new PreviewDriver()
@@ -139,7 +159,9 @@ export class PreviewManager implements PreviewToolHost {
   private serverErrors(cwd: string, caller: string, all: boolean): string[] {
     const s = this.servers.get(cwd)
     if (!s) return []
-    const key = `${caller}\u0000${cwd}`
+    // Per server, too: a restarted server's chunk count starts again at zero,
+    // and a cursor carried over would skip its first errors.
+    const key = `${caller}\u0000${cwd}\u0000${s.id}`
     const seen = all ? 0 : (this.serverCursors.get(key) ?? 0)
     this.serverCursors.set(key, s.written)
     const fresh = Math.min(s.log.length, s.written - seen)
@@ -157,7 +179,7 @@ export class PreviewManager implements PreviewToolHost {
     server.state = { ...server.state, ...patch }
     this.emit({ type: 'state', state: server.state })
     if (server.state.status === 'running' || server.state.status === 'error' || server.state.status === 'stopped') {
-      if (server.fallback) {
+      if (server.fallback && !(server.state.external && server.state.status === 'running')) {
         clearInterval(server.fallback)
         server.fallback = undefined
       }
@@ -166,8 +188,9 @@ export class PreviewManager implements PreviewToolHost {
     }
   }
 
+  private serverSeq = 0
   private newServer(state: PreviewState, waiters: Server['waiters'] = []): Server {
-    return { proc: null, state, log: [], written: 0, urlFound: false, sniff: '', waiters }
+    return { id: ++this.serverSeq, proc: null, state, log: [], written: 0, urlFound: false, sniff: '', waiters }
   }
 
   /**
@@ -175,40 +198,51 @@ export class PreviewManager implements PreviewToolHost {
    * terminal, typically. Matched by the process's working directory, so a
    * worktree beside the checkout does not claim the checkout's server.
    */
-  private async findExternal(cwd: string): Promise<{ url: string; label: string } | null> {
+  private async findExternal(cwd: string): Promise<{ url: string; label: string; host?: string } | null> {
     const servers = await scanLocalServers({ excludePids: [process.pid] }).catch(() => [])
     const mine = servers.filter((s) => cwdBelongsTo(s.cwd, cwd))
     if (!mine.length) return null
     const s = mine[0]
-    return { url: s.url, label: `${s.command} (pid ${s.pid}), started outside Carbon` }
+    return { url: s.url, label: `${s.command} (pid ${s.pid}), started outside Carbon`, host: s.host }
   }
 
   start(cwd: string, command?: string): Promise<PreviewState> {
-    const existing = this.servers.get(cwd)
-    if (existing && (existing.state.status === 'running' || existing.state.status === 'starting')) {
-      return Promise.resolve(existing.state)
-    }
     const inflight = this.starting.get(cwd)
     if (inflight) return inflight
-    const p = this.startNow(cwd, command).finally(() => this.starting.delete(cwd))
+    const p = this.startNow(cwd, command).finally(() => {
+      if (this.starting.get(cwd) === p) this.starting.delete(cwd)
+    })
     this.starting.set(cwd, p)
     return p
   }
 
   private async startNow(cwd: string, command?: string): Promise<PreviewState> {
+    if (this.disposed) return this.state(cwd)
+    const generation = this.gen(cwd)
+    const current = this.servers.get(cwd)
+    if (current && (current.state.status === 'running' || current.state.status === 'starting')) {
+      // An adopted server is someone else's process, and it may have been
+      // stopped in its terminal since: check before answering for it.
+      if (!current.state.external || (await this.alive(current))) return current.state
+      this.forgetExternal(cwd, current)
+      if (this.gen(cwd) !== generation) return this.state(cwd)
+    }
     const existing = this.servers.get(cwd)
     // Starting a second copy of a server the user already runs is a port
     // conflict at best; point the preview at theirs instead.
     if (!command) {
       const external = await this.findExternal(cwd)
+      if (this.gen(cwd) !== generation || this.disposed) return this.state(cwd)
       if (external) {
         killTree(existing?.proc ?? null)
         const server = this.newServer(
           { cwd, status: 'running', url: external.url, command: external.label, external: true },
           existing?.waiters
         )
+        server.probeHost = external.host
         this.servers.set(cwd, server)
         this.setState(cwd, {})
+        this.watchExternal(cwd, server)
         return server.state
       }
     }
@@ -292,8 +326,42 @@ export class PreviewManager implements PreviewToolHost {
     return server.state
   }
 
+  /** Whether an adopted server still answers, on the address it was found on. */
+  private async alive(server: Server): Promise<boolean> {
+    const url = server.state.url ? new URL(server.state.url) : null
+    // `new URL('http://localhost:80').port` is "" — the protocol's default.
+    const port = url ? Number(url.port || (url.protocol === 'https:' ? 443 : 80)) : NaN
+    return Number.isFinite(port) && (await probeHttp(port, server.probeHost)) !== null
+  }
+
+  private forgetExternal(cwd: string, server: Server): void {
+    if (server.fallback) clearInterval(server.fallback)
+    server.fallback = undefined
+    if (this.servers.get(cwd) === server) {
+      this.setState(cwd, { status: 'stopped', url: undefined, external: undefined, command: undefined, error: undefined })
+    }
+  }
+
+  /**
+   * An adopted server can stop at any time, in a terminal Carbon never sees;
+   * without a check it would read "running" for good and the toolbar would
+   * have nothing to restart. Polled gently while it is the project's server.
+   */
+  private watchExternal(cwd: string, server: Server): void {
+    server.fallback = setInterval(() => {
+      if (this.servers.get(cwd) !== server) {
+        if (server.fallback) clearInterval(server.fallback)
+        return
+      }
+      void this.alive(server).then((ok) => {
+        if (!ok) this.forgetExternal(cwd, server)
+      })
+    }, 10_000)
+  }
+
   private foundUrl(cwd: string, server: Server, url: string): void {
-    if (server.urlFound || this.servers.get(cwd) !== server) return
+    // `!server.proc`: a stop landed while a fallback scan was in flight.
+    if (server.urlFound || this.servers.get(cwd) !== server || !server.proc) return
     server.urlFound = true
     server.sniff = ''
     this.setState(cwd, { status: 'running', url })
@@ -318,6 +386,7 @@ export class PreviewManager implements PreviewToolHost {
         scanLocalServers({ fresh: true, excludePids: [process.pid] }).catch(() => []),
         processParents().catch(() => new Map<number, number>())
       ])
+      if (server.urlFound || this.servers.get(cwd) !== server || !server.proc) return
       const pick =
         found.find((s) => descendsFrom(s.pid, rootPid, parents)) ?? found.find((s) => cwdBelongsTo(s.cwd, dir))
       if (pick) this.foundUrl(cwd, server, pick.url)
@@ -351,6 +420,7 @@ export class PreviewManager implements PreviewToolHost {
   }
 
   stop(cwd: string): PreviewState {
+    this.bump(cwd)
     const server = this.servers.get(cwd)
     if (!server) return { cwd, status: 'stopped' }
     if (server.state.external) {
@@ -369,8 +439,15 @@ export class PreviewManager implements PreviewToolHost {
 
   /** Stops every server running in `dir` or below it — a worktree being removed. */
   stopUnder(dir: string): void {
-    for (const [cwd, server] of this.servers) {
-      if (!server.state.external && cwdBelongsTo(cwd, dir)) this.stop(cwd)
+    // In-flight starts too: one still scanning would otherwise spawn into the
+    // directory being removed.
+    for (const cwd of new Set([...this.servers.keys(), ...this.starting.keys()])) {
+      if (!cwdBelongsTo(cwd, dir)) continue
+      const server = this.servers.get(cwd)
+      if (server?.state.external) {
+        this.bump(cwd)
+        this.forgetExternal(cwd, server)
+      } else this.stop(cwd)
     }
   }
 
@@ -399,7 +476,10 @@ export class PreviewManager implements PreviewToolHost {
     // immediate; the wait covers a guest that was replaced in between.
     for (let i = 0; i < 20; i++) {
       const guest = this.driver.guest(res.paneId)
-      if (guest) return { paneId: res.paneId, guest }
+      if (guest) {
+        this.lastPane.set(cwd, res.paneId)
+        return { paneId: res.paneId, guest }
+      }
       await new Promise((r) => setTimeout(r, 100))
     }
     return { error: 'The preview did not finish loading. Try again in a moment.' }
@@ -429,10 +509,15 @@ export class PreviewManager implements PreviewToolHost {
    * into B. Each waits for the one before it, failed or not.
    */
   private lanes = new Map<string, Promise<unknown>>()
+  /** The pane each project's last operation ran on, for admitting queued actions. */
+  private lastPane = new Map<string, string>()
   private serial<T>(cwd: string, fn: () => Promise<T>): Promise<T> {
     const prev = this.lanes.get(cwd) ?? Promise.resolve()
     const next = prev.then(fn, fn)
-    const settled = next.catch(() => {})
+    // The lane is held until the page has actually finished, not only until
+    // the caller stopped waiting: a timed-out script still running would
+    // otherwise mutate the page under the next operation.
+    const settled = next.catch(() => {}).then(() => this.driver.quiesce(cwd))
     this.lanes.set(cwd, settled)
     void settled.then(() => {
       if (this.lanes.get(cwd) === settled) this.lanes.delete(cwd)
@@ -461,16 +546,36 @@ export class PreviewManager implements PreviewToolHost {
   }
 
   page(cwd: string, caller: string, op: PreviewPageOp, input: PreviewToolInput): Promise<string> {
+    // What the page was when the call arrived — if it has to wait behind
+    // another operation. An action that acts on the page (click, type, press,
+    // evaluate) and finds, when its turn comes, a different pane or a page
+    // navigated since, refuses rather than landing on what replaced it.
+    const queued = this.lanes.has(cwd)
+    const pane = queued ? this.lastPane.get(cwd) : undefined
+    const guest = pane ? this.driver.guest(pane) : undefined
+    const admitted = guest ? { pane: pane!, wc: guest.wc.id, doc: guest.docGen } : undefined
     return this.serial(cwd, async () => {
+      // Queued with nothing yet to bind it to — the preview was still being
+      // opened by the call ahead of it — an acting call has no page it was
+      // asked about, so it does not guess one.
+      if (ACTING_OPS.has(op) && queued && !admitted) {
+        return 'Not done: the preview was still opening when this action arrived. Take a preview_snapshot and try again.'
+      }
       try {
-        return await this.pageOp(cwd, caller, op, input)
+        return await this.pageOp(cwd, caller, op, input, ACTING_OPS.has(op) ? admitted : undefined)
       } catch (err) {
         return `Preview error: ${err instanceof Error ? err.message : String(err)}`
       }
     })
   }
 
-  private async pageOp(cwd: string, caller: string, op: PreviewPageOp, input: PreviewToolInput): Promise<string> {
+  private async pageOp(
+    cwd: string,
+    caller: string,
+    op: PreviewPageOp,
+    input: PreviewToolInput,
+    admitted?: { pane: string; wc: number; doc: number }
+  ): Promise<string> {
     if (op === 'console') {
       const t = await this.target(cwd, false)
       const browser = 'error' in t ? '' : this.driver.console(t.guest, caller, input.all === true)
@@ -484,6 +589,11 @@ export class PreviewManager implements PreviewToolHost {
     }
     if (op === 'navigate' && !input.action) {
       const url = input.url?.trim() ?? ''
+      // Only browsing schemes. A `javascript:` URL is a script run in the
+      // current page — past `evaluate`'s loopback rule and plan mode's deny.
+      if (!/^(https?:\/\/|file:\/\/)/i.test(url) && url !== 'about:blank') {
+        return 'preview_navigate takes an http(s) or file URL (or about:blank).'
+      }
       const before = await this.target(cwd, false)
       const mark = 'error' in before ? 0 : before.guest.log.mark()
       const res = await this.send({ cwd, kind: 'navigate', url })
@@ -495,23 +605,33 @@ export class PreviewManager implements PreviewToolHost {
     const t = await this.target(cwd, op !== 'network')
     if ('error' in t) return t.error
     const g = t.guest
+    if (admitted && (admitted.pane !== t.paneId || admitted.wc !== g.wc.id || admitted.doc !== g.docGen)) {
+      return 'Not done: the preview changed page or tab while this action was waiting behind another one. Take a new preview_snapshot and try again.'
+    }
+    // And again at the moment of input, inside the driver: the page can
+    // still move between here and there.
+    const doc = g.docGen
     switch (op) {
       case 'navigate':
         return this.driver.history(g, input.action as 'back' | 'forward' | 'reload')
       case 'snapshot':
         return this.driver.snapshot(g, caller)
       case 'click':
-        return this.driver.click(g, input)
+        return this.driver.click(g, input, doc)
       case 'type':
-        return this.driver.type(g, input)
       case 'press':
-        return this.driver.press(g, input)
+        await this.send({ cwd, kind: 'focus', paneId: t.paneId })
+        try {
+          return op === 'type' ? await this.driver.type(g, input, doc) : await this.driver.press(g, input, doc)
+        } finally {
+          await this.send({ cwd, kind: 'unfocus', paneId: t.paneId })
+        }
       case 'scroll':
         return this.driver.scroll(g, input)
       case 'wait_for':
         return this.driver.waitFor(g, input)
       case 'evaluate':
-        return this.driver.evaluateTool(g, input)
+        return this.driver.evaluateTool(g, input, doc)
       case 'network':
         return this.driver.network(g, caller, input)
       case 'resize': {
@@ -541,6 +661,9 @@ export class PreviewManager implements PreviewToolHost {
   }
 
   disposeAll(): void {
+    // A start still awaiting its scan must not spawn after this.
+    this.disposed = true
+    for (const cwd of new Set([...this.servers.keys(), ...this.starting.keys()])) this.bump(cwd)
     void this.mcp.then((bridge) => bridge?.close())
     for (const s of this.servers.values()) {
       if (s.fallback) clearInterval(s.fallback)

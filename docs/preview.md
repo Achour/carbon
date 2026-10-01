@@ -37,6 +37,34 @@ visible text). A ref is a `WeakMap` entry in the page, so an element keeps its
 ref across snapshots, and a ref whose element left the DOM says so instead of
 acting on whatever now sits at the old point.
 
+**A ref can never come to mean something else.** Each document numbers from
+`e1`, so the page keys refs by a per-document token (`<doc>:eN`) and refuses a
+key from another document; the model sees short aliases the driver issues from
+one counter across every pane and guest, and an alias names its pane. An old
+`e1` from before a reload, a replaced guest or another tab says so.
+
+**One operation per project at a time.** Parallel tool calls used to
+interleave inside the page — two `type`s focused A, focused B, then typed both
+values into B. `PreviewManager.serial` runs a project's operations in order,
+and holds the lane until every CDP command has actually finished (`quiesce`),
+not merely until its caller timed out; a command still running past the cap —
+a script awaiting forever — gets the page reloaded, which ends its context, so
+nothing from before can act under the next operation. An action that *acts*
+(click, type, press, evaluate) and had to wait records the pane and page it was
+asked about and refuses if either changed; it checks the page again at the
+moment of input, and re-measures a click point if a device change landed in
+between. A focus that did not take is an error, not a key sent to whatever had
+focus before, and a click whose point hits anything but the target (or inside
+it) is refused.
+
+**Typing needs the guest's keyboard focus, not a click.** `el.focus()` moves
+the DOM's focus but `insertText` still drops the text (measured); a real click
+gives the guest input focus but also activates what it lands on — Enter on a
+submit button fired it twice. Focusing the `<webview>` element from the
+renderer gives the focus with no click (the `focus` command), and `unfocus`
+hands it back afterwards, so the user's next keystroke goes to the composer
+rather than a hidden preview.
+
 - **A click is real input** (`Input.dispatchMouseEvent`), so it goes through
   hit-testing, focus and the whole pointer/mouse/click sequence with `isTrusted`
   set. The cost is that it lands on whatever is *at* the point: the target is
@@ -58,6 +86,11 @@ acting on whatever now sits at the old point.
   cookies for every site the user ever opened in it, so a script on a signed-in
   site is a read of their account — a prompt injection away from exfiltration.
   A dev server's page is the agent's own work. `snapshot` still reads any page.
+  The check is the *execution context's* origin as CDP reports it (a remote
+  page that navigates itself to `about:blank` keeps its origin), and the script
+  runs pinned to that context (`uniqueContextId`). `navigate` takes only
+  http(s)/file URLs — a `javascript:` URL is a script by another door — and a
+  password field's value is masked in `type`'s confirmation as in the snapshot.
 - **Plan mode refuses `click`, `type`, `press` and `evaluate`** beside
   `start`/`stop` (`SIDE_EFFECT` in `previewTools.ts`): a click on a dev app can
   write to a real dev database.
@@ -124,7 +157,8 @@ keeps the ones that answer with a page, with the owning process's working
 directory. `start` adopts one running inside the project (`external: true`) —
 the agent used to spawn a second server into a port conflict when the user had
 one up in their terminal — and `stop` will not kill a server Carbon did not
-start. The same scan rescues a spawned server that never prints a localhost URL
+start, and polls an adopted server so one stopped in its terminal reads as
+stopped rather than "running" for good. The same scan rescues a spawned server that never prints a localhost URL
 (Express, Rails, `ready on port 3000`), which used to stay "starting" for good:
 after 4 s a listener in the spawned process tree, or in the project folder,
 wins. The toolbar's ⋯ menu and the load-error screen list every local server.

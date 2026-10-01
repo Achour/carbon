@@ -176,6 +176,14 @@ test('parseLsofListen keeps one entry per port, preferring the IPv4 binding', ()
   ])
 })
 
+test('parseLsofListen keeps two processes on one port apart', () => {
+  const out = ['p1', 'cnode', 'n127.0.0.1:3000', 'p2', 'cnode', 'n127.0.0.2:3000'].join('\n')
+  assert.deepEqual(
+    parseLsofListen(out).map((s) => `${s.pid}@${s.host}`),
+    ['1@127.0.0.1', '2@127.0.0.2']
+  )
+})
+
 test('parseLsofCwd, parsePsParents and descendsFrom match a listener to the process tree', () => {
   assert.deepEqual([...parseLsofCwd('p10\nfcwd\nn/Users/me/app\np11\nn/tmp').entries()], [
     [10, '/Users/me/app'],
@@ -208,6 +216,12 @@ test('PreviewLog reads are per caller and only return what is new', () => {
   log.addConsole('warn', 'later')
   assert.deepEqual(log.readConsole('a').map((e) => e.text), ['later'])
   assert.equal(log.readConsole('a', { all: true }).length, 4)
+})
+
+test('PreviewLog caps navigation markers like any other line', () => {
+  const log = new PreviewLog()
+  for (let i = 0; i < 1000; i++) log.navigated(`http://localhost/${i}`)
+  assert.ok(log.readConsole('a', { all: true, limit: 5000 }).length <= 400)
 })
 
 test('PreviewLog drops Electron and picker noise', () => {

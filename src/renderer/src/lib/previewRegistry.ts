@@ -27,6 +27,10 @@ export interface PreviewHandle {
   /** Applies a viewport change and resolves with the result once the guest has it. */
   setViewport(patch: PreviewViewportPatch): Promise<PreviewViewport>
   getURL(): string
+  /** Gives the guest keyboard focus (see `PreviewCommand`'s `focus`)… */
+  focus(): void
+  /** …and hands it back to whatever had it before. */
+  unfocus(): void
 }
 
 const registry = new Map<string, PreviewHandle>()

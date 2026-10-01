@@ -65,13 +65,17 @@ export class PreviewLog {
 
   addConsole(level: ConsoleLevel, text: string, source?: string): void {
     if (NOISE.some((re) => re.test(text))) return
-    this.consoleEntries.push({ seq: ++this.seq, ts: Date.now(), level, text: clip(text, 2000), source })
-    if (this.consoleEntries.length > CONSOLE_CAP) this.consoleEntries.splice(0, this.consoleEntries.length - CONSOLE_CAP)
+    this.pushConsole({ seq: ++this.seq, ts: Date.now(), level, text: clip(text, 2000), source })
   }
 
   /** A main-frame navigation, so a read can tell which page a line came from. */
   navigated(url: string): void {
-    this.consoleEntries.push({ seq: ++this.seq, ts: Date.now(), level: 'info', text: `— navigated to ${url} —`, marker: true })
+    this.pushConsole({ seq: ++this.seq, ts: Date.now(), level: 'info', text: `— navigated to ${url} —`, marker: true })
+  }
+
+  private pushConsole(e: ConsoleEntry): void {
+    this.consoleEntries.push(e)
+    if (this.consoleEntries.length > CONSOLE_CAP) this.consoleEntries.splice(0, this.consoleEntries.length - CONSOLE_CAP)
   }
 
   requestStarted(id: string, method: string, url: string, type: string): void {

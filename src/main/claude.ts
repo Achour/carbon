@@ -73,7 +73,13 @@ import {
 import { AGENT_TOOLS } from '@shared/agentRuns'
 import type { Store } from './store'
 import type { PreviewManager } from './preview'
-import { PREVIEW_TOOL_INFO, previewPlanBlock, runPreviewTool, type PreviewParam } from './previewTools.ts'
+import {
+  PREVIEW_TOOL_INFO,
+  coercePreviewParam,
+  previewPlanBlock,
+  runPreviewTool,
+  type PreviewParam
+} from './previewTools.ts'
 import {
   CARBON_MCP_NAME,
   CARBON_TOOL_REFS,
@@ -137,7 +143,13 @@ import {
  */
 const GUI_SYSTEM_APPEND = `You are running inside a desktop GUI (not a terminal). The GUI renders any \`\`\`mermaid fenced code block as a real rendered diagram — this applies to your chat replies AND to plan documents you write for ExitPlanMode. When a diagram would make an explanation or a plan clearer (flows, sequences, architecture, state), draw it with a Mermaid fenced block (e.g. flowchart, sequenceDiagram) rather than ASCII art or box-drawing characters. Keep diagrams valid and reasonably small; label nodes clearly.\n\n${CANVAS_SESSION_RULES}`
 
-/** A preview tool parameter as the zod field Claude's in-process server takes. */
+/**
+ * A preview tool parameter as the zod field Claude's in-process server takes.
+ * The preprocess is `coercePreviewParam`, the same coercion the HTTP providers
+ * get, so `"800"` for a width is accepted here too rather than refused before
+ * the handler runs. (zod renders the schema from the inner type: a number is
+ * still advertised as a number.)
+ */
 function previewZod(p: PreviewParam): ZodTypeAny {
   const base =
     p.type === 'boolean'
@@ -147,7 +159,16 @@ function previewZod(p: PreviewParam): ZodTypeAny {
         : p.enum
           ? z.enum(p.enum as [string, ...string[]])
           : z.string()
-  return (p.required ? base : base.optional()).describe(p.description)
+  // Required parameters are all plain strings, which need no coercion — and a
+  // preprocess would cost them their `required` in the advertised schema (zod
+  // renders a pipe's input side without it). The optional ones carry their
+  // optionality *inside* the preprocess, so a `null` read as "not given"
+  // passes, as it does on the HTTP path; anything else that cannot be the
+  // declared type is kept as sent, so zod refuses it as HTTP does.
+  if (p.required) return base.describe(p.description)
+  return z
+    .preprocess((v) => (v === null ? undefined : (coercePreviewParam(p, v) ?? v)), base.optional())
+    .describe(p.description)
 }
 
 /**

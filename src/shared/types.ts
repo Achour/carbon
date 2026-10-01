@@ -2291,11 +2291,16 @@ export type PreviewEvent = { type: 'state'; state: PreviewState }
  * - `reveal` / `conceal`: put a hidden pane on screen for a capture CDP can
  *   only take from a painted guest (a full-page shot), then put it back.
  * - `viewport`: set the pane's viewport (device, size, color scheme).
+ * - `focus`: give the pane's guest keyboard focus — typed text only lands in a
+ *   guest whose widget has it, and focusing the `<webview>` gives it without
+ *   the click that would otherwise be needed (and would activate the target).
+ *   `unfocus` hands focus back to whatever had it, so the user's next
+ *   keystroke goes to the composer they were typing in, not to the preview.
  */
 export interface PreviewCommand {
   id: string
   cwd: string
-  kind: 'ensure' | 'navigate' | 'screenshot' | 'reveal' | 'conceal' | 'viewport'
+  kind: 'ensure' | 'navigate' | 'screenshot' | 'reveal' | 'conceal' | 'viewport' | 'focus' | 'unfocus'
   paneId?: string
   url?: string
   viewport?: PreviewViewportPatch
@@ -2325,6 +2330,8 @@ export interface LocalServer {
   cwd?: string
   /** The page's `<title>`, when it has one. */
   title?: string
+  /** The address the probe reached it on — what a liveness check must probe again. */
+  host?: string
 }
 
 /** What the renderer asks main to emulate for a pane's guest. */

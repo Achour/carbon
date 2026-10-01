@@ -7,7 +7,9 @@ import {
   type CanvasToolName
 } from './canvasTools.ts'
 import {
-  PREVIEW_PARAM_TYPES,
+  PREVIEW_PARAMS,
+  coercePreviewParam,
+  previewArgErrors,
   PREVIEW_TOOL_INFO,
   PREVIEW_TOOL_NAMES,
   isPreviewSideEffect,
@@ -185,25 +187,18 @@ export type CarbonToolInput = CanvasToolInput & PreviewToolInput
  * a parameter added there is coerced here without a second edit.
  *
  * Numbers arrive as strings often enough (`"300"`) that a strict check would
- * drop them; a string that is not a finite number is still dropped.
+ * drop them; a string that is not a finite number is still dropped, and so is
+ * an enum value outside its list (`coercePreviewParam`, shared with Claude's
+ * zod preprocess).
  */
 export function carbonToolInput(raw: unknown): CarbonToolInput {
   const input = (raw ?? {}) as Record<string, unknown>
   const str = (value: unknown): string | undefined =>
     typeof value === 'string' ? value : undefined
   const preview: Record<string, unknown> = {}
-  for (const [key, type] of Object.entries(PREVIEW_PARAM_TYPES)) {
-    const value = input[key]
-    if (value === undefined || value === null) continue
-    if (type === 'string') {
-      if (typeof value === 'string') preview[key] = value
-    } else if (type === 'boolean') {
-      if (value === true || value === 'true') preview[key] = true
-      else if (value === false || value === 'false') preview[key] = false
-    } else {
-      const n = typeof value === 'number' ? value : typeof value === 'string' && value.trim() ? Number(value) : NaN
-      if (Number.isFinite(n)) preview[key] = n
-    }
+  for (const [key, param] of Object.entries(PREVIEW_PARAMS)) {
+    const value = coercePreviewParam(param, input[key])
+    if (value !== undefined) preview[key] = value
   }
   return {
     ...(preview as PreviewToolInput),
@@ -324,6 +319,15 @@ export async function handleMcpCall(
   const id = message.id ?? null
   const params = (message.params ?? {}) as { name?: unknown; arguments?: unknown }
   const name = typeof params.name === 'string' ? params.name : ''
+  const ref = parseCarbonTool(name)
+  const invalid = ref?.kind === 'preview' ? previewArgErrors(ref.name, params.arguments) : []
+  if (invalid.length) {
+    return {
+      jsonrpc: '2.0',
+      id,
+      result: { content: [{ type: 'text', text: `Invalid arguments — ${invalid.join('; ')}` }], isError: true }
+    }
+  }
   try {
     const result = await callTool(name, carbonToolInput(params.arguments))
     if (!result.ok) {

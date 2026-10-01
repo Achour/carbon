@@ -28,17 +28,27 @@ export function carbonAgentRuntime(): unknown {
   const w = window as any
   if (w.__carbonAgent) return w.__carbonAgent
 
+  // Refs are `<doc>:eN`. The document token is what stops a ref from an
+  // earlier page resolving on this one — each document numbers from e1, so
+  // without it an old `e1` would name an unrelated element after a
+  // navigation. The driver shows the model short `eN` aliases and keeps the
+  // mapping (`previewDriver.ts`).
+  const doc = Math.random().toString(36).slice(2, 8)
   const refOf = new WeakMap<Element, string>()
   const byRef = new Map<string, WeakRef<Element>>()
   let nextRef = 1
   const refFor = (el: Element): string => {
     let r = refOf.get(el)
     if (!r) {
-      r = 'e' + nextRef++
+      r = doc + ':e' + nextRef++
       refOf.set(el, r)
     }
     byRef.set(r, new WeakRef(el))
     return r
+  }
+  /** Drops entries whose element has been collected, so an SPA's churn cannot grow the map forever. */
+  const prune = (): void => {
+    for (const [r, w] of byRef) if (!w.deref()) byRef.delete(r)
   }
 
   const norm = (s: string | null | undefined): string => (s || '').replace(/\s+/g, ' ').trim()
@@ -274,6 +284,7 @@ export function carbonAgentRuntime(): unknown {
   }
 
   const snapshot = (args: { maxLines?: number; maxChars?: number }): unknown => {
+    prune()
     const maxLines = args.maxLines || 500
     const maxChars = args.maxChars || 16000
     const lines: string[] = []
@@ -378,6 +389,26 @@ export function carbonAgentRuntime(): unknown {
     }
   }
 
+  /**
+   * Whether an ancestor makes `el` inert, across shadow boundaries — a host's
+   * `inert` reaches into its shadow tree, which `closest()` cannot see.
+   */
+  const inertFrom = (el: Element): boolean => {
+    let n: Element | null = el
+    while (n) {
+      if (n.hasAttribute('inert')) return true
+      n = n.parentElement || (((n.getRootNode() as ShadowRoot).host as Element | undefined) ?? null)
+    }
+    return false
+  }
+
+  /** Whether focus is on `el` (or inside it, through shadow roots). */
+  const hasFocus = (el: Element): boolean => {
+    let a: Element | null = document.activeElement
+    while (a && (a as Element).shadowRoot?.activeElement) a = (a as Element).shadowRoot!.activeElement
+    return !!a && contains(el, a)
+  }
+
   const contains = (outer: Element, inner: Element | null): boolean => {
     let n: Node | null = inner
     while (n) {
@@ -416,9 +447,12 @@ export function carbonAgentRuntime(): unknown {
       return el && el !== document.body ? { el } : { error: 'Nothing is focused.' }
     }
     if (t.ref) {
-      const r = t.ref.replace(/^\[?ref=/, '').replace(/\]$/, '')
+      const r = t.ref
+      if (r.split(':')[0] !== doc) {
+        return { error: 'That ref is from a page that has since been replaced (a navigation or reload) — take a new preview_snapshot.' }
+      }
       const el = byRef.get(r)?.deref()
-      if (!el || !el.isConnected) return { error: 'ref ' + r + ' is no longer on the page — take a new preview_snapshot.' }
+      if (!el || !el.isConnected) return { error: 'That ref is no longer on the page — take a new preview_snapshot.' }
       return { el }
     }
     if (t.selector) {
@@ -448,11 +482,23 @@ export function carbonAgentRuntime(): unknown {
     if (r.width === 0 || r.height === 0) return { error: describe(el) + ' has no size on screen.' }
     const x = Math.min(Math.max(r.left + r.width / 2, 1), innerWidth - 1)
     const y = Math.min(Math.max(r.top + r.height / 2, 1), innerHeight - 1)
-    const hit = document.elementFromPoint(x, y)
-    const ok = !hit || contains(el, hit) || contains(hit, el)
+    // Through open shadow roots: the document reports a shadow host, and the
+    // target may be inside it.
+    let hit = document.elementFromPoint(x, y)
+    while (hit && hit.shadowRoot) {
+      const inner = hit.shadowRoot.elementFromPoint(x, y)
+      if (!inner || inner === hit) break
+      hit = inner
+    }
+    // The hit must be the target or inside it. An *ancestor* hit means the
+    // point lands on what holds it — a clipped button, `pointer-events: none`
+    // — and a real click there would go to the background.
+    const ok = !!hit && contains(el, hit)
     return {
       x,
       y,
+      vw: innerWidth,
+      vh: innerHeight,
       desc: describe(el),
       ref: refFor(el),
       obscuredBy: ok ? undefined : describe(hit)
@@ -476,11 +522,16 @@ export function carbonAgentRuntime(): unknown {
       if (!el) return { error: 'Nothing is focused — name the field with ref or selector.' }
     }
     const tag = el.tagName.toLowerCase()
+    // The same bar a person faces, before anything changes: a disabled, hidden
+    // or inert control is not available to set.
+    if (isHidden(el) || !hasBox(el)) return { error: describe(el) + ' is not visible.' }
+    if (el.matches(':disabled') || inertFrom(el)) return { error: describe(el) + ' is disabled.' }
     if (tag === 'select') {
       const s = el as HTMLSelectElement
       const want = norm(t.text).toLowerCase()
-      const opt = Array.from(s.options).find((o) => norm(o.text).toLowerCase() === want || o.value.toLowerCase() === want) ||
-        Array.from(s.options).find((o) => norm(o.text).toLowerCase().includes(want))
+      const usable = Array.from(s.options).filter((o) => !o.disabled && !(o.parentElement as HTMLOptGroupElement | null)?.disabled)
+      const opt = usable.find((o) => norm(o.text).toLowerCase() === want || o.value.toLowerCase() === want) ||
+        usable.find((o) => norm(o.text).toLowerCase().includes(want))
       if (!opt) return { error: 'No option ' + JSON.stringify(t.text) + ' in ' + describe(el) + '.' }
       s.value = opt.value
       s.dispatchEvent(new Event('input', { bubbles: true }))
@@ -492,6 +543,7 @@ export function carbonAgentRuntime(): unknown {
     if ((el as HTMLInputElement).disabled || (el as HTMLInputElement).readOnly) return { error: describe(el) + ' is disabled or read-only.' }
     el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' as ScrollBehavior })
     ;(el as HTMLElement).focus()
+    if (!hasFocus(el)) return { error: 'Could not focus ' + describe(el) + ' — it is hidden, inert or not focusable.' }
     if ((el as HTMLElement).isContentEditable) {
       const range = document.createRange()
       range.selectNodeContents(el)
@@ -517,17 +569,23 @@ export function carbonAgentRuntime(): unknown {
   const valueOf = (ref: string): unknown => {
     const el = byRef.get(ref)?.deref() as HTMLInputElement | undefined
     if (!el) return null
-    return el.isContentEditable ? norm(el.innerText) : el.value
+    if (el.isContentEditable) return norm(el.innerText)
+    // Masked the way the snapshot masks it: a confirmation must not become a
+    // way to read a password the user typed.
+    if ((el.type || '').toLowerCase() === 'password') return el.value ? '••••' : ''
+    return el.value
   }
 
-  const present = (t: { text?: string; selector?: string }): boolean => {
+  const present = (t: { ref?: string; text?: string; selector?: string }): boolean => {
+    if (t.ref) {
+      if (t.ref.split(':')[0] !== doc) return false
+      const el = byRef.get(t.ref)?.deref()
+      return !!el && el.isConnected && !isHidden(el) && hasBox(el)
+    }
     if (t.selector) {
-      let el: Element | null = null
-      try {
-        el = document.querySelector(t.selector)
-      } catch {
-        return false
-      }
+      // An invalid selector throws out to the caller: read as "absent", it
+      // made `wait_for(gone)` succeed at once on a typo.
+      const el = document.querySelector(t.selector)
       return !!el && !isHidden(el) && hasBox(el)
     }
     if (t.text) {
@@ -593,6 +651,9 @@ export function carbonAgentRuntime(): unknown {
     const el = found.el as HTMLElement
     el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' as ScrollBehavior })
     el.focus()
+    // Keys sent after a focus that did not take would go to whatever had
+    // focus before — Enter on a disabled button submitting another form.
+    if (!hasFocus(el)) return { error: 'Could not focus ' + describe(el) + ' — it is disabled, hidden or not focusable.' }
     return { desc: describe(el), ref: refFor(el) }
   }
 

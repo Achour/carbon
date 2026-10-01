@@ -31,12 +31,13 @@ export interface ListeningSocket {
 /**
  * Parses `lsof -nP -iTCP -sTCP:LISTEN -F pcn`: a `p<pid>` line opens a
  * process, `c<command>` names it, and each `n<host>:<port>` is one socket.
- * One entry per port — a server bound to both `127.0.0.1` and `[::1]` is one
- * server — preferring the IPv4 binding, which is what `localhost` reaches first
- * from Node and Chromium alike.
+ * One entry per process and port — one server bound to both `127.0.0.1` and
+ * `[::1]` is one server, preferring the IPv4 binding, which is what
+ * `localhost` reaches first from Node and Chromium alike — but two processes
+ * on one port (`127.0.0.1:3000` and `127.0.0.2:3000`) stay two.
  */
 export function parseLsofListen(text: string): ListeningSocket[] {
-  const byPort = new Map<number, ListeningSocket>()
+  const byPort = new Map<string, ListeningSocket>()
   let pid = 0
   let command = ''
   for (const line of text.split('\n')) {
@@ -52,13 +53,14 @@ export function parseLsofListen(text: string): ListeningSocket[] {
       if (!m) continue
       const host = m[1].replace(/^\[|\]$/g, '')
       const port = Number(m[2])
-      const prev = byPort.get(port)
+      const key = `${pid}:${port}`
+      const prev = byPort.get(key)
       if (!prev || (prev.host.includes(':') && !host.includes(':'))) {
-        byPort.set(port, { pid, command, host, port })
+        byPort.set(key, { pid, command, host, port })
       }
     }
   }
-  return [...byPort.values()].sort((a, b) => a.port - b.port)
+  return [...byPort.values()].sort((a, b) => a.port - b.port || a.pid - b.pid)
 }
 
 /** Parses `lsof -a -d cwd -p <pids> -F pn` into pid → working directory. */
@@ -124,6 +126,7 @@ function run(cmd: string, args: string[], timeoutMs: number): Promise<string> {
 export function probeHttp(port: number, host = '127.0.0.1', timeoutMs = 1200): Promise<{ title?: string } | null> {
   return new Promise((resolve) => {
     let settled = false
+    let answered = false
     const done = (v: { title?: string } | null): void => {
       if (settled) return
       settled = true
@@ -132,6 +135,7 @@ export function probeHttp(port: number, host = '127.0.0.1', timeoutMs = 1200): P
     const req = request(
       { host, port, path: '/', method: 'GET', timeout: timeoutMs, headers: { Accept: 'text/html' } },
       (res) => {
+        answered = true
         const type = String(res.headers['content-type'] ?? '')
         const status = res.statusCode ?? 0
         const html = type.includes('html')
@@ -164,12 +168,20 @@ export function probeHttp(port: number, host = '127.0.0.1', timeoutMs = 1200): P
       done(null)
     })
     req.on('error', () => done(null))
+    // `timeout` above is socket *inactivity*: a page trickling bytes without a
+    // <title> would hold the scan open indefinitely. This is the wall clock.
+    const deadline = setTimeout(() => {
+      req.destroy()
+      done(answered ? {} : null)
+    }, timeoutMs * 2)
+    deadline.unref?.()
+    req.on('close', () => clearTimeout(deadline))
     req.end()
   })
 }
 
 const SCAN_TTL_MS = 2000
-let cached: { at: number; servers: Promise<LocalServer[]> } | null = null
+let cached: { at: number; servers: Promise<LocalServer[]>; pending: boolean } | null = null
 
 /**
  * Every local server that answers with a page, with the process behind it and
@@ -179,7 +191,9 @@ let cached: { at: number; servers: Promise<LocalServer[]> } | null = null
 export function scanLocalServers(opts: { excludePids?: number[]; fresh?: boolean } = {}): Promise<LocalServer[]> {
   if (process.platform === 'win32') return Promise.resolve([])
   const now = Date.now()
-  if (!opts.fresh && cached && now - cached.at < SCAN_TTL_MS) return cached.servers
+  // A scan still running is reused even when a fresh one is asked for: the
+  // fallback polls every 1.5 s, and a slow `lsof` must not pile scans up.
+  if (cached && (cached.pending || (!opts.fresh && now - cached.at < SCAN_TTL_MS))) return cached.servers
   const servers = (async (): Promise<LocalServer[]> => {
     const listen = parseLsofListen(await run('lsof', ['-nP', '-iTCP', '-sTCP:LISTEN', '-F', 'pcn'], 4000))
     const exclude = new Set(opts.excludePids ?? [])
@@ -199,14 +213,22 @@ export function scanLocalServers(opts: { excludePids?: number[]; fresh?: boolean
           pid: s.pid,
           command: s.command,
           cwd: cwds.get(s.pid),
-          title: page.title
+          title: page.title,
+          host
         }
         return server
       })
     )
     return probed.filter((s): s is LocalServer => s !== null)
   })()
-  cached = { at: now, servers }
+  const entry: { at: number; servers: Promise<LocalServer[]>; pending: boolean } = { at: now, servers, pending: true }
+  cached = entry
+  void servers
+    .finally(() => {
+      entry.pending = false
+      entry.at = Date.now()
+    })
+    .catch(() => {})
   return servers
 }
 

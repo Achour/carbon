@@ -10,7 +10,8 @@ import {
   PREVIEW_TOOL_INFO,
   type PreviewToolHost
 } from '../src/main/previewTools.ts'
-import { carbonToolInput, carbonToolList, isCarbonSideEffect } from '../src/main/carbonMcp.ts'
+import { carbonToolInput, carbonToolList, handleMcpCall, isCarbonSideEffect } from '../src/main/carbonMcp.ts'
+import { previewArgErrors } from '../src/main/previewTools.ts'
 
 function state(status: PreviewState['status'], extra: Partial<PreviewState> = {}): PreviewState {
   return { cwd: '/tmp/app', status, ...extra }
@@ -74,7 +75,7 @@ test('runPreviewTool validates required arguments before reaching the page', asy
   const ev = await runPreviewTool(preview, '/tmp/app', 'evaluate', { expression: '  ' })
   assert.equal(ev.kind === 'text' && /expression is required/.test(ev.text), true)
   const wait = await runPreviewTool(preview, '/tmp/app', 'wait_for', {})
-  assert.equal(wait.kind === 'text' && /text or a selector/.test(wait.text), true)
+  assert.equal(wait.kind === 'text' && /text, a selector or a ref/.test(wait.text), true)
   assert.equal(preview.calls.length, 0)
 })
 
@@ -129,6 +130,12 @@ test('carbonToolInput coerces by declared type and drops what does not fit', () 
   assert.equal(input.title, 'Canvas')
 })
 
+test('carbonToolInput drops an enum value outside its list', () => {
+  assert.equal(carbonToolInput({ button: 'left' }).button, 'left')
+  assert.equal(carbonToolInput({ button: 'thumb' }).button, undefined)
+  assert.equal(carbonToolInput({ color_scheme: 'sepia' }).color_scheme, undefined)
+})
+
 test('viewportPatch turns resize arguments into a patch, and names bad input', () => {
   assert.deepEqual(viewportPatch({ device: 'iPhone 15' }), { device: 'iphone-15' })
   assert.deepEqual(viewportPatch({ device: 'fill' }), { device: 'fill' })
@@ -138,4 +145,17 @@ test('viewportPatch turns resize arguments into a patch, and names bad input', (
   assert.match((viewportPatch({ device: 'nokia' }) as { error: string }).error, /Unknown device/)
   assert.match((viewportPatch({ width: 800 }) as { error: string }).error, /both width and height/)
   assert.match((viewportPatch({}) as { error: string }).error, /Say what to change/)
+})
+
+test('invalid arguments are refused at the HTTP boundary, the way zod refuses them for Claude', async () => {
+  assert.deepEqual(previewArgErrors('click', { button: 'left', x: '12' }), [])
+  assert.match(previewArgErrors('click', { button: 'thumb' })[0], /button: expected one of left, right, middle/)
+  assert.match(previewArgErrors('scroll', { dy: 'lots' })[0], /dy: expected a number/)
+  let called = false
+  const res = await handleMcpCall(
+    { id: 1, method: 'tools/call', params: { name: 'preview_click', arguments: { button: 'thumb' } } },
+    async () => ((called = true), { ok: true, kind: 'text', text: 'x' })
+  )
+  assert.equal(called, false)
+  assert.equal((res.result as { isError?: boolean }).isError, true)
 })

@@ -78,6 +78,12 @@ async function handle(cmd: PreviewCommand): Promise<Omit<PreviewCommandResult, '
     case 'conceal':
       pane.conceal()
       return { ok: true }
+    case 'focus':
+      pane.focus()
+      return { ok: true }
+    case 'unfocus':
+      pane.unfocus()
+      return { ok: true }
     case 'viewport': {
       if (!cmd.viewport) return { ok: false, error: 'No viewport.' }
       return { ok: true, viewport: await pane.setViewport(cmd.viewport) }

@@ -192,11 +192,12 @@ export const PREVIEW_TOOL_INFO: Record<
   },
   wait_for: {
     description:
-      'Wait until text or an element appears in the preview (or, with gone, disappears) — after an action that loads data or animates. Up to timeout_ms (default 5000, max 30000).',
+      'Wait until text, an element or a ref appears in the preview (or, with gone, disappears) — after an action that loads data or animates. Up to timeout_ms (default 5000, max 30000).',
     readOnly: true,
     params: {
       text: { type: 'string', description: 'Text to wait for anywhere on the page.' },
       selector: { type: 'string', description: 'CSS selector of a visible element to wait for.' },
+      ref: { type: 'string', description: 'Element ref from preview_snapshot — most useful with gone, to wait for it to leave.' },
       gone: { type: 'boolean', description: 'Wait for it to disappear instead.' },
       timeout_ms: { type: 'number', description: 'Maximum wait in milliseconds.' }
     }
@@ -245,10 +246,32 @@ export const PREVIEW_TOOL_INFO: Record<
   }
 }
 
-/** Every parameter name any preview tool declares, with its type. */
-export const PREVIEW_PARAM_TYPES: Record<string, PreviewParamType> = Object.fromEntries(
-  Object.values(PREVIEW_TOOL_INFO).flatMap((info) => Object.entries(info.params).map(([k, p]) => [k, p.type]))
+/** Every parameter name any preview tool declares. A name means one thing in every tool that takes it. */
+export const PREVIEW_PARAMS: Record<string, PreviewParam> = Object.fromEntries(
+  Object.values(PREVIEW_TOOL_INFO).flatMap((info) => Object.entries(info.params))
 )
+
+/**
+ * A raw argument as its declared type, or undefined when it cannot be one.
+ * Both boundaries use it — the HTTP providers through `carbonToolInput`, and
+ * Claude's zod schema as a preprocess — so `"800"` for a number, `"true"` for
+ * a boolean, or an enum value outside its list mean the same thing whichever
+ * provider sent them.
+ */
+export function coercePreviewParam(p: PreviewParam, value: unknown): string | number | boolean | undefined {
+  if (value === undefined || value === null) return undefined
+  if (p.type === 'string') {
+    if (typeof value !== 'string') return undefined
+    return p.enum && !p.enum.includes(value) ? undefined : value
+  }
+  if (p.type === 'boolean') {
+    if (value === true || value === 'true') return true
+    if (value === false || value === 'false') return false
+    return undefined
+  }
+  const n = typeof value === 'number' ? value : typeof value === 'string' && value.trim() ? Number(value) : NaN
+  return Number.isFinite(n) ? n : undefined
+}
 
 /**
  * What a session appends so the model knows the preview tools are the in-app
@@ -340,7 +363,7 @@ export async function runPreviewTool(
       if (!input.expression?.trim()) return { kind: 'text', text: 'expression is required.' }
       break
     case 'wait_for':
-      if (!input.text && !input.selector) return { kind: 'text', text: 'Give text or a selector to wait for.' }
+      if (!input.text && !input.selector && !input.ref) return { kind: 'text', text: 'Give text, a selector or a ref to wait for.' }
       break
   }
   return { kind: 'text', text: await preview.page(cwd, options.caller ?? cwd, name as PreviewPageOp, input) }
@@ -366,4 +389,26 @@ export function viewportPatch(input: PreviewToolInput): PreviewViewportPatch | {
   if (input.color_scheme) patch.colorScheme = input.color_scheme === 'system' ? null : (input.color_scheme as 'light' | 'dark')
   if (!Object.keys(patch).length) return { error: 'Say what to change: device, width and height, rotate, or color_scheme.' }
   return patch
+}
+
+/**
+ * Arguments a preview tool was given that cannot be what it declares — an
+ * enum value outside its list, `"lots"` for a number. Refused at the HTTP
+ * boundary the way Claude's zod schema refuses them, rather than dropped
+ * there and refused here: `button: "thumb"` must not become a left click on
+ * one provider and an error on another.
+ */
+export function previewArgErrors(name: PreviewToolName, raw: unknown): string[] {
+  const input = (raw ?? {}) as Record<string, unknown>
+  const errors: string[] = []
+  for (const [key, param] of Object.entries(PREVIEW_TOOL_INFO[name].params)) {
+    const value = input[key]
+    if (value === undefined || value === null) continue
+    if (coercePreviewParam(param, value) === undefined) {
+      errors.push(
+        `${key}: expected ${param.enum ? `one of ${param.enum.join(', ')}` : `a ${param.type}`}, got ${JSON.stringify(value)}`
+      )
+    }
+  }
+  return errors
 }

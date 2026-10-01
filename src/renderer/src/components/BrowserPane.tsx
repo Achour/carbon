@@ -725,9 +725,23 @@ export function BrowserPane({
     host.appendChild(wv)
 
     const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+    // Two frames for a layout to land — with a timer beside it, because a
+    // window in the background gets no animation frames at all, and the agent
+    // works while the user is in another app.
     const frames = (): Promise<void> =>
-      new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))
+      new Promise((r) => {
+        let done = false
+        const finish = (): void => {
+          if (done) return
+          done = true
+          r()
+        }
+        requestAnimationFrame(() => requestAnimationFrame(finish))
+        setTimeout(finish, 120)
+      })
     const visibleNow = (): boolean => activeRef.current && useApp.getState().panelOpen
+    // What had keyboard focus before an agent `focus`, to hand it back after.
+    let priorFocus: HTMLElement | null = null
     const root = (): HTMLDivElement | null => rootRef.current
 
     // Expose an imperative handle so agent commands can reach this pane by
@@ -814,6 +828,23 @@ export function BrowserPane({
           }
         }
         return null
+      },
+      focus: () => {
+        const before = document.activeElement
+        if (before && before !== wv) priorFocus = before as HTMLElement
+        try {
+          wv.focus()
+        } catch {
+          // not attached yet
+        }
+      },
+      unfocus: () => {
+        const back = priorFocus
+        priorFocus = null
+        if (document.activeElement !== wv) return
+        if (back && back !== document.body && back.isConnected) back.focus({ preventScroll: true })
+        // Nothing focusable had it (or it would not take it back): just let go.
+        if (document.activeElement === wv) wv.blur()
       },
       reveal: async () => {
         const el = root()
@@ -995,7 +1026,7 @@ export function BrowserPane({
         <WithTooltip
           label={
             external
-              ? `Using ${devState?.command ?? 'a server started outside Carbon'} — stop it where it runs`
+              ? `Using ${devState?.command ?? 'a server started outside Carbon'} — stop it where it runs. Click to check it is still up.`
               : serverRunning
                 ? status === 'starting'
                   ? 'Starting dev server…'
@@ -1009,8 +1040,9 @@ export function BrowserPane({
             className="relative shrink-0"
             aria-label={external ? 'Dev server started outside Carbon' : serverRunning ? 'Stop dev server' : 'Run dev server'}
             onClick={() => {
-              if (external) return
-              void (serverRunning ? stopPreview(cwd) : startPreview(cwd))
+              // Not Carbon's to stop; asking to start re-checks it is still up.
+              if (external) void startPreview(cwd)
+              else void (serverRunning ? stopPreview(cwd) : startPreview(cwd))
             }}
           >
             {external ? <Server /> : serverRunning ? <Square className="fill-current" /> : <Play />}
@@ -1207,7 +1239,7 @@ export function BrowserPane({
               <div className="px-2 py-1.5 text-xs text-muted-foreground">None found</div>
             ) : (
               servers.map((srv) => (
-                <DropdownMenuItem key={srv.port} onClick={() => go(srv.url)}>
+                <DropdownMenuItem key={`${srv.pid}:${srv.port}`} onClick={() => go(srv.url)}>
                   <Server />
                   <span className="flex min-w-0 flex-1 flex-col">
                     <span className="truncate">
@@ -1304,7 +1336,7 @@ export function BrowserPane({
                 <p className="text-[11px] text-muted-foreground/80">Running on this machine</p>
                 <div className="flex flex-wrap justify-center gap-1.5">
                   {servers.slice(0, 6).map((srv) => (
-                    <Button key={srv.port} size="sm" variant="outline" className="h-6 px-2 text-[11px]" onClick={() => go(srv.url)}>
+                    <Button key={`${srv.pid}:${srv.port}`} size="sm" variant="outline" className="h-6 px-2 text-[11px]" onClick={() => go(srv.url)}>
                       <Server className="size-3" /> localhost:{srv.port}
                       {srv.title ? <span className="max-w-28 truncate text-muted-foreground">{srv.title}</span> : null}
                     </Button>

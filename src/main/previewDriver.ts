@@ -44,6 +44,21 @@ interface Guest {
   snapshotMarks: Map<string, number>
   /** Agent actions in flight — a JS dialog that opens during one is answered. */
   acting: number
+  /** Cross-document navigations of the main frame, so a queued action can tell the page changed under it. */
+  docGen: number
+  /** CDP commands still running — including ones whose caller already timed out. */
+  inflight: Set<Promise<unknown>>
+  /**
+   * One at a time, first come first served: applying emulation, and an
+   * action's span from measuring a point to its last input event. A device
+   * change can then never land between the two. `emuRev` counts requests (it
+   * moves the moment one is asked for), so a newer request supersedes an
+   * older one mid-way, and an input sequence sees a resize asked for under it.
+   */
+  mutex: Promise<void>
+  emuRev: number
+  /** While an action runs, every evaluate is pinned to the context it began in. */
+  pinCtx?: string
   /** The main frame's id and its default execution context, as CDP reported them. */
   mainFrameId?: string
   mainContext?: { uniqueId: string; origin: string }
@@ -109,6 +124,20 @@ function shortSource(url: string | undefined, line: number | undefined): string 
 
 export class PreviewDriver {
   private guests = new Map<string, Guest>()
+  /**
+   * The short `eN` refs the model sees, each standing for a page-side
+   * `<doc>:eN` key in one pane. Numbered across *all* panes and guests, so an
+   * alias is never reissued: an old `e1` from a closed tab, a replaced guest
+   * or an earlier document cannot come to mean something else.
+   */
+  private aliasTarget = new Map<string, { pane: string; doc: number; key: string }>()
+  private keyAlias = new Map<string, string>()
+  private nextRef = 1
+  /**
+   * Document generations are numbered across every guest, so a replacement
+   * guest can never present the same number as the one it replaced.
+   */
+  private docSeq = 0
 
   /** Takes over a pane's guest. Idempotent per guest; a new guest replaces the old. */
   attach(paneId: string, cwd: string, webContentsId: number): boolean {
@@ -131,6 +160,10 @@ export class PreviewDriver {
       userAgent: wc.getUserAgent(),
       snapshotMarks: new Map(),
       acting: 0,
+      docGen: ++this.docSeq,
+      inflight: new Set(),
+      mutex: Promise.resolve(),
+      emuRev: 0,
       dispose: () => {}
     }
     const onMessage = (_e: unknown, method: string, params: Record<string, unknown>): void =>
@@ -240,6 +273,7 @@ export class PreviewDriver {
       case 'Page.frameNavigated':
         if (!p.frame?.parentId && p.frame?.url) {
           g.mainFrameId = p.frame.id
+          g.docGen = ++this.docSeq
           g.log.navigated(p.frame.url)
         }
         return
@@ -271,9 +305,15 @@ export class PreviewDriver {
     if (g.wc.isDestroyed()) throw new Error('The preview page is gone.')
     if (!g.wc.debugger.isAttached()) this.connect(g)
     let timer: ReturnType<typeof setTimeout> | undefined
+    const raw = g.wc.debugger.sendCommand(method, params) as Promise<T>
+    g.inflight.add(raw)
+    void raw.then(
+      () => g.inflight.delete(raw),
+      () => g.inflight.delete(raw)
+    )
     try {
       return await Promise.race([
-        g.wc.debugger.sendCommand(method, params) as Promise<T>,
+        raw,
         new Promise<T>((_, reject) => {
           timer = setTimeout(() => reject(new Error(`${method} timed out`)), timeoutMs)
         })
@@ -288,13 +328,99 @@ export class PreviewDriver {
     const res = await this.send<{ result: { value?: T }; exceptionDetails?: { exception?: { description?: string }; text?: string } }>(
       g,
       'Runtime.evaluate',
-      { expression, returnByValue: true, awaitPromise: true },
+      { expression, returnByValue: true, awaitPromise: true, ...(g.pinCtx ? { uniqueContextId: g.pinCtx } : {}) },
       timeoutMs
     )
     if (res.exceptionDetails) {
       throw new Error(res.exceptionDetails.exception?.description ?? res.exceptionDetails.text ?? 'Script error')
     }
     return res.result.value as T
+  }
+
+  /** The model-facing alias for a page key. */
+  private alias(g: Guest, key: string): string {
+    // Bound to main's own document number, not only the page's token: the
+    // token is the page's `Math.random()`, which a page can make repeat.
+    const id = `${g.paneId}|${g.docGen}|${key}`
+    let a = this.keyAlias.get(id)
+    if (!a) {
+      a = `e${this.nextRef++}`
+      this.keyAlias.set(id, a)
+      this.aliasTarget.set(a, { pane: g.paneId, doc: g.docGen, key })
+      // Bounded: the oldest aliases go first (a Map iterates in insertion order).
+      if (this.aliasTarget.size > 20_000) {
+        const [oldest, t] = this.aliasTarget.entries().next().value as [string, { pane: string; doc: number; key: string }]
+        this.aliasTarget.delete(oldest)
+        this.keyAlias.delete(`${t.pane}|${t.doc}|${t.key}`)
+      }
+    }
+    return a
+  }
+
+  /** A target with its alias swapped for the page key; an error string for an alias that does not fit. */
+  private target<T extends { ref?: string }>(g: Guest, t: T): T | string {
+    if (!t.ref) return t
+    const ref = t.ref.trim().replace(/^\[?ref=/, '').replace(/\]$/, '')
+    const hit = this.aliasTarget.get(ref)
+    if (!hit) return `Unknown ref "${t.ref}" — refs come from preview_snapshot; take a new one.`
+    if (hit.pane !== g.paneId) return `Ref "${t.ref}" belongs to a different preview tab — take a new preview_snapshot.`
+    if (hit.doc !== g.docGen) {
+      return `Ref "${t.ref}" is from a page that has since been replaced (a navigation or reload) — take a new preview_snapshot.`
+    }
+    return { ...t, ref: hit.key }
+  }
+
+  /**
+   * Waits for every CDP command still running on a project's guests — the
+   * ones whose caller timed out included — so the next queued operation
+   * cannot run while an old script is still mutating the page. Capped: a
+   * page that never settles must not wedge the lane for good.
+   */
+  async quiesce(cwd: string, capMs = 30_000): Promise<void> {
+    const guests = this.guestsFor(cwd).filter((g) => g.inflight.size > 0)
+    if (!guests.length) return
+    const done = await Promise.race([
+      Promise.allSettled(guests.flatMap((g) => [...g.inflight])).then(() => true),
+      sleep(capMs).then(() => false)
+    ])
+    if (done) return
+    // Still running past the cap: the page is reloaded rather than handed to
+    // the next operation with a script loose in it. A reload ends every
+    // execution context, so nothing from before can act afterwards.
+    for (const g of guests) {
+      if (g.inflight.size && !g.wc.isDestroyed()) {
+        g.log.addConsole('warn', '[carbon] a command did not finish in time; the preview was reloaded to stop it')
+        await this.hardStop(g)
+        g.inflight.clear()
+      }
+    }
+  }
+
+  /** Refusal for an action whose page changed between its target lookup and its input. */
+  private moved(g: Guest, expectDoc: number | undefined): string | null {
+    if (expectDoc === undefined || g.docGen === expectDoc) return null
+    return 'Not done: the preview navigated before the input was sent. Take a new preview_snapshot and try again.'
+  }
+
+  /**
+   * The point to click at, computed after any emulation in flight has landed,
+   * and computed again if a device change slipped in before the input went
+   * out — a resize between measuring and clicking would land the click on
+   * something else.
+   */
+  private async pointFor(
+    g: Guest,
+    t: object
+  ): Promise<
+    { x: number; y: number; desc: string; ref: string; obscuredBy?: string; rev: number; vw: number; vh: number } | { error: string }
+  > {
+    // Called inside `exclusive`, so no emulation is mid-way; `rev` lets the
+    // input that follows see a resize asked for after this measurement.
+    const rev = g.emuRev
+    const p = await this.evaluate<
+      { x: number; y: number; desc: string; ref: string; obscuredBy?: string; vw: number; vh: number } | { error: string }
+    >(g, agentCall('point', t))
+    return 'error' in p ? p : { ...p, rev }
   }
 
   /** Waits for the page to go quiet after an action: no load, no in-flight fetch, for a beat. */
@@ -322,13 +448,73 @@ export class PreviewDriver {
     return lines.join('\n')
   }
 
-  private async act<T>(g: Guest, fn: () => Promise<T>): Promise<T> {
+  /**
+   * Runs an action against the document it was meant for: refused if the
+   * page already moved, and every evaluate inside it pinned to the context it
+   * began in — so a navigation part-way through makes the rest fail rather
+   * than act on the page that replaced it.
+   */
+  private async act(g: Guest, fn: () => Promise<string>, expectDoc?: number): Promise<string> {
+    const moved = this.moved(g, expectDoc)
+    if (moved) return moved
     g.acting++
+    const pinned = expectDoc !== undefined && !g.pinCtx
+    if (pinned) {
+      if (!g.mainContext) await this.evaluate(g, '1').catch(() => {})
+      // The await above can span a navigation: pin only a context that still
+      // belongs to the document this action was admitted for.
+      const after = this.moved(g, expectDoc)
+      if (after) {
+        g.acting--
+        return after
+      }
+      g.pinCtx = g.mainContext?.uniqueId
+    }
     try {
       return await fn()
+    } catch (err) {
+      if (pinned && /context|Cannot find/i.test(String(err))) {
+        return 'Not done: the preview navigated part-way through. Take a new preview_snapshot and try again.'
+      }
+      throw err
     } finally {
+      if (pinned) g.pinCtx = undefined
       g.acting--
     }
+  }
+
+  /** Runs `fn` alone against this guest's emulation and other input (see `Guest.mutex`). */
+  private exclusive<T>(g: Guest, fn: () => Promise<T>): Promise<T> {
+    const next = g.mutex.then(fn, fn)
+    g.mutex = next.then(
+      () => {},
+      () => {}
+    )
+    return next
+  }
+
+  /**
+   * Stops anything still running in a guest by reloading it, and waits until
+   * the old document is really gone (a new one has committed). A renderer too
+   * wedged to reload is crashed and restarted — the one stop that cannot be
+   * ignored.
+   */
+  private async hardStop(g: Guest): Promise<void> {
+    if (g.wc.isDestroyed()) return
+    const gen = g.docGen
+    const replaced = async (ms: number): Promise<boolean> => {
+      const end = Date.now() + ms
+      while (Date.now() < end) {
+        if (g.wc.isDestroyed() || g.docGen !== gen) return true
+        await sleep(100)
+      }
+      return false
+    }
+    g.wc.reload()
+    if (await replaced(5000)) return
+    g.wc.forcefullyCrashRenderer()
+    g.wc.reload()
+    await replaced(10_000)
   }
 
   async snapshot(g: Guest, caller: string): Promise<string> {
@@ -340,6 +526,7 @@ export class PreviewDriver {
       tree: string
       dropped: number
     }>(g, agentCall('snapshot', { maxChars: 16_000 }))
+    snap.tree = snap.tree.replace(/\[ref=([a-z0-9]+:e\d+)\]/g, (_m, key: string) => `[ref=${this.alias(g, key)}]`)
     const v = snap.viewport
     const below = Math.max(0, v.scrollHeight - v.scrollY - v.height)
     const lines = [
@@ -361,33 +548,68 @@ export class PreviewDriver {
     return lines.join('\n')
   }
 
-  private async mouse(g: Guest, x: number, y: number, button: 'left' | 'right' | 'middle', double: boolean): Promise<void> {
+  /** The mouse sequence, checking before every event that the page has not moved. */
+  private async mouse(
+    g: Guest,
+    x: number,
+    y: number,
+    button: 'left' | 'right' | 'middle',
+    double: boolean,
+    expectDoc?: number,
+    /** The emulation revision the point was measured under. */
+    rev = g.emuRev,
+    /** The viewport size it was measured at. */
+    size?: { vw: number; vh: number }
+  ): Promise<string | null> {
     const buttons = button === 'left' ? 1 : button === 'right' ? 2 : 4
-    await this.send(g, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x, y })
-    const clicks = double ? [1, 2] : [1]
-    for (const clickCount of clicks) {
-      await this.send(g, 'Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button, buttons, clickCount })
+    const step = async (params: Record<string, unknown>): Promise<string | null> => {
+      const moved = this.moved(g, expectDoc)
+      if (moved) return moved
+      if (g.emuRev !== rev) return 'Not done: the preview was resized while the click was being sent. Try again.'
+      await this.send(g, 'Input.dispatchMouseEvent', params)
+      return null
+    }
+    const moved = await step({ type: 'mouseMoved', x, y })
+    if (moved) return moved
+    // The renderer lays a device viewport out — and the user drags the pane —
+    // without asking main, so the revision alone cannot see every resize; the
+    // size the page reports can.
+    if (size) {
+      const now = await this.evaluate<[number, number]>(g, '[innerWidth, innerHeight]').catch(() => null)
+      if (!now || now[0] !== size.vw || now[1] !== size.vh) {
+        return 'Not done: the preview was resized between measuring the target and clicking it. Try again.'
+      }
+    }
+    for (const clickCount of double ? [1, 2] : [1]) {
+      const refused = await step({ type: 'mousePressed', x, y, button, buttons, clickCount })
+      if (refused) return refused
+      // A press that went out is always released, or the page keeps a button held.
       await this.send(g, 'Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button, buttons: 0, clickCount })
     }
+    return null
   }
 
-  async click(g: Guest, input: PreviewToolInput): Promise<string> {
-    return this.act(g, async () => {
+  async click(g: Guest, input: PreviewToolInput, expectDoc?: number): Promise<string> {
+    return this.act(g, () => this.exclusive(g, async () => {
       let x: number
       let y: number
       let desc: string
+      let rev = g.emuRev
+      let size: { vw: number; vh: number } | undefined
       if (input.ref || input.selector || input.text) {
-        const p = await this.evaluate<{ x: number; y: number; desc: string; ref: string; obscuredBy?: string } | { error: string }>(
-          g,
-          agentCall('point', { ref: input.ref, selector: input.selector, text: input.text })
-        )
+        const t = this.target(g, { ref: input.ref, selector: input.selector, text: input.text })
+        if (typeof t === 'string') return t
+        const p = await this.pointFor(g, t)
         if ('error' in p) return p.error
+        const ref = this.alias(g, p.ref)
         if (p.obscuredBy) {
-          return `Not clicked: ${p.desc} [ref=${p.ref}] is covered by ${p.obscuredBy} at its centre. Close or dismiss what covers it first, or click at x/y if the cover is what you mean.`
+          return `Not clicked: ${p.desc} [ref=${ref}] is covered by ${p.obscuredBy} at its centre. Close or dismiss what covers it first, or click at x/y if the cover is what you mean.`
         }
         x = p.x
         y = p.y
-        desc = `${p.desc} [ref=${p.ref}]`
+        rev = p.rev
+        size = { vw: p.vw, vh: p.vh }
+        desc = `${p.desc} [ref=${ref}]`
       } else if (typeof input.x === 'number' && typeof input.y === 'number') {
         x = input.x
         y = input.y
@@ -398,22 +620,18 @@ export class PreviewDriver {
       const mark = g.log.mark()
       const before = g.wc.getURL()
       const button = input.button === 'right' || input.button === 'middle' ? input.button : 'left'
-      await this.mouse(g, x, y, button, input.double === true)
+      const refused = await this.mouse(g, x, y, button, input.double === true, expectDoc, rev, size)
+      if (refused) return refused
       await this.settle(g)
       return this.report(g, `${input.double ? 'Double-clicked' : 'Clicked'} ${desc}.`, mark, before)
-    })
+    }), expectDoc)
   }
 
-  /** A real click on an element, for the input focus `el.focus()` cannot give. */
-  private async focusByClick(g: Guest, target: { ref?: string; focused?: boolean }): Promise<void> {
-    const p = await this.evaluate<{ x: number; y: number } | { error: string }>(g, agentCall('point', target)).catch(() => null)
-    if (!p || 'error' in p) return
-    await this.mouse(g, p.x, p.y, 'left', false)
-  }
-
-  private async key(g: Guest, combo: string): Promise<string | null> {
+  private async key(g: Guest, combo: string, expectDoc?: number): Promise<string | null> {
     const k = parseKeyCombo(combo)
     if ('error' in k) return k.error
+    const moved = this.moved(g, expectDoc)
+    if (moved) return moved
     const base = { key: k.key, code: k.code, windowsVirtualKeyCode: k.windowsVirtualKeyCode, modifiers: k.modifiers }
     await this.send(g, 'Input.dispatchKeyEvent', {
       ...base,
@@ -425,11 +643,13 @@ export class PreviewDriver {
     return null
   }
 
-  async type(g: Guest, input: PreviewToolInput): Promise<string> {
+  async type(g: Guest, input: PreviewToolInput, expectDoc?: number): Promise<string> {
     return this.act(g, async () => {
+      const t = this.target(g, { ref: input.ref, selector: input.selector })
+      if (typeof t === 'string') return t
       const prep = await this.evaluate<{ desc: string; ref: string; selected?: string } | { error: string }>(
         g,
-        agentCall('prepareType', { ref: input.ref, selector: input.selector, append: input.append === true, text: input.text ?? '' })
+        agentCall('prepareType', { ...t, append: input.append === true, text: input.text ?? '' })
       )
       if ('error' in prep) return prep.error
       const mark = g.log.mark()
@@ -438,19 +658,18 @@ export class PreviewDriver {
         await this.settle(g)
         return this.report(g, `Selected ${JSON.stringify(prep.selected)} in ${prep.desc}.`, mark, before)
       }
-      // Text only lands once the guest's widget has input focus, which a
-      // real click gives and `el.focus()` does not (measured: focus in the
-      // DOM, `insertText` dropped). So click the field like a person would,
-      // then select its contents again — the click moved the caret.
-      await this.focusByClick(g, { ref: prep.ref })
-      await this.evaluate(
-        g,
-        agentCall('prepareType', { ref: prep.ref, append: input.append === true, text: input.text ?? '' })
-      ).catch(() => {})
+      // Keyboard focus for the guest itself was given before this ran (the
+      // manager's `focus` command): `el.focus()` alone moves the DOM's focus,
+      // and `insertText` still drops the text (measured).
       const text = input.text ?? ''
+      const moved = this.moved(g, expectDoc)
+      if (moved) return moved
       if (text) await this.send(g, 'Input.insertText', { text })
-      else if (input.append !== true) await this.key(g, 'Backspace')
-      if (input.submit) await this.key(g, 'Enter')
+      else if (input.append !== true) await this.key(g, 'Backspace', expectDoc)
+      if (input.submit) {
+        const refused = await this.key(g, 'Enter', expectDoc)
+        if (refused) return refused
+      }
       await this.settle(g)
       const value = await this.evaluate<unknown>(g, agentCall('valueOf', prep.ref)).catch(() => null)
       const now =
@@ -459,34 +678,30 @@ export class PreviewDriver {
           : ''
       return this.report(
         g,
-        `Typed into ${prep.desc} [ref=${prep.ref}].${now}${input.submit ? ' Pressed Enter.' : ''}`,
+        `Typed into ${prep.desc} [ref=${this.alias(g, prep.ref)}].${now}${input.submit ? ' Pressed Enter.' : ''}`,
         mark,
         before
       )
-    })
+    }, expectDoc)
   }
 
-  async press(g: Guest, input: PreviewToolInput): Promise<string> {
+  async press(g: Guest, input: PreviewToolInput, expectDoc?: number): Promise<string> {
     return this.act(g, async () => {
       let where = 'the focused element'
       if (input.ref || input.selector) {
-        const f = await this.evaluate<{ desc: string; ref: string } | { error: string }>(
-          g,
-          agentCall('focus', { ref: input.ref, selector: input.selector })
-        )
+        const t = this.target(g, { ref: input.ref, selector: input.selector })
+        if (typeof t === 'string') return t
+        const f = await this.evaluate<{ desc: string; ref: string } | { error: string }>(g, agentCall('focus', t))
         if ('error' in f) return f.error
-        where = `${f.desc} [ref=${f.ref}]`
-        await this.focusByClick(g, { ref: f.ref })
-      } else {
-        await this.focusByClick(g, { focused: true })
+        where = `${f.desc} [ref=${this.alias(g, f.ref)}]`
       }
       const mark = g.log.mark()
       const before = g.wc.getURL()
-      const err = await this.key(g, input.key ?? '')
+      const err = await this.key(g, input.key ?? '', expectDoc)
       if (err) return err
       await this.settle(g)
       return this.report(g, `Pressed ${input.key} on ${where}.`, mark, before)
-    })
+    }, expectDoc)
   }
 
   async scroll(g: Guest, input: PreviewToolInput): Promise<string> {
@@ -498,18 +713,26 @@ export class PreviewDriver {
     if (input.to === 'top' || input.to === 'bottom') {
       return describe(await this.evaluate<State>(g, agentCall('scrollTo', input.to)))
     }
+    return this.exclusive(g, () => this.scrollNow(g, input, describe))
+  }
+
+  private async scrollNow(
+    g: Guest,
+    input: PreviewToolInput,
+    describe: (s: { y: number; x: number; height: number; viewport: number }) => string
+  ): Promise<string> {
+    type State = { y: number; x: number; height: number; viewport: number }
     let x: number | undefined
     let y: number | undefined
     let desc = ''
     if (input.ref || input.selector || input.text) {
-      const p = await this.evaluate<{ x: number; y: number; desc: string; ref: string } | { error: string }>(
-        g,
-        agentCall('point', { ref: input.ref, selector: input.selector, text: input.text })
-      )
+      const t = this.target(g, { ref: input.ref, selector: input.selector, text: input.text })
+      if (typeof t === 'string') return t
+      const p = await this.pointFor(g, t)
       if ('error' in p) return p.error
       x = p.x
       y = p.y
-      desc = `${p.desc} [ref=${p.ref}]`
+      desc = `${p.desc} [ref=${this.alias(g, p.ref)}]`
     }
     const dy = input.dy ?? 0
     const dx = input.dx ?? 0
@@ -531,12 +754,26 @@ export class PreviewDriver {
   async waitFor(g: Guest, input: PreviewToolInput): Promise<string> {
     const timeout = Math.min(Math.max(input.timeout_ms ?? 5000, 100), 30_000)
     const want = !input.gone
-    const what = input.selector ? `selector ${JSON.stringify(input.selector)}` : `text ${JSON.stringify(input.text)}`
+    let ref: string | undefined
+    if (input.ref) {
+      const hit = this.target(g, { ref: input.ref })
+      // A ref whose page is gone names an element that is gone with it.
+      if (typeof hit === 'string') {
+        if (input.gone && /replaced/.test(hit)) return `Gone: ${input.ref} (its page was replaced).`
+        return hit
+      }
+      ref = hit.ref
+    }
+    const what = ref
+      ? `ref ${input.ref}`
+      : input.selector
+        ? `selector ${JSON.stringify(input.selector)}`
+        : `text ${JSON.stringify(input.text)}`
     const start = Date.now()
     for (;;) {
       let present: boolean | null
       try {
-        present = await this.evaluate<boolean>(g, agentCall('present', { text: input.text, selector: input.selector }))
+        present = await this.evaluate<boolean>(g, agentCall('present', { ref, text: input.text, selector: input.selector }))
       } catch (err) {
         // A navigation tearing the context down mid-poll is expected; anything
         // else (the guest gone, CDP detached) must not read as "it's gone".
@@ -558,7 +795,7 @@ export class PreviewDriver {
    * injection away from exfiltration. A dev server's page is the agent's own
    * work and fair game.
    */
-  async evaluateTool(g: Guest, input: PreviewToolInput): Promise<string> {
+  async evaluateTool(g: Guest, input: PreviewToolInput, expectDoc?: number): Promise<string> {
     // Judged by the *context's* origin, as CDP reported it, not the URL: a
     // remote page that navigates itself to `about:blank` keeps its origin. And
     // the script runs in that exact context (`uniqueContextId`), so a
@@ -571,6 +808,8 @@ export class PreviewDriver {
     return this.act(g, async () => {
       const source = (input.expression ?? '').trim()
       const expression = isFunctionSource(source) ? `(${source})()` : source
+      const moved = this.moved(g, expectDoc)
+      if (moved) return moved
       const res = await this.send<{
         result: { type: string; subtype?: string; value?: unknown; unserializableValue?: string; description?: string; objectId?: string }
         exceptionDetails?: { exception?: { description?: string }; text?: string }
@@ -579,7 +818,17 @@ export class PreviewDriver {
         'Runtime.evaluate',
         { expression, awaitPromise: true, returnByValue: false, userGesture: true, replMode: true, uniqueContextId: ctx.uniqueId },
         20_000
-      )
+      ).catch((err: unknown) => {
+        if (!/timed out/.test(String(err))) throw err
+        // A script still awaiting something cannot be cancelled over CDP; a
+        // reload ends its context, so it cannot act on the page later, under
+        // some other operation.
+        return null
+      })
+      if (!res) {
+        await this.hardStop(g)
+        return 'The script did not finish within 20s, so the preview was reloaded to stop it.'
+      }
       if (res.exceptionDetails) {
         return `The script threw: ${res.exceptionDetails.exception?.description ?? res.exceptionDetails.text ?? 'error'}`
       }
@@ -600,7 +849,7 @@ export class PreviewDriver {
       }
       const text = typeof value === 'string' ? JSON.stringify(value) : JSON.stringify(value, null, 2)
       return text === undefined ? String(value) : text.length > 20_000 ? `${text.slice(0, 20_000)}… (truncated)` : text
-    })
+    }, expectDoc)
   }
 
   async history(g: Guest, action: 'back' | 'forward' | 'reload'): Promise<string> {
@@ -731,12 +980,23 @@ export class PreviewDriver {
    * renderer lays it out); what CDP adds is what a sized box cannot: the
    * pixel ratio, touch, the mobile user agent, and `prefers-color-scheme`.
    */
-  async emulate(paneId: string, emu: PreviewEmulation): Promise<void> {
+  emulate(paneId: string, emu: PreviewEmulation): Promise<void> {
     const g = this.guest(paneId)
-    if (!g) return
+    if (!g) return Promise.resolve()
+    // Requests run in order, and each step checks it is still the newest:
+    // phone-then-Fill in quick succession must end on Fill, not on whichever
+    // half-applied phone request finished last.
+    const rev = ++g.emuRev
+    return this.exclusive(g, () => this.applyEmulation(g, emu, rev))
+  }
+
+  private async applyEmulation(g: Guest, emu: PreviewEmulation, rev: number): Promise<void> {
+    const current = (): boolean => rev === g.emuRev
+    if (!current()) return
     await this.send(g, 'Emulation.setEmulatedMedia', {
       features: emu.colorScheme ? [{ name: 'prefers-color-scheme', value: emu.colorScheme }] : []
     }).catch(() => {})
+    if (!current()) return
     if (emu.width && emu.height && (emu.mobile || (emu.dpr && emu.dpr > 0))) {
       await this.send(g, 'Emulation.setDeviceMetricsOverride', {
         width: emu.width,
@@ -747,11 +1007,14 @@ export class PreviewDriver {
         screenHeight: emu.height
       }).catch(() => {})
     } else {
+      if (!current()) return
       await this.send(g, 'Emulation.clearDeviceMetricsOverride').catch(() => {})
     }
+    if (!current()) return
     await this.send(g, 'Emulation.setTouchEmulationEnabled', { enabled: emu.mobile === true, maxTouchPoints: emu.mobile ? 5 : 1 }).catch(
       () => {}
     )
+    if (!current()) return
     await this.send(g, 'Emulation.setUserAgentOverride', {
       userAgent: emu.mobile ? MOBILE_UA[emu.os ?? 'ios'] : g.userAgent
     }).catch(() => {})
