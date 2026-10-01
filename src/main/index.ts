@@ -83,7 +83,8 @@ import { checkForUpdate, installedViaHomebrew } from './updates'
 import { readUsageOverview } from './usage'
 import { readUsageReport } from './usageStats'
 import { hydrateShellPath } from './shellEnv'
-import { configureProviderClis, providerClis } from './providerCli.ts'
+import { configureManagedRoot, configureProviderClis, providerClis } from './providerCli.ts'
+import { configureAntigravityAuth } from './antigravity'
 import { dockIconSvg } from './dockIcon'
 import {
   checkoutWorktree,
@@ -1016,6 +1017,16 @@ function registerIpc(): void {
     }
   )
 
+  ipcMain.handle('providers:install', async (_e, provider: Provider): Promise<ProviderCli[]> => {
+    await manager.installProvider(provider, (progress) =>
+      win?.webContents.send('providers:install-progress', progress)
+    )
+    return providerClis(true)
+  })
+  ipcMain.handle('providers:auth-state', (_e, provider: Provider) => manager.providerAuthState(provider))
+  ipcMain.handle('providers:sign-in', (_e, provider: Provider) => manager.providerSignIn(provider))
+  ipcMain.handle('providers:sign-out', (_e, provider: Provider) => manager.providerSignOut(provider))
+
   ipcMain.handle('app:forget-dir', (_e, dir: string) => store.forgetDir(dir))
 
   ipcMain.handle('app:reveal-path', (_e, path: string) => shell.showItemInFolder(path))
@@ -1219,6 +1230,13 @@ app.whenReady().then(() => {
   // the renderer caches what it is told for the session — so an overridden
   // project would draw the wrong icon until a Recheck.
   configureProjectIcons(app.getPath('userData'))
+  // Where Carbon unpacks the one provider it installs itself (Antigravity's
+  // ACP server), before anything resolves a binary.
+  configureManagedRoot(join(app.getPath('userData'), 'providers'))
+  // Its Google sign-in link opens in the user's browser, like any other link.
+  configureAntigravityAuth((url) => {
+    if (url.startsWith('https:')) void shell.openExternal(url)
+  })
   // Finder/Dock launches do not inherit the user's shell PATH. Hydrate it
   // before constructing managers so Claude, Codex, previews, Git, and terminal
   // sessions all see the same command-line tools as an interactive shell.

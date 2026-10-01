@@ -1,4 +1,4 @@
-export const PROVIDERS = ['claude', 'codex', 'grok'] as const
+export const PROVIDERS = ['claude', 'codex', 'grok', 'antigravity'] as const
 
 export type Provider = (typeof PROVIDERS)[number]
 
@@ -98,7 +98,9 @@ export function effortForProvider(effort: EffortId | undefined, provider: Provid
 export const PROVIDER_EFFORTS: Record<Provider, EffortId[]> = {
   claude: ['low', 'medium', 'high', 'xhigh', 'max'],
   codex: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
-  grok: ['low', 'medium', 'high', 'xhigh']
+  grok: ['low', 'medium', 'high', 'xhigh'],
+  // Effort is part of the model id (`gemini-3.8-flash-high`), not a knob.
+  antigravity: []
 }
 
 /** Grok's reasoning levels. Kept as a named export for the ACP spawn flag. */
@@ -1102,9 +1104,17 @@ export interface UsageTotals {
   unpricedTokens: number
 }
 
+/**
+ * The providers the Usage page can account for: the ones whose CLI writes a
+ * local session log carrying token counts. Antigravity's server keeps its
+ * history in SQLite trajectories with no usage in them, and its ACP replies
+ * carry none either, so there is nothing of its spend to scan.
+ */
+export type UsageProvider = Exclude<Provider, 'antigravity'>
+
 /** One row of the per-model breakdown. */
 export interface UsageModelRow extends UsageTotals {
-  provider: Provider
+  provider: UsageProvider
   model: string
 }
 
@@ -1450,7 +1460,26 @@ export interface ProviderCli {
   minVersion: string
   /** The command to run when nothing was found, shown on the row. */
   installCommand: string
+  /**
+   * Carbon can install this one itself (Settings → Providers → Install) — true
+   * only for Antigravity, whose server ships as a bare registry archive with no
+   * package manager or installer behind it.
+   */
+  installable?: boolean
 }
+
+/** Progress of a Carbon-managed install, pushed while one runs. */
+export interface ProviderInstallProgress {
+  provider: Provider
+  phase: 'download' | 'extract' | 'done' | 'error'
+  /** Bytes so far and in total; total is 0 when the server sent no length. */
+  received: number
+  total: number
+  error?: string
+}
+
+/** Whether a provider with its own sign-in has one. Only Antigravity does. */
+export type ProviderAuthState = 'signed-in' | 'signed-out' | 'unavailable'
 
 export interface AppDefaults {
   model?: string
@@ -1576,6 +1605,9 @@ export const CODEX_DEFAULT_MODEL = 'codex-default'
 /** Sentinel model id: use Grok without pinning a model (defer to ~/.grok/config.toml). */
 export const GROK_DEFAULT_MODEL = 'grok-default'
 
+/** Sentinel model id: use Antigravity's account default. */
+export const ANTIGRAVITY_DEFAULT_MODEL = 'antigravity-default'
+
 export const MODEL_OPTIONS: ModelOption[] = [
   { id: '', label: 'Default', description: 'Your Claude Code default', provider: 'claude' },
   { id: 'claude-fable-5', label: 'Fable 5', description: 'Most intelligent', provider: 'claude' },
@@ -1624,6 +1656,14 @@ export const MODEL_OPTIONS: ModelOption[] = [
     provider: 'grok',
     contextWindow: 500_000,
     supportedEfforts: ['low', 'medium', 'high']
+  },
+  // Antigravity's catalog is the account's, and arrives with a session; these
+  // rows exist so a stored id can be placed, as Grok's do.
+  {
+    id: 'antigravity-default',
+    label: 'Antigravity (default)',
+    description: "Your account's default model",
+    provider: 'antigravity'
   }
 ]
 
@@ -1652,6 +1692,9 @@ export function knownProviderForModel(
   // build-suffixed variants on usage rows (`grok-4.6-build`) and older docs use
   // the bare `grok-build` alias, none of which any static row carries.
   if (/^grok[-.]/i.test(id)) return 'grok'
+  // The Antigravity server lists only `gemini-*` models — its catalog filter
+  // drops everything else — so the prefix is the whole namespace.
+  if (/^(gemini|antigravity)[-.]/i.test(id)) return 'antigravity'
   return undefined
 }
 
@@ -1746,7 +1789,8 @@ export function claudeModelContextWindow(
 export const PROVIDER_LABELS: Record<Provider, string> = {
   claude: 'Claude Code',
   codex: 'Codex',
-  grok: 'Grok'
+  grok: 'Grok',
+  antigravity: 'Antigravity'
 }
 
 /**
@@ -1758,7 +1802,8 @@ export const PROVIDER_LABELS: Record<Provider, string> = {
 export const PROVIDER_SHORT_LABELS: Record<Provider, string> = {
   claude: 'Claude',
   codex: 'Codex',
-  grok: 'Grok'
+  grok: 'Grok',
+  antigravity: 'Antigravity'
 }
 
 /**
@@ -2587,6 +2632,21 @@ export interface Api {
     id: string,
     enabled: boolean
   ): Promise<ProviderFeatureState[]>
+  /**
+   * Install a provider Carbon manages itself (`ProviderCli.installable`).
+   * Progress arrives on `onProviderInstall`; resolves with the re-probed list,
+   * or rejects with the failure the row then shows.
+   */
+  installProvider(provider: Provider): Promise<ProviderCli[]>
+  onProviderInstall(cb: (progress: ProviderInstallProgress) => void): () => void
+  /**
+   * The sign-in of a provider that keeps its own (Antigravity's ACP server,
+   * whose login is separate from any CLI's). Others answer `unavailable`.
+   */
+  providerAuthState(provider: Provider): Promise<ProviderAuthState>
+  /** Start that sign-in: opens the browser, resolves when it completes. */
+  providerSignIn(provider: Provider): Promise<OpResult>
+  providerSignOut(provider: Provider): Promise<OpResult>
   forgetDir(dir: string): Promise<void>
   /** Show a file or folder in the OS file manager, selected in its parent. */
   revealPath(path: string): Promise<void>

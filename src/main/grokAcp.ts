@@ -949,7 +949,7 @@ export function removeGrokTempFiles(paths: string[]): void {
 }
 
 /** Renders a picked UI element as a text block the agent can act on. */
-function describeElement(el: ElementRef): string {
+export function describeElement(el: ElementRef): string {
   const lines = [`Selected UI element from the running app (${el.url}):`]
   if (el.source?.file) {
     const col = el.source.column != null ? `:${el.source.column}` : ''

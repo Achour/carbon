@@ -1,7 +1,7 @@
 import { createReadStream, type Dirent } from 'node:fs'
 import { readFile, readdir, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { Provider, UsageDay, UsageModelRow, UsageReport, UsageTotals } from '@shared/types'
+import type { UsageProvider, UsageDay, UsageModelRow, UsageReport, UsageTotals } from '@shared/types'
 import {
   CodexFileReader,
   addSample,
@@ -65,7 +65,7 @@ interface CacheEntry {
 }
 
 interface Source {
-  provider: Provider
+  provider: UsageProvider
   path: string
 }
 
@@ -244,7 +244,7 @@ async function readGrokFile(path: string): Promise<UsageCell[]> {
  * ternaries so a fourth provider is a missing key the compiler names, not a
  * silent fall-through into Codex's parser.
  */
-const READERS: Record<Provider, (path: string) => Promise<UsageCell[]>> = {
+const READERS: Record<UsageProvider, (path: string) => Promise<UsageCell[]>> = {
   claude: readClaudeFile,
   codex: readCodexFile,
   grok: readGrokFile
@@ -430,7 +430,7 @@ async function scan(opts: UsageStatsOptions, days: number, refresh: boolean): Pr
   // in the window — tens of thousands on a real corpus — and an inline
   // `{ claude, codex, grok }[cell.provider]` would allocate a throwaway object
   // on each pass purely to do a lookup.
-  const providerTotals: Record<Provider, UsageTotals> = { claude, codex, grok }
+  const providerTotals: Record<UsageProvider, UsageTotals> = { claude, codex, grok }
   let sessions = 0
 
   for (const [path, entry] of live) {

@@ -118,6 +118,12 @@
    * we made up, which is the exact error the blue-Codex note above rules out.
    */
   --brand-grok: oklch(0.27 0 0);
+  /*
+   * Antigravity's mark is Google's four-color gradient, which a single
+   * `currentColor` glyph cannot carry; its blue is the one hue the gradient
+   * resolves to at badge size, so that is the brand fact this keeps.
+   */
+  --brand-antigravity: oklch(0.6 0.19 259);
 
   /*
    * The file-type icon palette (`lib/fileIcon.tsx`). Seven hues rather than one
@@ -201,6 +207,7 @@
   --brand-claude: oklch(0.7 0.135 46);
   --brand-codex: oklch(0.95 0 0);
   --brand-grok: oklch(0.95 0 0);
+  --brand-antigravity: oklch(0.72 0.15 257);
   /* Re-stepped for the dark surface, same hues. */
   --icon-blue: oklch(0.7 0.13 250);
   --icon-cyan: oklch(0.75 0.1 205);

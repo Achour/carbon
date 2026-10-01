@@ -15,7 +15,9 @@ import { cn } from '@/lib/utils'
 const DEFAULT_BUILD_EFFORTS: Record<Provider, EffortId[]> = {
   claude: ['low', 'medium', 'high', 'xhigh', 'max'],
   codex: ['low', 'medium', 'high', 'xhigh'],
-  grok: ['low', 'medium', 'high', 'xhigh']
+  grok: ['low', 'medium', 'high', 'xhigh'],
+  // Effort is part of the model id (`gemini-…-high`), not a separate knob.
+  antigravity: []
 }
 import { availableProviders } from '@/lib/modelCatalog'
 import {
@@ -183,7 +185,9 @@ export function PlanContent({
                 />
               </div>
             )}
-            {chat && (
+            {/* Only the Default row means the backend has no effort knob (its
+                levels are separate models), and a picker of one is noise. */}
+            {chat && buildEffortOptions.length > 1 && (
               <div
                 className="flex items-center gap-1"
                 title="Reasoning effort used to implement the approved plan"

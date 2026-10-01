@@ -36,6 +36,15 @@ const GROK_PERMISSION_MODES: { id: PermissionModeId; label: string; description:
   { id: 'bypassPermissions', label: 'Full access', description: 'Skips prompts — deny rules still apply' }
 ]
 
+// The server's three modes plus Plan, which it spells as its `/plan` command
+// rather than a mode — Carbon prefixes it and raises the review itself.
+const ANTIGRAVITY_PERMISSION_MODES: { id: PermissionModeId; label: string; description: string }[] = [
+  { id: 'plan', label: 'Plan mode', description: 'Plans with /plan, then waits for your approval' },
+  { id: 'default', label: 'Ask to approve', description: 'Prompts before edits and commands' },
+  { id: 'acceptEdits', label: 'Accept edits', description: 'Applies file edits; asks for commands' },
+  { id: 'bypassPermissions', label: 'Full access', description: 'Approves every tool without asking' }
+]
+
 /**
  * Which permission modes each backend actually implements. A menu built from
  * the wrong provider's list offers modes that silently degrade — Grok served
@@ -47,7 +56,8 @@ export const PROVIDER_PERMISSION_MODES: Record<
 > = {
   claude: PERMISSION_MODES,
   codex: CODEX_PERMISSION_MODES,
-  grok: GROK_PERMISSION_MODES
+  grok: GROK_PERMISSION_MODES,
+  antigravity: ANTIGRAVITY_PERMISSION_MODES
 }
 
 export function codexPermissionValue(mode: PermissionModeId): PermissionModeId {

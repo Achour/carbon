@@ -1,8 +1,8 @@
 import { execFile as execFileCb } from 'node:child_process'
 import { promisify } from 'node:util'
-import { accessSync, constants, existsSync, statSync } from 'node:fs'
+import { accessSync, constants, readdirSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { delimiter, join } from 'node:path'
+import { basename, delimiter, dirname, join } from 'node:path'
 // Relative and .ts-extensioned, like store.ts: these are *runtime* imports, and
 // keeping them resolvable without a bundler is what lets `node --test` run the
 // resolution tests against this file directly.
@@ -30,7 +30,10 @@ const execFile = promisify(execFileCb)
 const BINARY: Record<Provider, string> = {
   claude: 'claude',
   codex: 'codex',
-  grok: 'grok'
+  grok: 'grok',
+  // Google's ACP server, not the `agy` CLI: `agy` has no ACP mode, and its
+  // headless stream cannot prompt for a permission (see `antigravityAcp.ts`).
+  antigravity: process.platform === 'win32' ? 'agy_acp_server.exe' : 'agy_acp_server.par'
 }
 
 /**
@@ -40,7 +43,50 @@ const BINARY: Record<Provider, string> = {
 const ENV_OVERRIDE: Record<Provider, string> = {
   claude: 'CARBON_CLAUDE_PATH',
   codex: 'CARBON_CODEX_PATH',
-  grok: 'CARBON_GROK_PATH'
+  grok: 'CARBON_GROK_PATH',
+  antigravity: 'CARBON_ANTIGRAVITY_PATH'
+}
+
+/**
+ * Where Carbon unpacks a provider it installs itself — set from `userData` at
+ * startup, so this module never imports Electron. Only Antigravity uses it: the
+ * other three are CLIs the user installs, and Google publishes this one as a
+ * bare archive through the ACP registry with no installer of its own.
+ */
+let managedRoot: string | null = null
+
+export function configureManagedRoot(dir: string): void {
+  managedRoot = dir
+  cache = {}
+}
+
+/** `<managed root>/antigravity`, where `antigravityInstall.ts` unpacks to. */
+export function managedAntigravityDir(): string | null {
+  return managedRoot ? join(managedRoot, 'antigravity') : null
+}
+
+/**
+ * The newest version directory under `root` holding `name`. Version
+ * directories are named for the version (`1.2.1`, Zed's `v_1.2.1_<hash>`), so
+ * the dotted triple in the name orders them.
+ */
+export function newestVersioned(root: string | null, name: string): string | null {
+  if (!root) return null
+  let best: { path: string; version: string } | null = null
+  let entries: string[]
+  try {
+    entries = readdirSync(root)
+  } catch {
+    return null
+  }
+  for (const entry of entries) {
+    const version = parseVersion(entry)
+    if (!version) continue
+    const path = join(root, entry, name)
+    if (!isExecutable(path)) continue
+    if (!best || compareVersions(version, best.version) > 0) best = { path, version }
+  }
+  return best?.path ?? null
 }
 
 /**
@@ -54,7 +100,17 @@ function knownLocations(provider: Provider, home: string): string[] {
   const perProvider: Record<Provider, string[]> = {
     claude: [join(home, '.local', 'bin', name), join(home, '.claude', 'local', name)],
     codex: [join(home, '.local', 'bin', name), join(home, '.codex', 'bin', name)],
-    grok: [join(home, '.grok', 'bin', name), join(home, '.local', 'bin', name)]
+    grok: [join(home, '.grok', 'bin', name), join(home, '.local', 'bin', name)],
+    // Carbon's own install first, then the copy Zed downloads from the same
+    // registry entry — one server, whichever app fetched it.
+    antigravity: [
+      newestVersioned(managedAntigravityDir(), name),
+      newestVersioned(
+        join(home, 'Library', 'Application Support', 'Zed', 'external_agents', 'registry', 'antigravity-acp'),
+        name
+      ),
+      newestVersioned(join(home, '.local', 'share', 'zed', 'external_agents', 'registry', 'antigravity-acp'), name)
+    ].filter((path): path is string => !!path)
   }
   return [...perProvider[provider], `/opt/homebrew/bin/${name}`, `/usr/local/bin/${name}`]
 }
@@ -69,7 +125,9 @@ function knownLocations(provider: Provider, home: string): string[] {
 export const MIN_CLI_VERSION: Record<Provider, string> = {
   claude: '2.0.0',
   codex: '0.140.0',
-  grok: '1.0.0'
+  grok: '1.0.0',
+  // The first server with `session/resume` and `session/set_config_option`.
+  antigravity: '1.2.0'
 }
 
 /**
@@ -83,7 +141,10 @@ export const INSTALL_COMMAND: Record<Provider, string> = {
   codex: 'npm install -g @openai/codex',
   // `@xai-official/grok` — not `@vibe-kit/grok-cli`, an unrelated third-party
   // package whose name reads like the official one.
-  grok: 'npm install -g @xai-official/grok'
+  grok: 'npm install -g @xai-official/grok',
+  // No package manager carries it; Settings → Providers installs it instead
+  // (`ProviderCli.installable`), and this is what an error card says.
+  antigravity: 'Settings \u2192 Providers \u2192 Antigravity \u2192 Install'
 }
 
 /** User settings, injected at startup so this module never imports the store. */
@@ -192,6 +253,9 @@ const versions = new Map<string, string | null>()
  * launch; it landed at whatever moment the first turn started, which is worse.
  */
 async function readVersion(path: string): Promise<string | null> {
+  // The Antigravity server has no `--version`; every place it is installed
+  // names its directory for the version instead.
+  if (path.endsWith(BINARY.antigravity)) return parseVersion(basename(dirname(path)))
   try {
     const { stdout } = await execFile(path, ['--version'], {
       encoding: 'utf8',
@@ -235,7 +299,8 @@ export function providerCli(provider: Provider, env: NodeJS.ProcessEnv = process
     source,
     outdated: !!version && compareVersions(version, minVersion) < 0,
     minVersion,
-    installCommand: INSTALL_COMMAND[provider]
+    installCommand: INSTALL_COMMAND[provider],
+    ...(provider === 'antigravity' ? { installable: true } : {})
   }
   if (cacheable) cache[provider] = info
   return info

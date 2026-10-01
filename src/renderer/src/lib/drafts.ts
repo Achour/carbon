@@ -8,6 +8,18 @@ import type {
 } from '@shared/types'
 
 /**
+ * Every provider, as a total record so a new one is a compile error here — a
+ * type-only import is all `node --test` allows this file, which rules out
+ * `knownProvider` and `PROVIDERS` themselves.
+ */
+const DRAFT_PROVIDERS: Record<Provider, true> = {
+  claude: true,
+  codex: true,
+  grok: true,
+  antigravity: true
+}
+
+/**
  * Composer drafts — text typed and not sent.
  *
  * The composer used to hold its text in local state, and `App` renders
@@ -195,8 +207,7 @@ export function parseDrafts(raw: string | null): DraftStore {
       attachments: Array.isArray(draft.attachments) ? draft.attachments : [],
       // The pair is reconciled again by `providerForRememberedModel` when the
       // draft is restored; this only keeps the field a valid `Provider`.
-      provider:
-        draft.provider === 'codex' || draft.provider === 'grok' ? draft.provider : 'claude',
+      provider: Object.hasOwn(DRAFT_PROVIDERS, draft.provider) ? draft.provider : 'claude',
       updatedAt: typeof draft.updatedAt === 'number' ? draft.updatedAt : 0
     }
     if (!isEmptyDraft(next)) out.projects[cwd] = next

@@ -189,6 +189,12 @@ export function SessionPanel({ chatId }: { chatId: string | null }): React.JSX.E
               and MCP status are live.
             </div>
           )}
+          {provider === 'antigravity' && (
+            <div className="text-[11px] leading-relaxed text-muted-foreground/70">
+              Signed in with Google through the Antigravity server. Usage, plan limits and its
+              own MCP servers aren’t reported over ACP, and spend doesn’t appear on the Usage page.
+            </div>
+          )}
           {provider === 'grok' && (
             <div className="text-[11px] leading-relaxed text-muted-foreground/70">
               Signed in via the Grok CLI. Account, plan limits and MCP status aren’t exposed

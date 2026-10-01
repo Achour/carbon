@@ -32,7 +32,8 @@ Dev utilities (env vars for `npm run dev`, used for UI iteration without a human
   main thread for the whole of the script and writes a `.cpuprofile` (open it in
   DevTools → Performance, or reduce it with a script). The Performance API says
   *when* a long task happened; this is how to learn what it was doing.
-- `CARBON_CLAUDE_PATH` / `CARBON_CODEX_PATH` / `CARBON_GROK_PATH` — pin a provider's
+- `CARBON_CLAUDE_PATH` / `CARBON_CODEX_PATH` / `CARBON_GROK_PATH` /
+  `CARBON_ANTIGRAVITY_PATH` — pin a provider's
   CLI to a specific binary, above the Settings → Providers value. Useful for testing
   a prerelease CLI, or the "not installed" path (point one at a path that isn't there).
 - `CARBON_UPDATE_REPO=owner/repo` — points the update check at another repo, so a real
@@ -381,6 +382,9 @@ it guards**, and put new reasoning in that file rather than back in this one.
   authored or review, across repos, with summary, diff, merge and a chat on the
   PR's branch (`main/pulls.ts`, `PullRequests.tsx`, `lib/prDiff.ts`).
 - **`docs/sounds.md`** — the three generated alert cues (`lib/sounds.ts`).
+- **`docs/antigravity.md`** — the Antigravity provider: why its ACP server and
+  not `agy`, the install exception, its own Google sign-in, and the wire shapes
+  read off the server's source.
 
 ## Provider integration
 
@@ -447,6 +451,24 @@ version floor, and an honest "not installed" answer.
 - **`hasCompleteModelCatalog` is relative to what's available.** It used to name
   Claude and Codex as required and exclude Grok. Requiring a provider that isn't
   installed retries a probe that is correctly returning nothing, forever.
+
+### Antigravity (`src/main/antigravity.ts`, `antigravityAcp.ts`, `antigravityInstall.ts`)
+
+The fourth provider is Google's **ACP server** (`agy_acp_server`), not the
+user's `agy` CLI: `agy`'s headless stream auto-denies every tool that needs
+approval and takes no per-session MCP servers, so Ask mode and the `carbon`
+tools would both be impossible on it. The server ships as a bare ACP-registry
+archive with no installer, which makes it the one provider Carbon *installs*.
+The download only runs when the user presses Install, comes from the registry's
+own entry, and lands in `userData/providers/`. That is an installer, not a
+bundled CLI. Zed's copy of the same download is a known location too. Its Google
+sign-in is the server's own, separate from `agy`'s; Carbon opens the link and the
+Settings row owns sign-in and sign-out. Modes and models move live (no respawn),
+Plan mode is spelled as its `/plan` command, tools are named from their titles,
+and it reports no usage, so the Usage page excludes it (`UsageProvider`).
+`acpRpc.ts` is the generic JSON-RPC-over-stdio transport (Grok predates it and
+keeps its own). Every shape and the reasoning behind it is in
+`docs/antigravity.md`; read it first.
 
 ### Per-provider capabilities (`src/main/providerFeatures.ts`)
 

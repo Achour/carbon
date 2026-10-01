@@ -372,7 +372,7 @@ function ProviderFeatures({ provider }: { provider: Provider }): React.JSX.Eleme
  * they actually use, and it reads identically to "not installed" everywhere
  * downstream — no rows in any picker.
  */
-function ProviderRow({ cli }: { cli: ProviderCli }): React.JSX.Element {
+function ProviderDetail({ cli }: { cli: ProviderCli }): React.JSX.Element {
   const setProviderCli = useApp((s) => s.setProviderCli)
   const [copied, setCopied] = React.useState(false)
 
@@ -386,19 +386,37 @@ function ProviderRow({ cli }: { cli: ProviderCli }): React.JSX.Element {
   }
 
   return (
-    <div className="rounded-lg border border-border px-3 py-3">
-      <div className="flex items-center gap-3">
-        <ProviderAvatar provider={cli.provider} className="size-6" />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="text-[13px] font-medium">{label}</span>
-            {cli.version && (
-              <span className="rounded bg-secondary px-1.5 py-px font-mono text-[10px] text-muted-foreground tabular-nums">
-                {cli.version}
-              </span>
-            )}
-          </div>
-          <div className="mt-0.5 truncate text-xs text-muted-foreground">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <div className="shrink-0 px-6 pt-5 pb-3">
+        <div className="flex items-center gap-2.5">
+          <ProviderAvatar provider={cli.provider} className="rounded-md" />
+          <h2 className="text-[15px] font-semibold">{label}</h2>
+          {cli.version && (
+            <span className="rounded bg-secondary px-1.5 py-px font-mono text-[10px] text-muted-foreground tabular-nums">
+              {cli.version}
+            </span>
+          )}
+          <div className="flex-1" />
+          <SwitchPill
+            on={cli.enabled}
+            disabled={missing}
+            label={`Use ${label}`}
+            onChange={() => void setProviderCli(cli.provider, { enabled: !cli.enabled })}
+          />
+        </div>
+        <p className="mt-1 text-[13px] text-muted-foreground">
+          {missing
+            ? 'Not installed on this machine, so it offers no models.'
+            : cli.enabled
+              ? 'Installed and on. Its models are in the model picker.'
+              : 'Turned off. It offers no models until you switch it back on.'}
+        </p>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6">
+        <div className="rounded-lg border border-border px-3 py-3">
+          <div className="text-xs font-medium">Binary</div>
+          <div className="mt-0.5 break-all text-[11px] leading-relaxed text-muted-foreground">
             {!missing ? (
               <span className="font-mono">{cli.path}</span>
             ) : cli.path ? (
@@ -412,45 +430,189 @@ function ProviderRow({ cli }: { cli: ProviderCli }): React.JSX.Element {
               'Not installed'
             )}
           </div>
+
+          {/* Carbon installs this one itself, so the next step is a button. */}
+          {missing && !cli.path && cli.installable && <ManagedInstall provider={cli.provider} />}
+
+          {/* The install command, shown only when it's the thing to do next — so
+              not when an env override resolved to a path that simply won't run. */}
+          {missing && !cli.path && !cli.installable && (
+            <div className="mt-2.5 flex items-center gap-2">
+              <code className="min-w-0 flex-1 truncate rounded-md bg-secondary px-2 py-1.5 font-mono text-[11px]">
+                {cli.installCommand}
+              </code>
+              <Button size="sm" variant="secondary" onClick={copyInstall}>
+                {copied ? 'Copied' : 'Copy'}
+              </Button>
+            </div>
+          )}
+
+          {/* Below the floor Carbon's adapter was written against — a warning,
+              not a block: the turn may work fine, and refusing to run it would
+              be the app overruling a version the user chose to keep. */}
+          {cli.outdated && cli.version && (
+            <div className="mt-2.5 flex items-start gap-2 text-xs text-warning">
+              <TriangleAlert className="mt-px size-3.5 shrink-0" />
+              <span>
+                Carbon expects {cli.minVersion} or newer; this is {cli.version}. Some features may
+                not work.
+              </span>
+            </div>
+          )}
+
+          {/* A provider with its own sign-in (Antigravity): its account lives
+              here, because there is no CLI of its own to sign in from. */}
+          {!missing && cli.enabled && cli.installable && (
+            <ProviderAccount provider={cli.provider} />
+          )}
+
+          {/* Only for a provider that can actually run: the switches below are
+              about what a session may do, and there are no sessions without a
+              binary. `providerFeatures` answers `[]` for one anyway. */}
+          {!missing && cli.enabled && <ProviderFeatures provider={cli.provider} />}
         </div>
-        <SwitchPill
-          on={cli.enabled}
-          disabled={missing}
-          label={`Use ${label}`}
-          onChange={() => void setProviderCli(cli.provider, { enabled: !cli.enabled })}
-        />
       </div>
+    </div>
+  )
+}
 
-      {/* The install command, shown only when it's the thing to do next — so
-          not when an env override resolved to a path that simply won't run. */}
-      {missing && !cli.path && (
-        <div className="mt-2.5 flex items-center gap-2">
-          <code className="min-w-0 flex-1 truncate rounded-md bg-secondary px-2 py-1.5 font-mono text-[11px]">
-            {cli.installCommand}
-          </code>
-          <Button size="sm" variant="secondary" onClick={copyInstall}>
-            {copied ? 'Copied' : 'Copy'}
-          </Button>
+/** The one-line status under a provider's name in the list. */
+function providerStatus(cli: ProviderCli): { text: string; warn: boolean } {
+  if (!cli.installed) return { text: cli.path ? 'Not executable' : 'Not installed', warn: !!cli.path }
+  if (!cli.enabled) return { text: 'Off', warn: false }
+  if (cli.outdated) return { text: `${cli.version} · update`, warn: true }
+  return { text: cli.version ?? 'Installed', warn: false }
+}
+
+function formatMegabytes(bytes: number): string {
+  return `${(bytes / 1_000_000).toFixed(bytes >= 100_000_000 ? 0 : 1)} MB`
+}
+
+/**
+ * Install for a provider Carbon manages itself. Antigravity's ACP server has no
+ * package or installer behind it — Google publishes it as a registry archive —
+ * so the row downloads it into Carbon's data folder rather than naming a
+ * command to run. The bar is the download; unpacking follows in a second.
+ */
+function ManagedInstall({ provider }: { provider: Provider }): React.JSX.Element {
+  const installProvider = useApp((s) => s.installProvider)
+  const progress = useApp((s) => s.providerInstall[provider])
+  const [error, setError] = React.useState<string | null>(null)
+  const busy = !!progress && progress.phase !== 'error'
+
+  const install = async (): Promise<void> => {
+    setError(null)
+    const result = await installProvider(provider)
+    if (!result.ok) setError(result.error ?? 'Install failed.')
+  }
+
+  const fraction = progress && progress.total > 0 ? progress.received / progress.total : null
+  const status = !busy
+    ? 'Google’s Antigravity agent server, from the ACP registry (about 110 MB). It keeps its own Google sign-in.'
+    : progress.phase === 'extract'
+      ? 'Unpacking…'
+      : fraction !== null
+        ? `Downloading… ${formatMegabytes(progress.received)} of ${formatMegabytes(progress.total)}`
+        : `Downloading… ${formatMegabytes(progress.received)}`
+  return (
+    <div className="mt-2.5 space-y-2">
+      <div className="flex items-center gap-2">
+        <div className="min-w-0 flex-1 text-[11px] leading-relaxed text-muted-foreground">
+          {status}
+        </div>
+        <Button size="sm" variant="secondary" onClick={() => void install()} disabled={busy}>
+          {busy ? <DotSpinner /> : <ArrowDownToLine />}
+          Install
+        </Button>
+      </div>
+      {busy && (
+        <div className="h-1 overflow-hidden rounded-full bg-secondary">
+          <div
+            className={cn(
+              'h-full rounded-full bg-primary transition-[width]',
+              fraction === null && 'w-1/3 animate-pulse'
+            )}
+            style={fraction !== null ? { width: `${Math.round(fraction * 100)}%` } : undefined}
+          />
         </div>
       )}
-
-      {/* Below the floor Carbon's adapter was written against — a warning, not
-          a block: the turn may work fine, and refusing to run it would be the
-          app overruling a version the user chose to keep. */}
-      {cli.outdated && cli.version && (
-        <div className="mt-2.5 flex items-start gap-2 text-xs text-warning">
+      {error && (
+        <div className="flex items-start gap-2 text-xs text-warning">
           <TriangleAlert className="mt-px size-3.5 shrink-0" />
-          <span>
-            Carbon expects {cli.minVersion} or newer; this is {cli.version}. Some features may
-            not work.
-          </span>
+          <span>{error}</span>
         </div>
       )}
+    </div>
+  )
+}
 
-      {/* Only for a provider that can actually run: the switches below are
-          about what a session may do, and there are no sessions without a
-          binary. `providerFeatures` answers `[]` for one anyway. */}
-      {!missing && cli.enabled && <ProviderFeatures provider={cli.provider} />}
+/**
+ * The account of a provider that signs in on its own. Antigravity's server
+ * keeps a Google login separate from the `agy` CLI's, so it is the one row
+ * whose login Carbon has to offer rather than find. Signing in opens the
+ * browser and the button waits on it; the server's own deadline is five
+ * minutes.
+ */
+function ProviderAccount({ provider }: { provider: Provider }): React.JSX.Element {
+  const auth = useApp((s) => s.providerAuth[provider])
+  const loadProviderAuth = useApp((s) => s.loadProviderAuth)
+  const signInProvider = useApp((s) => s.signInProvider)
+  const signOutProvider = useApp((s) => s.signOutProvider)
+  const [busy, setBusy] = React.useState<'in' | 'out' | null>(null)
+  const [error, setError] = React.useState<string | null>(null)
+
+  React.useEffect(() => {
+    void loadProviderAuth(provider)
+  }, [loadProviderAuth, provider])
+
+  const run = async (kind: 'in' | 'out'): Promise<void> => {
+    setBusy(kind)
+    setError(null)
+    const result = kind === 'in' ? await signInProvider(provider) : await signOutProvider(provider)
+    if (!result.ok) setError(result.error ?? 'That didn’t work.')
+    setBusy(null)
+  }
+
+  const status =
+    busy === 'in'
+      ? 'Finish signing in in your browser…'
+      : auth === 'signed-in'
+        ? 'Signed in. Models come from your Google account.'
+        : auth === 'signed-out'
+          ? 'Not signed in. Sign in to use Antigravity’s models.'
+          : auth === 'unavailable'
+            ? 'Couldn’t reach the Antigravity server.'
+            : 'Checking…'
+  return (
+    <div className="mt-3 space-y-2 border-t border-border pt-3">
+      <div className="flex items-center gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="text-xs font-medium">Google account</div>
+          <div className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">{status}</div>
+        </div>
+        {auth === 'signed-in' ? (
+          <Button size="sm" variant="secondary" onClick={() => void run('out')} disabled={!!busy}>
+            {busy === 'out' && <DotSpinner />}
+            Sign out
+          </Button>
+        ) : (
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => void run('in')}
+            disabled={!!busy || !auth}
+          >
+            {busy === 'in' && <DotSpinner />}
+            Sign in with Google
+          </Button>
+        )}
+      </div>
+      {error && (
+        <div className="flex items-start gap-2 text-xs text-warning">
+          <TriangleAlert className="mt-px size-3.5 shrink-0" />
+          <span>{error}</span>
+        </div>
+      )}
     </div>
   )
 }
@@ -669,10 +831,17 @@ function ModelsSection(): React.JSX.Element {
   )
 }
 
+/**
+ * The Providers section: the backends on the left, the picked one's install,
+ * account and capability switches on the right — the same list-and-detail as
+ * Models, because four providers each with a stack of switches made one long
+ * column where the one you came for was below the fold.
+ */
 function ProvidersSection(): React.JSX.Element {
   const providerClis = useApp((s) => s.providerClis)
   const loadProviderClis = useApp((s) => s.loadProviderClis)
   const [rechecking, setRechecking] = React.useState(false)
+  const [picked, setPicked] = React.useState<Provider | null>(null)
 
   // Re-probe on open: the common reason to be here is having just installed
   // something in a terminal next to the app, and asking the user to press a
@@ -689,41 +858,82 @@ function ProvidersSection(): React.JSX.Element {
   }
 
   const none = providerClis.length > 0 && providerClis.every((cli) => !cli.installed)
+  const selected = providerClis.find((cli) => cli.provider === picked) ?? providerClis[0]
 
   return (
-    <section>
-      <SectionHeader
-        icon={Terminal}
-        title="Providers"
-        description="Carbon runs the coding agents you have installed. Each one keeps its own login, so signing in stays where you already did it."
-      />
-
-      {none && (
-        <div className="mb-3 flex items-start gap-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2.5 text-xs text-warning">
-          <TriangleAlert className="mt-px size-3.5 shrink-0" />
-          <span>
-            None of the agent CLIs were found, so there is nothing to chat with yet. Install one
-            with the command on its row, then Recheck.
-          </span>
+    <div className="flex min-h-0 min-w-0 flex-1">
+      <div className="flex w-[264px] shrink-0 flex-col border-r border-border">
+        <h2 className="px-4 pt-4 pb-2.5 text-[12px] font-medium text-muted-foreground">
+          {providerClis.length} {providerClis.length === 1 ? 'provider' : 'providers'}
+        </h2>
+        <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto px-2 pb-2">
+          {providerClis.map((cli) => {
+            const status = providerStatus(cli)
+            return (
+              <button
+                key={cli.provider}
+                type="button"
+                aria-pressed={cli === selected}
+                onClick={() => setPicked(cli.provider)}
+                className={cn(
+                  'flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left transition-colors',
+                  cli === selected ? 'bg-accent' : 'hover:bg-accent/50'
+                )}
+              >
+                <ProviderAvatar
+                  provider={cli.provider}
+                  className={cn(!cli.installed || !cli.enabled ? 'opacity-50' : undefined)}
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[13px] font-medium">
+                    {PROVIDER_LABELS[cli.provider]}
+                  </div>
+                  <div
+                    className={cn(
+                      'truncate text-[11px]',
+                      status.warn ? 'text-warning' : 'text-muted-foreground'
+                    )}
+                  >
+                    {status.text}
+                  </div>
+                </div>
+              </button>
+            )
+          })}
         </div>
-      )}
-
-      <div className="space-y-2">
-        {providerClis.map((cli) => (
-          <ProviderRow key={cli.provider} cli={cli} />
-        ))}
+        <div className="shrink-0 space-y-1.5 border-t border-border px-3 py-2.5">
+          <Button
+            size="sm"
+            variant="ghost"
+            className="w-full justify-start text-muted-foreground"
+            onClick={() => void recheck()}
+            disabled={rechecking}
+          >
+            {rechecking ? <DotSpinner /> : <RefreshCw />}
+            Recheck installs
+          </Button>
+        </div>
       </div>
 
-      <div className="mt-3 flex items-center justify-between">
-        <span className="text-xs text-muted-foreground">
-          Just installed one? Recheck picks it up without a restart.
-        </span>
-        <Button size="sm" variant="secondary" onClick={() => void recheck()} disabled={rechecking}>
-          {rechecking ? <DotSpinner /> : <RefreshCw />}
-          Recheck
-        </Button>
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        {none && (
+          <div className="mx-6 mt-5 flex items-start gap-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2.5 text-xs text-warning">
+            <TriangleAlert className="mt-px size-3.5 shrink-0" />
+            <span>
+              None of the agent CLIs were found, so there is nothing to chat with yet. Install
+              one, then Recheck.
+            </span>
+          </div>
+        )}
+        {selected ? (
+          <ProviderDetail key={selected.provider} cli={selected} />
+        ) : (
+          <div className="flex flex-1 items-center justify-center">
+            <DotSpinner />
+          </div>
+        )}
       </div>
-    </section>
+    </div>
   )
 }
 
@@ -1258,7 +1468,7 @@ export function Settings(): React.JSX.Element {
         </nav>
 
         {/* Section content.
-            Projects is the one section that is not a column of settings but a
+            Projects (like Models and Providers) is not a column of settings but a
             *collection* — it takes the whole area and splits it into its own
             list and detail, each half scrolling independently. Everything else
             keeps the reading measure, which is the right width for a stack of
@@ -1267,6 +1477,8 @@ export function Settings(): React.JSX.Element {
           <ProjectsSection />
         ) : section === 'models' ? (
           <ModelsSection />
+        ) : section === 'providers' ? (
+          <ProvidersSection />
         ) : (
           <div className="min-h-0 flex-1 overflow-y-auto">
             <div className="mx-auto w-full max-w-2xl px-8 py-8">
@@ -1363,8 +1575,6 @@ export function Settings(): React.JSX.Element {
                   row of four facts, not a collection with a detail pane like a
                   project. See `SettingsArchive`. */}
               {section === 'archive' && <ArchiveSection />}
-
-              {section === 'providers' && <ProvidersSection />}
 
 
               {section === 'notifications' && (

@@ -27,7 +27,8 @@ export { canonicalModelId, rememberedEffortForModel }
  * pending rather than impossible, and the rows it will return are the ones
  * already listed. Grok keeps no static fallback even when installed — its
  * catalog is entirely runtime-discovered, and `MODEL_OPTIONS` carries its rows
- * only so `knownProviderForModel` can place a stored `grok-4.6`.
+ * only so `knownProviderForModel` can place a stored `grok-4.6`. Antigravity is
+ * the same, for the same reason.
  */
 export function assembleModelOptions(
   dynamicModels: ModelOption[],
@@ -45,10 +46,16 @@ export function assembleModelOptions(
       ? { ...option, resolvedModel: codexConfigModel }
       : option
   )
-  const grokModels = can.has('grok')
-    ? dynamicModels.filter((option) => option.provider === 'grok')
-    : []
-  return [...providerOptions('claude'), ...codexModels, ...grokModels]
+  // Live-only: neither has a static catalog to stand in, and Antigravity's
+  // empty answer also means "nobody is signed in", when a row would only fail.
+  const liveOnly = (provider: ModelOption['provider']): ModelOption[] =>
+    can.has(provider) ? dynamicModels.filter((option) => option.provider === provider) : []
+  return [
+    ...providerOptions('claude'),
+    ...codexModels,
+    ...liveOnly('grok'),
+    ...liveOnly('antigravity')
+  ]
 }
 
 /**

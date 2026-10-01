@@ -40,7 +40,9 @@ import type {
   PermissionDecision,
   PermissionModeId,
   Provider,
+  ProviderAuthState,
   ProviderFeatureState,
+  ProviderInstallProgress,
   EditMessageResult,
   EventMessage,
   RewindResult,
@@ -53,6 +55,7 @@ import type {
 import {
   CODEX_DEFAULT_MODEL,
   MODEL_OPTIONS,
+  PROVIDER_LABELS,
   PROVIDER_SHORT_LABELS,
   claudeModelContextWindow,
   claudeModelLabel,
@@ -85,6 +88,16 @@ import { CANVAS_SESSION_RULES, CANVAS_TOOL_INFO, runCanvasTool } from './canvasT
 import { CodexSession, fetchCodexFeatures, fetchCodexModels, generateCodexText } from './codex'
 import { CodexAppServerClient } from './codexAppServer'
 import { fetchGrokModels, forkGrokBefore, generateGrokText, GrokSession } from './grok'
+import {
+  ANTIGRAVITY_SLASH_COMMANDS,
+  AntigravitySession,
+  antigravityAuthState,
+  fetchAntigravityModels,
+  generateAntigravityText,
+  signInToAntigravity,
+  signOutOfAntigravity
+} from './antigravity'
+import { installAntigravity } from './antigravityInstall'
 import { spawnEnv } from './parentEnv.ts'
 import { cliAvailable, cliPath, requireCliPath } from './providerCli.ts'
 import { claudeFeatureEnv, claudeFeatureStates, codexFeatureStates } from './providerFeatures.ts'
@@ -2765,7 +2778,23 @@ const CONVERSATION_FORKS: Record<Provider, ConversationFork> = {
     fork: async (_chat: ChatData, index: number, session: AgentSession | null) =>
       session?.forkBefore?.(index)
   },
-  grok: { needsSession: false, fork: forkGrokBefore }
+  grok: { needsSession: false, fork: forkGrokBefore },
+  // The server has `session/fork` but no cut point — it copies a conversation
+  // whole — so an edit-and-resend replays, as Grok's does.
+  antigravity: { needsSession: false, fork: async () => undefined }
+}
+
+/**
+ * Whether a provider's plan review outlives its session. Claude's is a live
+ * `ExitPlanMode` permission and dies with the process; the other three raise
+ * the review from a *finished* turn, so it is persisted on the chat and can be
+ * answered after a restart.
+ */
+const PERSISTED_PLAN_REVIEW: Record<Provider, boolean> = {
+  claude: false,
+  codex: true,
+  grok: true,
+  antigravity: true
 }
 
 interface HandoffSnapshot {
@@ -2837,8 +2866,12 @@ export class ChatManager {
   // — new chats in a known project can show the menu before their first turn.
   /** Slash commands by `${cwd}::${provider}` — see `commandsKey`. */
   private commandsByCwd = new Map<string, SlashCommand[]>()
-  /** Whether the Grok catalog probe has run this session — see `listModels`. */
-  private grokProbed = false
+  /**
+   * Providers whose catalog probe has run this app session — see `listModels`.
+   * Grok and Antigravity answer `[]` when they cannot run, which must read as
+   * "asked", not "not asked yet".
+   */
+  private probed = new Set<Provider>()
   // In-flight warmups, deduped per cwd.
   private warmups = new Map<string, Promise<SlashCommand[]>>()
   // The model list is account-level, not per chat or folder, so it's cached once
@@ -2879,6 +2912,9 @@ export class ChatManager {
     if (provider === 'codex') return CODEX_SLASH_COMMANDS
     const cached = this.commandsByCwd.get(commandsKey(cwd, provider))
     if (cached) return cached
+    // The server's list is fixed — its built-ins plus `/logout` — so the menu
+    // has it before the first session announces it.
+    if (provider === 'antigravity') return ANTIGRAVITY_SLASH_COMMANDS
     // Only Claude can be warmed without a chat: its CLI answers
     // `supportedCommands` as a control request. Grok's list rides the ACP
     // handshake of a real session, so it arrives when one starts and not before.
@@ -2984,7 +3020,7 @@ export class ChatManager {
   async providerFeatures(provider: Provider): Promise<ProviderFeatureState[]> {
     if (!cliAvailable(provider)) return []
     if (provider === 'claude') return claudeFeatureStates()
-    if (provider === 'grok') return []
+    if (provider === 'grok' || provider === 'antigravity') return []
     const client = new CodexAppServerClient({})
     try {
       return codexFeatureStates(await fetchCodexFeatures(client))
@@ -2993,6 +3029,51 @@ export class ChatManager {
     } finally {
       client.dispose()
     }
+  }
+
+  /** Install a provider Carbon manages itself; only Antigravity is one. */
+  async installProvider(
+    provider: Provider,
+    onProgress: (progress: ProviderInstallProgress) => void
+  ): Promise<void> {
+    if (provider !== 'antigravity') throw new Error(`${PROVIDER_LABELS[provider]} installs from its own CLI.`)
+    await installAntigravity(onProgress)
+    this.forgetCatalog(provider)
+  }
+
+  async providerAuthState(provider: Provider): Promise<ProviderAuthState> {
+    return provider === 'antigravity' ? antigravityAuthState() : 'unavailable'
+  }
+
+  async providerSignIn(provider: Provider): Promise<OpResult> {
+    if (provider !== 'antigravity') return { ok: false, error: 'This provider signs in from its CLI.' }
+    const result = await signInToAntigravity()
+    if (result.ok) this.forgetCatalog(provider)
+    return result
+  }
+
+  async providerSignOut(provider: Provider): Promise<OpResult> {
+    if (provider !== 'antigravity') return { ok: false, error: 'This provider signs out from its CLI.' }
+    // Live sessions hold the credentials being removed; the server tears its
+    // own down, so Carbon's wrappers go with them.
+    for (const [chatId, session] of this.sessions) {
+      if (this.store.getMeta(chatId)?.provider === provider) {
+        session.dispose()
+        this.sessions.delete(chatId)
+      }
+    }
+    const result = await signOutOfAntigravity()
+    this.forgetCatalog(provider)
+    return result
+  }
+
+  /**
+   * Drop a provider's cached catalog so the next `listModels` asks again —
+   * after an install or a sign-in, the answer `[]` it gave before is stale.
+   */
+  private forgetCatalog(provider: Provider): void {
+    this.probed.delete(provider)
+    if (this.models) this.models = this.models.filter((option) => option.provider !== provider)
   }
 
   /**
@@ -3061,35 +3142,19 @@ export class ChatManager {
         queueMicrotask(() => this.pruneIdleSessions())
       }
     }
-    const session: AgentSession =
-      chat.provider === 'codex'
-        ? new CodexSession(
-            chat,
-            sessionEmit,
-            this.store,
-            onDead,
-            undefined,
-            undefined,
-            this.preview
-          )
-        : chat.provider === 'grok'
-          ? new GrokSession(
-              chat,
-              sessionEmit,
-              this.store,
-              onDead,
-              (commands) => this.commandsByCwd.set(commandsKey(chat.cwd, 'grok'), commands),
-              this.preview
-            )
-          : new ClaudeSession(
-              chat,
-              sessionEmit,
-              this.store,
-              onDead,
-              (commands) => this.commandsByCwd.set(commandsKey(chat.cwd, 'claude'), commands),
-              this.preview,
-              this.canvas
-            )
+    const onCommands = (commands: SlashCommand[]): void => {
+      this.commandsByCwd.set(commandsKey(chat.cwd, chat.provider), commands)
+    }
+    const build: Record<Provider, () => AgentSession> = {
+      claude: () =>
+        new ClaudeSession(chat, sessionEmit, this.store, onDead, onCommands, this.preview, this.canvas),
+      codex: () =>
+        new CodexSession(chat, sessionEmit, this.store, onDead, undefined, undefined, this.preview),
+      grok: () => new GrokSession(chat, sessionEmit, this.store, onDead, onCommands, this.preview),
+      antigravity: () =>
+        new AntigravitySession(chat, sessionEmit, this.store, onDead, onCommands, this.preview)
+    }
+    const session = build[chat.provider]()
     this.sessions.set(chat.id, session)
     this.pruneIdleSessions()
     return session
@@ -3415,12 +3480,14 @@ export class ChatManager {
         fromLabel,
         this.label(chat.model, chat.provider)
       )
-      const gen =
-        handoff.provider === 'codex'
-          ? generateCodexText(chat.cwd, handoff.model, `${HANDOFF_BRIEF_SYSTEM}\n\n${prompt}`)
-          : handoff.provider === 'grok'
-            ? generateGrokText(chat.cwd, handoff.model, `${HANDOFF_BRIEF_SYSTEM}\n\n${prompt}`)
-            : generateClaudeText(chat.cwd, handoff.model, HANDOFF_BRIEF_SYSTEM, prompt)
+      const joined = `${HANDOFF_BRIEF_SYSTEM}\n\n${prompt}`
+      const generate: Record<Provider, () => Promise<string | null>> = {
+        claude: () => generateClaudeText(chat.cwd, handoff.model, HANDOFF_BRIEF_SYSTEM, prompt),
+        codex: () => generateCodexText(chat.cwd, handoff.model, joined),
+        grok: () => generateGrokText(chat.cwd, handoff.model, joined),
+        antigravity: () => generateAntigravityText(handoff.model, joined)
+      }
+      const gen = generate[handoff.provider]()
       const brief = await withTimeout(gen, HANDOFF_TIMEOUT_MS, null)
       const summary = brief ?? this.transcriptFor(chat, HANDOFF_FALLBACK_CHARS)
       return summary ? buildHandoffContext(summary, fromLabel, !brief) : undefined
@@ -3899,8 +3966,10 @@ export class ChatManager {
     // it as "not fetched yet" would defeat this fast path forever for those
     // users — re-spawning `grok agent stdio` on every call. Same reasoning as
     // `hasCompleteModelCatalog` in the renderer, which excludes Grok outright.
-    const haveGrok = this.grokProbed || this.models?.some((option) => option.provider === 'grok')
-    if (haveClaude && haveCodex && haveGrok) return this.models!
+    const haveGrok = this.probed.has('grok') || this.models?.some((option) => option.provider === 'grok')
+    const haveAntigravity =
+      this.probed.has('antigravity') || this.models?.some((option) => option.provider === 'antigravity')
+    if (haveClaude && haveCodex && haveGrok && haveAntigravity) return this.models!
     const folder = this.store.getMeta(chatId)?.cwd || cwd
     if (!folder) return this.models ?? []
     this.modelWarmup ??= Promise.all([
@@ -3909,11 +3978,14 @@ export class ChatManager {
       // Resolves to [] when the CLI isn't installed, which is what keeps Grok
       // out of the picker for anyone who hasn't got it rather than showing rows
       // that fail on send.
-      haveGrok ? Promise.resolve([]) : fetchGrokModels(folder)
+      haveGrok ? Promise.resolve([]) : fetchGrokModels(folder),
+      // Same rule, and one more reason to answer `[]`: nobody signed in.
+      haveAntigravity ? Promise.resolve([]) : fetchAntigravityModels()
     ])
-      .then(([claude, codex, grok]) => {
-        this.grokProbed = true
-        this.mergeModels([...claude, ...codex, ...grok])
+      .then(([claude, codex, grok, antigravity]) => {
+        this.probed.add('grok')
+        this.probed.add('antigravity')
+        this.mergeModels([...claude, ...codex, ...grok, ...antigravity])
         return this.models ?? []
       })
       .finally(() => {
@@ -3943,8 +4015,7 @@ export class ChatManager {
     // A persisted Codex or Grok plan can be waiting without a live wrapper after
     // an app restart. Stopping it should still dismiss the review cleanly.
     const chat = this.store.getChat(chatId)
-    const review =
-      chat?.provider === 'codex' || chat?.provider === 'grok' ? chat.pendingPlanReview : undefined
+    const review = chat && PERSISTED_PLAN_REVIEW[chat.provider] ? chat.pendingPlanReview : undefined
     if (!chat || !review) return
     chat.pendingPlanReview = undefined
     this.store.saveChat(chatId)
@@ -3980,10 +4051,11 @@ export class ChatManager {
       live.respondPermission(requestId, decision)
       return
     }
-    // Codex and Grok plan reviews are persisted. Recreate the session wrapper on
+    // Codex, Grok and Antigravity plan reviews are persisted. Recreate the session wrapper on
     // demand so an approval made after an app restart can still continue.
     if (
-      (chat?.provider === 'codex' || chat?.provider === 'grok') &&
+      chat &&
+      PERSISTED_PLAN_REVIEW[chat.provider] &&
       chat.pendingPlanReview?.requestId === requestId
     ) {
       this.createSession(chat).respondPermission(requestId, decision)
@@ -3992,9 +4064,9 @@ export class ChatManager {
 
   /** The plan text behind a pending review request, if `requestId` is one. */
   private planForRequest(chat: ChatData, requestId: string): string | null {
-    // Codex and Grok both raise the plan at the *end* of a turn, so there is no
+    // Codex, Grok and Antigravity raise the plan at the *end* of a turn, so there is no
     // suspended request to hold it and the review is persisted instead.
-    if (chat.provider === 'codex' || chat.provider === 'grok') {
+    if (PERSISTED_PLAN_REVIEW[chat.provider]) {
       return chat.pendingPlanReview?.requestId === requestId ? chat.pendingPlanReview.plan : null
     }
     // Claude's review is a live ExitPlanMode permission; it dies with the

@@ -19,6 +19,7 @@ import type {
   PullState,
   Provider,
   ProviderCliConfig,
+  ProviderInstallProgress,
   ChatOptionsPatch,
   ServiceTier,
   TerminalCreateOpts,
@@ -192,6 +193,16 @@ const api: Api = {
   providerFeatures: (provider: Provider) => invoke('providers:features', provider),
   setProviderFeature: (provider: Provider, id: string, enabled: boolean) =>
     invoke('providers:set-feature', provider, id, enabled),
+  installProvider: (provider: Provider) => invoke('providers:install', provider),
+  onProviderInstall: (cb) => {
+    const listener = (_e: Electron.IpcRendererEvent, progress: ProviderInstallProgress): void =>
+      cb(progress)
+    ipcRenderer.on('providers:install-progress', listener)
+    return () => ipcRenderer.removeListener('providers:install-progress', listener)
+  },
+  providerAuthState: (provider: Provider) => invoke('providers:auth-state', provider),
+  providerSignIn: (provider: Provider) => invoke('providers:sign-in', provider),
+  providerSignOut: (provider: Provider) => invoke('providers:sign-out', provider),
   forgetDir: (dir: string) => invoke('app:forget-dir', dir),
   revealPath: (path: string) => invoke('app:reveal-path', path),
   focusWindow: () => invoke('app:focus-window'),

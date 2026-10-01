@@ -2,7 +2,7 @@ import * as React from 'react'
 import { DotSpinner } from '@/components/ui/dot-spinner'
 import { RefreshCw, X } from 'lucide-react'
 import { USAGE_RANGES } from '@shared/types'
-import type { Provider, UsageDay, UsageReport, UsageTotals } from '@shared/types'
+import type { UsageProvider, UsageDay, UsageReport, UsageTotals } from '@shared/types'
 import { cn } from '@/lib/utils'
 import { formatTokens, formatUsd, relativeTime } from '@/lib/format'
 import { useApp } from '@/store'
@@ -26,7 +26,7 @@ import { WithTooltip } from '@/components/ui/tooltip'
 
 // ---------- Series ----------
 
-const SERIES: { key: Provider; label: string; color: string }[] = [
+const SERIES: { key: UsageProvider; label: string; color: string }[] = [
   // Fixed order, never cycled: Claude is always warm, Codex always cool, Grok
   // always plum, so the legend on one chart reads the same as the dots in the
   // table below it.

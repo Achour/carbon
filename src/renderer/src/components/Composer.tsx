@@ -17,6 +17,7 @@ import {
 } from 'lucide-react'
 import {
   EFFORT_OPTIONS,
+  MODEL_OPTIONS,
   PROVIDERS,
   PROVIDER_LABELS,
   PROVIDER_SHORT_LABELS,
@@ -408,10 +409,24 @@ function ModelSettingsPicker({
   // The chip has room for one name, so show the model actually in use rather
   // than the provider's "Default" wrapper — the menu is where that row's
   // status is worth stating. Every explicit row already carries its real name.
-  const selectedName = resolvedModelName(selected?.resolvedModel) ?? selected?.label ?? model
+  // The live list names the resolved model better than any static table when
+  // it carries a row for it (Antigravity's Default → "Gemini 3.8 Flash (High)").
+  const resolvedRow = selected?.resolvedModel
+    ? models.find(
+        (option) => option.id === selected.resolvedModel && option.provider === selected.provider
+      )
+    : undefined
+  const selectedName =
+    resolvedRow?.label ??
+    resolvedModelName(selected?.resolvedModel) ??
+    selected?.label ??
+    // Before a live-only catalog (Grok, Antigravity) arrives, a remembered
+    // Default row is still in the static table under its own name.
+    MODEL_OPTIONS.find((option) => option.id === model)?.label ??
+    model
   const selectedEffort = efforts.find((option) => option.id === effort)
   const selectedTier = serviceTiers.find((option) => option.id === serviceTier)
-  const groups = (['claude', 'codex', 'grok'] as Provider[])
+  const groups = PROVIDERS
     .map((group) => ({
       group,
       models: models.filter(
@@ -471,7 +486,7 @@ function ModelSettingsPicker({
         <span className="max-w-32 truncate">{selectedName}</span>
         {/* The effort is the first thing a narrow column gives up: the model
             name says which backend answers, and the popover still shows both. */}
-        {!compact && (
+        {!compact && efforts.length > 1 && (
           <>
             <span className="shrink-0 text-muted-foreground/50 @max-[400px]:hidden">·</span>
             <span className="shrink-0 @max-[400px]:hidden">{selectedEffort?.label ?? effort}</span>
@@ -603,95 +618,102 @@ function ModelSettingsPicker({
           ))}
         </div>
 
-        <div className="border-t border-border p-1">
-          <Popover open={effortOpen} onOpenChange={setEffortOpen}>
-            <PopoverTrigger
-              onMouseEnter={() => {
-                setSpeedOpen(false)
-                setEffortOpen(true)
-              }}
-              className="flex h-9 w-full items-center gap-2 rounded-md px-2 text-sm outline-none transition-colors hover:bg-accent focus-visible:bg-accent data-[popup-open]:bg-accent"
-            >
-              <Brain className="size-3.5 text-muted-foreground" />
-              <span className="flex-1 text-left">Reasoning</span>
-              <span className="text-xs text-muted-foreground">
-                {selectedEffort?.label ?? effort}
-              </span>
-              <ChevronRight className="size-3.5 text-muted-foreground" />
-            </PopoverTrigger>
-            <PopoverContent side="right" align="end" className="w-44 p-1">
-              {efforts.map((option) => (
-                <button
-                  key={option.id || 'default'}
-                  type="button"
-                  title={option.description}
-                  aria-pressed={option.id === effort}
-                  onClick={() => {
-                    onEffortChange(option.id)
-                    setEffortOpen(false)
-                    setOpen(false)
+        {/* A provider whose effort lives in the model id (Antigravity's
+            `…-high` rows) has only the Default row here, and a menu of one
+            choice is not a choice. */}
+        {(efforts.length > 1 || onServiceTierChange) && (
+          <div className="border-t border-border p-1">
+            {efforts.length > 1 && (
+              <Popover open={effortOpen} onOpenChange={setEffortOpen}>
+                <PopoverTrigger
+                  onMouseEnter={() => {
+                    setSpeedOpen(false)
+                    setEffortOpen(true)
                   }}
-                  className="flex h-9 w-full items-center gap-2 rounded-md px-2 text-sm outline-none transition-colors hover:bg-accent focus-visible:bg-accent"
+                  className="flex h-9 w-full items-center gap-2 rounded-md px-2 text-sm outline-none transition-colors hover:bg-accent focus-visible:bg-accent data-[popup-open]:bg-accent"
                 >
-                  <span className="flex-1 text-left">{option.label}</span>
-                  {option.id === effort && <Check className="size-3.5" />}
-                </button>
-              ))}
-            </PopoverContent>
-          </Popover>
-
-          {onServiceTierChange && (
-            <Popover open={speedOpen} onOpenChange={setSpeedOpen}>
-              <PopoverTrigger
-                onMouseEnter={() => {
-                  setEffortOpen(false)
-                  setSpeedOpen(true)
-                }}
-                className="flex h-9 w-full items-center gap-2 rounded-md px-2 text-sm outline-none transition-colors hover:bg-accent focus-visible:bg-accent data-[popup-open]:bg-accent"
-              >
-                <Zap className="size-3.5 text-muted-foreground" />
-                <span className="flex-1 text-left">Speed</span>
-                <span className="text-xs text-muted-foreground">
-                  {fastNote && serviceTier === 'fast'
-                    ? 'Standard'
-                    : (selectedTier?.label ?? serviceTier)}
-                </span>
-                <ChevronRight className="size-3.5 text-muted-foreground" />
-              </PopoverTrigger>
-              <PopoverContent side="right" align="end" className="w-52 p-1">
-                {serviceTiers.map((option) => {
-                  // Only the Fast row can be refused, and only say so where the
-                  // user is looking at the choice itself.
-                  const note = option.id === 'fast' ? fastNote : null
-                  return (
+                  <Brain className="size-3.5 text-muted-foreground" />
+                  <span className="flex-1 text-left">Reasoning</span>
+                  <span className="text-xs text-muted-foreground">
+                    {selectedEffort?.label ?? effort}
+                  </span>
+                  <ChevronRight className="size-3.5 text-muted-foreground" />
+                </PopoverTrigger>
+                <PopoverContent side="right" align="end" className="w-44 p-1">
+                  {efforts.map((option) => (
                     <button
-                      key={option.id}
+                      key={option.id || 'default'}
                       type="button"
-                      title={note ?? option.description}
-                      aria-pressed={option.id === serviceTier}
+                      title={option.description}
+                      aria-pressed={option.id === effort}
                       onClick={() => {
-                        onServiceTierChange(option.id)
-                        setSpeedOpen(false)
+                        onEffortChange(option.id)
+                        setEffortOpen(false)
                         setOpen(false)
                       }}
-                      className="flex min-h-9 w-full items-center gap-2 rounded-md px-2 py-1 text-sm outline-none transition-colors hover:bg-accent focus-visible:bg-accent"
+                      className="flex h-9 w-full items-center gap-2 rounded-md px-2 text-sm outline-none transition-colors hover:bg-accent focus-visible:bg-accent"
                     >
-                      <span className="flex min-w-0 flex-1 flex-col text-left">
-                        <span className="truncate">{option.label}</span>
-                        {note && (
-                          <span className="text-[10px] leading-tight text-muted-foreground">
-                            {note}
-                          </span>
-                        )}
-                      </span>
-                      {option.id === serviceTier && <Check className="size-3.5 shrink-0" />}
+                      <span className="flex-1 text-left">{option.label}</span>
+                      {option.id === effort && <Check className="size-3.5" />}
                     </button>
-                  )
-                })}
-              </PopoverContent>
-            </Popover>
-          )}
-        </div>
+                  ))}
+                </PopoverContent>
+              </Popover>
+            )}
+
+            {onServiceTierChange && (
+              <Popover open={speedOpen} onOpenChange={setSpeedOpen}>
+                <PopoverTrigger
+                  onMouseEnter={() => {
+                    setEffortOpen(false)
+                    setSpeedOpen(true)
+                  }}
+                  className="flex h-9 w-full items-center gap-2 rounded-md px-2 text-sm outline-none transition-colors hover:bg-accent focus-visible:bg-accent data-[popup-open]:bg-accent"
+                >
+                  <Zap className="size-3.5 text-muted-foreground" />
+                  <span className="flex-1 text-left">Speed</span>
+                  <span className="text-xs text-muted-foreground">
+                    {fastNote && serviceTier === 'fast'
+                      ? 'Standard'
+                      : (selectedTier?.label ?? serviceTier)}
+                  </span>
+                  <ChevronRight className="size-3.5 text-muted-foreground" />
+                </PopoverTrigger>
+                <PopoverContent side="right" align="end" className="w-52 p-1">
+                  {serviceTiers.map((option) => {
+                    // Only the Fast row can be refused, and only say so where the
+                    // user is looking at the choice itself.
+                    const note = option.id === 'fast' ? fastNote : null
+                    return (
+                      <button
+                        key={option.id}
+                        type="button"
+                        title={note ?? option.description}
+                        aria-pressed={option.id === serviceTier}
+                        onClick={() => {
+                          onServiceTierChange(option.id)
+                          setSpeedOpen(false)
+                          setOpen(false)
+                        }}
+                        className="flex min-h-9 w-full items-center gap-2 rounded-md px-2 py-1 text-sm outline-none transition-colors hover:bg-accent focus-visible:bg-accent"
+                      >
+                        <span className="flex min-w-0 flex-1 flex-col text-left">
+                          <span className="truncate">{option.label}</span>
+                          {note && (
+                            <span className="text-[10px] leading-tight text-muted-foreground">
+                              {note}
+                            </span>
+                          )}
+                        </span>
+                        {option.id === serviceTier && <Check className="size-3.5 shrink-0" />}
+                      </button>
+                    )
+                  })}
+                </PopoverContent>
+              </Popover>
+            )}
+          </div>
+        )}
       </PopoverContent>
     </Popover>
   )

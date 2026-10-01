@@ -100,7 +100,9 @@ import type {
   ProjectOverview,
   Provider,
   ProviderCli,
+  ProviderAuthState,
   ProviderFeatureState,
+  ProviderInstallProgress,
   ProviderCliConfig,
   RateLimitState,
   EditMessageResult,
@@ -597,6 +599,19 @@ interface AppState {
   loadProviderFeatures(provider: Provider): Promise<void>
   /** Flip one, and take main's re-resolved answer as the new truth. */
   setProviderFeature(provider: Provider, id: string, enabled: boolean): Promise<void>
+  /**
+   * Sign-in state of a provider that keeps its own (Antigravity). Absent until
+   * asked: the answer costs a server spawn, so only its Settings row asks.
+   */
+  providerAuth: Partial<Record<Provider, ProviderAuthState>>
+  /** A Carbon-managed install in progress, by provider. */
+  providerInstall: Partial<Record<Provider, ProviderInstallProgress>>
+  loadProviderAuth(provider: Provider): Promise<void>
+  /** Opens the browser sign-in and waits for it; refetches the catalog after. */
+  signInProvider(provider: Provider): Promise<OpResult>
+  signOutProvider(provider: Provider): Promise<OpResult>
+  /** Download and unpack a provider Carbon installs itself. */
+  installProvider(provider: Provider): Promise<OpResult>
   /** `refresh` re-probes the disk, for the Providers section's Recheck. */
   loadProviderClis(refresh?: boolean): Promise<void>
   /** Toggle a provider or pin its binary; refetches the model catalog after. */
@@ -2053,6 +2068,18 @@ let codexConfigModelLoad: Promise<string | null> | null = null
 let modelsLoad: Promise<ModelOption[]> | null = null
 let modelsRetryAt = 0
 const MODELS_RETRY_MS = 30_000
+
+/**
+ * Drop one provider's rows and fetch again — after an install or a sign-in its
+ * earlier answer (`[]`) is stale, and the retry policy may have stopped asking.
+ * A free function because the store's own `set`/`get` are only in scope inside
+ * `create`; it reaches them through `useApp`.
+ */
+function refetchProviderModels(provider: Provider): void {
+  modelsRetryAt = 0
+  useApp.setState((s) => ({ models: s.models.filter((option) => option.provider !== provider) }))
+  void useApp.getState().loadModels()
+}
 // GitHub reads are deduped per project, not globally. A request for project A
 // must not suppress the refresh kicked off when the user switches to project B.
 const githubRequests = new Map<string, Promise<GitHubState>>()
@@ -2140,6 +2167,8 @@ export const useApp = create<AppState>((set, get) => ({
   codexConfigModel: undefined,
   providerClis: [],
   providerFeatures: {},
+  providerAuth: {},
+  providerInstall: {},
   permissions: {},
   queued: {},
   planPanel: null,
@@ -4704,6 +4733,53 @@ export const useApp = create<AppState>((set, get) => ({
     } catch {
       // The switch snaps back on the next load rather than lying about a
       // choice that never reached disk.
+    }
+  },
+
+  async loadProviderAuth(provider) {
+    try {
+      const state = await window.api.providerAuthState(provider)
+      set((s) => ({ providerAuth: { ...s.providerAuth, [provider]: state } }))
+    } catch {
+      // Unknown stays unknown; the row offers sign-in either way.
+    }
+  },
+
+  async signInProvider(provider) {
+    const result = await window.api
+      .providerSignIn(provider)
+      .catch((error: unknown): OpResult => ({ ok: false, error: String(error) }))
+    await get().loadProviderAuth(provider)
+    refetchProviderModels(provider)
+    return result
+  },
+
+  async signOutProvider(provider) {
+    const result = await window.api
+      .providerSignOut(provider)
+      .catch((error: unknown): OpResult => ({ ok: false, error: String(error) }))
+    await get().loadProviderAuth(provider)
+    refetchProviderModels(provider)
+    return result
+  },
+
+  async installProvider(provider) {
+    const off = window.api.onProviderInstall((progress) => {
+      if (progress.provider !== provider) return
+      set((s) => ({ providerInstall: { ...s.providerInstall, [provider]: progress } }))
+    })
+    try {
+      set({ providerClis: await window.api.installProvider(provider) })
+      return { ok: true }
+    } catch (error) {
+      // Electron prefixes a rejected `invoke` with its own channel boilerplate.
+      const message = error instanceof Error ? error.message : String(error)
+      return { ok: false, error: message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '') }
+    } finally {
+      off()
+      set((s) => ({ providerInstall: omit(s.providerInstall, [provider]) }))
+      void get().loadProviderAuth(provider)
+      refetchProviderModels(provider)
     }
   },
 
