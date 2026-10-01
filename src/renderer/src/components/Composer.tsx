@@ -1168,14 +1168,35 @@ export function Composer({
     mention === null
   const engage = collapsible ? () => setEngaged(true) : undefined
 
-  React.useLayoutEffect(() => {
+  const inputPlaceholder =
+    switchingNote ?? (streaming ? 'Queue a message for when this turn ends…' : placeholder)
+  const fitInput = React.useCallback(() => {
     const el = ref.current
     if (!el) return
     el.style.height = 'auto'
     el.style.height = `${Math.min(el.scrollHeight, 220)}px`
-    // Folding changes the input's padding and wrapping, so its height is
-    // measured again rather than kept from the other shape.
-  }, [text, collapsed])
+  }, [])
+  // Folding changes the input's padding and wrapping, and an empty input is as
+  // tall as its placeholder wraps, so all three are measured again rather than
+  // kept from the previous shape.
+  React.useLayoutEffect(fitInput, [fitInput, text, collapsed, inputPlaceholder])
+  // So is a change of width — the panel, the sidebar, a thread column, the
+  // window. Measured only on text changes, an input sized while its column was
+  // narrow (a wrapped placeholder, a long draft) kept that height after the
+  // column widened: an empty composer four lines tall.
+  React.useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    let width = el.clientWidth
+    const ro = new ResizeObserver(() => {
+      // fitInput's own height write fires this too; only a width change counts.
+      if (el.clientWidth === width) return
+      width = el.clientWidth
+      fitInput()
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [fitInput])
 
   // The fold is one frame changing shape — a line becoming a textarea over a
   // toolbar — which no CSS transition can interpolate. So the frame's height
@@ -1534,9 +1555,7 @@ export function Composer({
               void addFiles(e.clipboardData.files)
             }
           }}
-          placeholder={
-            switchingNote ?? (streaming ? 'Queue a message for when this turn ends…' : placeholder)
-          }
+          placeholder={inputPlaceholder}
           disabled={locked}
           rows={1}
           className={cn(
