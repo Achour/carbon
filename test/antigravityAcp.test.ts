@@ -6,6 +6,9 @@ import test from 'node:test'
 import { AcpMethodNotFound, AcpRpc, AcpRpcError } from '../src/main/acpRpc.ts'
 import {
   agyAnswerOption,
+  agyExecutionError,
+  agyRestartsText,
+  isAgyRetryNotice,
   agyMode,
   agyQuestion,
   agyToolInput,
@@ -79,6 +82,12 @@ test('tool names come from the title, the kind, or the MCP meta', () => {
   // A closing update carries no title; it must not rename the card.
   assert.equal(agyToolName({ toolCallId: '1', status: 'completed' }), undefined)
   assert.equal(agyToolName({ toolCallId: '1', title: 'Running mystery_tool' }), 'mystery_tool')
+  // Measured: the server calls an MCP tool natively, with no `_meta` and no
+  // server prefix — Carbon's own still have to land on their card.
+  assert.equal(
+    agyToolName({ toolCallId: '1', title: 'Running preview_screenshot', kind: 'other' }),
+    'mcp__carbon__preview_screenshot'
+  )
 })
 
 test('tool inputs are renamed to the fields the renderer reads', () => {
@@ -153,6 +162,33 @@ test('a question is told apart from a permission prompt, and answered by label',
   assert.equal(agyAnswerOption(question, { 'Trust this folder?': 'Don’t trust' }), 'dont_trust')
   assert.equal(agyAnswerOption(question, { q: ['Trust'] }), 'trust')
   assert.equal(agyAnswerOption(question, { q: 'Something else' }), null)
+})
+
+test('a retried model request is recognized, restarts replace, and a spent retry is an error', () => {
+  // Measured on a free-tier account: the harness retries a 500/503 and says
+  // so only by failing the open tool with this text.
+  assert.equal(
+    isAgyRetryNotice(
+      'Encountered retryable error from model provider: Agent execution terminated due to error. ("request failed (code 500): Internal error encountered.")'
+    ),
+    true
+  )
+  assert.equal(isAgyRetryNotice('file contents'), false)
+  // The retry re-streams from the first word, with or without that notice.
+  assert.equal(agyRestartsText('The first line of', 'The first line of [README.md](file:///p'), true)
+  assert.equal(
+    agyRestartsText('The first line of [README.md](file:///private/tmp/claude-501/-', 'The first line of [README.md](file:///private/tmp/claude-501/-Users-'),
+    true
+  )
+  assert.equal(agyRestartsText('The first line of', ' [README.md] is'), false)
+  assert.equal(agyRestartsText('Hi', 'Hi there'), false)
+  assert.match(
+    agyExecutionError(
+      'Agent execution error: Error 503, Message: No capacity available for model gemini-3.8-flash-high on the server, Status: UNAVAILABLE, Details: []'
+    ) ?? '',
+    /\(503: No capacity available for model gemini-3\.8-flash-high on the server\)/
+  )
+  assert.equal(agyExecutionError('All done.'), null)
 })
 
 test('a prompt sends images natively and names files in the text', () => {

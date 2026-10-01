@@ -21,6 +21,7 @@ import { foldAgentRuns, reconcileAgentRuns, type AgentRunView } from '@shared/ag
 import { foldTaskTimeline, NO_TASK_TIMELINE, reconcileTimeline } from '@/lib/taskList'
 import type { TaskItem, TaskTimeline } from '@/lib/taskList'
 import { Button } from '@/components/ui/button'
+import { DotSpinner } from '@/components/ui/dot-spinner'
 import { Composer } from '@/components/Composer'
 import { CodexReviewMenu } from '@/components/CodexReviewDialog'
 import { ContextStrip } from '@/components/ContextStrip'
@@ -694,8 +695,22 @@ export const ChatView = React.memo(function ChatView({
    * messages are prepended. Anchoring on the bottom rather than on scrollTop is
    * what keeps the message under the cursor still: prepending changes
    * scrollHeight, and the gap below the viewport is the part that doesn't move.
+   *
+   * Set when the fetch starts, as the mark that one is in flight, and
+   * **re-read in the render that prepends** (below): the fetch is triggered by
+   * scrolling, so the reader is usually still moving when it resolves, and an
+   * anchor from the request would snap them back to where they were when it
+   * was asked for.
    */
   const bottomAnchor = React.useRef<number | null>(null)
+  /**
+   * The message at the top of the viewport and where it sat, taken with the
+   * render-time snapshot. Preferred over `bottomAnchor` when it survives the
+   * commit: a prepend can change content *below* the reader too — a checklist
+   * row fills in once its TaskCreate loads — and holding the row being read is
+   * what absorbs both.
+   */
+  const rowAnchor = React.useRef<{ el: Element; top: number } | null>(null)
   const [showJump, setShowJump] = React.useState(false)
   const [reviewOpen, setReviewOpen] = React.useState(false)
 
@@ -712,6 +727,7 @@ export const ChatView = React.memo(function ChatView({
   const onScroll = (): void => {
     const el = scrollRef.current
     if (!el) return
+    maybeLoadEarlier()
     const pinned = el.scrollHeight - el.scrollTop - el.clientHeight < 90
     if (pinned === pinnedRef.current) return
     pinnedRef.current = pinned
@@ -730,8 +746,8 @@ export const ChatView = React.memo(function ChatView({
   // parked at the previous height, so the reply's last line sat just below the
   // fold — a lag that read as the stream stuttering. A ResizeObserver fires
   // after layout for every one of them, and `pinnedRef` is the only guard it
-  // needs: `loadEarlier` unpins before it prepends, so a prepend never snaps
-  // the reader back down. The scroller itself is observed too, so a window
+  // needs: `maybeLoadEarlier` only prepends under an unpinned reader (or into
+  // a window too short to scroll), so a prepend never snaps the reader down. The scroller itself is observed too, so a window
   // resize while pinned keeps the bottom rather than the top.
   React.useEffect(() => {
     const scroller = scrollRef.current
@@ -752,6 +768,7 @@ export const ChatView = React.memo(function ChatView({
     // and the control have to be reset together here rather than by the
     // scroll event that follows.
     setShowJump(false)
+    bottomAnchor.current = null
     requestAnimationFrame(() => scrollToBottom())
   }, [chat.id, scrollToBottom])
 
@@ -801,25 +818,73 @@ export const ChatView = React.memo(function ChatView({
     [toggleTurnExpanded]
   )
 
-  const loadEarlier = React.useCallback((): void => {
+  /**
+   * Fetch the next older window once the reader comes within a screen of the
+   * top — early enough that a steady scroll up never reaches the edge. There is
+   * no control to press: the history simply continues, the way it does in the
+   * Codex app and T3 Code.
+   *
+   * Two states load. Scrolled up (unpinned) near the top is the ordinary case.
+   * A window too short to scroll is the other: it can never produce the scroll
+   * that would ask for more, so it fills until it overflows. A pinned reader of
+   * a chat that does overflow is left alone, which is what keeps opening a chat
+   * from fetching history nobody scrolled towards — the scroller sits at 0 for
+   * a frame before `scrollToBottom` moves it.
+   *
+   * Called from the scroll handler and again whenever a load settles, because a
+   * restore that lands near the top fires no scroll of its own if `scrollTop`
+   * happens not to change.
+   */
+  const maybeLoadEarlier = (): void => {
     const el = scrollRef.current
-    bottomAnchor.current = el ? el.scrollHeight - el.scrollTop : null
-    // Asking for older messages is a statement that you want to read up, not
-    // follow the stream — otherwise the follow-the-tail effect below would
-    // immediately undo the restore.
-    pinnedRef.current = false
-    setShowJump(true)
-    void loadOlderMessages(chat.id)
-  }, [loadOlderMessages])
+    if (!el || hiddenBefore <= 0 || loadingOlder || bottomAnchor.current !== null) return
+    const overflows = el.scrollHeight > el.clientHeight
+    const nearTop = el.scrollTop < Math.max(600, el.clientHeight)
+    if (overflows ? !pinnedRef.current && nearTop : true) {
+      bottomAnchor.current = el.scrollHeight - el.scrollTop
+      void loadOlderMessages(chat.id)
+    }
+  }
+
+  // `getSnapshotBeforeUpdate`, spelled for a function component: the render
+  // that carries the prepend runs before its commit touches the DOM, so this is
+  // the last moment the old layout can be measured — later than any scroll
+  // event, which can trail a wheel tick by a frame. The store's update is
+  // synchronous (`useSyncExternalStore`), so no scroll lands in between.
+  const lastHidden = React.useRef(hiddenBefore)
+  if (lastHidden.current !== hiddenBefore) {
+    lastHidden.current = hiddenBefore
+    const el = scrollRef.current
+    const column = columnRef.current
+    if (el && bottomAnchor.current !== null) {
+      bottomAnchor.current = el.scrollHeight - el.scrollTop
+      const box = el.getBoundingClientRect()
+      let row = document.elementFromPoint(box.left + box.width / 2, box.top + 24)
+      while (row && row.parentElement !== column) row = row.parentElement
+      rowAnchor.current = row ? { el: row, top: row.getBoundingClientRect().top } : null
+    }
+  }
 
   // Restore the reading position after a prepend, before the browser paints.
   React.useLayoutEffect(() => {
     const el = scrollRef.current
     const anchor = bottomAnchor.current
+    const row = rowAnchor.current
+    rowAnchor.current = null
     if (!el || anchor === null) return
     bottomAnchor.current = null
-    el.scrollTop = el.scrollHeight - anchor
+    if (row?.el.isConnected) el.scrollTop += row.el.getBoundingClientRect().top - row.top
+    else el.scrollTop = el.scrollHeight - anchor
   }, [hiddenBefore])
+
+  // A load that came back empty or stale moved no `hiddenBefore`, so the
+  // restore above never consumed its anchor; drop it, then look again in case
+  // the reader is still at the top (or the window still doesn't fill).
+  React.useEffect(() => {
+    if (loadingOlder) return
+    bottomAnchor.current = null
+    maybeLoadEarlier()
+  }, [loadingOlder, hiddenBefore, messages.length === 0])
 
   // The live turn's message — only the *last* message counts, so a just-sent user
   // message (before the reply starts) isn't mistaken for the previous reply.
@@ -1225,19 +1290,13 @@ export const ChatView = React.memo(function ChatView({
                 </p>
               </div>
             )}
+            {/* The slot is held for as long as anything is left to load and
+                the spinner only fills it, so its appearing never nudges the
+                text the reader is on; it goes away in the same commit as the
+                last prepend, which the bottom-anchored restore absorbs. */}
             {hiddenBefore > 0 && (
-              <div className="flex justify-center">
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  className="rounded-full"
-                  onClick={loadEarlier}
-                  disabled={loadingOlder}
-                >
-                  {loadingOlder
-                    ? 'Loading…'
-                    : `Load earlier messages (${hiddenBefore.toLocaleString()})`}
-                </Button>
+              <div className="-mb-2 flex h-4 items-center text-muted-foreground" aria-live="polite">
+                {loadingOlder && <DotSpinner aria-label="Loading earlier messages" />}
               </div>
             )}
             {/* One array, deliberately: written as `{historyNodes}{liveNode}`

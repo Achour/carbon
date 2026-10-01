@@ -30,7 +30,9 @@ import { DeltaCoalescer } from './deltaCoalescer.ts'
 import {
   AntigravityAcpClient,
   agyAnswerOption,
+  agyExecutionError,
   agyMode,
+  agyRestartsText,
   agyQuestion,
   agyToolImages,
   agyToolInput,
@@ -40,6 +42,7 @@ import {
   buildAgyPrompt,
   geminiHome,
   isAgyQuestion,
+  isAgyRetryNotice,
   isAuthRequired,
   removeAgyConversation,
   withPlanCommand,
@@ -552,9 +555,18 @@ export class AntigravitySession implements AgentSession {
       }
     }
     switch (update.sessionUpdate) {
-      case 'agent_message_chunk':
-        this.appendStream('text', textOf(update.content))
+      case 'agent_message_chunk': {
+        const text = textOf(update.content)
+        const failure = agyExecutionError(text)
+        if (failure) {
+          // The turn's retries ran out; this is not the agent talking.
+          this.streamSlot = null
+          this.pushError(failure)
+          return
+        }
+        this.appendStream('text', text)
         return
+      }
       case 'agent_thought_chunk':
         this.appendStream('thinking', textOf(update.content))
         return
@@ -582,9 +594,31 @@ export class AntigravitySession implements AgentSession {
       this.emitPart(message, this.streamSlot.index)
     }
     const slot = message.parts[this.streamSlot.index]
+    if (kind === 'text' && slot?.type === 'text' && agyRestartsText(slot.text, delta)) {
+      // A retried attempt starting its answer over: replace, don't append.
+      slot.text = delta
+      this.turnText[this.turnText.length - 1] = delta
+      this.emitPart(message, this.streamSlot.index)
+      return
+    }
     if (slot && (slot.type === 'text' || slot.type === 'thinking')) slot.text += delta
     if (kind === 'text') this.turnText[this.turnText.length - 1] += delta
     this.deltas.queue(message.id, this.streamSlot.index, delta)
+  }
+
+  /**
+   * Empty the text part the failed attempt was streaming, keeping its slot so
+   * the retry's answer fills it. Emptied rather than removed: parts are
+   * addressed by index on the wire, and an empty text part draws nothing.
+   */
+  private dropAbandonedText(): void {
+    const slot = this.streamSlot
+    if (slot?.kind !== 'text' || !this.current) return
+    const part = this.current.parts[slot.index]
+    if (part?.type !== 'text' || !part.text) return
+    part.text = ''
+    this.turnText[this.turnText.length - 1] = ''
+    this.emitPart(this.current, slot.index)
   }
 
   private applyToolCall(call: AgyToolCall): void {
@@ -636,7 +670,12 @@ export class AntigravitySession implements AgentSession {
     }
     if (patch.status === 'success' || patch.status === 'error') {
       const output = agyToolOutput(call)
-      if (output !== undefined) patch.output = output
+      if (isAgyRetryNotice(output)) {
+        // The step never ran: the model request around it failed and the
+        // server is retrying. The text that attempt streamed is abandoned too.
+        patch.output = 'Not run — the model request failed and Antigravity retried.'
+        this.dropAbandonedText()
+      } else if (output !== undefined) patch.output = output
       else if (patch.status === 'error' && part.output === undefined) patch.output = 'Tool failed.'
       const images = agyToolImages(call)
       if (images) patch.outputImages = images

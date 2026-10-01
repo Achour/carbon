@@ -93,7 +93,11 @@ where these came from, rather than from the ACP schema:
   title reads "Run edit_file?" while it waits for permission and "Running
   view_file" once it runs, and a shell call's title is the command itself.
   `agyToolName` recovers the wire name and maps it to the renderer's
-  (`Read`/`Edit`/`Bash`). MCP calls carry `_meta.mcp.{server,tool}`, which is
+  (`Read`/`Edit`/`Bash`). An MCP tool the server calls *natively* arrives the
+  same way — "Running preview_status", no `_meta`, no server prefix, and a
+  `rawOutput` that is the call's purpose ("Call carbon preview_status") rather
+  than its result — so Carbon's own are recognized by their `preview_` /
+  `canvas_` names. MCP calls carry `_meta.mcp.{server,tool}`, which is
   how `carbon_canvas_write` becomes `mcp__carbon__canvas_write`. The closing
   update carries only `rawOutput` and a status. A shell call's `rawOutput` is
   `{ combinedOutput, exitCode }`.
@@ -123,17 +127,36 @@ where these came from, rather than from the ACP schema:
   keeps the running entries in `toolLoc`, and `handleUpdate` lets an idle
   `tool_call_update` through for those ids only.
 
+## Google's backend fails, and the server retries
+
+Measured on a free-tier account (`loadCodeAssist` reports `free-tier`): the
+model backend intermittently answers `500 INTERNAL` or `503 No capacity
+available for model gemini-3.8-flash-high`, **with or without images in the
+conversation**. Five runs of one three-step turn with no image hit it in two;
+an earlier guess that a full-size preview screenshot caused it did not survive
+that baseline. The server's harness retries ("retryable api error, retrying in
+4s"), and three shapes reach the client:
+
+- **The open tool fails** with `rawOutput` "Encountered retryable error from
+  model provider…" (`isAgyRetryNotice`). The step never ran, so its row says so,
+  and the text that attempt streamed is emptied (`dropAbandonedText`).
+- **The retry re-streams the answer from its first word**, sometimes with no
+  notice at all. A chunk that opens with the words the part already opens with
+  replaces the part (`agyRestartsText`), or the abandoned half prints glued to
+  the new answer.
+- **Spent retries end the turn with an agent message**, "Agent execution error:
+  Error 503, …", not an error. `agyExecutionError` turns it into an error card
+  that says it is Google's side.
+
 ## What has and hasn't run
 
-Everything above has been exercised in the dev app against a stand-in server
-that emits these shapes: Settings sign-in, the model catalog, Ask and Accept
-edits with their prompts, the `carbon` MCP tools through the bridge, the
-server's own questions, interrupt, a model switch, and `/plan` through review,
-approval and implementation. The real server is verified only signed out: the
-install, the handshake, the version, the Settings row, and the disabled
-sign-in row. Not yet run:
+Against the real server, signed in: turns with the `carbon` MCP tools
+(preview status, navigate, screenshot), file reads, model and mode changes
+over `session/set_config_option`, and the failures above. The rest — Ask and
+Accept edits prompts, questions, interrupt, `/plan` review → approve →
+implement, the signed-out row and Settings sign-in — ran in the dev app against
+a stand-in server emitting these shapes. Not yet run:
 
-- **A signed-in turn on the real server.** Its Google OAuth needs a person.
 - **The in-chat sign-in** (`withSignIn`): a send while signed out.
 - **`turnActed`'s positive path**: a `/plan` turn that edits or asks, which
   should raise no review.

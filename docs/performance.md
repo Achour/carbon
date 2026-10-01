@@ -194,8 +194,9 @@ time.
   parked at the previous height, so the reply's last line sat just below the
   fold and the stream read as stuttering. A `ResizeObserver` on the reading
   column (and on the scroller, for a window resize) fires after layout for all
-  of them, and `pinnedRef` is the only guard it needs — `loadEarlier` unpins
-  before it prepends, so a prepend never snaps the reader back down.
+  of them, and `pinnedRef` is the only guard it needs — older history is only
+  prepended under an unpinned reader (or into a window too short to scroll),
+  so a prepend never snaps the reader back down.
 - **A message keeps its DOM when it stops being live.** With the pacing right,
   the last visible seam was the *transitions*, and there were two, measured
   with `demo/e2e/stream-probe.js` (which pumps a Claude-shaped and a

@@ -440,7 +440,7 @@ function lookupOnce(cwd: string, name: string): Promise<string | null> {
  * an effect and a microtask, so a chip mounted for the hundredth time drew
  * unresolved for a frame and then became resolved. That was invisible while
  * resolution only changed a cursor and a title; it is a visible jump now that it
- * puts a mark in front of the text — and "Load earlier messages" mounts dozens
+ * puts a mark in front of the text — and loading an earlier window mounts dozens
  * of already-known chips in one go. Answered during render, so anything asked
  * before paints marked immediately.
  */

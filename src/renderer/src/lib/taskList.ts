@@ -126,7 +126,7 @@ function apply(state: Map<string, TaskItem>, part: TaskToolPart): void {
       const subject = str(input.subject) ?? existing?.subject
       // A task created before the loaded window: there is nothing to name it
       // with, and inventing "Task #7" would put a row on screen that says less
-      // than no row at all. Load earlier messages and it fills itself in.
+      // than no row at all. Scroll up into older history and it fills itself in.
       if (!subject) return
       // Map.set on an existing key keeps its position, so the list stays in
       // creation order however often a task is updated.
