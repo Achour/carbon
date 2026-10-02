@@ -38,7 +38,7 @@ import { formatTokens } from '@/lib/format'
 import type { ComposerDraft } from '@/lib/drafts'
 import { FileIcon } from '@/lib/fileIcon'
 import { availableProviders } from '@/lib/modelCatalog'
-import { codexComposerControl } from '@shared/codexCommands'
+import { CODEX_SLASH_COMMANDS, codexComposerControl } from '@shared/codexCommands'
 import {
   assembleModelOptions,
   canonicalModelId,
@@ -1044,6 +1044,11 @@ export function Composer({
   // any space); once arguments begin, the menu closes.
   const [slashQuery, setSlashQuery] = React.useState<string | null>(null)
   const [slashIdx, setSlashIdx] = React.useState(0)
+  // The shared command cache can still belong to another provider after a
+  // model switch, or to another column in a side-chat thread. Codex's native
+  // commands are fixed: use this composer's provider rather than that cache,
+  // so Enter on /review cannot select a Claude command such as /code-review.
+  const slashCommands = isCodex ? CODEX_SLASH_COMMANDS : commands
 
   const updateSlash = (value: string, caret: number): void => {
     const m = /^\/([\w:-]*)$/.exec(value.slice(0, caret))
@@ -1055,7 +1060,7 @@ export function Composer({
     const q = slashQuery.toLowerCase()
     const matches = (c: SlashCommand): boolean =>
       c.name.toLowerCase().includes(q) || (c.aliases ?? []).some((a) => a.toLowerCase().includes(q))
-    return commands
+    return slashCommands
       .filter(matches)
       .sort((a, b) => {
         const ap = a.name.toLowerCase().startsWith(q) ? 0 : 1
@@ -1063,7 +1068,7 @@ export function Composer({
         return ap - bp || a.name.localeCompare(b.name)
       })
       .slice(0, 50)
-  }, [slashQuery, commands])
+  }, [slashQuery, slashCommands])
 
   React.useEffect(() => setSlashIdx(0), [slashQuery])
 
