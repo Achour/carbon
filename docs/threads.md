@@ -113,10 +113,13 @@ behind it.
   easy to hit by accident — but a close is undoable in one click, so the
   question was a toll on every close guarding against nothing. The chat keeps
   running if it was, and comes back from its pill.
-- **Closed chats keep a pill in the thread header**, dimmed and dashed after
-  the open ones (`ClosedPill`, the newest `CLOSED_PILLS`), with the provider,
-  a delegate's name and the activity dot a closed chat mid-turn has nowhere
-  else to show; a click reopens the column. The strip shows whenever a thread
+- **Closed chats keep a pill in the thread header**, after the open ones and
+  in the *same* design, dimmed (`ClosedPill`, the newest `CLOSED_PILLS`): the
+  provider and the activity mark a closed chat mid-turn has nowhere else to
+  show, no number (those are ⌘1–⌘4 for what is on screen), the name in the
+  tooltip; a click reopens the column. A dashed, labelled variant was tried
+  first and read as a second kind of control rather than the same chat put
+  away. The strip shows whenever a thread
   has any — including when only its own chat is open, which is exactly when a
   way back is wanted. The `+` in the thread header still holds the full
   **Closed chats** list, sorted on `updatedAt` (the array is the sidebar's

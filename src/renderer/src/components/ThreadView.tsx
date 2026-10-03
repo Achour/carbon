@@ -327,16 +327,9 @@ function ThreadHeader({ chat, ids }: { chat: ChatMeta; ids: readonly string[] })
               ids.map((id, i) => (
                 <ThreadPill key={id} id={id} threadId={chat.id} index={i} focused={id === focused} />
               ))}
-            {closed.length > 0 && (
-              <div
-                aria-label="Closed chats"
-                className={cn('flex items-center gap-0.5', ids.length > 1 && 'ml-1 border-l border-border pl-1.5')}
-              >
-                {closed.slice(0, CLOSED_PILLS).map((c) => (
-                  <ClosedPill key={c.id} chat={c} full={ids.length >= MAX_THREAD_CHATS} />
-                ))}
-              </div>
-            )}
+            {closed.slice(0, CLOSED_PILLS).map((c) => (
+              <ClosedPill key={c.id} chat={c} full={ids.length >= MAX_THREAD_CHATS} />
+            ))}
           </div>
           <div className="min-w-2 flex-1" />
         </>
@@ -568,10 +561,12 @@ function ThreadPill({
 const CLOSED_PILLS = 6
 
 /**
- * A closed chat of the thread, dimmed beside the open ones: its provider, the
- * activity dot a closed chat mid-turn has nowhere else to show, and a click
- * that reopens its column. No number — numbers are ⌘1–⌘4 for what is on
- * screen.
+ * A closed chat of the thread: the same pill as an open one, dimmed — its
+ * provider, the activity mark a closed chat mid-turn has nowhere else to show,
+ * and a click that reopens its column. One design for both, on purpose: a
+ * dashed, labelled variant read as a second control rather than the same chat
+ * put away. No number — numbers are ⌘1–⌘4 for what is on screen — and the
+ * name lives in the tooltip.
  */
 function ClosedPill({ chat, full }: { chat: ChatMeta; full: boolean }): React.JSX.Element {
   const reopenSideChat = useApp((s) => s.reopenSideChat)
@@ -588,10 +583,9 @@ function ClosedPill({ chat, full }: { chat: ChatMeta; full: boolean }): React.JS
         aria-label={`Reopen ${name ?? title}`}
         disabled={full}
         onClick={() => void reopenSideChat(chat.id)}
-        className="relative flex h-6.5 items-center gap-1 rounded-md border border-dashed border-border/70 px-1.5 text-muted-foreground/60 transition-colors hover:border-border hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+        className="relative flex h-6.5 items-center gap-1.5 rounded-md border border-transparent px-1.5 text-muted-foreground opacity-50 transition-[background-color,color,opacity] hover:bg-accent hover:text-foreground hover:opacity-100 disabled:pointer-events-none disabled:opacity-30"
       >
         <ProviderMark provider={chat.provider} className="size-3" />
-        {name && <span className="max-w-20 truncate text-[11px]">{name}</span>}
         <ChatMark id={chat.id} />
       </button>
     </WithTooltip>
