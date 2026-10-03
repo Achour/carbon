@@ -368,6 +368,13 @@ it guards**, and put new reasoning in that file rather than back in this one.
 - **`docs/canvas.md`** — Carbon's own `carbon` MCP server and the canvas panel
   (`carbonMcp.ts`, `carbonBridge.ts`, `canvasTools.ts`, `previewTools.ts`,
   `canvasStore.ts`, `CanvasPanel`, `shared/canvasText.ts`, `lib/canvasRef.ts`).
+- **`docs/delegation.md`** — one chat's agent handing a task to another
+  provider through `agents_delegate`: the child as a side chat
+  (`ChatMeta.delegation`, `chat-added`), delegates' names and steering one by
+  name (`agents_send`, `resolveDelegate`), how an outcome is settled and
+  delivered back, and the one-level / plan-mode rules (`main/delegation.ts`,
+  `ChatManager.delegate`, `sendToDelegate`, `flushDeliveries`,
+  `DelegationBadge`).
 - **`docs/terminal-chats.md`** — a chat that is your shell in a pty, with the
   CLI session you start in it found and resumed (`ChatMeta.surface`,
   `main/chatTerminal.ts`, `main/termTitle.ts`, `ChatTerminal` in

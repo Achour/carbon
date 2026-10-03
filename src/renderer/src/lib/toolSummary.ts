@@ -50,6 +50,11 @@ const ACTIVITIES: Record<string, Activity> = {
   // Beside Write, and above the reads: a canvas is a *result* of the turn, the
   // same kind of thing a written file is.
   Canvas: { rank: 1, past: 'Wrote', gerund: 'Writing', one: 'canvas', many: 'canvases' },
+  // A task handed to another agent is a result of the turn too, and outranks
+  // the reads that led to it.
+  Delegate: { rank: 1, past: 'Delegated', gerund: 'Delegating', one: 'task', many: 'tasks' },
+  Delegation: { rank: 7, past: 'Checked', gerund: 'Checking', one: 'delegation', many: 'delegations' },
+  'Follow-up': { rank: 1, past: 'Sent', gerund: 'Sending', one: 'follow-up', many: 'follow-ups' },
   // The shell verbs `humanizeShellCommand` names — Codex does its file work
   // through them. Without a clause each fell to the unknown-label fallback,
   // and a run read "read 1 file, create folder ×1": a label wearing a

@@ -21,6 +21,16 @@ import {
   type PreviewToolName,
   type PreviewToolResult
 } from './previewTools.ts'
+import {
+  AGENTS_TOOL_INFO,
+  AGENTS_TOOL_NAMES,
+  isAgentsSideEffect,
+  runAgentsTool,
+  type AgentsToolHost,
+  type AgentsToolInput,
+  type AgentsToolName,
+  type DelegationView
+} from './delegation.ts'
 
 /**
  * **One MCP server, `carbon`, for every provider.**
@@ -52,12 +62,30 @@ const PROTOCOL = '2025-06-18'
 export type CarbonToolRef =
   | { kind: 'preview'; name: PreviewToolName }
   | { kind: 'canvas'; name: CanvasToolName }
+  | { kind: 'agents'; name: AgentsToolName }
 
 /** Every tool the server can advertise, preview first. */
 export const CARBON_TOOL_REFS: readonly CarbonToolRef[] = [
   ...PREVIEW_TOOL_NAMES.map((name) => ({ kind: 'preview' as const, name })),
-  ...CANVAS_TOOL_NAMES.map((name) => ({ kind: 'canvas' as const, name }))
+  ...CANVAS_TOOL_NAMES.map((name) => ({ kind: 'canvas' as const, name })),
+  ...AGENTS_TOOL_NAMES.map((name) => ({ kind: 'agents' as const, name }))
 ]
+
+/**
+ * Which tools one session is offered. `canvas` is off only for a build with no
+ * canvas host; `agents` is off for a delegate (one level only), for a chat-less
+ * session, and when Settings turns delegation off.
+ */
+export interface CarbonToolScope {
+  canvas?: boolean
+  agents?: boolean
+}
+
+export function inScope(ref: CarbonToolRef, scope: CarbonToolScope = {}): boolean {
+  if (ref.kind === 'canvas') return scope.canvas !== false
+  if (ref.kind === 'agents') return scope.agents === true
+  return true
+}
 
 /** The tool's own name inside the server: `preview_start`, `canvas_write`. */
 export function carbonToolName(ref: CarbonToolRef): string {
@@ -83,12 +111,16 @@ export function carbonToolId(ref: CarbonToolRef): string {
 export function parseCarbonTool(raw: string | undefined): CarbonToolRef | undefined {
   if (!raw) return undefined
   const key = raw.trim().toLowerCase().replace(/[-.]/g, '_')
-  const match = /(?:^|_|\/|:)(preview|canvas)_([a-z_]+)$/.exec(key)
+  const match = /(?:^|_|\/|:)(preview|canvas|agents)_([a-z_]+)$/.exec(key)
   if (!match) return undefined
   const [, kind, name] = match
   if (kind === 'preview') {
     const found = PREVIEW_TOOL_NAMES.find((candidate) => candidate === name)
     return found ? { kind: 'preview', name: found } : undefined
+  }
+  if (kind === 'agents') {
+    const found = AGENTS_TOOL_NAMES.find((candidate) => candidate === name)
+    return found ? { kind: 'agents', name: found } : undefined
   }
   const found = CANVAS_TOOL_NAMES.find((candidate) => candidate === name)
   return found ? { kind: 'canvas', name: found } : undefined
@@ -110,6 +142,7 @@ export function isCarbonToolId(name: string): boolean {
  */
 export function isCarbonSideEffect(name: string): boolean {
   const ref = parseCarbonTool(name)
+  if (ref?.kind === 'agents') return isAgentsSideEffect(ref.name)
   return ref?.kind === 'preview' && isPreviewSideEffect(ref.name)
 }
 
@@ -125,9 +158,8 @@ export type CarbonToolSchema = {
  * should advertise the preview half rather than a tool that answers "not
  * available" to every call.
  */
-export function carbonToolList(opts: { canvas?: boolean } = {}): CarbonToolSchema[] {
-  const canvas = opts.canvas !== false
-  return CARBON_TOOL_REFS.filter((ref) => canvas || ref.kind === 'preview').map((ref) => {
+export function carbonToolList(scope: CarbonToolScope = {}): CarbonToolSchema[] {
+  return CARBON_TOOL_REFS.filter((ref) => inScope(ref, scope)).map((ref) => {
     if (ref.kind === 'preview') {
       const info = PREVIEW_TOOL_INFO[ref.name]
       const entries = Object.entries(info.params)
@@ -142,8 +174,9 @@ export function carbonToolList(opts: { canvas?: boolean } = {}): CarbonToolSchem
         }
       }
     }
-    const info = CANVAS_TOOL_INFO[ref.name]
-    const entries = Object.entries(info.params)
+    const info = ref.kind === 'agents' ? AGENTS_TOOL_INFO[ref.name] : CANVAS_TOOL_INFO[ref.name]
+    const entries: [string, { type: string; required?: boolean; enum?: readonly string[]; description: string }][] =
+      Object.entries(info.params)
     const required = entries.filter(([, p]) => p.required).map(([key]) => key)
     return {
       name: carbonToolName(ref),
@@ -151,12 +184,22 @@ export function carbonToolList(opts: { canvas?: boolean } = {}): CarbonToolSchem
       inputSchema: {
         type: 'object',
         properties: Object.fromEntries(
-          entries.map(([key, p]) => [key, { type: p.type, description: p.description }])
+          entries.map(([key, p]) => [
+            key,
+            { type: p.type, description: p.description, ...(p.enum ? { enum: [...p.enum] } : {}) }
+          ])
         ),
         ...(required.length ? { required } : {})
       }
     }
   })
+}
+
+/** A tool's table entry, whichever table it is in. */
+export function carbonToolInfo(ref: CarbonToolRef): { description: string; readOnly: boolean } {
+  if (ref.kind === 'preview') return PREVIEW_TOOL_INFO[ref.name]
+  if (ref.kind === 'agents') return AGENTS_TOOL_INFO[ref.name]
+  return CANVAS_TOOL_INFO[ref.name]
 }
 
 /**
@@ -166,7 +209,7 @@ export function carbonToolList(opts: { canvas?: boolean } = {}): CarbonToolSchem
  */
 export function carbonMcpTools(): { name: string; description: string; readOnly: boolean }[] {
   return CARBON_TOOL_REFS.map((ref) => {
-    const info = ref.kind === 'preview' ? PREVIEW_TOOL_INFO[ref.name] : CANVAS_TOOL_INFO[ref.name]
+    const info = carbonToolInfo(ref)
     return { name: carbonToolName(ref), description: info.description, readOnly: info.readOnly }
   })
 }
@@ -176,8 +219,8 @@ function previewParamSchema(p: PreviewParam): Record<string, unknown> {
   return { type: p.type, description: p.description, ...(p.enum ? { enum: [...p.enum] } : {}) }
 }
 
-/** The union of both tool tables' arguments. */
-export type CarbonToolInput = CanvasToolInput & PreviewToolInput
+/** The union of every tool table's arguments. */
+export type CarbonToolInput = CanvasToolInput & PreviewToolInput & AgentsToolInput
 
 /**
  * Coerced in one place rather than at each call site: the arguments arrive as
@@ -207,7 +250,14 @@ export function carbonToolInput(raw: unknown): CarbonToolInput {
     id: str(input.id),
     old_string: str(input.old_string),
     new_string: str(input.new_string),
-    replace_all: input.replace_all === true
+    replace_all: input.replace_all === true,
+    task: str(input.task),
+    provider: str(input.provider),
+    model: str(input.model),
+    role: str(input.role),
+    name: str(input.name),
+    agent: str(input.agent),
+    message: str(input.message)
   }
 }
 
@@ -223,11 +273,19 @@ export interface CarbonToolContext {
    * mode where Claude's were refused.
    */
   plan?: () => boolean
+  /**
+   * Whether this session may delegate — false for a delegate itself, and while
+   * Settings turns it off. Live, like `plan`, and checked again at the call,
+   * not only at `tools/list`: an unlisted name is still a name a model can
+   * send, and a CLI lists a server's tools once, at connect.
+   */
+  delegate?: () => boolean
 }
 
 export interface CarbonToolHosts {
   preview: PreviewToolHost
   canvas?: CanvasToolHost
+  agents?: AgentsToolHost & { agentLabel(view: DelegationView): string }
 }
 
 export type CarbonToolResponse =
@@ -250,6 +308,24 @@ export async function runCarbonTool(
       ok: true,
       ...(await runPreviewTool(hosts.preview, ctx.cwd, ref.name, input, { caller: ctx.chatId ?? ctx.cwd }))
     }
+  }
+  if (ref.kind === 'agents') {
+    if (!ctx.delegate?.() || !hosts.agents) {
+      return { ok: false, error: 'Delegation is not available in this session.' }
+    }
+    if (isAgentsSideEffect(ref.name) && ctx.plan?.() === true) {
+      return {
+        ok: false,
+        error: 'Delegating is not allowed in plan mode. Note in the plan which agent should take which task.'
+      }
+    }
+    const result = await runAgentsTool(
+      hosts.agents,
+      { chatId: ctx.chatId, agentLabel: (v) => hosts.agents!.agentLabel(v) },
+      ref.name,
+      input
+    )
+    return result.isError ? { ok: false, error: result.text } : { ok: true, kind: 'text', text: result.text }
   }
   if (!hosts.canvas) return { ok: false, error: 'Canvas is not available.' }
   if (!ctx.project) return { ok: false, error: 'project is required.' }
@@ -284,7 +360,7 @@ export interface JsonRpcResponse {
  */
 export function handleMcpMessage(
   message: JsonRpcRequest,
-  opts: { canvas?: boolean } = {}
+  opts: CarbonToolScope = {}
 ): JsonRpcResponse | null {
   if (!message.method || message.id == null) return null
   const id = message.id

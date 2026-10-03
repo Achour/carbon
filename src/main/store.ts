@@ -1558,6 +1558,22 @@ export class Store {
     )
   }
 
+  /** Ids of the chats `parentId` delegated a task to — see `ChatMeta.delegation`. */
+  delegationIdsOf(parentId: string): string[] {
+    return this.idsWhere(
+      (m) => m.delegation?.parentId === parentId,
+      "json_extract(meta, '$.delegation') IS NOT NULL"
+    )
+  }
+
+  /** Delegated chats whose task was still running when last written. */
+  runningDelegationIds(): string[] {
+    return this.idsWhere(
+      (m) => m.delegation?.status === 'running',
+      "json_extract(meta, '$.delegation.status') = 'running'"
+    )
+  }
+
   private liveIds(): Set<string> {
     const ids = new Set<string>(this.resident.keys())
     for (const id of this.dirty.keys()) ids.add(id)
@@ -2198,6 +2214,9 @@ export class Store {
     if (patch.hiddenModels !== undefined)
       defaults.hiddenModels = patch.hiddenModels.length ? patch.hiddenModels : undefined
     if (patch.keepAwake !== undefined) defaults.keepAwake = patch.keepAwake || undefined
+    // On by default, so only the `false` is worth writing down.
+    if (patch.allowDelegation !== undefined)
+      defaults.allowDelegation = patch.allowDelegation ? undefined : false
     this.writeSettings()
     return defaults
   }

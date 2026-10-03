@@ -634,6 +634,12 @@ function registerIpc(): void {
     async (_e, id: string, disposition: WorktreeDisposition = 'keep'): Promise<OpResult> => {
       const chat = store.getMeta(id)
       const wt = chat?.worktree
+      // A delegate deleted mid-task is reported to its parent as stopped —
+      // before the row goes, since the report is read off it. Then the whole
+      // thread is marked as going, so nothing its teardown settles is
+      // delivered to (and spawns a session for) a chat being deleted.
+      manager.forgetDelegation(id)
+      manager.markDeleting([id, ...store.sideChatIdsOf(id)])
       // Release the directory before git touches it — a live provider process
       // holding the cwd makes `git worktree remove` fail on some platforms.
       manager.disposeChat(id)
@@ -1299,6 +1305,8 @@ app.whenReady().then(() => {
   // preview tools through the main inspector without a provider turn.
   if (!app.isPackaged) (globalThis as Record<string, unknown>).__carbonPreview = preview
   manager = new ChatManager(store, emit, preview, canvas, forgetChat)
+  preview.setAgentsHost(manager.agentsHost)
+  manager.reconcileDelegations()
   terminals = new TerminalManager(emitTerminal)
   chatTerminals = new ChatTerminalManager(terminals, store, emitTerminal, emit)
   registerIpc()

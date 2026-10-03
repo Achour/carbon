@@ -38,7 +38,16 @@ export function assistantSummaryText(messages: ChatMessage[], cap = 2000): strin
 
 /** Normalize a model's raw title: unwrap quotes, drop trailing punctuation, clamp. */
 export function cleanTitle(raw: string): string {
-  return raw
+  // Markdown emphasis is never part of a title ("**Fix Login**", "`cart.js`").
+  const plain = raw.replace(/\*\*|__|`/g, '')
+  // A title the model wrapped across lines is still one title, so lines are
+  // joined — unless joined they overrun a title, which is the model naming the
+  // chat and then starting on the task itself ("Delegate Review to Codex\nI
+  // need to load the agents_delegate tool…"); then the first line was the title.
+  const lines = plain.split('\n').map((line) => line.trim()).filter(Boolean)
+  const joined = lines.join(' ')
+  const source = lines.length > 1 && joined.length > 60 && lines[0].split(/\s+/).length >= 2 ? lines[0] : joined
+  return source
     .replace(/\s+/g, ' ')
     .trim()
     .replace(/^["'“”‘’`]+|["'“”‘’`]+$/g, '')

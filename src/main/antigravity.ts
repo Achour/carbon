@@ -57,6 +57,7 @@ import { cliAvailable, requireCliPath } from './providerCli.ts'
 import { deriveTitle } from './titles.ts'
 import { PREVIEW_SESSION_RULES } from './previewTools.ts'
 import { CANVAS_SESSION_RULES } from './canvasTools.ts'
+import { DELEGATION_SESSION_RULES, canDelegate } from './delegation.ts'
 import type { CarbonMcpProvider, CarbonMcpSession } from './carbonBridge.ts'
 import { CARBON_MCP_NAME, carbonMcpTools, isCarbonSideEffect, isCarbonToolId } from './carbonMcp.ts'
 import { projectRoot } from '../shared/types.ts'
@@ -221,6 +222,11 @@ export class AntigravitySession implements AgentSession {
     return this.starting
   }
 
+  /** Whether this session is offered the `agents_*` tools — see `canDelegate`. */
+  private delegates(): boolean {
+    return canDelegate(this.chat, this.store.getDefaults())
+  }
+
   private ensureMcp(): Promise<CarbonMcpSession | null> {
     if (!this.mcp) {
       this.mcp =
@@ -228,7 +234,8 @@ export class AntigravitySession implements AgentSession {
           cwd: this.chat.cwd,
           project: projectRoot(this.chat),
           chatId: this.chat.id,
-          plan: () => this.chat.permissionMode === 'plan'
+          plan: () => this.chat.permissionMode === 'plan',
+          delegate: () => this.delegates()
         }) ?? Promise.resolve(null)
     }
     return this.mcp
@@ -236,6 +243,9 @@ export class AntigravitySession implements AgentSession {
 
   private async startClient(): Promise<AntigravityAcpClient> {
     const mcp = await this.ensureMcp()
+    // Disposed while the bridge registered: `dispose` had no client to kill
+    // yet, so building one now would start a server nothing will ever stop.
+    if (this.disposed) throw new Error('Session disposed.')
     const client = new AntigravityAcpClient({
       cwd: this.chat.cwd,
       mcpServers: mcp ? [mcp.acpServer] : [],
@@ -489,12 +499,19 @@ export class AntigravitySession implements AgentSession {
       if (this.needsRules) {
         // `/plan` has to stay first to be read as the command, so the rules
         // go after the user's words rather than ahead of them.
-        text = `${text}\n\n<carbon_session_rules>\n${SESSION_RULES}\n</carbon_session_rules>`
+        const rules = this.delegates() ? `${SESSION_RULES}\n\n${DELEGATION_SESSION_RULES}` : SESSION_RULES
+        text = `${text}\n\n<carbon_session_rules>\n${rules}\n</carbon_session_rules>`
         this.needsRules = false
       }
       const prompt = buildAgyPrompt(text, turn.attachments)
       const sessionId = this.sessionId
-      stopReason = await this.withSignIn(client, () => client.prompt(sessionId, prompt))
+      // Checked inside the closure, so a retry after signing in is held too:
+      // `interrupt` has no session to cancel while the server is still
+      // starting, so this is the last point the prompt can be stopped.
+      stopReason = await this.withSignIn(client, () => {
+        if (this.disposed || this.interrupted) throw new Error('Stopped before the prompt was sent.')
+        return client.prompt(sessionId, prompt)
+      })
     } catch (error) {
       if (!this.disposed && !this.interrupted) {
         this.pushError(error instanceof Error ? error.message : String(error))
@@ -961,6 +978,11 @@ export class AntigravitySession implements AgentSession {
     this.queued.clear()
     if (this.sessionId) this.client?.cancel(this.sessionId)
     this.rejectAllPermissions()
+    // Cleared here as Grok's is, not left to `runTurn`'s finally: stopped
+    // while the server was still starting, the turn unwinds later and its
+    // idle is deduplicated against this one — so a manager waiting for
+    // `idle` to be true when this status lands would never see it.
+    this.running = false
     this.deltas.flush()
     this.setStatus('idle')
   }

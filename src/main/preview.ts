@@ -16,7 +16,7 @@ import {
   type CarbonBridgeHandle,
   type CarbonMcpSession
 } from './carbonBridge.ts'
-import type { CarbonToolContext } from './carbonMcp.ts'
+import type { CarbonToolContext, CarbonToolHosts } from './carbonMcp.ts'
 import type { CanvasToolHost } from './canvasTools.ts'
 import { PreviewDriver } from './previewDriver.ts'
 import { cwdBelongsTo, descendsFrom, probeHttp, processParents, scanLocalServers } from './localServers.ts'
@@ -119,10 +119,21 @@ export class PreviewManager implements PreviewToolHost {
      */
     canvas?: CanvasToolHost
   ) {
-    this.mcp = startCarbonBridge(this, canvas).catch((err) => {
+    this.mcp = startCarbonBridge(this, canvas, () => this.agents).catch((err) => {
       console.warn('[preview] MCP bridge failed to start:', err)
       return null
     })
+  }
+
+  /** The delegation host — `ChatManager`, which is built after this. */
+  private agents: CarbonToolHosts['agents']
+
+  setAgentsHost(host: CarbonToolHosts['agents']): void {
+    this.agents = host
+  }
+
+  agentsHost(): CarbonToolHosts['agents'] {
+    return this.agents
   }
 
   /**

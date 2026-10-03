@@ -15,6 +15,7 @@ import {
   Folder,
   FolderInput,
   FolderPlus,
+  Forward,
   GitBranch,
   Globe,
   Layers,
@@ -36,6 +37,7 @@ import {
   X
 } from 'lucide-react'
 import type { AssistantPart, ToolPart } from '@shared/types'
+import { PROVIDER_SHORT_LABELS, knownProvider } from '@shared/types'
 import {
   formatAgentDuration,
   formatAgentTokens,
@@ -51,6 +53,7 @@ import { lineDiff, type DiffLine } from '@/lib/lineDiff'
 import { parseDiff } from '@/lib/diffRows'
 import { Markdown } from '@/components/Markdown'
 import { useApp } from '@/store'
+import { DelegateCard } from './DelegateCard'
 import {
   canvasInRun,
   canvasWrite,
@@ -516,6 +519,40 @@ function computeToolMeta(part: ToolPart, cwd: string): ToolMeta {
     case 'mcp__carbon__canvas_read':
     case 'mcp__canvas__read':
       return { icon: PenLine, label: 'Canvas', summary: 'Read canvas' }
+    // Handing a task to another provider. The summary names who took it and
+    // what, since the result arrives later as its own message and this row is
+    // the only place the call itself is described.
+    case 'mcp__carbon__agents_delegate': {
+      const provider = knownProvider(str(input.provider))
+      const task = str(input.task)?.replace(/\s+/g, ' ').trim()
+      const who = str(input.name) ?? (provider ? PROVIDER_SHORT_LABELS[provider] : str(input.provider))
+      return {
+        icon: Forward,
+        label: 'Delegate',
+        summary: [who, task].filter(Boolean).join(' · ') || undefined
+      }
+    }
+    // A follow-up to an agent already running: who, then what was said.
+    case 'mcp__carbon__agents_send': {
+      const message = str(input.message)?.replace(/\s+/g, ' ').trim()
+      return {
+        icon: Forward,
+        label: 'Follow-up',
+        summary: [str(input.agent), message].filter(Boolean).join(' · ') || undefined
+      }
+    }
+    case 'mcp__carbon__agents_status':
+      return {
+        icon: Forward,
+        label: 'Delegation',
+        summary: str(input.agent) ? `Check ${str(input.agent)}` : 'Check agents'
+      }
+    case 'mcp__carbon__agents_cancel':
+      return {
+        icon: Forward,
+        label: 'Delegation',
+        summary: str(input.agent) ? `Kill ${str(input.agent)}` : 'Kill an agent'
+      }
     default: {
       if (browserPrefix(part.name)) return browserMeta(part.name, input)
       const firstString = Object.values(input).find((v) => typeof v === 'string') as
@@ -1113,6 +1150,12 @@ export const ToolCard = React.memo(function ToolCard({
   if (part.name === 'Task' || part.name === 'Agent') {
     return <AgentCard part={part} cwd={cwd} />
   }
+  // A delegate is a chat of its own: this row is its collapsed form, live with
+  // the child's state, and opens its column. A refused call (no agent) falls
+  // through to the ordinary row, which shows why.
+  if (part.name === DELEGATE_TOOL && part.status !== 'error') {
+    return <DelegateCard part={part} />
+  }
 
   // Plans open in the side panel instead of expanding inline.
   const plan = (part.input as { plan?: string } | null)?.plan
@@ -1277,8 +1320,13 @@ const GROUPABLE_SERVERS = [...BROWSER_PREFIXES, 'mcp__carbon__', 'mcp__preview__
 
 /** Whether this call is a step in a run rather than a block of its own. */
 export function isGroupableTool(name: string): boolean {
+  // Never folded into a run: an agent started is a chat of its own, and a row
+  // inside a collapsed group is a chat nobody can find.
+  if (name === DELEGATE_TOOL) return false
   return GROUPABLE_TOOLS.has(name) || GROUPABLE_SERVERS.some((s) => name.startsWith(s))
 }
+
+export const DELEGATE_TOOL = 'mcp__carbon__agents_delegate'
 
 /** True while any call in the run — or, for agents, any of their children — is
  *  still working, so a mixed done/running group shows the spinner. */

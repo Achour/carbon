@@ -96,3 +96,15 @@ test('assistantSummaryText: respects the cap', () => {
   ]
   assert.equal(assistantSummaryText(messages, 10).length, 10)
 })
+
+test('cleanTitle drops the model running on into the task, keeps a wrapped title', () => {
+  assert.equal(
+    cleanTitle('**Two-Agent Code Review**\nI don\'t have an `agents_delegate` tool loaded yet, so let me search for it first.'),
+    'Two-Agent Code Review'
+  )
+  assert.equal(
+    cleanTitle('Delegate Bug Review to Codex\nI need to load the agents_delegate tool before calling it.'),
+    'Delegate Bug Review to Codex'
+  )
+  assert.equal(cleanTitle('  Rework   the\n  layout  '), 'Rework the layout')
+})

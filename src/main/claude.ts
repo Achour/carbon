@@ -29,6 +29,7 @@ import type {
   ChatOptionsPatch,
   ChatStatus,
   ContextUsage,
+  Delegation,
   EffortId,
   ElementRef,
   FastModeState,
@@ -53,8 +54,11 @@ import type {
   UsageInfo
 } from '@shared/types'
 import {
+  ANTIGRAVITY_DEFAULT_MODEL,
   CODEX_DEFAULT_MODEL,
+  GROK_DEFAULT_MODEL,
   MODEL_OPTIONS,
+  PROVIDERS,
   PROVIDER_LABELS,
   PROVIDER_SHORT_LABELS,
   claudeModelContextWindow,
@@ -85,7 +89,9 @@ import {
   CARBON_TOOL_REFS,
   carbonToolInput,
   carbonToolName,
+  inScope,
   isCarbonSideEffect,
+  runCarbonTool,
   isCarbonToolId,
   parseCarbonTool,
   type CarbonToolInput
@@ -93,6 +99,27 @@ import {
 import { projectRoot } from '../shared/types.ts'
 import type { CanvasManager } from './canvas.ts'
 import { CANVAS_SESSION_RULES, CANVAS_TOOL_INFO, runCanvasTool } from './canvasTools.ts'
+import {
+  AGENTS_TOOL_INFO,
+  DELEGATION_SESSION_RULES,
+  MAX_RUNNING_DELEGATIONS,
+  canDelegate,
+  delegateBrief,
+  delegationOutcome,
+  delegationResult,
+  deliveryLabel,
+  deliveryText,
+  followUpBrief,
+  resolveDelegate,
+  resolveModel,
+  slugName,
+  pendingDeliveriesContext,
+  promptReached,
+  validateDelegateRequest,
+  type AgentsToolHost,
+  type DelegateOutcome,
+  type DelegationView
+} from './delegation.ts'
 import { CodexSession, fetchCodexFeatures, fetchCodexModels, generateCodexText } from './codex'
 import { CodexAppServerClient } from './codexAppServer'
 import { fetchGrokModels, forkGrokBefore, generateGrokText, GrokSession } from './grok'
@@ -190,7 +217,7 @@ function previewZod(p: PreviewParam): ZodTypeAny {
  * branch.
  */
 function buildCarbonServer(
-  ctx: { cwd: string; project: string; chatId: string },
+  ctx: { cwd: string; project: string; chatId: string; plan: () => boolean; delegate: () => boolean },
   preview: PreviewManager,
   canvas: CanvasManager
 ): ReturnType<typeof createSdkMcpServer> {
@@ -212,8 +239,32 @@ function buildCarbonServer(
     // had been, until `id` was described one way here and another way in the
     // schema the other providers read. That is the silent provider asymmetry
     // this codebase keeps ruling out, arriving by the mechanism it warns about.
-    tools: CARBON_TOOL_REFS.map((ref) => {
+    // The agents tools are listed only when this chat may delegate at spawn —
+    // never for a delegate — and `runCarbonTool` re-checks at every call.
+    tools: CARBON_TOOL_REFS.filter((ref) => inScope(ref, { agents: ctx.delegate() })).map((ref) => {
       const name = carbonToolName(ref)
+      if (ref.kind === 'agents') {
+        const info = AGENTS_TOOL_INFO[ref.name]
+        const shape: ZodRawShape = Object.fromEntries(
+          Object.entries(info.params).map(([key, p]) => {
+            const base = p.enum ? z.enum(p.enum as [string, ...string[]]) : z.string()
+            return [key, (p.required ? base : base.optional()).describe(p.description)]
+          })
+        )
+        // Through `runCarbonTool`, the choke point the HTTP providers share, so
+        // the delegate check and the plan-mode refusal cannot drift apart.
+        return tool(name, info.description, shape, async (args) => {
+          const result = await runCarbonTool(
+            { preview, canvas, agents: preview.agentsHost() },
+            ctx,
+            name,
+            carbonToolInput(args)
+          )
+          return result.ok
+            ? text(result.kind === 'text' ? result.text : '')
+            : { ...text(result.error), isError: true }
+        })
+      }
       if (ref.kind === 'preview') {
         const info = PREVIEW_TOOL_INFO[ref.name]
         const shape: ZodRawShape = Object.fromEntries(
@@ -306,6 +357,18 @@ const CHILD_UPDATE_MS = 120
 const CHILD_UPDATE_PER_CHILD_MS = 8
 const CHILD_UPDATE_MAX_MS = 1000
 const ADVISOR_TOOL = 'advisor'
+// How long a delegate locked by another instance is left before reconcile
+// looks again — just past the lock's 30 s staleness — and how many times.
+const RECONCILE_RETRY_MS = 35_000
+// Permission modes from narrowest to widest, for a delegate's ceiling.
+const MODE_RANK: Record<PermissionModeId, number> = {
+  plan: 0,
+  default: 1,
+  acceptEdits: 2,
+  auto: 3,
+  bypassPermissions: 4
+}
+const RECONCILE_RETRIES = 10
 
 /**
  * How long to wait before shipping the next partial input, given how much of it
@@ -776,11 +839,16 @@ class ClaudeSession implements AgentSession {
         // recording back; the SDK's own docs carry the rest. What is Carbon's
         // is that GUI_SYSTEM_APPEND is a module constant, so the "a later
         // launch's different append is ignored" hazard can only bite across a
-        // release — see CLAUDE.md, Session flow.
+        // release — see CLAUDE.md, Session flow. The delegation rules are the
+        // one per-chat part, and they are fixed by what the chat *is* (a
+        // delegate never gets them); the Settings switch moving later only
+        // changes whether a call is honoured, which `delegate` reads live.
         systemPrompt: {
           type: 'preset',
           preset: 'claude_code',
-          append: GUI_SYSTEM_APPEND,
+          append: canDelegate(chat, store.getDefaults())
+            ? `${GUI_SYSTEM_APPEND}\n\n${DELEGATION_SESSION_RULES}`
+            : GUI_SYSTEM_APPEND,
           snapshot: true
         },
         settingSources: ['user', 'project', 'local'],
@@ -820,7 +888,13 @@ class ClaudeSession implements AgentSession {
         env: spawnEnv(claudeFeatureEnv()),
         mcpServers: {
           [CARBON_MCP_NAME]: buildCarbonServer(
-            { cwd: chat.cwd, project: projectRoot(chat), chatId: chat.id },
+            {
+              cwd: chat.cwd,
+              project: projectRoot(chat),
+              chatId: chat.id,
+              plan: () => this.chat.permissionMode === 'plan',
+              delegate: () => canDelegate(this.chat, store.getDefaults())
+            },
             preview,
             canvas
           )
@@ -2905,6 +2979,38 @@ export class ChatManager {
   // for the app run — same lifetime the renderer's store assumes.
   private models: ModelOption[] | null = null
   private modelWarmup: Promise<ModelOption[]> | null = null
+  /**
+   * Delegated chats whose turn has actually begun. An idle that lands before
+   * that (a session announcing itself) is not the task ending.
+   */
+  private delegationStarted = new Set<string>()
+  /**
+   * Delegated chats the user pressed Stop in. The transcript of a stopped turn
+   * looks like a finished one, so the interrupt is remembered here.
+   */
+  private delegationStopped = new Set<string>()
+  /**
+   * Outcomes handed to a parent's session and not yet confirmed: a session
+   * taking a send only *queues* it — a Grok handshake or a Codex start can
+   * still fail after — so they count as delivered once that turn ends without
+   * failing (`onChatSettled`), not when `deliver` returns.
+   */
+  private deliveryInFlight = new Map<string, { promptId: string; views: DelegationView[] }[]>()
+  /**
+   * Parents whose delivery turn failed. Automatic delivery stops for them —
+   * retrying at each idle would loop on a provider that cannot start — and the
+   * outcomes ride the user's next send instead.
+   */
+  private deliveryParked = new Set<string>()
+  /**
+   * Chats being deleted, and the whole app on its way out. Teardown disposes
+   * sessions, and a disposal settles a busy delegate and delivers to its
+   * parent — which would spawn a fresh session for a chat about to be gone,
+   * or during quit, where a running delegate must be left for the next
+   * launch's reconcile to call interrupted.
+   */
+  private deleting = new Set<string>()
+  private shuttingDown = false
 
   constructor(
     private store: Store,
@@ -2930,7 +3036,12 @@ export class ChatManager {
   }
 
   private pruneIdleSessions(): void {
-    const idle = [...this.sessions.entries()].filter(([, session]) => session.idle)
+    // Never a running delegate's: an idle one is about to be settled, and one
+    // whose turn has not shown yet must not be swept before it starts.
+    const idle = [...this.sessions.entries()].filter(
+      ([chatId, session]) =>
+        session.idle && this.store.getMeta(chatId)?.delegation?.status !== 'running'
+    )
     while (idle.length > ChatManager.MAX_IDLE_SESSIONS) {
       const [chatId, session] = idle.shift()!
       session.dispose()
@@ -3088,10 +3199,12 @@ export class ChatManager {
     if (provider !== 'antigravity') return { ok: false, error: 'This provider signs out from its CLI.' }
     // Live sessions hold the credentials being removed; the server tears its
     // own down, so Carbon's wrappers go with them.
-    for (const [chatId, session] of this.sessions) {
+    // Through `disposeChat`, so a delegate cut off here is reported as
+    // stopped rather than read as finished when its aborted turn idles.
+    for (const chatId of [...this.sessions.keys()]) {
       if (this.store.getMeta(chatId)?.provider === provider) {
-        session.dispose()
-        this.sessions.delete(chatId)
+        this.disposeChat(chatId)
+        this.emit({ type: 'status', chatId, status: 'idle' })
       }
     }
     const result = await signOutOfAntigravity()
@@ -3167,11 +3280,21 @@ export class ChatManager {
     }
     const sessionEmit: Emit = (event) => {
       this.emit(event)
+      if (event.type === 'status' && event.status !== 'idle' && chat.delegation?.status === 'running') {
+        this.delegationStarted.add(chat.id)
+      }
       if (
         (event.type === 'status' && event.status === 'idle') ||
         (event.type === 'background-jobs' && event.jobs.length === 0)
       ) {
-        queueMicrotask(() => this.pruneIdleSessions())
+        // Settling runs *after* the prune, in the same microtask: a delivery
+        // made synchronously here could land in a parent session whose `idle`
+        // has not flipped yet, and the prune would then dispose the session
+        // that had just taken the send.
+        queueMicrotask(() => {
+          this.pruneIdleSessions()
+          this.onChatSettled(chat)
+        })
       }
     }
     const onCommands = (commands: SlashCommand[]): void => {
@@ -3213,7 +3336,18 @@ export class ChatManager {
       )
       return
     }
-    this.sendPrompt(chat, text, attachments, label, handoff)
+    // Outcomes nobody delivered (a relaunch, chiefly) ride this send as hidden
+    // context, and count as delivered only once a session has taken it — a
+    // provider that cannot start must not swallow them.
+    const due = this.undelivered(chat)
+    const extra = due.length
+      ? pendingDeliveriesContext(due.map((view) => ({ agent: PROVIDER_SHORT_LABELS[view.provider], view })))
+      : ''
+    if (this.sendPrompt(chat, text, attachments, label, handoff, extra)) {
+      // The user sending is what un-parks automatic delivery.
+      this.deliveryParked.delete(chat.id)
+      if (due.length) this.carry(chat, due)
+    }
   }
 
   /** Start Codex review mode through App Server's structured `review/start`. */
@@ -3349,12 +3483,11 @@ export class ChatManager {
     text: string,
     attachments?: Attachment[],
     label?: string,
-    handoff?: HandoffSnapshot | null
-  ): void {
-    if (!handoff) {
-      this.deliver(chat, text, attachments, label)
-      return
-    }
+    handoff?: HandoffSnapshot | null,
+    /** Delegation outcomes that never reached this chat — see `undelivered`. */
+    extraContext?: string
+  ): boolean {
+    if (!handoff) return this.deliver(chat, text, attachments, label, extraContext || undefined)
     // Lock the composer with a visible reason while the handoff context is
     // generated; the note clears the moment the turn reaches the new backend.
     const note =
@@ -3362,23 +3495,27 @@ export class ChatManager {
       `${this.label(handoff.model, handoff.provider)} is handing off the conversation…`
     chat.switchingNote = note
     this.emit({ type: 'meta', chatId: chat.id, patch: { switchingNote: note } })
-    const context = this.handoffContext(chat, handoff).finally(() => {
-      chat.switchingNote = undefined
-      this.emit({ type: 'meta', chatId: chat.id, patch: { switchingNote: undefined } })
-    })
-    this.deliver(chat, text, attachments, label, context)
+    const context = this.handoffContext(chat, handoff)
+      .then((brief) => [extraContext, brief].filter(Boolean).join('\n\n') || undefined)
+      .finally(() => {
+        chat.switchingNote = undefined
+        this.emit({ type: 'meta', chatId: chat.id, patch: { switchingNote: undefined } })
+      })
+    return this.deliver(chat, text, attachments, label, context)
   }
 
+  /** True when a session took the send; false when one could not be built. */
   private deliver(
     chat: ChatData,
     text: string,
     attachments?: Attachment[],
     label?: string,
     hiddenContext?: string | Promise<string | undefined>
-  ): void {
+  ): boolean {
     try {
       const session = this.sessionFor(chat.id) ?? this.createSession(chat)
       session.send(text, attachments, label, hiddenContext)
+      return true
     } catch (err) {
       // Session construction failed before the turn started (e.g. a missing or
       // non-executable Codex binary). Persist the prompt, surface the error, and
@@ -3409,6 +3546,10 @@ export class ChatManager {
       this.emit({ type: 'message', chatId: chat.id, message: errMsg })
       this.emit({ type: 'status', chatId: chat.id, status: 'idle' })
       this.store.saveChat(chat.id)
+      // No session means no idle event will ever settle a delegate that could
+      // not start; the error card just pushed is its outcome.
+      if (chat.delegation?.status === 'running') this.settleDelegation(chat)
+      return false
     }
   }
 
@@ -4039,6 +4180,9 @@ export class ChatManager {
   }
 
   async interrupt(chatId: string): Promise<void> {
+    // The stopped turn will read as finished once it idles; this is how its
+    // delegation is reported as stopped instead.
+    if (this.store.getMeta(chatId)?.delegation?.status === 'running') this.delegationStopped.add(chatId)
     const session = this.sessionFor(chatId)
     if (session) {
       await session.interrupt()
@@ -4276,13 +4420,617 @@ export class ChatManager {
     this.emit({ type: 'status', chatId, status: 'idle' })
   }
 
+  // ---------- Delegation (docs/delegation.md) ----------
+
+  /** The host `runAgentsTool` drives, for both MCP transports. */
+  readonly agentsHost: AgentsToolHost & { agentLabel(view: DelegationView): string } = {
+    delegate: (parentId, request) => this.delegate(parentId, request),
+    send: (parentId, agent, message) => this.sendToDelegate(parentId, agent, message),
+    list: (parentId) => this.delegationsOf(parentId),
+    cancel: (parentId, agent) => this.cancelDelegation(parentId, agent),
+    agentLabel: (view) => PROVIDER_SHORT_LABELS[view.provider]
+  }
+
+  private delegationsOf(parentId: string): DelegationView[] {
+    const views: DelegationView[] = []
+    for (const id of this.store.delegationIdsOf(parentId)) {
+      const meta = this.store.getMeta(id)
+      if (!meta?.delegation) continue
+      views.push({
+        ...meta.delegation,
+        // Rows written before delegates had names still need one to be called.
+        name: meta.delegation.name || `${meta.provider}-${id.slice(0, 4)}`,
+        id,
+        provider: meta.provider,
+        model: meta.model
+      })
+    }
+    return views.sort((a, b) => a.createdAt - b.createdAt)
+  }
+
+  private patchDelegation(chat: ChatData, patch: Partial<Delegation>): void {
+    if (!chat.delegation) return
+    chat.delegation = { ...chat.delegation, ...patch }
+    this.store.saveChat(chat.id)
+    this.emit({ type: 'meta', chatId: chat.id, patch: { delegation: chat.delegation } })
+  }
+
+  /**
+   * One admission at a time per parent. `delegate` awaits the model catalog,
+   * and checks taken before that await — the names in use, the running cap,
+   * whether delegation is even still allowed — go stale across it: four calls
+   * in one turn all saw an empty parent and all started as `codex-a`.
+   * Serialized, each sees the last one's agent; and every check runs after
+   * the await, against the parent as it is now.
+   */
+  private admissions = new Map<string, Promise<unknown>>()
+
+  private admit<T>(parentId: string, work: () => Promise<T>): Promise<T> {
+    const prior = this.admissions.get(parentId) ?? Promise.resolve()
+    const next = prior.then(work, work)
+    const tail = next.catch(() => {})
+    this.admissions.set(parentId, tail)
+    void tail.then(() => {
+      if (this.admissions.get(parentId) === tail) this.admissions.delete(parentId)
+    })
+    return next
+  }
+
+  private delegate(
+    parentId: string,
+    input: { task: string; provider: Provider; model?: string; role?: string; name?: string }
+  ): Promise<DelegateOutcome> {
+    return this.admit(parentId, async () => {
+      // The live catalog, which the user's nickname for a model ("Sol") is
+      // matched against; bounded, since a probe that hangs must not hold the
+      // parent's tool call. Fetched first, so nothing below is stale.
+      const catalog = input.model?.trim()
+        ? await withTimeout(this.listModels(parentId), 15_000, this.modelCatalog())
+        : this.modelCatalog()
+      return this.admitDelegate(parentId, input, catalog)
+    })
+  }
+
+  private admitDelegate(
+    parentId: string,
+    input: { task: string; provider: Provider; model?: string; role?: string; name?: string },
+    catalog: ModelOption[]
+  ): DelegateOutcome {
+    const parent = this.store.getChat(parentId)
+    if (!parent) return { ok: false, error: 'This conversation no longer exists.' }
+    if (!canDelegate(parent, this.store.getDefaults())) {
+      return { ok: false, error: 'Delegation is turned off for this chat (Settings → Chats).' }
+    }
+    // The side-effect table refuses this before it gets here; this is the
+    // backstop for a mode that moved between the check and the call.
+    if (parent.permissionMode === 'plan') {
+      return { ok: false, error: 'Delegating is not allowed in plan mode.' }
+    }
+    const mine = this.delegationsOf(parentId)
+    const running = mine.filter((v) => v.status === 'running')
+    // A retried tool call (a dropped connection, a model repeating itself)
+    // must not start the same work twice — checked before the name, which a
+    // retry would otherwise trip over as "already used".
+    const retry = running.find(
+      (v) =>
+        v.provider === (input.provider ?? '').trim().toLowerCase() &&
+        v.task === (input.task ?? '').trim() &&
+        (!input.name?.trim() || v.name === slugName(input.name))
+    )
+    if (retry) {
+      return { ok: true, id: retry.id, name: retry.name, label: PROVIDER_SHORT_LABELS[retry.provider] }
+    }
+    const checked = validateDelegateRequest(
+      input,
+      PROVIDERS.filter((p) => cliAvailable(p)),
+      (model) => knownProviderForModel(model, this.modelCatalog()),
+      mine.map((v) => v.name)
+    )
+    if (!checked.ok) return checked
+    const request = checked.request
+    if (request.model) {
+      const model = resolveModel(request.model, request.provider, catalog)
+      if (!model.ok) return model
+      request.model = model.model
+    }
+    if (running.length >= MAX_RUNNING_DELEGATIONS) {
+      return {
+        ok: false,
+        error: `${running.length} agents from this conversation are already working (${running.map((v) => v.name).join(', ')}; the limit is ${MAX_RUNNING_DELEGATIONS}). Wait for one to finish, give one of them this work with agents_send, or stop one with agents_cancel.`
+      }
+    }
+    const now = Date.now()
+    const child: ChatData = {
+      id: randomUUID(),
+      title: '',
+      cwd: parent.cwd,
+      provider: request.provider,
+      model: request.model ?? this.defaultModelFor(request.provider),
+      effort: effortForProvider(parent.effort, request.provider),
+      serviceTier: 'standard',
+      // Never above the parent's: a delegate is the parent's agent acting
+      // through another provider, not a way out of the mode the user chose.
+      permissionMode: parent.permissionMode,
+      worktree: parent.worktree,
+      // A side chat of the parent's *thread*, so it opens as a column beside
+      // it — and when the parent is itself a column, beside that thread.
+      ephemeral: true,
+      sideOf: parent.sideOf ?? parent.id,
+      delegation: {
+        parentId,
+        name: request.name,
+        task: request.task,
+        ...(request.role ? { role: request.role } : {}),
+        status: 'running',
+        createdAt: now
+      },
+      createdAt: now,
+      updatedAt: now,
+      sortKey: now,
+      messages: []
+    }
+    this.store.addChat(child)
+    const { messages: _messages, ...meta } = child
+    this.emit({ type: 'chat-added', chatId: child.id, meta })
+    // `deliver`, not `send`: send commits a cross-provider pick armed in the
+    // composer and parses slash commands, and neither belongs to a task.
+    const started = this.startRound(child, request.task, delegateBrief(this.parentAgent(parent), request.role))
+    if (!started.ok) return started
+    return { ok: true, id: child.id, name: request.name, label: PROVIDER_SHORT_LABELS[child.provider] }
+  }
+
+  /** "Claude (Sonnet 5)" — how a delegate is told who it works for. */
+  private parentAgent(parent: ChatMeta): string {
+    return `${PROVIDER_SHORT_LABELS[parent.provider]} (${this.label(parent.model, parent.provider)})`
+  }
+
+  /**
+   * Send a delegate the prompt that opens a round — the task, or a follow-up
+   * that re-armed it — and remember which message that was, since the outcome
+   * is read from there on. A provider that cannot start fails inside
+   * `deliver`, synchronously; that is said in the tool result rather than as a
+   * delivery the parent waits for.
+   */
+  private startRound(
+    child: ChatData,
+    text: string,
+    brief: string
+  ): { ok: true } | { ok: false; error: string } {
+    const sent = this.deliver(child, text, undefined, undefined, brief)
+    if (!sent || child.delegation?.status === 'failed') {
+      this.patchDelegation(child, { deliveredAt: Date.now() })
+      return { ok: false, error: child.delegation?.error ?? 'The agent could not start.' }
+    }
+    const prompt = child.messages[child.messages.length - 1]
+    if (prompt?.role === 'user') this.patchDelegation(child, { promptId: prompt.id, startedAt: Date.now() })
+    return { ok: true }
+  }
+
+  /**
+   * `agents_send`: more work for a delegate the parent already started. A
+   * running one gets the message queued into the round it is in — its outcome
+   * still arrives once, covering both. A finished one is re-armed: a new round,
+   * a fresh outcome, delivered like the first.
+   */
+  private sendToDelegate(
+    parentId: string,
+    agent: string,
+    message: string
+  ): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
+    return this.admit(parentId, () => this.admitSend(parentId, agent, message))
+  }
+
+  private async admitSend(
+    parentId: string,
+    agent: string,
+    message: string
+  ): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
+    const parent = this.store.getChat(parentId)
+    if (!parent) return { ok: false, error: 'This conversation no longer exists.' }
+    if (!canDelegate(parent, this.store.getDefaults())) {
+      return { ok: false, error: 'Delegation is turned off for this chat (Settings → Chats).' }
+    }
+    if (parent.permissionMode === 'plan') {
+      return { ok: false, error: 'Messaging agents is not allowed in plan mode.' }
+    }
+    const mine = this.delegationsOf(parentId)
+    const found = resolveDelegate(mine, agent)
+    if (!found.ok) return found
+    const view = found.view
+    const child = this.store.getChat(view.id)
+    if (!child?.delegation) return { ok: false, error: `${view.name} no longer exists.` }
+    if (!cliAvailable(child.provider)) {
+      return { ok: false, error: `${PROVIDER_LABELS[child.provider]} is not available on this machine any more.` }
+    }
+    // The ceiling is the parent's mode *now*: a delegate started under Full
+    // access must not keep it for a follow-up sent after the parent was
+    // narrowed to Ask.
+    if (MODE_RANK[child.permissionMode] > MODE_RANK[parent.permissionMode]) {
+      await this.setOptions(child.id, { permissionMode: parent.permissionMode, remember: false })
+    }
+    const brief = followUpBrief(this.parentAgent(parent))
+    if (child.delegation.status === 'running') {
+      // Same round: the message joins the work in progress, and the round's
+      // one outcome (read from its opening prompt) covers both.
+      if (!this.deliver(child, message, undefined, undefined, brief)) {
+        return { ok: false, error: `${view.name} could not take the message.` }
+      }
+      return {
+        ok: true,
+        text: `Sent to ${view.name}, which is still working on its task; it will take this into account, and one outcome covering both will arrive in this conversation when it finishes. Do not poll or wait.`
+      }
+    }
+    const running = mine.filter((v) => v.status === 'running')
+    if (running.length >= MAX_RUNNING_DELEGATIONS) {
+      return {
+        ok: false,
+        error: `${running.length} agents are already working (${running.map((v) => v.name).join(', ')}; the limit is ${MAX_RUNNING_DELEGATIONS}). Wait for one to finish first.`
+      }
+    }
+    // The last round's report may not have reached the parent yet — it ended
+    // during this very turn. Riding a delivery turn already in flight, the
+    // model has it in front of it; otherwise it is handed over here, in the
+    // tool result, before the round it belongs to is overwritten.
+    let previous = ''
+    const carriers = this.deliveryInFlight.get(parentId)
+    const carried = carriers?.some((c) => c.views.some((v) => v.id === child.id))
+    if (carried && carriers) {
+      const rest = carriers
+        .map((c) => ({ ...c, views: c.views.filter((v) => v.id !== child.id) }))
+        .filter((c) => c.views.length)
+      if (rest.length) this.deliveryInFlight.set(parentId, rest)
+      else this.deliveryInFlight.delete(parentId)
+    } else if (!view.deliveredAt) {
+      previous = `\n\nIts previous run had ended without being reported to you yet:\n${deliveryText(PROVIDER_SHORT_LABELS[view.provider], view)}`
+    }
+    this.delegationStopped.delete(child.id)
+    this.patchDelegation(child, {
+      status: 'running',
+      result: undefined,
+      error: undefined,
+      finishedAt: undefined,
+      deliveredAt: undefined,
+      promptId: undefined,
+      followUp: message
+    })
+    const started = this.startRound(child, message, brief)
+    if (!started.ok) return started
+    return {
+      ok: true,
+      text: `Sent to ${view.name}; it is working on it now, in its own chat with its earlier context. Its outcome will arrive in this conversation as a new message when it finishes — do not poll or wait.${previous}`
+    }
+  }
+
+  /**
+   * The model a delegate runs when the parent named none. An absent model reads
+   * as Claude's "Default" row everywhere a picker resolves it (the empty id is
+   * Claude's), so a Codex delegate's composer chip named a Claude model. Each
+   * other provider has its own default row, which its session reads as "none".
+   */
+  private defaultModelFor(provider: Provider): string | undefined {
+    const defaults: Record<Provider, string | undefined> = {
+      claude: undefined,
+      codex: CODEX_DEFAULT_MODEL,
+      grok: GROK_DEFAULT_MODEL,
+      antigravity: ANTIGRAVITY_DEFAULT_MODEL
+    }
+    return defaults[provider]
+  }
+
+  /**
+   * `agents_cancel` — "kill codex-a". A working agent is stopped; whether it
+   * was working or not, its column closes (`chat-close`). Nothing is deleted:
+   * the card stays in the parent, the column reopens from it, and
+   * `agents_send` can give the agent new work. "all" does every agent of the
+   * parent's.
+   */
+  private async cancelDelegation(
+    parentId: string,
+    agent: string
+  ): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
+    const mine = this.delegationsOf(parentId)
+    let targets: DelegationView[]
+    if (/^(all|every|everyone|all agents)$/i.test(agent.trim())) {
+      if (!mine.length) return { ok: false, error: 'This conversation has not started any agents.' }
+      targets = mine
+    } else {
+      const found = resolveDelegate(mine, agent)
+      if (!found.ok) return found
+      targets = [found.view]
+    }
+    const stopped: string[] = []
+    const idle: string[] = []
+    for (const view of targets) {
+      const child = this.store.getChat(view.id)
+      if (!child?.delegation || child.delegation.parentId !== parentId) continue
+      const session = this.sessions.get(view.id)
+      if (child.delegation.status === 'running') {
+        await this.stopDelegate(child)
+        stopped.push(view.name)
+      } else if (session && !session.dead && !session.idle) {
+        // Work the user resumed in the column after the delegation ended: the
+        // record says done, the session says otherwise, and "kill" means the
+        // session.
+        await this.haltSession(view.id)
+        stopped.push(view.name)
+      } else {
+        idle.push(view.name)
+      }
+      this.emit({ type: 'chat-close', chatId: view.id })
+    }
+    const said = [
+      stopped.length ? `Stopped ${stopped.join(', ')}` : '',
+      idle.length ? `${idle.join(', ')} ${idle.length === 1 ? 'was' : 'were'} not working` : ''
+    ].filter(Boolean)
+    const one = targets.length === 1
+    return {
+      ok: true,
+      text: `${said.join('; ')}. ${one ? 'Its chat is' : 'Their chats are'} closed beside this one; nothing was deleted, and agents_send can give ${one ? 'it' : 'them'} new work.`
+    }
+  }
+
+  /** Stop one running delegate for good: settled as cancelled, then disposed. */
+  private async stopDelegate(child: ChatData): Promise<void> {
+    const id = child.id
+    const now = Date.now()
+    this.delegationStarted.delete(id)
+    this.delegationStopped.delete(id)
+    // Settled first and marked delivered: the parent asked for this, so the
+    // idle the interrupt produces must find nothing left to report.
+    this.patchDelegation(child, {
+      status: 'cancelled',
+      result: delegationResult(child.messages, undefined, child.delegation?.promptId) || undefined,
+      finishedAt: now,
+      deliveredAt: now
+    })
+    // Interrupt, then dispose: an interrupt is best-effort on every provider
+    // (Grok and Antigravity have nothing to cancel while their client is still
+    // starting, and would prompt the moment it came up), and "stopped" here is
+    // a promise to the parent that nothing more runs. The transcript stays; the
+    // next send in that column resumes it in a fresh process.
+    await this.haltSession(id)
+  }
+
+  /** Interrupt and dispose a chat's session, if it has one; the transcript stays. */
+  private async haltSession(id: string): Promise<void> {
+    const session = this.sessionFor(id)
+    if (!session) return
+    await session.interrupt().catch(() => {})
+    if (this.sessions.get(id) === session) {
+      this.disposeChat(id)
+      this.emit({ type: 'status', chatId: id, status: 'idle' })
+    }
+  }
+
+  /** A chat's turn ended and nothing is left running in it. */
+  private onChatSettled(chat: ChatData): void {
+    if (this.shuttingDown || this.deleting.has(chat.id)) return
+    const session = this.sessions.get(chat.id)
+    if (session && !session.dead && !session.idle) return
+    // As a parent: the turn that carried outcomes has ended. Confirm them if
+    // the model answered it; if it never got that far (the provider failed to
+    // start, or the user stopped it first) leave them due and stop retrying —
+    // re-sending at every idle would loop on a broken provider, or undo a Stop
+    // — until the user's next send carries them.
+    this.retireInFlight(chat)
+    if (chat.delegation?.status === 'running' && this.delegationStarted.has(chat.id)) {
+      this.settleDelegation(chat)
+    }
+    // As a parent: anything that ended while this chat was busy goes now.
+    this.flushDeliveries(chat.id)
+  }
+
+  /** Record how a delegated task ended, and report it if the parent is free. */
+  private settleDelegation(chat: ChatData): void {
+    if (this.shuttingDown) return
+    const d = chat.delegation
+    if (!d || d.status !== 'running') return
+    const stopped = this.delegationStopped.delete(chat.id)
+    this.delegationStarted.delete(chat.id)
+    const outcome = delegationOutcome(chat.messages, stopped, d.promptId)
+    this.patchDelegation(chat, {
+      status: outcome.status,
+      result: outcome.result || undefined,
+      ...(outcome.error ? { error: outcome.error } : {}),
+      finishedAt: Date.now()
+    })
+    this.flushDeliveries(d.parentId)
+  }
+
+  /**
+   * Deliver every outcome waiting for `parentId`, as one turn of its own —
+   * only while the parent can take a turn: no live turn, prompt or plan review
+   * (a persisted review counts with no session behind it). A busy parent gets
+   * them at its next settle. They are marked delivered only once a session
+   * has taken the send; that is synchronous, so nothing can deliver twice.
+   */
+  private flushDeliveries(parentId: string): void {
+    if (this.shuttingDown || this.deleting.has(parentId) || this.deliveryParked.has(parentId)) return
+    const session = this.sessions.get(parentId)
+    if (session && !session.dead && !session.idle) return
+    if (!this.store.getMeta(parentId)) return
+    const parent = this.store.getChat(parentId)
+    if (!parent || parent.pendingPlanReview) return
+    const due = this.undelivered(parent)
+    if (!due.length) return
+    const agent = (v: DelegationView): string => PROVIDER_SHORT_LABELS[v.provider]
+    const [only] = due
+    const text =
+      due.length === 1
+        ? deliveryText(agent(only), only)
+        : pendingDeliveriesContext(due.map((view) => ({ agent: agent(view), view })))
+    const label = due.length === 1 ? deliveryLabel(only) : `${due.map((v) => v.name).join(', ')} finished`
+    if (this.deliver(parent, text, undefined, label)) this.carry(parent, due)
+  }
+
+  /**
+   * Outcomes a parent's session has queued, tied to the prompt that carries
+   * them — the user message every session pushes synchronously in `send`.
+   */
+  private carry(parent: ChatData, views: DelegationView[]): void {
+    const prompt = parent.messages[parent.messages.length - 1]
+    // Every session pushes its prompt synchronously in `send`; if one ever
+    // does not, park rather than drop — left neither in flight nor delivered,
+    // the outcomes would be due again at the next idle, forever.
+    if (prompt?.role !== 'user') {
+      this.deliveryParked.add(parent.id)
+      return
+    }
+    const carriers = this.deliveryInFlight.get(parent.id) ?? []
+    this.deliveryInFlight.set(parent.id, [...carriers, { promptId: prompt.id, views }])
+  }
+
+  /**
+   * Settle a parent's in-flight outcomes: delivered where the model answered
+   * the prompt that carried them, otherwise left due with automatic delivery
+   * parked. Run when the parent settles, and when its session is disposed —
+   * a disposal (an effort change) can drop the prompt before it ran, and left
+   * in flight the outcomes would be hidden from the next send and then
+   * vouched for by an unrelated answer.
+   */
+  private retireInFlight(parent: ChatData): void {
+    const carriers = this.deliveryInFlight.get(parent.id)
+    if (!carriers) return
+    this.deliveryInFlight.delete(parent.id)
+    for (const { promptId, views } of carriers) {
+      if (promptReached(parent.messages, promptId)) this.commitDelivered(parent, views)
+      else this.deliveryParked.add(parent.id)
+    }
+  }
+
+  /**
+   * Ended, unreported outcomes for a parent — its children's and its inbox's —
+   * less any already riding a turn that has not ended yet.
+   */
+  private undelivered(parent: ChatData): DelegationView[] {
+    const seen = new Set(
+      (this.deliveryInFlight.get(parent.id) ?? []).flatMap((c) => c.views.map((v) => v.id))
+    )
+    const fromChildren = this.delegationsOf(parent.id).filter(
+      (v) => v.status !== 'running' && !v.deliveredAt && !seen.has(v.id)
+    )
+    for (const v of fromChildren) seen.add(v.id)
+    const inbox = (parent.delegationInbox ?? []).filter((v) => !seen.has(v.id))
+    return [...fromChildren, ...inbox]
+  }
+
+  private commitDelivered(parent: ChatData, views: DelegationView[]): void {
+    const now = Date.now()
+    const ids = new Set(views.map((v) => v.id))
+    for (const view of views) {
+      const child = this.store.getChat(view.id)
+      if (child?.delegation) this.patchDelegation(child, { deliveredAt: now })
+    }
+    if (parent.delegationInbox?.some((v) => ids.has(v.id))) {
+      const rest = parent.delegationInbox.filter((v) => !ids.has(v.id))
+      parent.delegationInbox = rest.length ? rest : undefined
+      this.store.saveChat(parent.id)
+      this.emit({ type: 'meta', chatId: parent.id, patch: { delegationInbox: parent.delegationInbox } })
+    }
+  }
+
+  /**
+   * At launch: a delegate still `running` on disk died with the last process.
+   * Skips a chat another instance holds (`userData` is shared between builds),
+   * whose delegate may be alive and well over there.
+   */
+  reconcileDelegations(attempt = 0): void {
+    const now = Date.now()
+    let held = 0
+    for (const id of this.store.runningDelegationIds()) {
+      if (this.sessions.has(id) || this.delegationStarted.has(id)) continue
+      // Either live in another instance, or that instance died less than a
+      // lock lease ago (a crash and a quick relaunch). Only time tells which,
+      // so look again once the lease has had a chance to go stale.
+      if (this.store.lockedElsewhere(id)) {
+        held++
+        continue
+      }
+      const chat = this.store.getChat(id)
+      if (!chat?.delegation || chat.delegation.status !== 'running') continue
+      this.patchDelegation(chat, {
+        status: 'interrupted',
+        result: delegationResult(chat.messages, undefined, chat.delegation.promptId) || undefined,
+        finishedAt: now
+      })
+    }
+    if (held && attempt < RECONCILE_RETRIES) {
+      setTimeout(() => this.reconcileDelegations(attempt + 1), RECONCILE_RETRY_MS).unref?.()
+    }
+  }
+
+  /**
+   * A delegated chat is being deleted: a running task is reported to its
+   * parent as stopped, so the parent is not left waiting on a chat that is
+   * gone. Called before the row goes, since delivery reads it.
+   */
+  forgetDelegation(chatId: string): void {
+    if (this.deleting.has(chatId)) return
+    const chat = this.store.getChat(chatId)
+    const d = chat?.delegation
+    if (!chat || !d) return
+    if (d.status === 'running') {
+      this.delegationStopped.add(chatId)
+      this.settleDelegation(chat)
+    }
+    // Still unreported (the parent was busy, or it ended while nobody could
+    // deliver it): the report lives on this row, which is about to go. Move it
+    // to the parent, where the next delivery picks it up.
+    const ended = chat.delegation
+    if (!ended || ended.deliveredAt || ended.status === 'running') return
+    const parent = this.store.getChat(ended.parentId)
+    if (!parent) return
+    const record: DelegationView = {
+      ...ended,
+      name: ended.name || `${chat.provider}-${chat.id.slice(0, 4)}`,
+      id: chat.id,
+      provider: chat.provider,
+      model: chat.model
+    }
+    parent.delegationInbox = [...(parent.delegationInbox ?? []).filter((v) => v.id !== chat.id), record]
+    this.store.saveChat(parent.id)
+    this.emit({ type: 'meta', chatId: parent.id, patch: { delegationInbox: parent.delegationInbox } })
+  }
+
+  /**
+   * Chats about to be deleted — a thread and its side chats. Called before
+   * any of them is disposed, so nothing their teardown settles is delivered
+   * to a chat on its way out (and no session is spawned for one).
+   */
+  markDeleting(chatIds: string[]): void {
+    for (const id of chatIds) {
+      this.deleting.add(id)
+      this.deliveryInFlight.delete(id)
+      this.deliveryParked.delete(id)
+    }
+  }
+
   disposeChat(chatId: string): void {
-    this.sessions.get(chatId)?.dispose()
+    const session = this.sessions.get(chatId)
+    const busy = !!session && !session.dead && !session.idle
+    session?.dispose()
     this.sessions.delete(chatId)
     this.onDispose(chatId)
+    if (!this.shuttingDown && !this.deleting.has(chatId) && this.deliveryInFlight.has(chatId)) {
+      const parent = this.store.getChat(chatId)
+      if (parent) this.retireInFlight(parent)
+    }
+    // A disposed session emits no final status, so a delegate whose turn was
+    // cut short here (an effort change, a worktree exit) would otherwise stay
+    // `running` with nothing left to settle it. Synchronous, ahead of the
+    // microtask the dispose's own background-jobs event queued, so it is
+    // reported as stopped rather than read as finished.
+    if (busy && !this.deleting.has(chatId)) {
+      const chat = this.store.getChat(chatId)
+      if (chat?.delegation?.status === 'running') {
+        this.delegationStopped.add(chatId)
+        this.settleDelegation(chat)
+      }
+    }
   }
 
   disposeAll(): void {
+    this.shuttingDown = true
     for (const [chatId, session] of this.sessions) {
       session.dispose()
       this.onDispose(chatId)

@@ -409,3 +409,49 @@ test('both provider configs name one http server and spawn nothing', async () =>
     bridge.close()
   }
 })
+
+test('agents tools are listed only in scope, and refused at the call outside it', async () => {
+  const names = (scope?: Parameters<typeof carbonToolList>[0]): string[] =>
+    carbonToolList(scope).map((t) => t.name)
+  assert.ok(!names().includes('agents_delegate'))
+  assert.deepEqual(
+    names({ agents: true }).filter((n) => n.startsWith('agents_')),
+    ['agents_delegate', 'agents_send', 'agents_status', 'agents_cancel']
+  )
+  const delegate = carbonToolList({ agents: true }).find((t) => t.name === 'agents_delegate')!
+  assert.deepEqual((delegate.inputSchema as { required: string[] }).required, ['task', 'provider'])
+  assert.deepEqual(parseCarbonTool('mcp__carbon__agents_cancel'), { kind: 'agents', name: 'cancel' })
+  assert.equal(isCarbonSideEffect('mcp__carbon__agents_delegate'), true)
+  assert.equal(isCarbonSideEffect('mcp__carbon__agents_status'), false)
+
+  const calls: string[] = []
+  const agents = {
+    delegate: async (parentId: string) => {
+      calls.push(parentId)
+      return { ok: true as const, id: 'child-1', name: 'codex-a', label: 'Codex' }
+    },
+    send: async () => ({ ok: true as const, text: 'sent' }),
+    list: () => [],
+    cancel: async () => ({ ok: true as const, text: 'Stopped codex-a.' }),
+    agentLabel: () => 'Codex'
+  }
+  const hosts = { preview: previewHost(), agents }
+  let allowed = false
+  let plan = false
+  const ctx = { cwd: '/repo', project: '/repo', chatId: 'p', plan: () => plan, delegate: () => allowed }
+  const input = { task: 'review', provider: 'codex' }
+
+  // A delegate, or delegation switched off: the name is refused even unlisted.
+  const refused = await runCarbonTool(hosts, ctx, 'agents_delegate', input)
+  assert.equal(refused.ok, false)
+  allowed = true
+  plan = true
+  const planned = await runCarbonTool(hosts, ctx, 'agents_delegate', input)
+  assert.equal(planned.ok, false)
+  if (!planned.ok) assert.match(planned.error, /plan mode/)
+  assert.equal((await runCarbonTool(hosts, ctx, 'agents_status')).ok, true)
+  plan = false
+  const started = await runCarbonTool(hosts, ctx, 'agents_delegate', input)
+  assert.equal(started.ok, true)
+  assert.deepEqual(calls, ['p'])
+})

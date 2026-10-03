@@ -70,6 +70,7 @@ import type { CarbonMcpProvider, CarbonMcpSession } from './carbonBridge.ts'
 import { CARBON_MCP_NAME, carbonMcpTools } from './carbonMcp.ts'
 import { projectRoot } from '../shared/types.ts'
 import { CANVAS_SESSION_RULES } from './canvasTools.ts'
+import { DELEGATION_SESSION_RULES, canDelegate } from './delegation.ts'
 
 /**
  * Grok Build as an `AgentSession`, on top of the ACP client in `grokAcp.ts`.
@@ -272,6 +273,11 @@ export class GrokSession implements AgentSession {
     return this.starting
   }
 
+  /** Whether this session is offered the `agents_*` tools — see `canDelegate`. */
+  private delegates(): boolean {
+    return canDelegate(this.chat, this.store.getDefaults())
+  }
+
   /** Registers this session's MCP context with the bridge, once. */
   private ensureMcp(): Promise<CarbonMcpSession | null> {
     if (!this.mcp) {
@@ -280,7 +286,8 @@ export class GrokSession implements AgentSession {
           cwd: this.chat.cwd,
           project: projectRoot(this.chat),
           chatId: this.chat.id,
-          plan: () => this.chat.permissionMode === 'plan'
+          plan: () => this.chat.permissionMode === 'plan',
+          delegate: () => this.delegates()
         }) ?? Promise.resolve(null)
     }
     return this.mcp
@@ -293,6 +300,9 @@ export class GrokSession implements AgentSession {
     // per server, each an Electron binary relaying to the same process — are
     // gone.
     const mcp = await this.ensureMcp()
+    // Disposed while the bridge registered: `dispose` had no client to kill
+    // yet, so building one now would start an agent nothing will ever stop.
+    if (this.disposed) throw new Error('Session disposed.')
     const mcpServers = mcp ? [mcp.acpServer] : []
     const client = new GrokAcpClient({
       cwd: this.chat.cwd,
@@ -301,7 +311,11 @@ export class GrokSession implements AgentSession {
       alwaysApprove: baseline === 'yolo',
       autoMode: baseline === 'auto',
       mcpServers,
-      extraRules: mcp ? [PREVIEW_SESSION_RULES, CANVAS_SESSION_RULES].join('\n\n') : undefined,
+      extraRules: mcp
+        ? [PREVIEW_SESSION_RULES, CANVAS_SESSION_RULES, this.delegates() ? DELEGATION_SESSION_RULES : '']
+            .filter(Boolean)
+            .join('\n\n')
+        : undefined,
       callbacks: {
         onUpdate: (update) => this.handleUpdate(update),
         onPermission: (request) => this.handlePermission(request),
@@ -489,6 +503,9 @@ export class GrokSession implements AgentSession {
       // (or a previous turn's leftover notifications) must not create a
       // second copy of history under the user message we just pushed.
       this.liveTurn = true
+      // Stopped while the agent was still starting: `interrupt` had no
+      // session to cancel, so this is the last point the prompt can be held.
+      if (this.disposed || this.interrupted) throw new Error('Stopped before the prompt was sent.')
       const { blocks, temps } = buildGrokPrompt(turn.text, turn.attachments)
       try {
         result = await client.prompt(this.sessionId, blocks)

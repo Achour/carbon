@@ -29,9 +29,11 @@ import {
   FILE_MUTATION_TOOLS,
   isGroupableTool,
   ToolCard,
+  DELEGATE_TOOL,
   ToolGroup,
   ToolOutputImages
 } from './ToolCard'
+import { DelegateCard } from './DelegateCard'
 
 /**
  * One button in a user message's hover row. Shared so the two actions cannot
@@ -446,7 +448,7 @@ export const AssistantBlock = React.memo(function AssistantBlock({
   // Coalesce inspection/terminal sequences into one activity row. Short progress
   // narration between calls stays available inside the expanded group instead
   // of breaking the sequence into a wall of cards.
-  const items: Array<PartRun | { kind: 'images'; part: ToolPart }> = []
+  const items: Array<PartRun | { kind: 'images'; part: ToolPart } | { kind: 'delegate'; part: ToolPart }> = []
   // Folded away with the rest of the turn — see `fromPart` — except for what
   // it *produced*. A screenshot arrives as `outputImages` on the call that took
   // it, and `ToolOutputImages` deliberately draws outside the activity row's
@@ -458,6 +460,11 @@ export const AssistantBlock = React.memo(function AssistantBlock({
   for (let i = 0; i < Math.min(fromPart, parts.length); i++) {
     const part = parts[i]
     if (part?.type === 'tool' && part.outputImages?.length) items.push({ kind: 'images', part })
+    // An agent the turn started is a result the same way: it is a chat that
+    // goes on after the turn folds, and this row is the way back into it.
+    else if (part?.type === 'tool' && part.name === DELEGATE_TOOL && part.status !== 'error') {
+      items.push({ kind: 'delegate', part })
+    }
   }
   items.push(
     ...groupToolRuns(parts, {
@@ -487,6 +494,9 @@ export const AssistantBlock = React.memo(function AssistantBlock({
       {items.map((item) => {
         if (item.kind === 'group') {
           return <ToolGroup key={item.key} parts={item.parts} cwd={cwd} live={turnLive} />
+        }
+        if (item.kind === 'delegate') {
+          return <DelegateCard key={`delegate-${item.part.toolUseId}`} part={item.part} />
         }
         if (item.kind === 'images') {
           return (

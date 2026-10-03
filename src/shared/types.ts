@@ -445,8 +445,80 @@ export interface ChatMeta {
    * with no messages rather than failing.
    */
   surface?: 'terminal'
+  /**
+   * Set on a chat another chat's agent **delegated** a task to through
+   * `agents_delegate`. The child is an ordinary side chat of the parent's
+   * thread (`sideOf`, `ephemeral`) — the record here is what makes it a
+   * delegation: the task, and the one outcome that is reported back. See
+   * `docs/delegation.md`.
+   */
+  delegation?: Delegation
+  /**
+   * On a *parent*: outcomes of delegates that were deleted before their report
+   * could be delivered. The report lived on the child's row, so it is moved
+   * here rather than lost with it, and delivered like any other.
+   */
+  delegationInbox?: DelegationRecord[]
   createdAt: number
   updatedAt: number
+}
+
+/**
+ * How a delegated task ended, as far as the parent is told.
+ *
+ * `running` is the only live state. `interrupted` is what a relaunch finds a
+ * `running` record as: the provider process died with the app, and nothing can
+ * say whether the work finished.
+ */
+export type DelegationStatus = 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted'
+
+export interface Delegation {
+  /** The chat whose agent delegated the task — where the outcome is delivered. */
+  parentId: string
+  /**
+   * What the parent and the user call this delegate: `codex-a`, `reviewer`.
+   * Unique among one parent's delegates, so "tell codex-b…" names exactly one;
+   * letters rather than numbers, so it never reads as a column number.
+   */
+  name: string
+  task: string
+  /**
+   * The user message that opened the current round — the task, or the last
+   * `agents_send` that re-armed a finished delegate. The outcome is read from
+   * here on, so a follow-up sent mid-run does not cut the report in half.
+   */
+  promptId?: string
+  /**
+   * The instruction that opened the current round when it was a follow-up
+   * (`agents_send` to a finished delegate); absent for the first round, whose
+   * instruction is `task`. What the "finished" chip names, so a second report
+   * is not labelled with the first round's task.
+   */
+  followUp?: string
+  /** Free-form role the parent gave (`review`, `research`, …), shown and prompted. */
+  role?: string
+  status: DelegationStatus
+  /** The child's own words since the task was sent, capped. Set once it ends. */
+  result?: string
+  /** Why a `failed` delegation failed. */
+  error?: string
+  createdAt: number
+  /** When the current round started — `createdAt` for the first. */
+  startedAt?: number
+  finishedAt?: number
+  /**
+   * When the outcome reached the parent. Persisted, so a relaunch, a retry or
+   * a second idle cannot deliver it twice. Also set when the *parent* cancelled
+   * it: that parent already knows.
+   */
+  deliveredAt?: number
+}
+
+/** One delegation as its parent sees it — the child chat's id is its id. */
+export interface DelegationRecord extends Delegation {
+  id: string
+  provider: Provider
+  model?: string
 }
 
 export interface ChatData extends ChatMeta {
@@ -1262,6 +1334,13 @@ export type ChatEvent =
   // Recents list is what goes live, and shipping the body would push a megabyte
   // through the event channel on every save for a panel that may never open.
   | { type: 'canvas'; chatId: string; project: string; canvas: CanvasSummary }
+  // Main created a chat the renderer did not ask for — today, only a delegated
+  // child (`agents_delegate`). Carries the meta so it joins `chats`, and opens
+  // as a column when its thread is on screen and has room.
+  | { type: 'chat-added'; chatId: string; meta: ChatMeta }
+  // Close a column main decided to put away — a delegate its parent killed
+  // (`agents_cancel`). Closed, never deleted: its card in the parent reopens it.
+  | { type: 'chat-close'; chatId: string }
 
 // ---------- Canvas ----------
 
@@ -1523,6 +1602,12 @@ export interface AppDefaults {
    * new-chat default; it lives here because this is the record Settings writes.
    */
   keepAwake?: boolean
+  /**
+   * Settings → Chats → "Agents can delegate": whether sessions get the
+   * `agents_*` tools (`docs/delegation.md`). On unless explicitly `false`, and
+   * read at spawn, so a change lands on each chat's next session.
+   */
+  allowDelegation?: boolean
 }
 
 /** What Settings can write into `AppDefaults` directly. */
@@ -1536,6 +1621,7 @@ export interface DefaultsPatch {
   fixed?: boolean
   hiddenModels?: string[]
   keepAwake?: boolean
+  allowDelegation?: boolean
 }
 
 /** A live change to a chat's inference options. */

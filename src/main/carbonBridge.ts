@@ -8,6 +8,7 @@ import {
   parseCarbonTool,
   runCarbonTool,
   type CarbonToolContext,
+  type CarbonToolHosts,
   type HttpMcpServer,
   type JsonRpcRequest,
   type JsonRpcResponse
@@ -73,13 +74,18 @@ export interface CarbonBridgeHandle {
 
 export function startCarbonBridge(
   preview: PreviewToolHost,
-  canvas?: CanvasToolHost
+  canvas?: CanvasToolHost,
+  /**
+   * The delegation host is `ChatManager`, which is built after the bridge
+   * starts — so it is read through a getter at each call rather than captured.
+   */
+  agents?: () => CarbonToolHosts['agents']
 ): Promise<CarbonBridgeHandle> {
   return new Promise((resolve, reject) => {
     const token = randomUUID()
     const sessions = new Map<string, CarbonToolContext>()
     const server = createServer((req, res) => {
-      void handleRequest(req, res, { token, sessions, preview, canvas })
+      void handleRequest(req, res, { token, sessions, preview, canvas, agents })
     })
     server.once('error', reject)
     server.listen(0, '127.0.0.1', () => {
@@ -121,6 +127,7 @@ interface BridgeState {
   sessions: Map<string, CarbonToolContext>
   preview: PreviewToolHost
   canvas?: CanvasToolHost
+  agents?: () => CarbonToolHosts['agents']
 }
 
 async function handleRequest(
@@ -206,12 +213,13 @@ async function answer(
   state: BridgeState,
   ctx: CarbonToolContext
 ): Promise<JsonRpcResponse | null> {
+  const agents = state.agents?.()
   if (message.method === 'tools/call' && message.id != null) {
     return handleMcpCall(message, (name, input) =>
-      runCarbonTool({ preview: state.preview, canvas: state.canvas }, ctx, name, input)
+      runCarbonTool({ preview: state.preview, canvas: state.canvas, agents }, ctx, name, input)
     )
   }
-  return handleMcpMessage(message, { canvas: !!state.canvas })
+  return handleMcpMessage(message, { canvas: !!state.canvas, agents: !!agents && ctx.delegate?.() === true })
 }
 
 function readBody(req: IncomingMessage): Promise<string> {

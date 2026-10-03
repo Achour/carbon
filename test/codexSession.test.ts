@@ -238,7 +238,8 @@ function harness(
     saveChatSoon: (id: string) => saved.push(id),
     markMessageDirty: () => {},
     // Every chat these tests build is short enough to be fully hydrated.
-    hiddenBefore: () => 0
+    hiddenBefore: () => 0,
+    getDefaults: () => ({ permissionMode: 'default', recentDirs: [] })
   } as unknown as Store
   const codex = new FakeCodex(turns)
   let watcher!: FakeRolloutWatcher
@@ -740,7 +741,8 @@ test('a pending plan is persisted and can be approved by a recreated session', a
     saveChatSoon: () => {},
     markMessageDirty: () => {},
     // Every chat these tests build is short enough to be fully hydrated.
-    hiddenBefore: () => 0
+    hiddenBefore: () => 0,
+    getDefaults: () => ({ permissionMode: 'default', recentDirs: [] })
   } as unknown as Store
   const codex = new FakeCodex([
     async function* () {

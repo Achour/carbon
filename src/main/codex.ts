@@ -85,6 +85,7 @@ import { PREVIEW_SESSION_RULES } from './previewTools.ts'
 import type { CarbonMcpProvider, CarbonMcpSession } from './carbonBridge.ts'
 import { projectRoot } from '../shared/types.ts'
 import { CANVAS_SESSION_RULES } from './canvasTools.ts'
+import { DELEGATION_SESSION_RULES, canDelegate } from './delegation.ts'
 import { describeCanvas, describeElement, describeQuote, describeSelection } from './attachmentText.ts'
 
 const OUTPUT_CAP = 100_000
@@ -578,6 +579,10 @@ export class CodexSession implements AgentSession {
       !this.running &&
       !this.nativeThreadActive &&
       this.pending.length === 0 &&
+      // A send still waiting on its handoff context is work too: read as idle,
+      // the manager's prune could dispose the session and sweep the turn away
+      // before it ever reached `pending`.
+      this.chainQueued.size === 0 &&
       this.nativeTurns.length === 0 &&
       this.activeTurn === null &&
       !this.planReview
@@ -857,6 +862,11 @@ export class CodexSession implements AgentSession {
     }
   }
 
+  /** Whether this session is offered the `agents_*` tools — see `canDelegate`. */
+  private delegates(): boolean {
+    return canDelegate(this.chat, this.store.getDefaults())
+  }
+
   /** Registers this session's MCP context with the bridge, once. */
   private ensureMcp(): Promise<CarbonMcpSession | null> {
     if (!this.mcp) {
@@ -865,7 +875,8 @@ export class CodexSession implements AgentSession {
           cwd: this.chat.cwd,
           project: projectRoot(this.chat),
           chatId: this.chat.id,
-          plan: () => this.chat.permissionMode === 'plan'
+          plan: () => this.chat.permissionMode === 'plan',
+          delegate: () => this.delegates()
         }) ?? Promise.resolve(null)
     }
     return this.mcp
@@ -882,7 +893,8 @@ export class CodexSession implements AgentSession {
     const rules = [
       CODEX_BROWSER_SESSION_RULES,
       mcp ? PREVIEW_SESSION_RULES : '',
-      mcp ? CANVAS_SESSION_RULES : ''
+      mcp ? CANVAS_SESSION_RULES : '',
+      mcp && this.delegates() ? DELEGATION_SESSION_RULES : ''
     ]
       .filter(Boolean)
       .join('\n\n')

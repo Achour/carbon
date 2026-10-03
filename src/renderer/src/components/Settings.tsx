@@ -1413,6 +1413,7 @@ export function Settings(): React.JSX.Element {
   const sidebarDensity = useApp((s) => s.sidebarDensity)
   const setSidebarDensity = useApp((s) => s.setSidebarDensity)
   const keepAwake = useApp((s) => !!s.defaults?.keepAwake)
+  const allowDelegation = useApp((s) => s.defaults?.allowDelegation !== false)
   const setDefaults = useApp((s) => s.setDefaults)
 
   // Which section is open lives in the store: the sidebar's project menu and
@@ -1576,6 +1577,12 @@ export function Settings(): React.JSX.Element {
                     description="Stop the Mac from idle-sleeping while an agent is working. The display can still turn off, and closing the lid still sleeps it."
                     checked={keepAwake}
                     onChange={(on) => void setDefaults({ keepAwake: on })}
+                  />
+                  <Toggle
+                    label="Agents can delegate"
+                    description="Let an agent hand a task to another provider — “have Codex review this” — which runs as a new chat beside it and reports back when done. Applies to each chat's next session."
+                    checked={allowDelegation}
+                    onChange={(on) => void setDefaults({ allowDelegation: on })}
                   />
                 </section>
               )}

@@ -1057,6 +1057,7 @@ function ColumnHeader({
           >
             {title}
           </span>
+          {chat.delegation && <DelegationBadge chat={chat} />}
           <ChatMark id={chat.id} labelled />
           <div className="ml-auto flex shrink-0 items-center">
             <WithTooltip label={expanded ? 'Show all chats  esc' : 'Expand  ⌘⇧↵'}>
@@ -1106,6 +1107,53 @@ function ColumnHeader({
           only while asking, so its selectors do not run on every delta. */}
       {side && confirmClose && <CloseChatDialog chat={chat} onClose={() => setConfirmClose(false)} />}
     </>
+  )
+}
+
+const DELEGATION_STATE: Record<NonNullable<ChatMeta['delegation']>['status'], string> = {
+  running: 'Working on it',
+  completed: 'Finished',
+  failed: 'Failed',
+  cancelled: 'Stopped',
+  interrupted: 'Interrupted when Carbon quit'
+}
+
+/**
+ * Marks a column another chat's agent opened with `agents_delegate`: its name
+ * — the word both the user and the parent use for it ("tell codex-b…") — and
+ * on hover the role, the task and whether its outcome has gone back. The task is what the column's first message shows too, but a
+ * reader scanning headers needs to know this chat was not started by them.
+ */
+function DelegationBadge({ chat }: { chat: ChatMeta }): React.JSX.Element {
+  const d = chat.delegation!
+  const parentTitle = useApp((s) => s.chats.find((c) => c.id === d.parentId)?.title?.trim())
+  const state = DELEGATION_STATE[d.status]
+  const reported = d.deliveredAt ? ' · reported back' : ''
+  return (
+    <WithTooltip
+      label={
+        <span className="flex flex-col gap-1">
+          <span className="font-medium">
+            {d.name ? `${d.name} · ` : ''}Delegated{parentTitle ? ` by “${parentTitle}”` : ''}
+            {d.role ? `, role ${d.role}` : ''} — {state}
+            {reported}
+          </span>
+          {d.name && (
+            <span className="text-muted-foreground">
+              Tell the agent that started it “tell {d.name} …” to give it more work.
+            </span>
+          )}
+          <span className="line-clamp-6 text-muted-foreground">{d.task}</span>
+        </span>
+      }
+    >
+      <span
+        data-delegation={d.status}
+        className="shrink-0 rounded-sm bg-muted px-1.5 py-px text-[10px] font-medium text-muted-foreground"
+      >
+        {d.name ?? d.role ?? 'Delegated'}
+      </span>
+    </WithTooltip>
   )
 }
 

@@ -5237,6 +5237,68 @@ export const useApp = create<AppState>((set, get) => ({
         break
       }
 
+      case 'chat-added': {
+        // A delegated child (`agents_delegate`). It joins `chats` like a column
+        // added by hand, and opens as a column of its thread when there is
+        // room — without taking focus: the agent that delegated is the one
+        // being read. With no room it is simply in the thread's closed list,
+        // which is drawn from `chats`.
+        const meta = ev.meta
+        const thread = meta.sideOf
+        let opened = false
+        set((st) => {
+          if (st.chats.some((c) => c.id === meta.id)) return {}
+          const chats = [...st.chats, meta]
+          if (!thread) return { chats }
+          if (thread === st.activeId) {
+            if (threadFull(st)) return { chats }
+            opened = true
+            return {
+              chats,
+              sideChats: { ...st.sideChats, [meta.id]: EMPTY_SIDE_SLOT },
+              sideColumns: [...st.sideColumns, meta.id]
+            }
+          }
+          const stashed = st.sideColumnsByChat[thread] ?? []
+          if (1 + stashed.length >= MAX_THREAD_CHATS) return { chats }
+          return {
+            chats,
+            sideColumnsByChat: { ...st.sideColumnsByChat, [thread]: [...stashed, meta.id] }
+          }
+        })
+        if (opened) void get().hydrateSideChats([meta.id])
+        break
+      }
+
+      case 'chat-close': {
+        // A killed delegate. On screen, its column closes the way a ✕ closes
+        // one (minus the confirm: the agent that asked already decided);
+        // stashed with another thread's columns, it leaves that list.
+        // Not `closeSideChat`: that discards a column it judges unused, and a
+        // slot still hydrating — or a hidden window whose transcript events
+        // are parked — looks exactly like one. A kill promises nothing is
+        // deleted, so this is the close half alone.
+        if (get().sideColumns.includes(ev.chatId)) {
+          set((st) => ({
+            ...closeSideColumn(st, ev.chatId),
+            sideChats: omit(st.sideChats, [ev.chatId]),
+            unreadChats: omit(st.unreadChats, [ev.chatId])
+          }))
+          break
+        }
+        set((st) => {
+          const owner = Object.entries(st.sideColumnsByChat).find(([, ids]) => ids.includes(ev.chatId))
+          if (!owner) return {}
+          return {
+            sideColumnsByChat: {
+              ...st.sideColumnsByChat,
+              [owner[0]]: owner[1].filter((id) => id !== ev.chatId)
+            }
+          }
+        })
+        break
+      }
+
       case 'canvas': {
         // Splice the summary in rather than refetching: the list is live while
         // a turn runs, and a round trip per write would be a query per token of
