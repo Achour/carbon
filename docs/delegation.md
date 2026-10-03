@@ -184,7 +184,11 @@ whose `idle` had not flipped, which the prune would then dispose.
   kill, stop, cancel, close, dismiss. A working agent is stopped; a finished
   one is not an error. Either way its column closes (`chat-close`) and nothing
   is deleted — the card in the parent reopens it, and `agents_send` can give it
-  new work. `"all"` does every delegate of the parent's. Deleting stays the
+  new work. `"all"` does every delegate of the parent's. A killed delegate is
+  also **dismissed** (`Delegation.dismissedAt`): it leaves the thread header's
+  closed pills, since a kill is "put it away" where a ✕ is only "not now" —
+  its card in the parent and the ＋ list still reach it, and reopening it
+  (`chats:undismiss`) or `agents_send` clears the mark. Deleting stays the
   user's own act, from the column's menu: a model mapping "kill" onto
   destroying a conversation would be a misheard word the user cannot undo.
 - **Deleting a delegate** reports a running one to its parent as stopped
@@ -203,6 +207,31 @@ rather than `send`, for both this and the child's first prompt: `send` commits a
 cross-provider pick armed in the composer and parses Codex slash commands, and
 neither belongs to a message the app wrote.
 
+- **"Idle" for a parent means between turns, not without background jobs**
+  (`AgentSession.acceptsTurn`, `takesTurn`). Claude counts a backgrounded
+  shell into `idle`, so a parent that had started a dev server — the ordinary
+  case — never became idle again and never received a single report, while
+  the user could send it a message at any moment. A delegate's *own* ending
+  still waits for its background work: that is part of its task. A Claude
+  **continuation** — the model woken by a background agent's notification,
+  with no turn of ours open and the status never leaving `idle` — is busy for
+  this purpose (`continuationLive`, from its first output to its result, which
+  then re-emits `idle`), or a report injected mid-continuation would be
+  "answered" by output that was never its reply.
+- **Where the provider can name what it answered, that is the word**
+  (`AgentSession.promptAnswered`). Claude's result echoes the uuids of the
+  prompts its turn consumed (the same ids `isStaleResult` reads), so a report
+  counts as delivered once its own prompt is named — not because output
+  appeared after it, which a continuation racing the injection produced: its
+  uuid-less result closed the turn the report sat behind and its output was
+  read as the reply. A prompt a live session has not named yet stays in
+  flight; a disposed session's unnamed ones park. Providers that name nothing
+  (and an older Claude CLI) keep the transcript rule, `promptReached`. A *failed* result names its prompt too, but is
+  no evidence the model read it, so it counts as no answer (and parks the
+  report) rather than as delivery. And idle-session pruning never disposes a
+  parent with a report in flight, nor a Claude session mid-continuation (its
+  `idle` excludes one): the answer to "was it delivered" lives on that live
+  session.
 - **Only an idle parent receives.** A busy one (mid-turn, waiting on a prompt,
   holding a plan review — a persisted `pendingPlanReview` counts even with no
   session behind it) gets everything due at its next settle, as one turn when

@@ -580,6 +580,50 @@ cached input.
   and stops following the moment the reader scrolls up. A *settled* agent opens
   at the top instead — it is a document, and its report is a scroll away where
   a report goes.
+- **…and the open form of an agent is now its own column** (`AgentColumn` in
+  `ThreadView.tsx`, `NativeAgentRow` / `AgentGroupCard` in
+  `messages/AgentRows.tsx`). The row answered the 13,816px problem by taking
+  the work out of the chat column; a thread column is the better home for it
+  than a panel tab, because it is the same shape every other conversation in
+  the thread has, sits beside the chat that spawned it, and is what T3 Code
+  does for every provider's sub-agents. So a transcript row is a **toggle**:
+  click opens the agent as a column — `agent:<parentChatId>:<toolUseId>`
+  (`agentColumnId`), a column that is not a chat — and click again folds it
+  back. The column reads the spawning part live out of its parent's
+  transcript (`findAgentPart`, by reference, in a memo — a selector that
+  walked the transcript would run on every streamed token), so it needs no
+  storage and cannot drift from the row. It draws "Subagent of *parent*", the
+  prompt marked "Sent by another agent" and folded past a few lines, the
+  stream through the panel's own body (`AgentStreamBody`, shared, so both
+  follow a working agent identically), and in place of a composer a footer —
+  model, effort, the clock, **Runs on its own**, **Open parent** — because no
+  provider offers a way to type to a sub-agent it is running. What it shows is
+  what the provider reports: Claude and Codex stream the agent's work; Grok
+  and Antigravity report that it ran and its result, so theirs is the prompt,
+  the clock and the report (their mappers fill `description`/`prompt` from
+  whichever keys the CLI used, or the row would read only "Agent").
+  Measured on the CLIs: **Grok** sends real `prompt`/`description` but spawns
+  with `run_in_background` and never reports the agent's end, so its call
+  returns at once — drawn "Started in the background" (`untrackedBackground`)
+  rather than "Finished in 0s". **Antigravity** sends nothing: its
+  `start_subagent` arrives with an empty input and returns "Sub-agent spawn",
+  so its column has no prompt to show — an honest blank, not a mapper gap.
+  Agent columns go with their parent (`closeSideColumn` takes a chat's agent
+  columns with it; `liveColumns` keeps one only while its parent is in the
+  thread), are never fetched, deleted or kept as closed chats, and do not
+  survive a relaunch — the parts do, and the row reopens them. The Agents
+  panel stays as the roster.
+- **Agents are drawn out of activity runs, as one card per batch.** `Task` and
+  `Agent` stay groupable — Claude sends one call per message, so a batch of
+  three spawns is three messages, and the run is what batches them — but
+  `ToolGroup` splits each stretch of agents (native or delegated,
+  `isAgentish`) out into an `AgentGroupCard`: stacked avatars, "3 subagents ·
+  2 working", the span, and a chevron that lists their rows. A run of
+  ToolSearch + three agents is "Searched…" and then the card, where before it
+  was one "3 agents" line with the agents inside it. And a folded turn keeps
+  its agents (both fold paths: `AssistantBlock`'s survivors and
+  `renderMessages`' run), the way it keeps a screenshot — an agent outlives
+  the turn that started it, and its card is the way back into its column.
 - **The panel is still never auto-selected.** A spawn mid-read would take the
   file you are looking at off screen. The way in is a click — the activity bar
   above the composer, which exists only while something is running; the tab,

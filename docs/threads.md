@@ -149,6 +149,28 @@ behind it.
   runs in its thread's cwd by construction — counted, it would refuse to remove,
   merge or hand off the worktree the whole thread is about.
 
+### Agent columns
+
+A native sub-agent opened from its transcript row is a column too, named
+`agent:<parentChatId>:<toolUseId>` — not a chat, so every path that treats a
+column id as one steps around it: `closeSideChat` only closes it (nothing to
+keep or discard), `hydrateSideChats` and `openChat`'s restore never fetch it,
+and `liveColumns` keeps it only while the chat it reads from is in the thread.
+Closing a chat column closes its agent columns with it, since their stream is
+read out of that chat's transcript. It takes focus like any column (⌘1–⌘4
+count it), but it has **no pill**: a working session spins up many
+sub-agents, and a pill each crowded out the chats the strip is for. They live
+behind one robot icon at the right of the header instead (`SubagentsMenu`) —
+a count, a dot while any works, and a dropdown of the thread's sub-agents
+(read off `agentsStore`, so it moves when an agent does) whose rows open or
+fold their columns. Delegates are chats and keep their pills. No drag, no
+"move to its own chat", no closed pill — the menu and its row in the parent
+are the ways back. Focus on it is a *view* focus: everything that acts on a chat — the
+review's "last turn", a commit's scope, the roster, permission keys — reads
+`focusedChatOf`, which resolves it to the chat that spawned it, and ⌘1–⌘4 move
+the keyboard onto the column itself (it has no composer to receive the caret).
+See "The agent roster" in `docs/transcript.md`.
+
 ### Reordering columns, and dragging a thread into another
 
 **Columns reorder by drag**: a column's header, or its pill in the thread

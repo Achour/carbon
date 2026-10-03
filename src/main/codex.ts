@@ -2059,7 +2059,10 @@ export class CodexSession implements AgentSession {
     const message = this.ensureCurrent()
     const part: ToolPart = {
       type: 'tool',
-      toolUseId: `codex-agent-${threadId}`,
+      // The holding message is part of the id: Codex can give the same child
+      // thread more work in a later turn, and two runs sharing one id meant
+      // the newer row opened the older run's column.
+      toolUseId: `codex-agent-${threadId}-${message.id}`,
       name: 'Agent',
       input: {
         subagent_type: 'Codex',
@@ -2299,6 +2302,11 @@ export class CodexSession implements AgentSession {
       const state = item.agents_states[threadId]
       const description = item.prompt?.trim().slice(0, 500) || state?.message || 'Codex sub-agent'
       const loc = this.ensureCodexAgent(threadId, description)
+      // The whole brief too: the description is a caption, and the agent's
+      // column shows the prompt in full behind "Show full message".
+      const prompt = item.prompt?.trim()
+      const input = (loc.part.input ?? {}) as Record<string, unknown>
+      if (prompt && input.prompt !== prompt) this.updateCodexAgent(loc, { input: { ...input, prompt } })
       const status = state ? agentStatus(state.status) : agentStatus(item.status)
       const patch: Partial<Omit<ToolPart, 'type' | 'toolUseId' | 'name'>> = {
         status

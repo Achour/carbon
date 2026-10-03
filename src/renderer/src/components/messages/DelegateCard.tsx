@@ -1,12 +1,7 @@
-import * as React from 'react'
-import { ChevronRight } from 'lucide-react'
 import type { ChatMeta, ToolPart } from '@shared/types'
 import { PROVIDER_SHORT_LABELS, knownProvider } from '@shared/types'
-import { formatAgentDuration } from '@shared/agentRuns'
-import { ProviderAvatar } from '@/components/ui/provider-mark'
-import { WithTooltip } from '@/components/ui/tooltip'
-import { cn } from '@/lib/utils'
 import { threadFull, useApp } from '@/store'
+import { AgentRowShell, useElapsed } from './AgentRows'
 
 /**
  * The delegate's chat id, read off the `agents_delegate` result — "Started
@@ -32,18 +27,6 @@ function lookOf(meta: ChatMeta | undefined, waiting: boolean): Look {
   return { word: 'Interrupted', dot: 'bg-muted-foreground/60', live: false }
 }
 
-function useElapsed(from: number | undefined, to: number | undefined, live: boolean): string | null {
-  const [now, setNow] = React.useState(() => Date.now())
-  React.useEffect(() => {
-    if (!live) return
-    setNow(Date.now())
-    const id = window.setInterval(() => setNow(Date.now()), 1000)
-    return () => window.clearInterval(id)
-  }, [live])
-  if (!from) return null
-  const end = live ? now : to
-  return end ? formatAgentDuration(Math.max(0, end - from)) : null
-}
 
 /**
  * An agent this chat delegated to, as one live row of its transcript — the
@@ -88,59 +71,28 @@ export function DelegateCard({ part }: { part: ToolPart }): React.JSX.Element {
     else void reopenSideChat(childId)
   }
 
-  const row = (
-    <button
-      type="button"
-      data-delegate={childId ?? 'pending'}
-      data-delegate-open={open ? 'true' : undefined}
-      disabled={!clickable}
-      onClick={toggle}
-      title={meta ? (open ? 'Collapse its chat' : 'Open its chat beside this one') : undefined}
-      className={cn(
-        'group flex w-full animate-step-in items-center gap-3 rounded-xl px-2 py-1.5 text-left outline-none transition-colors',
-        clickable ? 'hover:bg-accent/50 focus-visible:bg-accent/50' : 'cursor-default'
-      )}
-    >
-      <span className="relative shrink-0">
-        <ProviderAvatar provider={provider} className="size-7 [&>svg]:size-4" />
-        <span
-          className={cn('absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full ring-2 ring-background', look.dot)}
-        />
-      </span>
-      <span className="flex min-w-0 flex-1 flex-col">
-        <span className="truncate text-[13px] text-foreground">
-          <span className="font-medium">{name}</span>
-          {task && <span className="text-foreground/80">: {task}</span>}
-        </span>
-        <span className={cn('text-xs text-muted-foreground', look.live && 'shimmer-text')}>
+  return (
+    <AgentRowShell
+      provider={provider}
+      dot={look.dot}
+      name={name}
+      task={task}
+      status={
+        <>
           {look.word}
           {/* A stop carries no report — its `deliveredAt` only marks that
               nothing is owed — so "reported back" would be a claim about a
               message that never went. */}
           {!look.live && d?.deliveredAt && d.status !== 'cancelled' ? ' · reported back' : ''}
-        </span>
-      </span>
-      {elapsed && (
-        <span className="shrink-0 font-mono text-[11px] text-muted-foreground/70 tabular-nums">{elapsed}</span>
-      )}
-      {meta && (
-        <ChevronRight
-          className={cn(
-            'size-3.5 shrink-0 text-muted-foreground/40 transition-transform group-hover:text-muted-foreground',
-            open && 'rotate-90'
-          )}
-        />
-      )}
-    </button>
+        </>
+      }
+      live={look.live}
+      elapsed={elapsed}
+      open={open}
+      clickable={clickable}
+      blockedReason={meta ? 'The thread already shows four chats — close one to open this agent.' : undefined}
+      onToggle={toggle}
+      data={{ 'data-delegate': childId ?? 'pending', 'data-delegate-open': open ? 'true' : undefined }}
+    />
   )
-  // Disabled only when there is no room for its column; say why rather than
-  // leave a row that silently does nothing.
-  if (meta && !clickable) {
-    return (
-      <WithTooltip label="The thread already shows four chats — close one to open this agent.">
-        <span className="block">{row}</span>
-      </WithTooltip>
-    )
-  }
-  return row
 }

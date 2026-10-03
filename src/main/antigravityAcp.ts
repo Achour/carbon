@@ -421,6 +421,18 @@ export function agyToolInput(name: string, raw: unknown, call?: AgyToolCall): un
       'path'
     ) ?? call?.locations?.find((loc) => loc?.path)?.path
   switch (name) {
+    // A sub-agent's call names its task under the server's own keys; the agent
+    // row and column read `description` and `prompt`, so they are filled from
+    // whichever the server used — a row reading only "Agent" says nothing.
+    case 'Agent': {
+      const prompt = firstString(input, 'prompt', 'Prompt', 'task', 'Task', 'instructions', 'Instructions', 'message')
+      const description = firstString(input, 'description', 'Description', 'title', 'Title', 'name', 'Name')
+      if (prompt !== undefined && next.prompt === undefined) next.prompt = prompt
+      if (next.description === undefined && (description ?? prompt) !== undefined) {
+        next.description = description ?? prompt
+      }
+      return next
+    }
     case 'Read':
     case 'Write':
     case 'Edit':

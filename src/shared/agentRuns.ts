@@ -83,6 +83,64 @@ function childrenBusy(children: AssistantPart[] | undefined): boolean {
   )
 }
 
+/**
+ * One spawn's view, off its part alone — what the transcript's agent row and
+ * the agent column draw, through the same rule as the roster so a row and the
+ * panel cannot show a tick and a spinner for one agent.
+ */
+export function agentRunOf(part: ToolPart, messageId = '', depth = 0): AgentRunView {
+  return viewOf(part, messageId, depth)
+}
+
+/**
+ * A spawn the provider sent to the background and will say nothing more about.
+ * Grok's `Agent` calls arrive with `run_in_background` and return at once; ACP
+ * carries no notification when the agent actually finishes (Claude's does, and
+ * its part is held running until it lands — so it never matches here). Reading
+ * the returned call as the agent's end drew "Finished in 0s" over an agent
+ * that had only started.
+ */
+export function untrackedBackground(part: ToolPart): boolean {
+  const input = (part.input ?? {}) as Record<string, unknown>
+  return input.run_in_background === true && part.status === 'success' && !(part.children ?? []).length
+}
+
+/** The delegation tool's namespaced name (`main/delegation.ts`). */
+export const DELEGATE_TOOL = 'mcp__carbon__agents_delegate'
+
+/**
+ * Whether a call draws as an agent — a native spawn, or a delegate that
+ * started (a refused `agents_delegate` has no agent and draws as an ordinary
+ * row, which says why).
+ */
+export function isAgentish(part: ToolPart): boolean {
+  return isAgentPart(part) || (part.name === DELEGATE_TOOL && part.status !== 'error')
+}
+
+/**
+ * A native sub-agent opened as a thread column. It is not a chat — its stream
+ * lives inside the spawning call's part — so its column is named by where to
+ * find that part: the chat whose transcript holds it, and the call's id.
+ */
+const AGENT_COLUMN = 'agent:'
+
+export function agentColumnId(parentChatId: string, toolUseId: string): string {
+  return `${AGENT_COLUMN}${parentChatId}:${toolUseId}`
+}
+
+export function isAgentColumn(id: string | null | undefined): id is string {
+  return typeof id === 'string' && id.startsWith(AGENT_COLUMN)
+}
+
+export function parseAgentColumn(id: string): { parentId: string; toolUseId: string } | null {
+  if (!isAgentColumn(id)) return null
+  const rest = id.slice(AGENT_COLUMN.length)
+  // Chat ids are uuids (no colon); a tool use id may contain anything after.
+  const at = rest.indexOf(':')
+  if (at <= 0 || at === rest.length - 1) return null
+  return { parentId: rest.slice(0, at), toolUseId: rest.slice(at + 1) }
+}
+
 function viewOf(part: ToolPart, messageId: string, depth: number): AgentRunView {
   const input = (part.input ?? {}) as Record<string, unknown>
   const children = (part.children ?? []).filter(Boolean)
@@ -179,6 +237,42 @@ export function findAgentPart(
     if (hit) return hit
   }
   return undefined
+}
+
+/**
+ * Where a spawn sits inside one message: part indexes, descending through
+ * `children` for a nested spawn. Paired with `agentAtPath`, so a caller that
+ * re-reads a part on every change to its message reads one slot instead of
+ * walking every sibling agent's history to find it again.
+ */
+export function findAgentPath(
+  parts: readonly (AssistantPart | null | undefined)[],
+  id: string
+): number[] | null {
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i]
+    if (!part || part.type !== 'tool') continue
+    if (part.toolUseId === id) return [i]
+    if (part.children) {
+      const inner = findAgentPath(part.children, id)
+      if (inner) return [i, ...inner]
+    }
+  }
+  return null
+}
+
+export function agentAtPath(
+  parts: readonly (AssistantPart | null | undefined)[],
+  path: readonly number[]
+): ToolPart | undefined {
+  let level: readonly (AssistantPart | null | undefined)[] | undefined = parts
+  let part: AssistantPart | null | undefined
+  for (const i of path) {
+    part = level?.[i]
+    if (!part || part.type !== 'tool') return undefined
+    level = part.children
+  }
+  return part && part.type === 'tool' ? part : undefined
 }
 
 function sameRun(a: AgentRunView, b: AgentRunView): boolean {

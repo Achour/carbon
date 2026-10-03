@@ -81,6 +81,7 @@ const api: Api = {
   worktreeRemove: (path: string, repoRoot?: string) =>
     invoke('worktree:remove', path, repoRoot),
   renameChat: (id: string, title: string) => invoke('chats:rename', id, title),
+  undismissChat: (id: string) => invoke('chats:undismiss', id),
   setChatPinned: (id: string, pinned: boolean) => invoke('chats:set-pinned', id, pinned),
   setPinnedOrder: (ids: string[]) => invoke('chats:set-pinned-order', ids),
   placeChat: (id: string, sortKey: number) => invoke('chats:place', id, sortKey),

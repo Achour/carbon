@@ -1520,12 +1520,14 @@ test('Codex collaboration items render and update one Agent card', async () => {
   assert.equal(typeof card.agent?.endedAt, 'number')
   assert.deepEqual({ ...card, agent: undefined }, {
     type: 'tool',
-    toolUseId: 'codex-agent-child-1',
+    toolUseId: `codex-agent-child-1-${assistant!.id}`,
     name: 'Agent',
     input: {
       subagent_type: 'Codex',
       description: 'Inspect the renderer',
-      agent_id: 'child-1'
+      agent_id: 'child-1',
+      // The full brief rides beside the caption — the agent's column shows it.
+      prompt: 'Inspect the renderer'
     },
     status: 'success',
     children: [],

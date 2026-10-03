@@ -730,6 +730,17 @@ export function grokToolInput(name: string, raw: unknown): unknown {
     }
     case 'ListDir':
       return path && input.path !== path ? { ...input, path } : input
+    // A sub-agent's call names its task under the CLI's own keys; the agent row
+    // and column read `description` and `prompt`, so they are filled from
+    // whichever it used — a row reading only "Agent" says nothing.
+    case 'Agent': {
+      const prompt = firstString(input.prompt, input.task, input.instructions, input.message)
+      const description = firstString(input.description, input.title, input.name)
+      const next = { ...input }
+      if (prompt && next.prompt === undefined) next.prompt = prompt
+      if (next.description === undefined && (description ?? prompt)) next.description = description ?? prompt
+      return next
+    }
     default:
       return raw
   }

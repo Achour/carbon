@@ -53,6 +53,21 @@ export interface AgentSession {
   /** True when the wrapper has no running turn, prompt, permission, or background job. */
   readonly idle: boolean
   /**
+   * Whether a new turn could start now — `idle` without the background jobs.
+   * A dev server the agent left running does not stop the user sending, so it
+   * must not stop a delegated agent's report from being delivered either; only
+   * Claude counts background jobs into `idle`, so only it differs. Absent means
+   * the same as `idle`.
+   */
+  readonly acceptsTurn?: boolean
+  /**
+   * Whether the provider has *named* this prompt as answered — Claude's result
+   * echoes the uuids of the prompts a turn consumed. `undefined` when the
+   * provider cannot say (no such echo, or an older CLI that never sent one),
+   * and the manager falls back to reading the transcript.
+   */
+  promptAnswered?(promptId: string): boolean | undefined
+  /**
    * `hiddenContext` is prepended to the prompt the provider sees but never to
    * the displayed/persisted user message — the cross-provider handoff rides
    * it. A promise is allowed (the handoff brief resolving): the user message

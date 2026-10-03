@@ -17,7 +17,7 @@ import { basename } from '@/lib/format'
 import { messagesOf, severalChatsShown, useApp } from '@/store'
 import { useTaskList } from '@/taskListStore'
 import { useAgents } from '@/agentsStore'
-import { foldAgentRuns, reconcileAgentRuns, type AgentRunView } from '@shared/agentRuns'
+import { foldAgentRuns, isAgentish, reconcileAgentRuns, type AgentRunView } from '@shared/agentRuns'
 import { foldTaskTimeline, NO_TASK_TIMELINE, reconcileTimeline } from '@/lib/taskList'
 import type { TaskItem, TaskTimeline } from '@/lib/taskList'
 import { Button } from '@/components/ui/button'
@@ -45,6 +45,7 @@ import {
 import { PromptDock } from '@/components/PromptDock'
 import { QuoteBar } from '@/components/QuoteBar'
 import { TasksCard } from '@/components/messages/TasksCard'
+import { AgentGroupCard, AgentPartRow, TranscriptChat } from '@/components/messages/AgentRows'
 import { TurnChangesCard } from '@/components/messages/TurnChangesCard'
 import { TurnHeader } from '@/components/messages/TurnHeader'
 import { turnPresentations } from '@/lib/turnChanges'
@@ -379,6 +380,16 @@ function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
         if (images.length) {
           out.push(<ToolOutputImages key={`images-${run[0].id}`} images={images} />)
         }
+        // …and the agents stay too: a spawned agent outlives the turn that
+        // started it, and its card is the way back into its column.
+        const agents = run.flatMap((message) =>
+          message.parts.filter((part): part is ToolPart => !!part && part.type === 'tool' && isAgentish(part))
+        )
+        if (agents.length === 1) {
+          out.push(<AgentPartRow key={`agent-${agents[0].toolUseId}`} part={agents[0]} />)
+        } else if (agents.length > 1) {
+          out.push(<AgentGroupCard key={`agents-${run[0].id}`} parts={agents} />)
+        }
       }
       if (!hidden) {
         const turn = presentations.get(run[0].id)
@@ -626,6 +637,12 @@ export const ChatView = React.memo(function ChatView({
   // other column a keyed slot (`messagesOf`). Everything else about a chat is
   // already keyed by id.
   const messages = useApp((s) => messagesOf(s, chat.id))
+  // Which chat an agent row belongs to — see `TranscriptChat`. Changes only
+  // with the chat, so the memoized rows below are not re-rendered per token.
+  const transcriptChat = React.useMemo(
+    () => ({ chatId: chat.id, provider: chat.provider }),
+    [chat.id, chat.provider]
+  )
   const hiddenBefore = useApp((s) =>
     chat.id === s.activeId ? s.hiddenBefore : (s.sideChats[chat.id]?.hiddenBefore ?? 0)
   )
@@ -1188,6 +1205,7 @@ export const ChatView = React.memo(function ChatView({
   ) : null
 
   return (
+    <TranscriptChat.Provider value={transcriptChat}>
     <div
       // `data-chat-surface` is the "which chat is this" marker: it is how a
       // permission keypress finds the transcript it happened in (see
@@ -1490,5 +1508,6 @@ export const ChatView = React.memo(function ChatView({
       )}
 
     </div>
+    </TranscriptChat.Provider>
   )
 })

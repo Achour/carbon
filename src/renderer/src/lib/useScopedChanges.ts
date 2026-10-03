@@ -1,6 +1,6 @@
 import * as React from 'react'
 import type { ChatMessage, GitFileChange } from '@shared/types'
-import { chatMeta, messagesOf, scopedChanges, useApp } from '@/store'
+import { chatMeta, focusedChatOf, messagesOf, scopedChanges, useApp } from '@/store'
 import { useStableChanges } from '@/lib/useStableChanges'
 
 const NO_MESSAGES: ChatMessage[] = []
@@ -19,8 +19,8 @@ export function useScopedChanges(cwd: string): GitFileChange[] {
   const git = useApp((s) => s.git)
   const branchChanges = useApp((s) => s.branchChanges)
   const lastTurn = changeScope === 'last-turn'
-  const messages = useApp((s) => (lastTurn ? messagesOf(s, s.focusedChatId) : NO_MESSAGES))
-  const chatCwd = useApp((s) => (lastTurn ? chatMeta(s, s.focusedChatId)?.cwd : undefined))
+  const messages = useApp((s) => (lastTurn ? messagesOf(s, focusedChatOf(s)) : NO_MESSAGES))
+  const chatCwd = useApp((s) => (lastTurn ? chatMeta(s, focusedChatOf(s))?.cwd : undefined))
   const raw = React.useMemo(
     () => scopedChanges({ changeScope, git, branchChanges }, messages, chatCwd, cwd),
     [changeScope, git, branchChanges, messages, chatCwd, cwd]

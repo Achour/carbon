@@ -40,20 +40,20 @@ import type { AssistantPart, ToolPart } from '@shared/types'
 import { PROVIDER_SHORT_LABELS, knownProvider } from '@shared/types'
 import {
   formatAgentDuration,
-  formatAgentTokens,
-  isAgentPart,
-  summarizeAgentParts
+  DELEGATE_TOOL,
+  isAgentish
 } from '@shared/agentRuns'
 import { cn } from '@/lib/utils'
 import { humanizeShellCommand, unwrapGrokTool } from '@/lib/toolLabels'
 import { leadActivityLabel, summarizeActivity } from '@/lib/toolSummary'
-import { groupToolRuns } from '@/lib/toolRuns'
+import { GROUP_MIN, groupToolRuns } from '@/lib/toolRuns'
 import { DISCLOSURE_PANEL } from '@/lib/disclosure'
 import { lineDiff, type DiffLine } from '@/lib/lineDiff'
 import { parseDiff } from '@/lib/diffRows'
 import { Markdown } from '@/components/Markdown'
 import { useApp } from '@/store'
 import { DelegateCard } from './DelegateCard'
+import { AgentGroupCard, NativeAgentRow } from './AgentRows'
 import {
   canvasInRun,
   canvasWrite,
@@ -1146,9 +1146,10 @@ export const ToolCard = React.memo(function ToolCard({
   const [open, onOpenChange] = React.useState(false)
   const elapsed = useToolElapsed(part)
 
-  // Task/Agent tools render their spawned sub-agent's live activity.
-  if (part.name === 'Task' || part.name === 'Agent') {
-    return <AgentCard part={part} cwd={cwd} />
+  // A spawned sub-agent is a row whose open form is its own column — see
+  // `NativeAgentRow` and `AgentColumn`.
+  if (part.name === 'Task' || part.name === 'Agent' || part.agent) {
+    return <NativeAgentRow part={part} />
   }
   // A delegate is a chat of its own: this row is its collapsed form, live with
   // the child's state, and opens its column. A refused call (no agent) falls
@@ -1320,13 +1321,10 @@ const GROUPABLE_SERVERS = [...BROWSER_PREFIXES, 'mcp__carbon__', 'mcp__preview__
 
 /** Whether this call is a step in a run rather than a block of its own. */
 export function isGroupableTool(name: string): boolean {
-  // Never folded into a run: an agent started is a chat of its own, and a row
-  // inside a collapsed group is a chat nobody can find.
-  if (name === DELEGATE_TOOL) return false
   return GROUPABLE_TOOLS.has(name) || GROUPABLE_SERVERS.some((s) => name.startsWith(s))
 }
 
-export const DELEGATE_TOOL = 'mcp__carbon__agents_delegate'
+export { DELEGATE_TOOL }
 
 /** True while any call in the run — or, for agents, any of their children — is
  *  still working, so a mixed done/running group shows the spinner. */
@@ -1390,7 +1388,51 @@ function useArrivals(parts: ToolPart[], live: boolean): ReadonlySet<string> {
  * ("Read 12 files") so hundreds of reads don't bury the conversation. Expand to
  * see each call as a thin, still-expandable row.
  */
-export const ToolGroup = React.memo(function ToolGroup({
+/**
+ * A run of calls, with its agents taken out of it.
+ *
+ * Spawns ride the same runs as reads and searches — Claude sends one call per
+ * message, so a batch of three agents arrives as three messages, and the run is
+ * what batches them — but an agent is not a step to fold into "Ran 3
+ * commands": it is a conversation of its own, and inside a collapsed row it is
+ * one nobody finds. So each stretch of agents (native or delegated) draws as an
+ * `AgentGroupCard`, and the calls around them as the activity group they always
+ * were.
+ */
+export const ToolGroup = React.memo(function ToolGroup(props: {
+  parts: ToolPart[]
+  cwd: string
+  live?: boolean
+}): React.JSX.Element {
+  const { parts } = props
+  if (!parts.some(isAgentish)) return <ActivityGroup {...props} />
+  const segments: { agents: boolean; parts: ToolPart[] }[] = []
+  for (const part of parts) {
+    const agents = isAgentish(part)
+    const last = segments[segments.length - 1]
+    if (last && last.agents === agents) last.parts.push(part)
+    else segments.push({ agents, parts: [part] })
+  }
+  return (
+    <>
+      {segments.map((seg) =>
+        seg.agents ? (
+          seg.parts.length === 1 ? (
+            <ToolCard key={seg.parts[0].toolUseId} part={seg.parts[0]} cwd={props.cwd} />
+          ) : (
+            <AgentGroupCard key={`agents-${seg.parts[0].toolUseId}`} parts={seg.parts} />
+          )
+        ) : seg.parts.length >= GROUP_MIN ? (
+          <ActivityGroup key={`run-${seg.parts[0].toolUseId}`} {...props} parts={seg.parts} />
+        ) : (
+          seg.parts.map((p) => <ToolCard key={p.toolUseId} part={p} cwd={props.cwd} />)
+        )
+      )}
+    </>
+  )
+})
+
+const ActivityGroup = React.memo(function ActivityGroup({
   parts,
   cwd,
   live = false
@@ -1428,19 +1470,6 @@ export const ToolGroup = React.memo(function ToolGroup({
   // MCP tool nothing has a case for still gets the glyph its own row has.
   const lead = leadActivityLabel(labels)
   const GroupIcon = metas.find((m) => m.label === lead)?.icon ?? Wrench
-  // A run of spawns is the one group whose collapsed row can say something
-  // better than "what the last call touched": how many of them are still
-  // working and what they have spent between them. Same numbers as the Agents
-  // panel and the activity bar, off the same fold, so the three cannot disagree.
-  const agents = parts.every(isAgentPart) ? summarizeAgentParts(parts) : null
-  const agentTrailing = agents
-    ? [
-        agents.running > 0 ? `${agents.running} working` : null,
-        agents.tokens > 0 ? `Σ ${formatAgentTokens(agents.tokens)} tok` : null
-      ]
-        .filter(Boolean)
-        .join(' · ')
-    : ''
   // Open for as long as this is the live block, folded to one line the moment
   // the turn hands it to history. `running` still counts, so a group holding a
   // backgrounded agent that outlives its turn does not shut on it.
@@ -1450,8 +1479,7 @@ export const ToolGroup = React.memo(function ToolGroup({
   // is on screen one row down with its own summary, and the same command
   // trailing the row above it was the summary saying it twice — in mono, at the
   // end of a sentence it was not part of.
-  const trailing =
-    agentTrailing || (running && !open ? metas[metas.length - 1]?.summary : undefined)
+  const trailing = running && !open ? metas[metas.length - 1]?.summary : undefined
   // A canvas is the one thing a run produces that lives somewhere else, and
   // grouping had put its only link one expand away — a document the turn just
   // wrote, with nothing on screen to open it. So the way in rides the collapsed
@@ -1583,107 +1611,3 @@ export function SubAgentStream({
   )
 }
 
-/**
- * A live clock for a running agent. Ticks in the component and only while the
- * agent runs, so a settled card costs nothing and the transcript's state is
- * never rewritten once a second.
- */
-function useAgentElapsed(agent: ToolPart['agent'], running: boolean): string | null {
-  const [now, setNow] = React.useState(() => Date.now())
-  React.useEffect(() => {
-    if (!running) return
-    setNow(Date.now())
-    const id = window.setInterval(() => setNow(Date.now()), 1000)
-    return () => window.clearInterval(id)
-  }, [running])
-  if (!agent?.startedAt) return null
-  const end = running ? now : agent.endedAt
-  if (end == null) return null
-  return formatAgentDuration(end - agent.startedAt)
-}
-
-/**
- * A spawned sub-agent: one row in the transcript, and the way into its work.
- *
- * **It does not unfold here, and that is the point.** The body used to be the
- * agent's whole conversation nested inside the chat column — narration, the
- * tables it wrote, its report — which is not a step in a turn but a second
- * transcript. Measured on a five-way fan-out, one card came to 13,816px with
- * four siblings growing beside it, so the thing the reader wanted (which agent
- * is doing what) was the one thing off screen. Clicking opens the stream in
- * `AgentsPanel`, which is a scroller of its own and already holds the roster.
- *
- * The row keeps the vitals it always carried, and `data-agent-run` stays for
- * the anchor's sake even though nothing scrolls to it any more.
- */
-function AgentCard({ part }: { part: ToolPart; cwd: string }): React.JSX.Element {
-  const input = (part.input ?? {}) as Record<string, unknown>
-  const subType = str(input.subagent_type)
-  const description = str(input.description) ?? str(input.prompt)
-  const children = (part.children ?? []).filter(Boolean)
-  const steps = children.filter((c) => c.type === 'tool').length
-  // The parent Task tool_result can land (status → success) while the sub-agent
-  // is still mid-step — and for background agents it lands right at spawn. Treat
-  // the agent as running until its own child steps have all settled, so the row
-  // never shows a checkmark while the sub-agent is visibly still working.
-  const childRunning = children.some(
-    (c) => c.type === 'tool' && (c.status === 'running' || c.status === 'pending')
-  )
-  const running = part.status === 'pending' || part.status === 'running' || childRunning
-  const openAgentsPanel = useApp((s) => s.openAgentsPanel)
-  const elapsed = useAgentElapsed(part.agent, running)
-  // What the agent has spent, when its provider says. Deliberately *short* of
-  // the panel's line: the description is the thing a reader is scanning for,
-  // and a model id beside it wins the width fight in a chat column and leaves
-  // the row saying "Agent · claude-sonnet-5" with the task truncated away.
-  // Identity belongs in the panel, which has the width for it.
-  const vitals = [
-    part.agent?.tokens ? `${formatAgentTokens(part.agent.tokens)} tok` : null,
-    steps > 0 ? `${steps} ${steps === 1 ? 'step' : 'steps'}` : null,
-    elapsed
-  ].filter(Boolean) as string[]
-
-  return (
-    <button
-      type="button"
-      data-agent-run={part.toolUseId}
-      onClick={() => openAgentsPanel(part.toolUseId)}
-      className={cn(
-        'group flex w-full animate-step-in items-center gap-2.5 rounded-xl border px-3 py-2 text-left outline-none transition-colors',
-        running
-          ? 'border-warning/40 bg-warning/[0.04] hover:bg-warning/[0.08]'
-          : 'border-primary/25 bg-primary/[0.03] hover:bg-primary/[0.07]'
-      )}
-    >
-      <Bot className="size-4 shrink-0 text-primary" />
-      <span className="shrink-0 text-[13px] font-medium">Agent</span>
-      {subType && (
-        <span className="shrink-0 rounded bg-primary/10 px-1.5 py-px font-mono text-[10px] font-medium text-primary">
-          {subType}
-        </span>
-      )}
-      {description ? (
-        <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{description}</span>
-      ) : (
-        <span className="flex-1" />
-      )}
-      {running && <span className="shimmer-text shrink-0 text-[11px] font-medium">Working</span>}
-      {vitals.length > 0 && (
-        <span className="shrink-0 font-mono text-[11px] text-muted-foreground/70 tabular-nums">
-          {vitals.join(' · ')}
-        </span>
-      )}
-      <span className="shrink-0">
-        {running ? (
-          <DotSpinner className="size-3.5 text-warning" />
-        ) : (
-          <StatusIcon part={part} />
-        )}
-      </span>
-      {/* The affordance. A row that opens a panel has to say so, and the chevron
-          is the same one every disclosure in the transcript uses — pointing at
-          the panel rather than down at a body that no longer exists. */}
-      <ChevronRight className="size-3.5 shrink-0 text-muted-foreground/40 transition-colors group-hover:text-muted-foreground" />
-    </button>
-  )
-}

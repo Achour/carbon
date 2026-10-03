@@ -177,3 +177,32 @@ test('durations read as clocks', () => {
   // negative age.
   assert.equal(formatAgentDuration(-5000), '0s')
 })
+
+test('agent columns: an id names the parent chat and the spawning call, and parses back', async () => {
+  const { agentColumnId, isAgentColumn, parseAgentColumn, isAgentish } = await import('../src/shared/agentRuns.ts')
+  const id = agentColumnId('3f2a-chat', 'toolu_01:odd')
+  assert.equal(isAgentColumn(id), true)
+  assert.equal(isAgentColumn('3f2a-chat'), false)
+  assert.deepEqual(parseAgentColumn(id), { parentId: '3f2a-chat', toolUseId: 'toolu_01:odd' })
+  assert.equal(parseAgentColumn('agent:nocolon'), null)
+  assert.equal(parseAgentColumn('chat-id'), null)
+  const part = (name: string, status: 'success' | 'error' = 'success') =>
+    ({ type: 'tool', toolUseId: 't', name, input: {}, status }) as never
+  assert.equal(isAgentish(part('Agent')), true)
+  assert.equal(isAgentish(part('mcp__carbon__agents_delegate')), true)
+  assert.equal(isAgentish(part('mcp__carbon__agents_delegate', 'error')), false)
+  assert.equal(isAgentish(part('Read')), false)
+})
+
+test('agent paths: a spawn is found by index path, nested ones through children', async () => {
+  const { findAgentPath, agentAtPath } = await import('../src/shared/agentRuns.ts')
+  const tool = (id: string, children?: unknown[]) =>
+    ({ type: 'tool', toolUseId: id, name: 'Agent', input: {}, status: 'running', children }) as never
+  const parts = [{ type: 'text', text: 'hi' } as never, tool('a', [tool('x'), tool('nested')]), tool('b')]
+  assert.deepEqual(findAgentPath(parts, 'b'), [2])
+  assert.deepEqual(findAgentPath(parts, 'nested'), [1, 1])
+  assert.equal(findAgentPath(parts, 'zz'), null)
+  assert.equal((agentAtPath(parts, [1, 1]) as { toolUseId: string }).toolUseId, 'nested')
+  assert.equal(agentAtPath(parts, [0]), undefined)
+  assert.equal(agentAtPath(parts, [9]), undefined)
+})

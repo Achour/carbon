@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { agentColumnId, isAgentColumn, parseAgentColumn } from '@shared/agentRuns'
 import {
   applyCodeFontSize,
   applyTheme,
@@ -379,6 +380,17 @@ export function inActiveThread(s: Pick<AppState, 'activeId' | 'sideColumns'>, id
   return id === s.activeId || s.sideColumns.includes(id)
 }
 
+/**
+ * The focused *chat* — `focusedChatId` with an agent column resolved to the
+ * chat that spawned it. Anything that acts on a chat (the review's "last
+ * turn", a commit's scope, the roster, permission keys) reads this: an agent
+ * column has no transcript, cwd or prompts of its own, and reading its virtual
+ * id there found nothing — which a commit took as "stage everything".
+ */
+export function focusedChatOf(s: Pick<AppState, 'focusedChatId'>): string | null {
+  return parseAgentColumn(s.focusedChatId ?? '')?.parentId ?? s.focusedChatId
+}
+
 /** The active thread already draws `MAX_THREAD_CHATS`. */
 export function threadFull(s: Pick<AppState, 'sideColumns'>): boolean {
   return 1 + s.sideColumns.length >= MAX_THREAD_CHATS
@@ -448,7 +460,14 @@ function allColumns(
 
 /** `ids` kept only where the side chat still exists and still belongs to `owner`. */
 function liveColumns(chats: ChatMeta[], owner: string, ids: string[]): string[] {
-  return ids.filter((id) => chats.some((c) => c.id === id && c.sideOf === owner))
+  const chatColumns = ids.filter((id) => chats.some((c) => c.id === id && c.sideOf === owner))
+  // An agent column lives as long as the chat it reads from is in the thread —
+  // the thread's own chat, or a chat column still open beside it.
+  return ids.filter((id) => {
+    if (chatColumns.includes(id)) return true
+    const agent = parseAgentColumn(id)
+    return !!agent && (agent.parentId === owner || chatColumns.includes(agent.parentId))
+  })
 }
 
 /** A side chat of `threadId` with no column open — a row of the `+` popover's closed list. */
@@ -779,6 +798,12 @@ interface AppState {
    * awaited.
    */
   reopenSideChat(id: string): Promise<void>
+  /**
+   * Open a native sub-agent as a column of the thread, or fold it back into its
+   * row if it is open (`AgentColumn`). Its column id names the chat whose
+   * transcript holds the spawn — see `agentColumnId`.
+   */
+  toggleAgentColumn(parentId: string, toolUseId: string): void
   /**
    * Fetch side chats' transcripts into slots that already exist — the second
    * half of a reopen, and what a thread restored after a relaunch needs, since
@@ -1766,7 +1791,9 @@ function stripSideStashes(
 ): Record<string, string[]> {
   const next: Record<string, string[]> = {}
   for (const [owner, tabs] of Object.entries(map)) {
-    const kept = tabs.filter((id) => !ids.has(id))
+    // A removed chat's agent columns go with it — their stream is read out of
+    // its transcript — in a stashed thread exactly as in the one on screen.
+    const kept = tabs.filter((id) => !ids.has(id) && !ids.has(parseAgentColumn(id)?.parentId ?? ''))
     if (kept.length) next[owner] = kept
   }
   return next
@@ -1784,17 +1811,20 @@ function closeSideColumn(
   >,
   id: string
 ): Partial<AppState> {
-  const sideColumns = s.sideColumns.filter((c) => c !== id)
+  // A chat's agent columns go with it: their stream is read out of its
+  // transcript, which a closed column no longer holds.
+  const gone = new Set([id, ...s.sideColumns.filter((c) => parseAgentColumn(c)?.parentId === id)])
+  const sideColumns = s.sideColumns.filter((c) => !gone.has(c))
   return {
     sideColumns,
-    sideColumnsByChat: stripSideStashes(s.sideColumnsByChat, new Set([id])),
+    sideColumnsByChat: stripSideStashes(s.sideColumnsByChat, gone),
     // Focus falls back to the column that took its place, the way a closed tab
     // hands the strip to its neighbour — or to the thread's own chat.
     focusedChatId:
-      s.focusedChatId === id
+      s.focusedChatId && gone.has(s.focusedChatId)
         ? (sideColumns[Math.max(0, s.sideColumns.indexOf(id) - 1)] ?? s.activeId)
         : s.focusedChatId,
-    expandedChatId: s.expandedChatId === id ? null : s.expandedChatId,
+    expandedChatId: s.expandedChatId && gone.has(s.expandedChatId) ? null : s.expandedChatId,
     // The plan panel belongs to whichever chat opened it, and a closed column
     // has no transcript left on screen to answer it from.
     planPanel: s.planPanel?.chatId === id ? null : s.planPanel
@@ -2132,7 +2162,8 @@ function readStoredColumns(): Record<string, string[]> {
     const out: Record<string, string[]> = {}
     for (const [owner, ids] of Object.entries(raw as Record<string, unknown>)) {
       if (Array.isArray(ids)) {
-        const kept = ids.filter((id): id is string => typeof id === 'string')
+        // Older builds of this feature wrote agent columns; they are dropped.
+        const kept = ids.filter((id): id is string => typeof id === 'string' && !isAgentColumn(id))
         if (kept.length) out[owner] = kept.slice(0, MAX_THREAD_CHATS - 1)
       }
     }
@@ -2158,7 +2189,7 @@ function readStoredExpanded(): Record<string, string> {
     if (!raw || typeof raw !== 'object') return {}
     const out: Record<string, string> = {}
     for (const [thread, id] of Object.entries(raw as Record<string, unknown>)) {
-      if (typeof id === 'string') out[thread] = id
+      if (typeof id === 'string' && !isAgentColumn(id)) out[thread] = id
     }
     return out
   } catch {
@@ -3068,7 +3099,7 @@ export const useApp = create<AppState>((set, get) => ({
   openAgentsPanel(runId, chatId) {
     const agents = useAgents.getState()
     const s = get()
-    const owner = chatId ?? (runId ? chatOfRun(agents, runId) : null) ?? s.focusedChatId
+    const owner = chatId ?? (runId ? chatOfRun(agents, runId) : null) ?? focusedChatOf(s)
     agents.selectAgent(runId ?? null, owner)
     set((s) => ({ activeTab: 'agents', ...panelPatch(s, true) }))
   },
@@ -3092,7 +3123,15 @@ export const useApp = create<AppState>((set, get) => ({
         ...(unread ? { unreadChats: omit(s.unreadChats, [id]) } : {})
       }
     })
-    if (opts?.caret) focusComposer(id)
+    if (opts?.caret) {
+      // An agent column has no composer; it takes the focus itself, or keys
+      // would keep landing in the composer the user just moved away from.
+      if (isAgentColumn(id)) {
+        requestAnimationFrame(() =>
+          document.querySelector<HTMLElement>(`[data-thread-column="${CSS.escape(id)}"]`)?.focus()
+        )
+      } else focusComposer(id)
+    }
   },
 
   toggleExpandedChat(id) {
@@ -3258,6 +3297,12 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   async closeSideChat(id) {
+    // An agent column is not a chat: closing it folds it back into its row,
+    // with nothing to keep or discard.
+    if (isAgentColumn(id)) {
+      set((st) => closeSideColumn(st, id))
+      return
+    }
     const s = get()
     // Never used and nothing in flight: there is nothing to come back to, and
     // keeping it would put a blank row in the closed list.
@@ -3276,6 +3321,23 @@ export const useApp = create<AppState>((set, get) => ({
     }))
   },
 
+  toggleAgentColumn(parentId, toolUseId) {
+    const id = agentColumnId(parentId, toolUseId)
+    const s = get()
+    if (s.sideColumns.includes(id)) {
+      set((st) => closeSideColumn(st, id))
+      return
+    }
+    // Only beside a transcript on screen — the column reads the agent out of it.
+    if (s.activeId !== parentId && !s.sideColumns.includes(parentId)) return
+    if (threadFull(s)) return
+    set((st) => ({
+      sideColumns: [...st.sideColumns, id],
+      // Seen at once: an expanded column would hide the one just opened.
+      expandedChatId: null
+    }))
+  },
+
   async reopenSideChat(id) {
     const s = get()
     if (s.sideColumns.includes(id)) {
@@ -3286,6 +3348,9 @@ export const useApp = create<AppState>((set, get) => ({
     // and the closed list is drawn from the active thread's own side chats.
     if (chatMeta(s, id)?.sideOf !== s.activeId) return
     if (threadFull(s)) return
+    // Reopening a killed delegate takes the kill back: it belongs in the
+    // thread's pills again once it is closed.
+    if (chatMeta(s, id)?.delegation?.dismissedAt) void window.api.undismissChat(id)
     // The column opens first, on an empty slot, so the click lands immediately
     // — and so events streaming in during the round trip have somewhere to go,
     // since `onScreen` keys on the slot existing.
@@ -3300,7 +3365,7 @@ export const useApp = create<AppState>((set, get) => ({
 
   async hydrateSideChats(ids) {
     await Promise.all(
-      ids.map(async (id) => {
+      ids.filter((id) => !isAgentColumn(id)).map(async (id) => {
         const view = await window.api.getChat(id).catch(() => null)
         set((st) => {
           const current = st.sideChats[id]
@@ -4043,8 +4108,8 @@ export const useApp = create<AppState>((set, get) => ({
       const st = get()
       const paths = lastTurnEditedPaths(
         st.git,
-        messagesOf(st, st.focusedChatId),
-        chatMeta(st, st.focusedChatId)?.cwd,
+        messagesOf(st, focusedChatOf(st)),
+        chatMeta(st, focusedChatOf(st))?.cwd,
         cwd
       )
       commitScope =
@@ -4357,12 +4422,22 @@ export const useApp = create<AppState>((set, get) => ({
     {
       const st = get()
       const alive = liveColumns(st.chats, id, st.sideColumns)
-      const missing = alive.filter((c) => !st.sideChats[c])
+      // An agent column has no slot to fill: its stream is read out of its
+      // parent's transcript, which is fetched as that chat's own.
+      const missing = alive.filter((c) => !st.sideChats[c] && !isAgentColumn(c))
       if (alive.length !== st.sideColumns.length || missing.length) {
         set((cur) => {
           const sideChats = { ...cur.sideChats }
           for (const c of missing) sideChats[c] = EMPTY_SIDE_SLOT
-          return { sideColumns: alive, sideChats }
+          // An expansion or focus restored onto a column just dropped would
+          // hide every column left, or send keys nowhere.
+          const shown = (c: string | null): boolean => c === id || (!!c && alive.includes(c))
+          return {
+            sideColumns: alive,
+            sideChats,
+            ...(shown(cur.expandedChatId) ? {} : { expandedChatId: null }),
+            ...(shown(cur.focusedChatId) ? {} : { focusedChatId: id })
+          }
         })
       }
       if (missing.length) void get().hydrateSideChats(missing)
@@ -5335,11 +5410,13 @@ export const useApp = create<AppState>((set, get) => ({
         set((st) => {
           const owner = Object.entries(st.sideColumnsByChat).find(([, ids]) => ids.includes(ev.chatId))
           if (!owner) return {}
+          const gone = new Set([ev.chatId])
+          const expanded = st.expandedByChat[owner[0]]
+          const expansionGone =
+            expanded === ev.chatId || parseAgentColumn(expanded ?? '')?.parentId === ev.chatId
           return {
-            sideColumnsByChat: {
-              ...st.sideColumnsByChat,
-              [owner[0]]: owner[1].filter((id) => id !== ev.chatId)
-            }
+            sideColumnsByChat: stripSideStashes(st.sideColumnsByChat, gone),
+            ...(expansionGone ? { expandedByChat: omit(st.expandedByChat, [owner[0]]) } : {})
           }
         })
         break
@@ -5573,7 +5650,15 @@ useApp.subscribe((s, prev) => {
   ) {
     return
   }
-  const json = JSON.stringify(allColumns(s))
+  // Agent columns are not kept across a relaunch: the part they read may be
+  // outside the window the chat hydrates, and the row reopens them.
+  const json = JSON.stringify(
+    Object.fromEntries(
+      Object.entries(allColumns(s))
+        .map(([owner, ids]) => [owner, ids.filter((c) => !isAgentColumn(c))] as const)
+        .filter(([, ids]) => ids.length)
+    )
+  )
   if (json === storedColumns) return
   storedColumns = json
   try {
@@ -5593,7 +5678,9 @@ useApp.subscribe((s, prev) => {
   ) {
     return
   }
-  const json = JSON.stringify(allExpanded(s))
+  const json = JSON.stringify(
+    Object.fromEntries(Object.entries(allExpanded(s)).filter(([, c]) => !isAgentColumn(c)))
+  )
   if (json === storedExpanded) return
   storedExpanded = json
   try {

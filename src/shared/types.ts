@@ -495,6 +495,13 @@ export interface Delegation {
    * is not labelled with the first round's task.
    */
   followUp?: string
+  /**
+   * When the parent killed it (`agents_cancel`). A kill is "put it away", so a
+   * dismissed delegate leaves the thread header's closed pills — its card in
+   * the parent and the ＋ list still reach it — and reopening it, or sending
+   * it new work, clears this.
+   */
+  dismissedAt?: number
   /** Free-form role the parent gave (`review`, `research`, …), shown and prompted. */
   role?: string
   status: DelegationStatus
@@ -2552,6 +2559,8 @@ export interface Api {
    */
   worktreeRemove(path: string, repoRoot?: string): Promise<OpResult>
   renameChat(id: string, title: string): Promise<void>
+  /** Bring a killed delegate back into its thread's pills — see `Delegation.dismissedAt`. */
+  undismissChat(id: string): Promise<void>
   /** Pin/unpin a chat to the sidebar's Pinned section. */
   setChatPinned(id: string, pinned: boolean): Promise<void>
   /**

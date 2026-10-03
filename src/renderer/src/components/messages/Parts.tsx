@@ -29,11 +29,11 @@ import {
   FILE_MUTATION_TOOLS,
   isGroupableTool,
   ToolCard,
-  DELEGATE_TOOL,
   ToolGroup,
   ToolOutputImages
 } from './ToolCard'
-import { DelegateCard } from './DelegateCard'
+import { AgentGroupCard, AgentPartRow } from './AgentRows'
+import { isAgentish } from '@shared/agentRuns'
 
 /**
  * One button in a user message's hover row. Shared so the two actions cannot
@@ -448,7 +448,7 @@ export const AssistantBlock = React.memo(function AssistantBlock({
   // Coalesce inspection/terminal sequences into one activity row. Short progress
   // narration between calls stays available inside the expanded group instead
   // of breaking the sequence into a wall of cards.
-  const items: Array<PartRun | { kind: 'images'; part: ToolPart } | { kind: 'delegate'; part: ToolPart }> = []
+  const items: Array<PartRun | { kind: 'images'; part: ToolPart } | { kind: 'agents'; parts: ToolPart[] }> = []
   // Folded away with the rest of the turn — see `fromPart` — except for what
   // it *produced*. A screenshot arrives as `outputImages` on the call that took
   // it, and `ToolOutputImages` deliberately draws outside the activity row's
@@ -457,15 +457,16 @@ export const AssistantBlock = React.memo(function AssistantBlock({
   // for a screenshot cannot lose: the fold hides *work*, and an image is a
   // result. The row itself stays folded — only the picture comes back. They all
   // precede the grouping pass because they all precede `fromPart`.
+  // An agent the turn started is a result the same way: a conversation that
+  // goes on after the turn folds, and its row is the way back into it — so the
+  // folded turn keeps its agents, as one card when there are several.
+  const survivors: ToolPart[] = []
   for (let i = 0; i < Math.min(fromPart, parts.length); i++) {
     const part = parts[i]
     if (part?.type === 'tool' && part.outputImages?.length) items.push({ kind: 'images', part })
-    // An agent the turn started is a result the same way: it is a chat that
-    // goes on after the turn folds, and this row is the way back into it.
-    else if (part?.type === 'tool' && part.name === DELEGATE_TOOL && part.status !== 'error') {
-      items.push({ kind: 'delegate', part })
-    }
+    else if (part?.type === 'tool' && isAgentish(part)) survivors.push(part)
   }
+  if (survivors.length) items.push({ kind: 'agents', parts: survivors })
   items.push(
     ...groupToolRuns(parts, {
       from: fromPart,
@@ -495,8 +496,12 @@ export const AssistantBlock = React.memo(function AssistantBlock({
         if (item.kind === 'group') {
           return <ToolGroup key={item.key} parts={item.parts} cwd={cwd} live={turnLive} />
         }
-        if (item.kind === 'delegate') {
-          return <DelegateCard key={`delegate-${item.part.toolUseId}`} part={item.part} />
+        if (item.kind === 'agents') {
+          return item.parts.length === 1 ? (
+            <AgentPartRow key={`agent-${item.parts[0].toolUseId}`} part={item.parts[0]} />
+          ) : (
+            <AgentGroupCard key={`agents-${item.parts[0].toolUseId}`} parts={item.parts} />
+          )
         }
         if (item.kind === 'images') {
           return (

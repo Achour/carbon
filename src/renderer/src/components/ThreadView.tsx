@@ -2,6 +2,7 @@ import * as React from 'react'
 import { DotSpinner } from '@/components/ui/dot-spinner'
 import {
   ArrowLeftRight,
+  ArrowUpLeft,
   Bot,
   Columns3,
   GitMerge,
@@ -21,7 +22,18 @@ import {
   X
 } from 'lucide-react'
 import type { ChatMeta } from '@shared/types'
-import { projectRoot } from '@shared/types'
+import { PROVIDER_LABELS, modelDisplayName, projectRoot } from '@shared/types'
+import {
+  agentColumnId,
+  agentRunOf,
+  formatAgentDuration,
+  isAgentColumn,
+  parseAgentColumn,
+  untrackedBackground
+} from '@shared/agentRuns'
+import { useAgents } from '@/agentsStore'
+import { AgentStreamBody } from '@/components/AgentsPanel'
+import { TranscriptChat, useAgentPart, useElapsed } from '@/components/messages/AgentRows'
 import { cn } from '@/lib/utils'
 import { chatActivityKind } from '@/lib/chatActivity'
 import { focusComposer } from '@/lib/composerFocus'
@@ -35,6 +47,7 @@ import {
 import {
   chatMeta,
   isClosedSideChat,
+  threadFull,
   MAX_THREAD_CHATS,
   panelFloats,
   severalChatsShown,
@@ -287,7 +300,9 @@ function ThreadHeader({ chat, ids }: { chat: ChatMeta; ids: readonly string[] })
   const closed = React.useMemo(
     () =>
       chats
-        .filter((c) => isClosedSideChat(c, chat.id, sideColumns))
+        // A killed delegate is put away, not merely closed — it stays
+        // reachable from its card and the ＋ list, but not from the strip.
+        .filter((c) => isClosedSideChat(c, chat.id, sideColumns) && !c.delegation?.dismissedAt)
         .sort((a, b) => b.updatedAt - a.updatedAt),
     [chats, chat.id, sideColumns]
   )
@@ -323,10 +338,15 @@ function ThreadHeader({ chat, ids }: { chat: ChatMeta; ids: readonly string[] })
             aria-label="Chats in this thread"
             className="no-drag ml-1 flex shrink-0 items-center gap-0.5 border-l border-border pl-2"
           >
+            {/* Chats only — a delegate is a chat and has its pill; a spawned
+                sub-agent is reached from the robot menu at the right, so a
+                busy turn's fan-out does not crowd this strip. */}
             {ids.length > 1 &&
-              ids.map((id, i) => (
-                <ThreadPill key={id} id={id} threadId={chat.id} index={i} focused={id === focused} />
-              ))}
+              ids.map((id, i) =>
+                isAgentColumn(id) ? null : (
+                  <ThreadPill key={id} id={id} threadId={chat.id} index={i} focused={id === focused} />
+                )
+              )}
             {closed.slice(0, CLOSED_PILLS).map((c) => (
               <ClosedPill key={c.id} chat={c} full={ids.length >= MAX_THREAD_CHATS} />
             ))}
@@ -346,7 +366,7 @@ function ThreadHeader({ chat, ids }: { chat: ChatMeta; ids: readonly string[] })
           className="no-drag mb-0 shrink-0"
         />
       )}
-      <BackgroundJobs chatId={focused} />
+      <BackgroundJobs chatId={parseAgentColumn(focused)?.parentId ?? focused} />
       {ids.length >= 3 && (
         <div
           role="group"
@@ -369,6 +389,7 @@ function ThreadHeader({ chat, ids }: { chat: ChatMeta; ids: readonly string[] })
           </LayoutButton>
         </div>
       )}
+      <SubagentsMenu chatIds={ids.filter((id) => !isAgentColumn(id))} openIds={ids} />
       <AddChatControl count={ids.length} threadId={chat.id} />
       <ThreadMenu chat={chat} />
       {/* Open — docked or floating over this header — the panel's own header
@@ -526,6 +547,7 @@ function ThreadPill({
 }): React.JSX.Element | null {
   const meta = useApp((s) => chatMeta(s, id))
   const drop = useChatDrop(threadId, id)
+  if (isAgentColumn(id)) return null
   if (!meta) return null
   const title = meta.title?.trim() || 'New chat'
   const onClick = (): void => useApp.getState().focusChat(id, { caret: true })
@@ -554,6 +576,313 @@ function ThreadPill({
         <DropEdge side={drop.over} inset="inset-y-1 -mx-[3px]" />
       </button>
     </WithTooltip>
+  )
+}
+
+/**
+ * The thread's spawned sub-agents — every chat's on screen, Claude's `Task`s
+ * and the other providers' `Agent`s — behind one robot icon at the right of
+ * the header, rather than as pills. A working session spins up many of them,
+ * and a pill each crowded out the chats the strip is for; delegates are chats
+ * and keep their pills. Read off `agentsStore` (each `ChatView` publishes its
+ * fold there, carried forward by identity), so the menu moves when an agent
+ * does and not on every token. A row opens the agent as a column, or folds an
+ * open one back.
+ */
+function SubagentsMenu({
+  chatIds,
+  openIds
+}: {
+  chatIds: readonly string[]
+  openIds: readonly string[]
+}): React.JSX.Element | null {
+  const byChat = useAgents((s) => s.byChat)
+  const chats = useApp((s) => s.chats)
+  const toggleAgentColumn = useApp((s) => s.toggleAgentColumn)
+  const full = useApp(threadFull)
+  const [open, setOpen] = React.useState(false)
+  const rows = React.useMemo(
+    () =>
+      chatIds.flatMap((chatId) =>
+        (byChat[chatId]?.runs ?? []).map((run) => ({
+          chatId,
+          run,
+          provider: chats.find((c) => c.id === chatId)?.provider ?? 'claude'
+        }))
+      ),
+    [chatIds, byChat, chats]
+  )
+  const working = rows.filter((r) => r.run.status === 'running').length
+  const now = useNow(working > 0 && open)
+  if (!rows.length) return null
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger
+        render={
+          <Button
+            size="sm"
+            variant="ghost"
+            className="no-drag relative h-6.5 shrink-0 gap-1 px-1.5"
+            aria-label={`Sub-agents: ${rows.length}${working ? `, ${working} working` : ''}`}
+            data-subagents-menu={rows.length}
+          >
+            <Bot className={cn(working > 0 && 'text-primary')} />
+            <span className="text-[11px] text-muted-foreground tabular-nums">
+              {working > 0 ? `${working}/${rows.length}` : rows.length}
+            </span>
+            {working > 0 && (
+              <span className="absolute top-1 right-1 size-1.5 animate-pulse rounded-full bg-primary" />
+            )}
+          </Button>
+        }
+      />
+      <PopoverContent align="end" className="w-80 p-1">
+        <div className="px-2 pt-1.5 pb-1 text-[11px] font-medium text-muted-foreground/70">
+          Sub-agents{working ? ` · ${working} working` : ''}
+        </div>
+        <div className="max-h-80 overflow-y-auto">
+          {rows.map(({ chatId, run, provider }) => {
+            const columnOpen = openIds.includes(agentColumnId(chatId, run.id))
+            const end = run.status === 'running' ? now : run.endedAt
+            const elapsed =
+              run.startedAt != null && end != null ? formatAgentDuration(end - run.startedAt) : null
+            return (
+              <button
+                key={`${chatId}:${run.id}`}
+                type="button"
+                data-subagent-row={run.id}
+                disabled={!columnOpen && full}
+                title={!columnOpen && full ? 'The thread already shows four chats — close one to open this agent.' : undefined}
+                onClick={() => toggleAgentColumn(chatId, run.id)}
+                className={cn(
+                  'flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-[13px] transition-colors hover:bg-accent disabled:opacity-50',
+                  run.depth > 0 && 'pl-6'
+                )}
+              >
+                <span className="relative shrink-0">
+                  <ProviderMark provider={provider} className="size-3.5 text-muted-foreground" />
+                  <span
+                    className={cn(
+                      'absolute -right-1 -bottom-1 size-1.5 rounded-full',
+                      run.status === 'running'
+                        ? 'animate-pulse bg-primary'
+                        : run.status === 'failed'
+                          ? 'bg-destructive'
+                          : 'bg-success'
+                    )}
+                  />
+                </span>
+                <span className="min-w-0 flex-1 truncate">
+                  {run.type && <span className="text-muted-foreground">{run.type}: </span>}
+                  {run.description || 'Sub-agent'}
+                </span>
+                {elapsed && (
+                  <span className="shrink-0 font-mono text-[11px] text-muted-foreground/70 tabular-nums">{elapsed}</span>
+                )}
+                {columnOpen && <span className="size-1.5 shrink-0 rounded-full bg-foreground/60" title="Open" />}
+              </button>
+            )
+          })}
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+/** A clock for the menu, ticking only while it is open and something runs. */
+function useNow(active: boolean): number {
+  const [now, setNow] = React.useState(() => Date.now())
+  React.useEffect(() => {
+    if (!active) return
+    setNow(Date.now())
+    const t = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(t)
+  }, [active])
+  return now
+}
+
+/**
+ * The prompt the parent agent wrote, as the first message of the agent's
+ * column — marked as sent by another agent, and folded past a few lines: a
+ * brief is often pages long, and the work below it is what was opened.
+ */
+function AgentPrompt({ text }: { text: string }): React.JSX.Element {
+  const [full, setFull] = React.useState(false)
+  const long = text.length > 420 || text.split('\n').length > 8
+  return (
+    <div className="mb-4 flex flex-col items-end gap-1">
+      <span className="pr-1 text-[11px] text-muted-foreground">Sent by another agent</span>
+      <div className="relative max-w-[92%] rounded-2xl bg-secondary/70 px-3.5 py-2.5 text-[13px] leading-relaxed text-foreground">
+        <div className={cn('whitespace-pre-wrap break-words', !full && long && 'max-h-40 overflow-hidden')}>{text}</div>
+        {long && (
+          <button
+            type="button"
+            onClick={() => setFull((v) => !v)}
+            className="mt-1.5 block w-full text-right text-xs text-muted-foreground transition-colors hover:text-foreground"
+          >
+            {full ? 'Show less' : 'Show full message'}
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * A native sub-agent opened as a thread column — Claude's `Task`, Codex's,
+ * Grok's and Antigravity's `Agent` alike. Its stream is read live out of the
+ * parent chat's transcript (the spawning call's `children`), so it needs no
+ * storage of its own and cannot drift from the row it was opened from.
+ *
+ * What it shows is what the provider reports: Claude and Codex stream the
+ * agent's whole work; Grok and Antigravity report only that it ran and its
+ * final result, so their column is the prompt, the clock and the report.
+ *
+ * There is no composer, because there is nobody to type to — no provider
+ * offers a way to message a sub-agent it is running — and the footer says so:
+ * "Runs on its own", with the way back to the parent.
+ */
+function AgentColumn({
+  id,
+  index,
+  focused,
+  expanded,
+  className
+}: {
+  id: string
+  index: number
+  focused: boolean
+  expanded: boolean
+  className: string
+}): React.JSX.Element | null {
+  const ref = parseAgentColumn(id)
+  const parentId = ref?.parentId ?? ''
+  const parent = useApp((s) => chatMeta(s, parentId))
+  // The part by reference — see `useAgentPart`: an open column re-renders when
+  // its agent moves, not on every token the parent streams.
+  const part = useAgentPart(parentId, ref?.toolUseId ?? '')
+  const toggleExpandedChat = useApp((s) => s.toggleExpandedChat)
+  const closeSideChat = useApp((s) => s.closeSideChat)
+  const provider = parent?.provider ?? 'claude'
+  const transcriptChat = React.useMemo(() => ({ chatId: parentId, provider }), [parentId, provider])
+  const run = React.useMemo(() => (part ? agentRunOf(part) : undefined), [part])
+  const running = run?.status === 'running'
+  // Held running for the agent's whole life — see `AgentDetail`'s `live`.
+  const live = part?.status === 'running' || part?.status === 'pending'
+  const elapsed = useElapsed(run?.startedAt, run?.endedAt, running)
+  const input = (part?.input ?? {}) as Record<string, unknown>
+  const prompt =
+    (typeof input.prompt === 'string' && input.prompt) ||
+    (typeof input.description === 'string' && input.description) ||
+    run?.description ||
+    ''
+  const title = run?.description || 'Subagent'
+  // Stable across renders, so the memoized stream body below is skipped when
+  // nothing it draws has moved.
+  const lead = React.useMemo(
+    () => (
+      <>
+        <div className="mb-3 truncate text-[13px] font-medium text-foreground">{title}</div>
+        {prompt && <AgentPrompt text={prompt} />}
+      </>
+    ),
+    [title, prompt]
+  )
+  if (!ref) return null
+  const model = run?.model ? modelDisplayName(run.model, provider) : PROVIDER_LABELS[provider]
+  const claimFocus = (): void => useApp.getState().focusChat(id)
+  // Back to the chat that spawned it — and if this column was the expanded
+  // one, the expansion moves there with the focus (`focusChat`'s rule).
+  const openParent = (): void => useApp.getState().focusChat(parentId, { caret: true })
+
+  return (
+    <section
+      data-thread-column={id}
+      data-agent-column={ref.toolUseId}
+      aria-label={`Chat ${index + 1}`}
+      // Focusable, so ⌘1–⌘4 onto it takes the keyboard away from the composer
+      // it left — there is no composer here to take it.
+      tabIndex={-1}
+      onPointerDownCapture={claimFocus}
+      onFocusCapture={claimFocus}
+      className={cn('relative flex min-h-0 min-w-0 flex-col outline-none', className)}
+    >
+      <div className="flex h-8 shrink-0 items-center gap-2 pr-1.5 pl-3">
+        <ChatNumber index={index} focused={focused} />
+        <ProviderMark provider={provider} className="size-3 shrink-0 text-muted-foreground" />
+        <Bot className="size-3 shrink-0 text-muted-foreground" />
+        <span className="shrink-0 text-xs text-muted-foreground">Subagent of</span>
+        <span
+          title={parent?.title}
+          className={cn('min-w-0 truncate text-xs font-medium', focused ? 'text-foreground' : 'text-muted-foreground')}
+        >
+          {parent?.title?.trim() || 'New chat'}
+        </span>
+        <div className="ml-auto flex shrink-0 items-center">
+          <WithTooltip label={expanded ? 'Show all chats  esc' : 'Expand  ⌘⇧↵'}>
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              onClick={() => toggleExpandedChat(id)}
+              aria-label={expanded ? 'Show all chats' : `Expand chat ${index + 1}`}
+            >
+              {expanded ? <Minimize2 /> : <Maximize2 />}
+            </Button>
+          </WithTooltip>
+          <WithTooltip label="Close">
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              onClick={() => void closeSideChat(id)}
+              aria-label={`Close chat ${index + 1}`}
+            >
+              <X />
+            </Button>
+          </WithTooltip>
+        </div>
+      </div>
+      <TranscriptChat.Provider value={transcriptChat}>
+        {part ? (
+          <AgentStreamBody
+            part={part}
+            cwd={parent?.cwd ?? ''}
+            live={live}
+            running={running}
+            className="px-4"
+            lead={lead}
+          />
+        ) : (
+          <div className="flex-1 px-4 py-6 text-[13px] text-muted-foreground">
+            This agent is not in the part of its chat that is loaded. Scroll that chat up to load
+            it, or close this column.
+          </div>
+        )}
+      </TranscriptChat.Provider>
+      <div className="@container mx-3 mb-3 flex shrink-0 items-center gap-2 rounded-2xl border border-border bg-card/60 px-3.5 py-2 text-[13px]">
+        <ProviderMark provider={provider} className="size-3.5 shrink-0" />
+        <span className="min-w-0 truncate font-medium text-foreground">{model}</span>
+        {run?.effort && <span className="shrink-0 text-muted-foreground">{run.effort}</span>}
+        <span className={cn('shrink-0 text-muted-foreground', running && 'shimmer-text')}>
+          {running
+            ? `Working${elapsed ? ` ${elapsed}` : ''}`
+            : run?.status === 'failed'
+              ? 'Failed'
+              : part && untrackedBackground(part)
+                ? 'Started in the background'
+                : `Finished${elapsed ? ` in ${elapsed}` : ''}`}
+        </span>
+        <span className="flex-1" />
+        <span className="hidden shrink-0 text-muted-foreground @[420px]:inline">Runs on its own</span>
+        <button
+          type="button"
+          onClick={openParent}
+          className="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 font-medium text-foreground transition-colors hover:bg-accent"
+        >
+          <ArrowUpLeft className="size-3.5" />
+          Open parent
+        </button>
+      </div>
+    </section>
   )
 }
 
@@ -1018,6 +1347,27 @@ function gridCell(i: number, n: number): string {
 }
 
 function ThreadColumn({
+  id,
+  threadId,
+  index,
+  focused,
+  expanded,
+  className
+}: {
+  id: string
+  threadId: string
+  index: number
+  focused: boolean
+  expanded: boolean
+  className: string
+}): React.JSX.Element | null {
+  if (isAgentColumn(id)) {
+    return <AgentColumn id={id} index={index} focused={focused} expanded={expanded} className={className} />
+  }
+  return <ChatColumn id={id} threadId={threadId} index={index} focused={focused} expanded={expanded} className={className} />
+}
+
+function ChatColumn({
   id,
   threadId,
   index,

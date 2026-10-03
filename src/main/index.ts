@@ -780,6 +780,8 @@ function registerIpc(): void {
     }
   })
 
+  ipcMain.handle('chats:undismiss', (_e, id: string) => manager.undismissDelegation(id))
+
   ipcMain.handle('chats:rename', (_e, id: string, title: string) => {
     const chat = store.getChat(id)
     if (!chat) return

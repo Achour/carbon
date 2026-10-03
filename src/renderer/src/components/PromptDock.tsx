@@ -7,7 +7,7 @@ import { cn } from '@/lib/utils'
 import { DISCLOSURE_PANEL } from '@/lib/disclosure'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { useApp } from '@/store'
+import { focusedChatOf, useApp } from '@/store'
 
 /**
  * Everything the agent asks you, docked on the composer.
@@ -361,7 +361,7 @@ function PermissionPrompt({
   const respondPermission = useApp((s) => s.respondPermission)
   // The chat keys belong to when focus is nowhere in particular: the thread's
   // focused column, which is its own chat until another column is clicked.
-  const keyChat = useApp((s) => s.focusedChatId)
+  const keyChat = useApp(focusedChatOf)
   const [busy, setBusy] = React.useState(false)
   const summary = summarize(request)
   const authorizationUrl =

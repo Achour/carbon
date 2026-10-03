@@ -8,10 +8,11 @@ import {
 } from '@shared/agentRuns'
 import type { ToolPart } from '@shared/types'
 import { cn } from '@/lib/utils'
-import { messagesOf, useApp } from '@/store'
+import { focusedChatOf, messagesOf, useApp } from '@/store'
 import { NO_AGENTS, rosterChat, useAgents } from '@/agentsStore'
 import { Markdown } from '@/components/Markdown'
 import { SubAgentStream } from '@/components/messages/ToolCard'
+import { TranscriptChat } from '@/components/messages/AgentRows'
 
 /**
  * Every sub-agent this chat has spawned, with what it is running on and what it
@@ -33,7 +34,7 @@ import { SubAgentStream } from '@/components/messages/ToolCard'
 export function AgentsPanel(): React.JSX.Element {
   // One panel serves every chat in the thread, so it shows one roster: the chat
   // it was pointed at, else the focused one — see `rosterChat`.
-  const focused = useApp((s) => s.focusedChatId)
+  const focused = useApp(focusedChatOf)
   const chatId = useAgents((s) => rosterChat(s, focused))
   const { runs, totals } = useAgents((s) => (chatId ? s.byChat[chatId] : undefined) ?? NO_AGENTS)
   const selectedId = useAgents((s) => s.selectedId)
@@ -113,19 +114,17 @@ function AgentDetail({
   chatId: string
 }): React.JSX.Element {
   const selectAgent = useAgents((s) => s.selectAgent)
-  const scrollRef = React.useRef<HTMLDivElement>(null)
-  const columnRef = React.useRef<HTMLDivElement>(null)
-  const pinnedRef = React.useRef(true)
   // The chat's own cwd, not the project's: a chat in a worktree resolves its
   // file links against the worktree. A string, so the selector is stable.
   const cwd = useApp((s) => s.chats.find((c) => c.id === chatId)?.cwd ?? '')
+  const provider = useApp((s) => s.chats.find((c) => c.id === chatId)?.provider ?? 'claude')
+  const transcriptChat = React.useMemo(() => ({ chatId, provider }), [chatId, provider])
   const input = (part.input ?? {}) as Record<string, unknown>
   const description =
     run?.description ||
     (typeof input.description === 'string' ? input.description : '') ||
     'Agent'
   const type = run?.type ?? (typeof input.subagent_type === 'string' ? input.subagent_type : undefined)
-  const children = (part.children ?? []).filter(Boolean)
   const running = run ? run.status === 'running' : part.status === 'running'
   // Held running gap-free for the agent's whole life — a foreground agent's
   // result lands once, after all its children; a backgrounded one's is held to
@@ -145,6 +144,68 @@ function AgentDetail({
     elapsed
   ].filter(Boolean) as string[]
 
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <header className="shrink-0 border-b border-border px-3 py-2">
+        <button
+          type="button"
+          onClick={() => selectAgent(null)}
+          className="-mx-1 mb-1.5 flex items-center gap-1.5 rounded-md px-1 py-0.5 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase transition-colors hover:text-foreground"
+        >
+          <ArrowLeft className="size-3.5" />
+          Spawned agents
+        </button>
+        <div className="flex items-baseline gap-2">
+          <span className="min-w-0 flex-1 text-[13px] text-foreground">{description}</span>
+          {type && (
+            <span className="shrink-0 rounded bg-secondary px-1 py-px font-mono text-[10px] text-muted-foreground">
+              {type}
+            </span>
+          )}
+          <StatusDot status={run?.status ?? (running ? 'running' : 'done')} />
+        </div>
+        {identity.length > 0 && (
+          <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground/70">
+            {identity.join(' · ')}
+          </div>
+        )}
+      </header>
+      {/* Its nested spawns are agent rows, which name their column by the
+          chat that holds them. */}
+      <TranscriptChat.Provider value={transcriptChat}>
+        <AgentStreamBody part={part} cwd={cwd} live={live} running={running} />
+      </TranscriptChat.Provider>
+    </div>
+  )
+}
+
+/**
+ * A sub-agent's work, read top to bottom: its stream, then its report. Shared
+ * by the Agents panel's detail and the agent's own thread column, so the two
+ * follow a working agent, group its calls and show its result identically.
+ * `lead` is drawn above the stream — the column puts the prompt there.
+ */
+export const AgentStreamBody = React.memo(function AgentStreamBody({
+  part,
+  cwd,
+  live,
+  running,
+  lead,
+  className
+}: {
+  part: ToolPart
+  cwd: string
+  /** The spawning part is open — see `live` in `AgentDetail`. */
+  live: boolean
+  running: boolean
+  lead?: React.ReactNode
+  className?: string
+}): React.JSX.Element {
+  const scrollRef = React.useRef<HTMLDivElement>(null)
+  const columnRef = React.useRef<HTMLDivElement>(null)
+  const pinnedRef = React.useRef(true)
+  const children = (part.children ?? []).filter(Boolean)
+  const hasText = children.some((c) => c.type === 'text' && c.text.trim())
   // Follow a working agent, the way the transcript follows a streaming turn —
   // and for the same reason, since this is that problem one level down: the
   // step it is on is the answer, and it is at the bottom. Keyed on the column's
@@ -181,40 +242,16 @@ function AgentDetail({
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <header className="shrink-0 border-b border-border px-3 py-2">
-        <button
-          type="button"
-          onClick={() => selectAgent(null)}
-          className="-mx-1 mb-1.5 flex items-center gap-1.5 rounded-md px-1 py-0.5 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase transition-colors hover:text-foreground"
-        >
-          <ArrowLeft className="size-3.5" />
-          Spawned agents
-        </button>
-        <div className="flex items-baseline gap-2">
-          <span className="min-w-0 flex-1 text-[13px] text-foreground">{description}</span>
-          {type && (
-            <span className="shrink-0 rounded bg-secondary px-1 py-px font-mono text-[10px] text-muted-foreground">
-              {type}
-            </span>
-          )}
-          <StatusDot status={run?.status ?? (running ? 'running' : 'done')} />
-        </div>
-        {identity.length > 0 && (
-          <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground/70">
-            {identity.join(' · ')}
-          </div>
-        )}
-      </header>
       <div
         ref={scrollRef}
         onScroll={onScroll}
-        className="min-h-0 flex-1 overflow-y-auto px-3 py-3"
+        className={cn('min-h-0 flex-1 overflow-y-auto px-3 py-3', className)}
       >
         {/* The measured element is the content, not the scroller: a
             ResizeObserver on a scroller reports the viewport, which does not
             move when the stream grows. */}
         <div ref={columnRef}>
+          {lead}
           {children.length > 0 ? (
             <SubAgentStream parts={children} cwd={cwd} live={live} />
           ) : (
@@ -224,7 +261,11 @@ function AgentDetail({
           )}
           {/* The agent's report to the model that spawned it — the one thing the
               roster row cannot carry, and usually the thing being looked for. */}
-          {part.output != null && part.output !== '' && (
+          {/* Skipped when the stream already ends on the agent's own words
+              and the output is that same report — Claude's and Codex's do —
+              but kept for a provider that streams nothing (Grok, Antigravity),
+              where it is the whole of what the agent said. */}
+          {part.output != null && part.output !== '' && !(hasText && sameReport(children, part.output)) && (
             <div className="mt-3 rounded-lg border border-border bg-code p-2.5">
               <div className="mb-1 text-[10px] font-medium tracking-wider text-muted-foreground uppercase">
                 Result
@@ -236,8 +277,18 @@ function AgentDetail({
           )}
         </div>
       </div>
-    </div>
   )
+})
+
+/** The stream's last words are the output — don't print the report twice. */
+function sameReport(children: ToolPart['children'] & object, output: string): boolean {
+  const last = [...children].reverse().find((c) => c?.type === 'text' && c.text.trim())
+  if (!last || last.type !== 'text') return false
+  const a = last.text.replace(/\s+/g, ' ').trim()
+  const b = output.replace(/\s+/g, ' ').trim()
+  // Equal, not "contains": a short line streamed first ("Done.") would
+  // otherwise hide a longer report that merely begins with it.
+  return a === b
 }
 
 function StatusDot({ status }: { status: AgentRunView['status'] }): React.JSX.Element {

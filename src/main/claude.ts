@@ -771,6 +771,25 @@ class ClaudeSession implements AgentSession {
   // stream ends cleanly in between, surface that as a failed turn instead of
   // silently returning to idle with only the user's message persisted.
   private turnActive = false
+  /**
+   * The model is answering with no turn of ours open — a backgrounded agent's
+   * notification woke it. The status stays `idle` through it (nothing was
+   * sent), so `acceptsTurn` reads this instead: a delegated agent's report
+   * injected mid-continuation would be answered by output that was never its
+   * reply. Cleared at the continuation's result.
+   */
+  private continuationLive = false
+  /**
+   * Prompt uuids results have named as consumed, newest last and bounded — and
+   * whether this CLI names them at all. A delegated agent's report counts as
+   * delivered only once its own prompt is named: a continuation's uuid-less
+   * result can close the turn a queued report was sitting behind, and its
+   * output would otherwise be read as the report's answer.
+   */
+  private answeredPrompts: string[] = []
+  /** Prompts a *failed* result named — correlated, but never put to the model. */
+  private failedPrompts: string[] = []
+  private namesPrompts = false
   // Last status emitted, so consecutive duplicates (e.g. interrupt() then the
   // turn's `result` both emitting 'idle') collapse to one — consumers get a
   // clean level-triggered stream and don't each need to edge-detect.
@@ -794,8 +813,36 @@ class ClaudeSession implements AgentSession {
     return (
       this.lastEmittedStatus === 'idle' &&
       this.pending.size === 0 &&
-      this.backgroundJobCount === 0
+      this.backgroundJobCount === 0 &&
+      // A continuation is the model working with no turn of ours open; idle-
+      // session pruning must not dispose it mid-answer.
+      !this.continuationLive
     )
+  }
+
+  promptAnswered(promptId: string): boolean | undefined {
+    if (this.answeredPrompts.includes(promptId)) return true
+    // A failure names the prompt too, but says nothing about the model having
+    // read it — so it is no answer either way, and the manager falls back to
+    // the transcript (which shows the error, and parks the report).
+    if (this.failedPrompts.includes(promptId)) return undefined
+    return this.namesPrompts ? false : undefined
+  }
+
+  private noteAnswered(msg: SDKMessage & { type: 'result' }): void {
+    const all = 'user_message_uuids' in msg ? msg.user_message_uuids : undefined
+    const one = 'user_message_uuid' in msg ? msg.user_message_uuid : undefined
+    const ids = all?.length ? all : one ? [one] : []
+    if (!ids.length) return
+    this.namesPrompts = true
+    const failed = msg.subtype !== 'success' || ('is_error' in msg && msg.is_error === true)
+    const list = failed ? this.failedPrompts : this.answeredPrompts
+    list.push(...ids)
+    if (list.length > 64) list.splice(0, list.length - 64)
+  }
+
+  get acceptsTurn(): boolean {
+    return this.lastEmittedStatus === 'idle' && this.pending.size === 0 && !this.continuationLive
   }
 
   constructor(
@@ -1779,6 +1826,7 @@ class ClaudeSession implements AgentSession {
         // turn now running, and `interrupt()` has already dealt with the dead
         // one. Silence on those fields — an older CLI, a synthetic turn — is
         // read as "this turn", which is the behaviour that was here before.
+        this.noteAnswered(msg)
         if (this.isStaleResult(msg)) {
           this.lastAssistantError = undefined
           this.interruptedTurn = false
@@ -1788,6 +1836,16 @@ class ClaudeSession implements AgentSession {
         // Covers valid itemless/silent turns and failures before assistant output.
         void this.maybeGenerateTitle()
         this.turnActive = false
+        // A continuation ending changes no status — it never left `idle` — so
+        // nothing would tell the manager the chat can take a turn again; this
+        // idle is that word (deduplicated nowhere downstream that matters: the
+        // renderer's idle handling is a refresh).
+        if (this.continuationLive) {
+          this.continuationLive = false
+          if (this.lastEmittedStatus === 'idle') {
+            this.emit({ type: 'status', chatId: this.chat.id, status: 'idle' })
+          }
+        }
         // What the turn that just ran was actually served at.
         this.emitFastMode(msg.fast_mode_state, msg.fast_mode_disabled_reason)
         if ('modelUsage' in msg && msg.modelUsage) {
@@ -2101,6 +2159,7 @@ class ClaudeSession implements AgentSession {
   }): void {
     switch (event.type) {
       case 'message_start':
+        if (!this.turnActive) this.continuationLive = true
         this.ensureCurrent()
         this.jsonAcc.clear()
         break
@@ -3038,9 +3097,14 @@ export class ChatManager {
   private pruneIdleSessions(): void {
     // Never a running delegate's: an idle one is about to be settled, and one
     // whose turn has not shown yet must not be swept before it starts.
+    // Never a running delegate's session, and never a parent with a report in
+    // flight: whether that report was answered is read off the live session
+    // (`promptAnswered`), which a prune would throw away mid-question.
     const idle = [...this.sessions.entries()].filter(
       ([chatId, session]) =>
-        session.idle && this.store.getMeta(chatId)?.delegation?.status !== 'running'
+        session.idle &&
+        this.store.getMeta(chatId)?.delegation?.status !== 'running' &&
+        !this.deliveryInFlight.has(chatId)
     )
     while (idle.length > ChatManager.MAX_IDLE_SESSIONS) {
       const [chatId, session] = idle.shift()!
@@ -4649,6 +4713,8 @@ export class ChatManager {
       await this.setOptions(child.id, { permissionMode: parent.permissionMode, remember: false })
     }
     const brief = followUpBrief(this.parentAgent(parent))
+    // Work for it again is the opposite of a kill.
+    if (child.delegation.dismissedAt) this.patchDelegation(child, { dismissedAt: undefined })
     if (child.delegation.status === 'running') {
       // Same round: the message joins the work in progress, and the round's
       // one outcome (read from its opening prompt) covers both.
@@ -4756,6 +4822,8 @@ export class ChatManager {
       } else {
         idle.push(view.name)
       }
+      // Killed is put away: out of the thread's pills too, not just closed.
+      this.patchDelegation(child, { dismissedAt: Date.now() })
       this.emit({ type: 'chat-close', chatId: view.id })
     }
     const said = [
@@ -4767,6 +4835,12 @@ export class ChatManager {
       ok: true,
       text: `${said.join('; ')}. ${one ? 'Its chat is' : 'Their chats are'} closed beside this one; nothing was deleted, and agents_send can give ${one ? 'it' : 'them'} new work.`
     }
+  }
+
+  /** The user reopened a killed delegate — see `Delegation.dismissedAt`. */
+  undismissDelegation(id: string): void {
+    const chat = this.store.getChat(id)
+    if (chat?.delegation?.dismissedAt) this.patchDelegation(chat, { dismissedAt: undefined })
   }
 
   /** Stop one running delegate for good: settled as cancelled, then disposed. */
@@ -4806,14 +4880,20 @@ export class ChatManager {
   private onChatSettled(chat: ChatData): void {
     if (this.shuttingDown || this.deleting.has(chat.id)) return
     const session = this.sessions.get(chat.id)
-    if (session && !session.dead && !session.idle) return
+    // As a parent, a chat can take a report once its turn is over — a dev
+    // server it left running in the background does not make it busy. Before
+    // this, a parent with one never received a single report.
+    if (!this.takesTurn(session)) return
     // As a parent: the turn that carried outcomes has ended. Confirm them if
     // the model answered it; if it never got that far (the provider failed to
     // start, or the user stopped it first) leave them due and stop retrying —
     // re-sending at every idle would loop on a broken provider, or undo a Stop
     // — until the user's next send carries them.
     this.retireInFlight(chat)
-    if (chat.delegation?.status === 'running' && this.delegationStarted.has(chat.id)) {
+    // As a delegate, its task is over only when nothing of it runs — a
+    // background shell or agent it started is still its work.
+    const settled = !session || session.dead || session.idle
+    if (settled && chat.delegation?.status === 'running' && this.delegationStarted.has(chat.id)) {
       this.settleDelegation(chat)
     }
     // As a parent: anything that ended while this chat was busy goes now.
@@ -4846,8 +4926,7 @@ export class ChatManager {
    */
   private flushDeliveries(parentId: string): void {
     if (this.shuttingDown || this.deleting.has(parentId) || this.deliveryParked.has(parentId)) return
-    const session = this.sessions.get(parentId)
-    if (session && !session.dead && !session.idle) return
+    if (!this.takesTurn(this.sessions.get(parentId))) return
     if (!this.store.getMeta(parentId)) return
     const parent = this.store.getChat(parentId)
     if (!parent || parent.pendingPlanReview) return
@@ -4888,20 +4967,39 @@ export class ChatManager {
    * in flight the outcomes would be hidden from the next send and then
    * vouched for by an unrelated answer.
    */
-  private retireInFlight(parent: ChatData): void {
+  private retireInFlight(
+    parent: ChatData,
+    session = this.sessions.get(parent.id),
+    live = !!session && !session.dead
+  ): void {
     const carriers = this.deliveryInFlight.get(parent.id)
     if (!carriers) return
-    this.deliveryInFlight.delete(parent.id)
-    for (const { promptId, views } of carriers) {
-      if (promptReached(parent.messages, promptId)) this.commitDelivered(parent, views)
-      else this.deliveryParked.add(parent.id)
+    const pending: typeof carriers = []
+    for (const carrier of carriers) {
+      // The provider's own word first: a prompt it named as consumed was
+      // answered; one it has not named yet, on a live session, is still queued
+      // behind other work (a continuation) and stays in flight. Only a
+      // provider that cannot say falls back to the transcript.
+      const named = session?.promptAnswered?.(carrier.promptId)
+      if (named === true) this.commitDelivered(parent, carrier.views)
+      else if (named === false && live) pending.push(carrier)
+      else if (named === undefined && promptReached(parent.messages, carrier.promptId)) {
+        this.commitDelivered(parent, carrier.views)
+      } else this.deliveryParked.add(parent.id)
     }
+    if (pending.length) this.deliveryInFlight.set(parent.id, pending)
+    else this.deliveryInFlight.delete(parent.id)
   }
 
   /**
    * Ended, unreported outcomes for a parent — its children's and its inbox's —
    * less any already riding a turn that has not ended yet.
    */
+  /** No session, a dead one, or one between turns — background jobs allowed. */
+  private takesTurn(session: AgentSession | undefined): boolean {
+    return !session || session.dead || (session.acceptsTurn ?? session.idle)
+  }
+
   private undelivered(parent: ChatData): DelegationView[] {
     const seen = new Set(
       (this.deliveryInFlight.get(parent.id) ?? []).flatMap((c) => c.views.map((v) => v.id))
@@ -5013,7 +5111,9 @@ export class ChatManager {
     this.onDispose(chatId)
     if (!this.shuttingDown && !this.deleting.has(chatId) && this.deliveryInFlight.has(chatId)) {
       const parent = this.store.getChat(chatId)
-      if (parent) this.retireInFlight(parent)
+      // The disposed session answers for what it consumed; whatever it never
+      // named is parked rather than kept waiting on a session that is gone.
+      if (parent) this.retireInFlight(parent, session, false)
     }
     // A disposed session emits no final status, so a delegate whose turn was
     // cut short here (an effort change, a worktree exit) would otherwise stay
