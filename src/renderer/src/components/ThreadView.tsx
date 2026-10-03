@@ -35,7 +35,6 @@ import {
 import {
   chatMeta,
   isClosedSideChat,
-  isUnusedSideChat,
   MAX_THREAD_CHATS,
   panelFloats,
   severalChatsShown,
@@ -280,6 +279,18 @@ function ThreadHeader({ chat, ids }: { chat: ChatMeta; ids: readonly string[] })
   const busyLabel =
     busyTerminals.length === 1 ? busyTerminals[0] : `${busyTerminals.length} processes`
   const layout = threadLayoutFor(ids.length, threadLayout)
+  // The thread's closed chats, newest first — drawn beside the open ones so a
+  // put-away agent or side chat is one click from coming back, rather than
+  // behind ＋. Selected by identity and derived here, like `AddChatControl`.
+  const chats = useApp((s) => s.chats)
+  const sideColumns = useApp((s) => s.sideColumns)
+  const closed = React.useMemo(
+    () =>
+      chats
+        .filter((c) => isClosedSideChat(c, chat.id, sideColumns))
+        .sort((a, b) => b.updatedAt - a.updatedAt),
+    [chats, chat.id, sideColumns]
+  )
 
   return (
     <header
@@ -305,16 +316,27 @@ function ThreadHeader({ chat, ids }: { chat: ChatMeta; ids: readonly string[] })
       >
         {chat.title || 'New chat'}
       </div>
-      {ids.length > 1 && (
+      {(ids.length > 1 || closed.length > 0) && (
         <>
           <div
             role="tablist"
             aria-label="Chats in this thread"
             className="no-drag ml-1 flex shrink-0 items-center gap-0.5 border-l border-border pl-2"
           >
-            {ids.map((id, i) => (
-              <ThreadPill key={id} id={id} threadId={chat.id} index={i} focused={id === focused} />
-            ))}
+            {ids.length > 1 &&
+              ids.map((id, i) => (
+                <ThreadPill key={id} id={id} threadId={chat.id} index={i} focused={id === focused} />
+              ))}
+            {closed.length > 0 && (
+              <div
+                aria-label="Closed chats"
+                className={cn('flex items-center gap-0.5', ids.length > 1 && 'ml-1 border-l border-border pl-1.5')}
+              >
+                {closed.slice(0, CLOSED_PILLS).map((c) => (
+                  <ClosedPill key={c.id} chat={c} full={ids.length >= MAX_THREAD_CHATS} />
+                ))}
+              </div>
+            )}
           </div>
           <div className="min-w-2 flex-1" />
         </>
@@ -537,6 +559,40 @@ function ThreadPill({
         <ProviderMark provider={meta.provider} className="size-3" />
         <ChatMark id={id} />
         <DropEdge side={drop.over} inset="inset-y-1 -mx-[3px]" />
+      </button>
+    </WithTooltip>
+  )
+}
+
+/** How many closed chats get a pill; the rest stay in ＋'s list. */
+const CLOSED_PILLS = 6
+
+/**
+ * A closed chat of the thread, dimmed beside the open ones: its provider, the
+ * activity dot a closed chat mid-turn has nowhere else to show, and a click
+ * that reopens its column. No number — numbers are ⌘1–⌘4 for what is on
+ * screen.
+ */
+function ClosedPill({ chat, full }: { chat: ChatMeta; full: boolean }): React.JSX.Element {
+  const reopenSideChat = useApp((s) => s.reopenSideChat)
+  const name = chat.delegation?.name
+  const title = chat.title?.trim() || 'New chat'
+  const label = full
+    ? `${name ? `${name} · ` : ''}${title} — the thread shows ${MAX_THREAD_CHATS} chats; close one to reopen this`
+    : `${name ? `${name} · ` : ''}${title} — closed, click to reopen`
+  return (
+    <WithTooltip label={label} side="bottom">
+      <button
+        type="button"
+        data-closed-pill={chat.id}
+        aria-label={`Reopen ${name ?? title}`}
+        disabled={full}
+        onClick={() => void reopenSideChat(chat.id)}
+        className="relative flex h-6.5 items-center gap-1 rounded-md border border-dashed border-border/70 px-1.5 text-muted-foreground/60 transition-colors hover:border-border hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+      >
+        <ProviderMark provider={chat.provider} className="size-3" />
+        {name && <span className="max-w-20 truncate text-[11px]">{name}</span>}
+        <ChatMark id={chat.id} />
       </button>
     </WithTooltip>
   )
@@ -1030,7 +1086,12 @@ function ColumnHeader({
 }): React.JSX.Element {
   const toggleExpandedChat = useApp((s) => s.toggleExpandedChat)
   const leaveThread = useApp((s) => s.leaveThread)
-  const [confirmClose, setConfirmClose] = React.useState(false)
+  const closeSideChat = useApp((s) => s.closeSideChat)
+  // No confirmation: closing deletes nothing — the chat keeps running if it
+  // was, and its pill in the thread header (or its card in a parent's
+  // transcript) brings it back in one click. A question in front of an
+  // undoable act was a toll on every close.
+  const close = (): void => void closeSideChat(chat.id)
   const title = chat.title?.trim() || 'New chat'
   return (
     <>
@@ -1075,7 +1136,7 @@ function ColumnHeader({
                 <Button
                   size="icon-sm"
                   variant="ghost"
-                  onClick={() => setConfirmClose(true)}
+                  onClick={close}
                   aria-label={`Close chat ${index + 1}`}
                 >
                   <X />
@@ -1095,17 +1156,13 @@ function ColumnHeader({
                 <PanelLeftOpen /> Move to its own chat
               </ContextMenuItem>
               <ContextMenuSeparator />
-              <ContextMenuItem onClick={() => setConfirmClose(true)}>
+              <ContextMenuItem onClick={close}>
                 <X /> Close chat
               </ContextMenuItem>
             </>
           )}
         </ContextMenuContent>
       </ContextMenu>
-      {/* Outside the header: a portal still bubbles React events to its
-          ancestors, and the header's double-click expands the column. Mounted
-          only while asking, so its selectors do not run on every delta. */}
-      {side && confirmClose && <CloseChatDialog chat={chat} onClose={() => setConfirmClose(false)} />}
     </>
   )
 }
@@ -1157,53 +1214,3 @@ function DelegationBadge({ chat }: { chat: ChatMeta }): React.JSX.Element {
   )
 }
 
-/**
- * Asks before a column closes. A close keeps the conversation, but it still
- * takes a live chat off the screen — mid-turn, or with a prompt waiting — and
- * the ✕ sits beside the expand button in a 32px header, so a stray click was
- * too cheap. The body says what actually happens to *this* chat: an untouched
- * one is discarded rather than kept, and a running turn goes on in the
- * background.
- */
-function CloseChatDialog({
-  chat,
-  onClose
-}: {
-  chat: ChatMeta
-  onClose: () => void
-}): React.JSX.Element {
-  const closeSideChat = useApp((s) => s.closeSideChat)
-  const busy = useApp((s) => (s.statuses[chat.id] ?? 'idle') !== 'idle')
-  // The test `closeSideChat` itself applies, so the wording matches the outcome.
-  const unused = useApp((s) => isUnusedSideChat(s, chat.id))
-  const title = chat.title?.trim()
-  return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent>
-        <DialogTitle>Close this chat?</DialogTitle>
-        <DialogDescription>
-          {title ? <span className="text-foreground">“{title}”</span> : 'This chat'}{' '}
-          {unused
-            ? 'has no messages yet, so closing it discards it.'
-            : busy
-              ? 'is still working. Its turn keeps running in the background, and you can reopen it from ＋.'
-              : 'moves to Closed chats under ＋, where you can reopen it. Nothing is deleted.'}
-        </DialogDescription>
-        <div className="mt-4 flex justify-end gap-2">
-          <Button variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button
-            autoFocus
-            onClick={() => {
-              onClose()
-              void closeSideChat(chat.id)
-            }}
-          >
-            Close chat
-          </Button>
-        </div>
-      </DialogContent>
-    </Dialog>
-  )
-}

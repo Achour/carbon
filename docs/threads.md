@@ -108,19 +108,22 @@ behind it.
   a switch made inside that trip files the column under the thread it was added
   to rather than dropping it onto the one now on screen — `openChat`'s
   `if (get().activeId === id)` guard in the other shape.
-- **Closing a column does not delete the chat, and it asks first**
-  (`CloseChatDialog`). A close takes a live chat off the screen — possibly
-  mid-turn or with a prompt waiting — from a ✕ beside the expand button in a
-  32px header, so it is not left to a stray click; the dialog says what happens
-  to *that* chat (kept, discarded if untouched, or still running in the
-  background). The one you close is very often the one you want two minutes
-  later. The `+` in the thread header turns into a
-  popover listing **Closed chats** once there is one, sorted on `updatedAt`
-  (the array is the sidebar's hand-made order, `ChatMeta.sortKey`, so array
-  position says nothing about recency), each with the activity dot a
-  closed chat mid-turn would otherwise have nowhere to show. **One thing deletes
-  one: the ✕ on a row there, and it asks first** (`SideChatDeleteDialog`,
-  rendered by `App` because the popover closes on the click).
+- **Closing a column does not delete the chat, and it does not ask.** It
+  used to (`CloseChatDialog`), on the argument that a ✕ in a 32px header is
+  easy to hit by accident — but a close is undoable in one click, so the
+  question was a toll on every close guarding against nothing. The chat keeps
+  running if it was, and comes back from its pill.
+- **Closed chats keep a pill in the thread header**, dimmed and dashed after
+  the open ones (`ClosedPill`, the newest `CLOSED_PILLS`), with the provider,
+  a delegate's name and the activity dot a closed chat mid-turn has nowhere
+  else to show; a click reopens the column. The strip shows whenever a thread
+  has any — including when only its own chat is open, which is exactly when a
+  way back is wanted. The `+` in the thread header still holds the full
+  **Closed chats** list, sorted on `updatedAt` (the array is the sidebar's
+  hand-made order, `ChatMeta.sortKey`, so array position says nothing about
+  recency). **One thing deletes one: the ✕ on a row there, and it asks first**
+  (`SideChatDeleteDialog`, rendered by `App` because the popover closes on the
+  click).
   - **The slot is dropped on close and refetched on reopen.** Main keeps the
     session alive and keeps persisting, so a retained slot would be a second copy
     of the truth that drifts. Dropping it also makes `onScreen` false, which is
