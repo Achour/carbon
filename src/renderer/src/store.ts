@@ -701,6 +701,13 @@ interface AppState {
   focusChat(id: string, opts?: { caret?: boolean }): void
   /** The one column drawn full width, the rest hidden; null for all. */
   expandedChatId: string | null
+  /**
+   * Every other thread's expanded column, stashed and restored with the switch
+   * the way `sideColumnsByChat` is, and persisted (`threadExpanded`). Without
+   * it, expanding a column, visiting another chat and coming back showed the
+   * whole thread again — the view the user had chosen was simply dropped.
+   */
+  expandedByChat: Record<string, string>
   toggleExpandedChat(id: string): void
   /** The layout picked for three or more chats; null follows the count. */
   threadLayout: ThreadLayout | null
@@ -1651,6 +1658,8 @@ function chatSwitchPatch(
     | 'sideColumns'
     | 'sideColumnsByChat'
     | 'sideChats'
+    | 'expandedChatId'
+    | 'expandedByChat'
   >,
   nextId: string | null
 ): Partial<AppState> {
@@ -1675,6 +1684,13 @@ function chatSwitchPatch(
   const sideColumnsByChat = allColumns(s)
   const sideColumns = (nextId ? sideColumnsByChat[nextId] : undefined) ?? NO_COLUMNS
   if (nextId) delete sideColumnsByChat[nextId]
+  // The expansion rides along. Restored only onto a chat the thread still
+  // shows — a column closed or deleted while the thread was away expands
+  // nothing — and focus follows it, so keys land on the chat on screen.
+  const expandedByChat = allExpanded(s)
+  const wanted = nextId ? expandedByChat[nextId] : undefined
+  const expanded = wanted && (wanted === nextId || sideColumns.includes(wanted)) ? wanted : null
+  if (nextId) delete expandedByChat[nextId]
   return {
     tabsByChat,
     openFiles: restored.openFiles,
@@ -1690,10 +1706,11 @@ function chatSwitchPatch(
       : {}),
     sideColumns,
     sideColumnsByChat,
-    // Focus and expansion describe the thread on screen, and the next one has
-    // neither yet: its own chat is where keys land until a column is clicked.
-    focusedChatId: nextId,
-    expandedChatId: null,
+    // Focus describes the thread on screen: the next one's own chat is where
+    // keys land until a column is clicked — or the column it had expanded.
+    focusedChatId: expanded ?? nextId,
+    expandedChatId: expanded,
+    expandedByChat,
     // The closed list is scoped to the active thread, so a confirmation still
     // standing after a switch would be asking about a side chat the list it was
     // opened from is no longer drawing — `canvasScopePatch`'s rule, one level
@@ -2125,6 +2142,30 @@ function readStoredColumns(): Record<string, string[]> {
   }
 }
 
+/** Expanded columns by thread — the stash plus the thread on screen. */
+function allExpanded(s: Pick<AppState, 'activeId' | 'expandedChatId' | 'expandedByChat'>): Record<string, string> {
+  const out = { ...s.expandedByChat }
+  if (s.activeId) {
+    if (s.expandedChatId) out[s.activeId] = s.expandedChatId
+    else delete out[s.activeId]
+  }
+  return out
+}
+
+function readStoredExpanded(): Record<string, string> {
+  try {
+    const raw = JSON.parse(localStorage.getItem('threadExpanded') ?? '{}') as unknown
+    if (!raw || typeof raw !== 'object') return {}
+    const out: Record<string, string> = {}
+    for (const [thread, id] of Object.entries(raw as Record<string, unknown>)) {
+      if (typeof id === 'string') out[thread] = id
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
+
 function readThreadOrder(): Record<string, string[]> {
   try {
     const raw = JSON.parse(localStorage.getItem('threadOrder') ?? '{}') as unknown
@@ -2189,6 +2230,7 @@ export const useApp = create<AppState>((set, get) => ({
   expandedChatId: null,
   threadLayout: readThreadLayout(),
   threadOrder: readThreadOrder(),
+  expandedByChat: readStoredExpanded(),
   unreadChats: {},
   panelFloating: localStorage.getItem('panelFloating') !== 'false',
   defaults: null,
@@ -2939,6 +2981,10 @@ export const useApp = create<AppState>((set, get) => ({
         }
         return kept
       })(),
+      // Same for expansions, which `chatSwitchPatch` validates anyway.
+      expandedByChat: Object.fromEntries(
+        Object.entries(get().expandedByChat).filter(([thread]) => visible.some((c) => c.id === thread))
+      ),
       defaults,
       providerClis,
       loading: false,
@@ -5534,6 +5580,26 @@ useApp.subscribe((s, prev) => {
     localStorage.setItem('threadColumns', json)
   } catch {
     // Storage full or blocked: threads relaunch as one column, nothing worse.
+  }
+})
+
+let storedExpanded = ''
+useApp.subscribe((s, prev) => {
+  if (
+    s.loading ||
+    (s.expandedChatId === prev.expandedChatId &&
+      s.expandedByChat === prev.expandedByChat &&
+      s.activeId === prev.activeId)
+  ) {
+    return
+  }
+  const json = JSON.stringify(allExpanded(s))
+  if (json === storedExpanded) return
+  storedExpanded = json
+  try {
+    localStorage.setItem('threadExpanded', json)
+  } catch {
+    // Storage full or blocked: the expansion lasts for this session only.
   }
 })
 

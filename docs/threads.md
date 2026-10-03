@@ -81,6 +81,14 @@ looking at running through `set` — and every selector in the app with it. The
 thread's own transcript is refetched when it is opened anyway, and its columns
 are fetched back beside it.
 
+**The expanded column rides the same switch** (`expandedByChat`, persisted as
+`localStorage.threadExpanded`). It used to be reset on every switch, on the
+argument that the next thread has no expansion yet — true of a thread never
+opened, wrong of one the user had set up: expand a column, look at another
+chat, come back, and the view they chose was gone. It is restored only onto a
+chat the thread still shows (a column closed or deleted while it was away
+expands nothing), and focus follows it, so keys land on the chat on screen.
+
 **They are written through to storage** (`localStorage.threadColumns`, from a
 store subscription at the foot of `store.ts`). In memory only, every thread
 relaunched as one column with its other chats sitting in the closed list, which
