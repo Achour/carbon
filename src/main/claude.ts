@@ -780,6 +780,21 @@ class ClaudeSession implements AgentSession {
    */
   private continuationLive = false
   /**
+   * A background job just ended and the CLI is about to wake the model with its
+   * notification — the gap *before* `continuationLive`, which only rises at the
+   * continuation's `message_start`. The job set empties first, and that same
+   * event makes the session `idle` and runs `pruneIdleSessions` in the next
+   * microtask: with more than `MAX_IDLE_SESSIONS` chats open, the chat whose
+   * build had just finished was disposed while the CLI was dequeuing the
+   * notification. The process died before calling the model, the transcript
+   * stopped at "Waiting for the build", and the next send resumed a session
+   * with an unanswered notification ("No response requested."). Held until
+   * the continuation starts, or for `WAKE_GRACE_MS` if none does (a
+   * notification the running turn absorbed, a job the user stopped).
+   */
+  private wakeTimer: NodeJS.Timeout | null = null
+  private static readonly WAKE_GRACE_MS = 30_000
+  /**
    * Prompt uuids results have named as consumed, newest last and bounded — and
    * whether this CLI names them at all. A delegated agent's report counts as
    * delivered only once its own prompt is named: a continuation's uuid-less
@@ -816,7 +831,8 @@ class ClaudeSession implements AgentSession {
       this.backgroundJobCount === 0 &&
       // A continuation is the model working with no turn of ours open; idle-
       // session pruning must not dispose it mid-answer.
-      !this.continuationLive
+      !this.continuationLive &&
+      !this.wakeTimer
     )
   }
 
@@ -842,7 +858,12 @@ class ClaudeSession implements AgentSession {
   }
 
   get acceptsTurn(): boolean {
-    return this.lastEmittedStatus === 'idle' && this.pending.size === 0 && !this.continuationLive
+    return (
+      this.lastEmittedStatus === 'idle' &&
+      this.pending.size === 0 &&
+      !this.continuationLive &&
+      !this.wakeTimer
+    )
   }
 
   constructor(
@@ -1182,6 +1203,8 @@ class ClaudeSession implements AgentSession {
 
   private emitBackgroundJobs(jobs: BackgroundJob[]): void {
     const hadJobs = this.backgroundJobCount > 0
+    // Raised before the emit, whose listener prunes idle sessions.
+    if (jobs.length < this.backgroundJobCount && !this.disposed && !this.dead) this.expectWake()
     this.backgroundJobCount = jobs.length
     this.emit({ type: 'background-jobs', chatId: this.chat.id, jobs })
     if (
@@ -1193,6 +1216,23 @@ class ClaudeSession implements AgentSession {
     ) {
       this.terminalizeRunning('success')
     }
+  }
+
+  /** See `wakeTimer`. */
+  private expectWake(): void {
+    if (this.wakeTimer) clearTimeout(this.wakeTimer)
+    this.wakeTimer = setTimeout(() => {
+      this.wakeTimer = null
+      // No continuation came, so nothing else will say the chat can take a
+      // turn again — the same word a continuation's result gives.
+      if (this.idle && !this.disposed) this.emit({ type: 'status', chatId: this.chat.id, status: 'idle' })
+    }, ClaudeSession.WAKE_GRACE_MS)
+  }
+
+  private clearWake(): void {
+    if (!this.wakeTimer) return
+    clearTimeout(this.wakeTimer)
+    this.wakeTimer = null
   }
 
   async setModel(model?: string): Promise<void> {
@@ -1485,6 +1525,7 @@ class ClaudeSession implements AgentSession {
     this.partialTimers.clear()
     for (const timer of this.thinkingPingTimers.values()) clearTimeout(timer)
     this.thinkingPingTimers.clear()
+    this.clearWake()
     // Flushes the parked child updates on its way through, which is why they
     // are not cleared alongside the two timer maps above: a sub-agent's last
     // few steps are exactly what a reader goes looking for after a session ends.
@@ -1585,6 +1626,7 @@ class ClaudeSession implements AgentSession {
       this.turnActive = false
     } finally {
       this.dead = true
+      this.clearWake()
       if (this.turnActive && !this.disposed && !this.interruptedTurn) {
         this.pushMessage({
           id: randomUUID(),
@@ -2159,7 +2201,10 @@ class ClaudeSession implements AgentSession {
   }): void {
     switch (event.type) {
       case 'message_start':
-        if (!this.turnActive) this.continuationLive = true
+        if (!this.turnActive) {
+          this.continuationLive = true
+          this.clearWake()
+        }
         this.ensureCurrent()
         this.jsonAcc.clear()
         break

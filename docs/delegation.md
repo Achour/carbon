@@ -217,7 +217,15 @@ neither belongs to a message the app wrote.
   with no turn of ours open and the status never leaving `idle` — is busy for
   this purpose (`continuationLive`, from its first output to its result, which
   then re-emits `idle`), or a report injected mid-continuation would be
-  "answered" by output that was never its reply.
+  "answered" by output that was never its reply. The gap *before* that first
+  output is covered too (`wakeTimer`, raised when a job leaves the set, up to
+  30 s): the job set empties ahead of the wake, and its event runs
+  `pruneIdleSessions` — so with more than two chats open, the one whose build
+  had just finished was disposed while the CLI was dequeuing its notification,
+  and the transcript stopped at "waiting for the build" for good. A turn's
+  `result` deliberately leaves it raised, since a notification landing at the
+  turn boundary gets its own continuation; the cost is that a job the turn
+  absorbed holds the session busy (and a report due to it) for up to 30 s.
 - **Where the provider can name what it answered, that is the word**
   (`AgentSession.promptAnswered`). Claude's result echoes the uuids of the
   prompts its turn consumed (the same ids `isStaleResult` reads), so a report
