@@ -13,7 +13,7 @@ import { cn } from '@/lib/utils'
 
 /**
  * A chart an agent drew with `chart_render`, drawn with the app's own chart
- * components — the heavy half of `ChartEmbed`, split out so Recharts is not in
+ * components — the heavy half of `InlineVisual`, split out so Recharts is not in
  * the entry chunk (see `lib/preloadHeavy.ts`).
  *
  * The marks follow the dataviz rules rather than the library's defaults: bars

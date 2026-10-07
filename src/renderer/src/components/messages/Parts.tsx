@@ -33,8 +33,7 @@ import {
   ToolOutputImages
 } from './ToolCard'
 import { AgentGroupCard, AgentPartRow } from './AgentRows'
-import { ChartEmbed } from './ChartEmbed'
-import { chartCall } from '@shared/chartSpec'
+import { InlineVisual, isInlineVisual } from './InlineVisual'
 import { isAgentish } from '@shared/agentRuns'
 
 /**
@@ -453,7 +452,7 @@ export const AssistantBlock = React.memo(function AssistantBlock({
   const items: Array<
     | PartRun
     | { kind: 'images'; part: ToolPart }
-    | { kind: 'chart'; part: ToolPart }
+    | { kind: 'visual'; part: ToolPart }
     | { kind: 'agents'; parts: ToolPart[] }
   > = []
   // Folded away with the rest of the turn — see `fromPart` — except for what
@@ -471,10 +470,10 @@ export const AssistantBlock = React.memo(function AssistantBlock({
   for (let i = 0; i < Math.min(fromPart, parts.length); i++) {
     const part = parts[i]
     if (part?.type === 'tool' && part.outputImages?.length) items.push({ kind: 'images', part })
-    // A chart the call drew is a result in exactly the same sense, and draws
-    // in the same place a screenshot does.
-    else if (part?.type === 'tool' && part.status === 'success' && chartCall(part)) {
-      items.push({ kind: 'chart', part })
+    // A chart or diagram the call drew is a result in exactly the same sense,
+    // and draws in the same place a screenshot does.
+    else if (part?.type === 'tool' && part.status === 'success' && isInlineVisual(part)) {
+      items.push({ kind: 'visual', part })
     } else if (part?.type === 'tool' && isAgentish(part)) survivors.push(part)
   }
   if (survivors.length) items.push({ kind: 'agents', parts: survivors })
@@ -513,8 +512,8 @@ export const AssistantBlock = React.memo(function AssistantBlock({
             <AgentGroupCard key={`agents-${item.parts[0].toolUseId}`} parts={item.parts} />
           )
         }
-        if (item.kind === 'chart') {
-          return <ChartEmbed key={`chart-${item.part.toolUseId}`} part={item.part} />
+        if (item.kind === 'visual') {
+          return <InlineVisual key={`visual-${item.part.toolUseId}`} part={item.part} />
         }
         if (item.kind === 'images') {
           return (

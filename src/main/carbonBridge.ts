@@ -203,11 +203,12 @@ function cap(messages: JsonRpcRequest[]): number {
   const canvas = messages.some((message) => {
     if (message.method !== 'tools/call') return false
     const name = (message.params as { name?: unknown } | undefined)?.name
-    // A chart carries its rows — hundreds of them — where a preview call
+    // A chart carries its rows — hundreds of them — and a diagram its whole
+    // graph, where a preview call
     // carries a URL; under the URL-sized cap it was refused on Codex and Grok
     // alone.
     const kind = parseCarbonTool(typeof name === 'string' ? name : undefined)?.kind
-    return kind === 'canvas' || kind === 'chart'
+    return kind === 'canvas' || kind === 'chart' || kind === 'diagram'
   })
   return canvas ? CANVAS_BODY_CAP : BODY_CAP
 }

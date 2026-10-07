@@ -100,6 +100,7 @@ import { projectRoot } from '../shared/types.ts'
 import type { CanvasManager } from './canvas.ts'
 import { CANVAS_SESSION_RULES, CANVAS_TOOL_INFO, runCanvasTool } from './canvasTools.ts'
 import { CHART_SESSION_RULES, CHART_TOOL_INFO, runChartTool } from './chartTool.ts'
+import { DIAGRAM_TOOL_INFO, runDiagramTool } from './diagramTool.ts'
 import {
   AGENTS_TOOL_INFO,
   DELEGATION_SESSION_RULES,
@@ -169,7 +170,7 @@ import {
  * here reaches a chat only once it starts or compacts — a relaunch is not
  * enough. See "the one option that changes on neither axis" in CLAUDE.md.
  */
-const GUI_SYSTEM_APPEND = `You are running inside a desktop GUI (not a terminal). The GUI renders any \`\`\`mermaid fenced code block as a real rendered diagram — this applies to your chat replies AND to plan documents you write for ExitPlanMode. When a diagram would make an explanation or a plan clearer (flows, sequences, architecture, state), draw it with a Mermaid fenced block (e.g. flowchart, sequenceDiagram) rather than ASCII art or box-drawing characters. Keep diagrams valid and reasonably small; label nodes clearly.\n\n${CANVAS_SESSION_RULES}\n\n${CHART_SESSION_RULES}`
+const GUI_SYSTEM_APPEND = `You are running inside a desktop GUI (not a terminal). The GUI renders any \`\`\`mermaid fenced code block as a real rendered diagram. In a plan document you write for ExitPlanMode, draw flows, sequences, architecture and state with a Mermaid fenced block rather than ASCII art or box-drawing characters; keep diagrams valid and reasonably small, and label nodes clearly. In a chat reply, a flow or architecture diagram is better drawn with the \`diagram_render\` tool (below), which the app lays out in its own style — keep Mermaid in replies for what it can show and that tool cannot, such as a sequence diagram.\n\n${CANVAS_SESSION_RULES}\n\n${CHART_SESSION_RULES}`
 
 /**
  * A preview tool parameter as the zod field Claude's in-process server takes.
@@ -279,10 +280,10 @@ function buildCarbonServer(
           )
         )
       }
-      if (ref.kind === 'chart') {
+      if (ref.kind === 'chart' || ref.kind === 'diagram') {
         // Derived from the one JSON Schema the HTTP providers read, property by
         // property — `tool()` takes a shape, not a schema.
-        const info = CHART_TOOL_INFO[ref.name]
+        const info = ref.kind === 'chart' ? CHART_TOOL_INFO[ref.name] : DIAGRAM_TOOL_INFO[ref.name]
         const required = new Set<string>(info.inputSchema.required)
         const shape: ZodRawShape = Object.fromEntries(
           Object.entries(info.inputSchema.properties).map(([key, prop]) => {
@@ -291,7 +292,8 @@ function buildCarbonServer(
           })
         )
         return tool(name, info.description, shape, async (args) => {
-          const result = runChartTool(ref.name, args)
+          const result =
+            ref.kind === 'chart' ? runChartTool(ref.name, args) : runDiagramTool(ref.name, args)
           return result.isError ? { ...text(result.text), isError: true } : text(result.text)
         })
       }

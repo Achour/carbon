@@ -34,6 +34,7 @@ import {
   Sparkles,
   SquareTerminal,
   Trash2,
+  Workflow,
   Wrench,
   X
 } from 'lucide-react'
@@ -46,7 +47,6 @@ import {
 } from '@shared/agentRuns'
 import { cn } from '@/lib/utils'
 import { humanizeShellCommand, unwrapGrokTool } from '@/lib/toolLabels'
-import { chartCall } from '@shared/chartSpec'
 import { leadActivityLabel, summarizeActivity } from '@/lib/toolSummary'
 import { GROUP_MIN, groupToolRuns } from '@/lib/toolRuns'
 import { DISCLOSURE_PANEL } from '@/lib/disclosure'
@@ -55,7 +55,7 @@ import { parseDiff } from '@/lib/diffRows'
 import { Markdown } from '@/components/Markdown'
 import { useApp } from '@/store'
 import { DelegateCard } from './DelegateCard'
-import { ChartEmbed } from './ChartEmbed'
+import { InlineVisual, isInlineVisual } from './InlineVisual'
 import { AgentGroupCard, NativeAgentRow } from './AgentRows'
 import {
   canvasInRun,
@@ -460,9 +460,11 @@ function computeToolMeta(part: ToolPart, cwd: string): ToolMeta {
     // months of history into anonymous wrenches.
     // A chart drawn in the thread. The label is what kind of thing it is and
     // the summary is the agent's own name for it; the chart itself is drawn
-    // below the row (`ChartEmbed`), so the row has nothing to open.
+    // below the row (`InlineVisual`), so the row has nothing to open.
     case 'mcp__carbon__chart_render':
       return { icon: ChartColumn, label: 'Chart', summary: str(input.title) }
+    case 'mcp__carbon__diagram_render':
+      return { icon: Workflow, label: 'Diagram', summary: str(input.title) }
     case 'mcp__carbon__preview_status':
     case 'mcp__preview__status':
       return { icon: AppWindow, label: 'Preview', summary: 'Status' }
@@ -1141,7 +1143,7 @@ export const ToolCard = React.memo(function ToolCard({
   arriving?: boolean
   /**
    * Draw what the call *produced* below the row — its screenshots, and the
-   * chart it drew. A containing ToolGroup owns the one always-visible copy
+   * chart or diagram it drew. A containing ToolGroup owns the one always-visible copy
    * of both, so its rows turn this off.
    */
   showOutputs?: boolean
@@ -1275,7 +1277,7 @@ export const ToolCard = React.memo(function ToolCard({
       {showOutputs && part.outputImages?.length ? (
         <ToolOutputImages images={part.outputImages} />
       ) : null}
-      {showOutputs ? <ChartEmbed part={part} /> : null}
+      {showOutputs ? <InlineVisual part={part} /> : null}
     </>
   )
 })
@@ -1550,9 +1552,9 @@ const ActivityGroup = React.memo(function ActivityGroup({
         </Collapsible.Panel>
       </Collapsible.Root>
       {outputImages.length ? <ToolOutputImages images={outputImages} /> : null}
-      {/* Every chart the run drew, below it as its screenshots are. */}
+      {/* Every chart or diagram the run drew, below it as its screenshots are. */}
       {parts.map((part) =>
-        chartCall(part) ? <ChartEmbed key={`chart-${part.toolUseId}`} part={part} /> : null
+        isInlineVisual(part) ? <InlineVisual key={`visual-${part.toolUseId}`} part={part} /> : null
       )}
     </>
   )

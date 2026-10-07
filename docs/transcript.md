@@ -838,9 +838,9 @@ fold paths keep the images and drop the rows: a folded message renders at a
 boundary past its last part (`AssistantBlock` surfaces a hidden tool part's
 images and returns null when nothing else is left), and a folded *run* pushes
 its collected images in place of the group. A browser or preview sequence is
-exactly such a run, and it is all screenshots. A chart the turn drew with
-`chart_render` survives the same way (`ChartEmbed`; see "Charts in the
-conversation" in `docs/canvas.md`).
+exactly such a run, and it is all screenshots. A chart or diagram the turn
+drew (`chart_render`, `diagram_render`) survives the same way (`InlineVisual`;
+see "Charts and diagrams in the conversation" in `docs/canvas.md`).
 
 **A turn whose work outlives it is still live.** A backgrounded agent's call
 returns at spawn and its real end arrives minutes later as a `task_notification`

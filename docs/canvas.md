@@ -322,7 +322,7 @@ the file tree's idiom, for the file tree's reason — and the empty canvas carri
 a placeholder saying to ask the agent to fill it, since a blank pane reads as a
 canvas that failed to load. The agent finds it by title through `canvas list`.
 
-### Charts in the conversation (`chartTool.ts`, `shared/chartSpec.ts`, `ChartEmbed`, `ChartCard`)
+### Charts and diagrams in the conversation (`chartTool.ts`, `diagramTool.ts`, `shared/chartSpec.ts`, `shared/diagramSpec.ts`, `InlineVisual`, `ChartCard`, `DiagramCard`)
 
 `chart_render` draws a chart **in the conversation**, under the call — the
 in-thread visuals T3 Code shipped, in Carbon's own chart style. The agent sends
@@ -382,11 +382,90 @@ The rest:
   run in `renderMessages`, keyed `chart-<toolUseId>` on all of them. A folded
   turn reads header, chart, answer. It draws once the call has succeeded:
   before that the input is still streaming.
-- **Recharts is a lazy chunk** (`ChartEmbed` → `ChartCard`), warmed on idle
+- **Recharts is a lazy chunk** (`InlineVisual` → `ChartCard`), warmed on idle
   beside mermaid by `preloadHeavyChunks`: a large dependency most chats never
   draw stays off the path to first paint, and the first chart does not wait on
   a fetch either. The suspense fallback is the card's frame at about its
   height, so the transcript does not jump when the chunk lands.
+- **Charts alone was the third wrong turn.** Read as "only charts", the
+  shadcn instruction shipped a tool that could draw a bar and nothing that
+  explains *how something works* — and the first real chat that needed a flow
+  got "chart_render only draws numeric charts" from the model and a Mermaid
+  block. `diagram_render` is the sibling for that: nodes (a short label, an
+  optional detail line, a tone, a group), edges (optional label, dashed for an
+  optional or async path) and groups, validated the chart's way
+  (`normalizeDiagram`) and drawn by `DiagramCard`. In a *reply* the rules now
+  send flows there rather than to Mermaid; plan documents keep Mermaid, which
+  is what renders in the plan panel. `InlineVisual` / `isInlineVisual` is the
+  one question the four transcript paths ask, so a third kind of visual lands
+  in one place.
+- **dagre lays it out; the app draws it.** Nodes are HTML (the app's type,
+  wrapping and tokens, crisp when scaled) and edges are one SVG layer, in one
+  box. Box sizes come from text measured in the body's own font, so what dagre
+  placed is what the browser draws. Tones are what a node *is* — `accent` for
+  the node the explanation is about, `muted` for context, and three states
+  that carry an icon as well as a colour, never hue alone.
+- **A diagram fits the column before it shrinks.** The reading column can be
+  ~400px with the panel open, and a branching flow at full text width is wider.
+  So the card tries, in order: what was asked; the same with box text wrapped
+  narrower; and, for a left-to-right flow, the same turned downward — the
+  column's length is free and its width is not, and `right` was asked because
+  the flow is shallow, not because it must be read sideways. Only if nothing
+  fits is it scaled, never below 0.8, and then scrolled. Three things this
+  took measuring to get right: the available width is the *content* box
+  (`clientWidth` counts the padding, so every fit test was 32px generous); the
+  bounds are taken off what was placed, not dagre's graph size, whose margins
+  left a band of empty card under a grouped flow; and group captions sit above
+  the edge layer on the card's colour, since an edge entering a group at its
+  top centre ran straight through a long caption.
+- **A review (GPT 6.1 Sol, 2026-10-07) found the layout trusted model input
+  it should not have, and fuzzing found more.** All of it lives in
+  `lib/diagramLayout.ts`, out of the card so `test/diagramLayout.test.ts` can
+  reach it:
+  - *Model ids reached graphlib's plain objects.* `constructor` and
+    `toString` crashed the layout, a node named `__proto__` with an outgoing
+    edge wrote two enumerable keys onto the renderer's own
+    `Object.prototype`, and a node `group:g` collided with the container id
+    once derived for group `g`. dagre now sees only generated ids (`n<i>`,
+    `c<i>`); the model's stay application data.
+  - *Parallel edges break dagre's routing* ("Not possible to find
+    intersection inside of the rectangle"), grouped or not, once a graph is
+    dense. `normalizeDiagram` drops an exact repeat and **refuses** a
+    parallel edge that says something different, with how to express it.
+    Joining them was the first answer and the re-review caught it losing
+    meaning: two conditions that each fit the label limit were cut to one,
+    and a dashed and a solid path became one or the other.
+  - *dagre's compound pass can return `NaN` for every position without
+    throwing* (dense, every node grouped): a diagram that draws as nothing,
+    with no error anywhere. `finite` treats that as a failure, and a failed
+    compound pass falls back to a flat layout (`layoutFlat`) that draws **no
+    group boxes** and captions each member with its group instead. Boxes
+    drawn round a flat layout's members were the first fallback, and the
+    re-review caught them sweeping in other groups' nodes — a wrong
+    boundary is worse than none.
+  - *Edge labels were bounded at a fixed 120px* while dagre reserved their
+    measured width, so a long one hung past the left edge of a drawing that
+    "fit". The measured size now carries through bounds and DOM.
+  - *A resize re-ran every candidate layout* — ~180–280 ms for the largest
+    accepted graph. `DiagramLayouts` builds each candidate once per spec;
+    a resize only chooses.
+  - The text description calls a dashed edge "dashed", not "optional": the
+    schema lets dashing mean optional, async or fallback, and the words must
+    not pick one.
+  - *A screen reader got the title alone*: `role="img"` made the graph
+    presentational. It is a `figure` now, described by the same graph in
+    words — steps with their detail, state and group, arrows with their
+    condition — and the drawing is `aria-hidden`.
+  - `InlineVisual` wraps each card in its own boundary, so a throw nobody has
+    found yet costs one card, not the chat: rendering happens under the content
+    pane's boundary, and the saved call would have crashed it again on every
+    reopen. A fuzz of 1,600 random dense graphs (cycles, self-loops, groups,
+    long labels, both directions, both text widths) lays out clean; 60 of them
+    run in the test.
+- `demo/e2e/diagram-inline.js` pins it at two window widths: fold survival,
+  one box per node and none overlapping, an arrow per edge, labels, dashing, a
+  group enclosing its members, Grok's wrapping, a right-running flow advancing
+  in order (across, or down when narrow), and no sideways scroll.
 - `demo/e2e/chart-inline.js` pins the rendering: the fold, native drawing, bar
   count and width, legend at two series and none at one, the stats, no
   animation, the table view, the row's label, Grok's wrapped call, and a later

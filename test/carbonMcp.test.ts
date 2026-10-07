@@ -57,7 +57,8 @@ test('one server carries both tool tables, each name saying which half it is', (
       'canvas_edit',
       'canvas_list',
       'canvas_read',
-      'chart_render'
+      'chart_render',
+      'diagram_render'
     ]
   )
   const byName = Object.fromEntries(tools.map((tool) => [tool.name, tool]))
@@ -81,8 +82,8 @@ test('one server carries both tool tables, each name saying which half it is', (
   )
   // A build with no canvas host advertises the preview half rather than four
   // tools that answer "not available" to every call.
-  // `chart_render` stays: it needs no canvas host.
-  assert.equal(carbonToolList({ canvas: false }).length, PREVIEW_COUNT + 1)
+  // `chart_render` and `diagram_render` stay: they need no canvas host.
+  assert.equal(carbonToolList({ canvas: false }).length, PREVIEW_COUNT + 2)
 })
 
 test('a tool name is recognized however the provider spelled it', () => {
@@ -129,14 +130,15 @@ test('handleMcpMessage answers initialize, tools/list, and refuses the rest by n
   assert.equal(result.protocolVersion, '2025-11-25')
 
   const list = handleMcpMessage({ jsonrpc: '2.0', id: 2, method: 'tools/list' })
-  assert.equal((list?.result as { tools: unknown[] }).tools.length, PREVIEW_COUNT + 5)
+  assert.equal((list?.result as { tools: unknown[] }).tools.length, PREVIEW_COUNT + 6)
   assert.equal(
     (
       handleMcpMessage({ jsonrpc: '2.0', id: 3, method: 'tools/list' }, { canvas: false })
         ?.result as { tools: unknown[] }
     ).tools.length,
-    // `chart_render` needs no canvas host — the spec is the call's own input.
-    PREVIEW_COUNT + 1
+    // `chart_render` and `diagram_render` need no canvas host — the spec is
+    // the call's own input.
+    PREVIEW_COUNT + 2
   )
 
   // Grok opens with `server/discover`, which is not MCP. Answered `-32601`
@@ -270,7 +272,7 @@ test('the bridge speaks streamable-HTTP MCP behind a bearer token', async () => 
     assert.equal(notified.status, 202)
 
     const list = await rpc(bridge, session.url, { jsonrpc: '2.0', id: 1, method: 'tools/list' })
-    assert.equal((list.json as { result: { tools: unknown[] } }).result.tools.length, PREVIEW_COUNT + 5)
+    assert.equal((list.json as { result: { tools: unknown[] } }).result.tools.length, PREVIEW_COUNT + 6)
 
     const shot = await rpc(bridge, session.url, {
       jsonrpc: '2.0',

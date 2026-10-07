@@ -48,8 +48,7 @@ import { TasksCard } from '@/components/messages/TasksCard'
 import { AgentGroupCard, AgentPartRow, TranscriptChat } from '@/components/messages/AgentRows'
 import { TurnChangesCard } from '@/components/messages/TurnChangesCard'
 import { TurnHeader } from '@/components/messages/TurnHeader'
-import { ChartEmbed } from '@/components/messages/ChartEmbed'
-import { chartCall } from '@shared/chartSpec'
+import { InlineVisual, isInlineVisual } from '@/components/messages/InlineVisual'
 import { turnPresentations } from '@/lib/turnChanges'
 import { foldTurns, type TurnFold } from '@/lib/turnFold'
 
@@ -382,11 +381,11 @@ function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
         if (images.length) {
           out.push(<ToolOutputImages key={`images-${run[0].id}`} images={images} />)
         }
-        // A chart the run drew is a result the same way.
+        // A chart or diagram the run drew is a result the same way.
         for (const message of run) {
           for (const part of message.parts) {
-            if (part?.type === 'tool' && part.status === 'success' && chartCall(part)) {
-              out.push(<ChartEmbed key={`chart-${part.toolUseId}`} part={part} />)
+            if (part?.type === 'tool' && part.status === 'success' && isInlineVisual(part)) {
+              out.push(<InlineVisual key={`visual-${part.toolUseId}`} part={part} />)
             }
           }
         }

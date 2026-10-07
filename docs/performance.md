@@ -43,8 +43,8 @@ turn, or on every message of every turn.
   a streaming fence and the diff view — and would lose their colour the moment
   the turn ended and the full parse replaced them. `HLJS_LANGUAGES` is now one
   definition fed to both, the way `--syn-*` is one palette rather than two that
-  agree by coincidence. mermaid, CodeMirror, xterm and Recharts (the chart an
-  agent draws, ~885 KB) are dynamic imports
+  agree by coincidence. mermaid, CodeMirror, xterm, Recharts and dagre (the charts
+  and diagrams an agent draws) are dynamic imports
   preloaded by `preloadHeavy.ts`: lazily loading a surface without warming it
   does not remove its cost, it moves it to the first click on a file, the first
   terminal tab and the first diagram, where it lands as a hitch in the middle of

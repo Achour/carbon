@@ -368,8 +368,10 @@ it guards**, and put new reasoning in that file rather than back in this one.
 - **`docs/canvas.md`** — Carbon's own `carbon` MCP server and the canvas panel
   (`carbonMcp.ts`, `carbonBridge.ts`, `canvasTools.ts`, `previewTools.ts`,
   `canvasStore.ts`, `CanvasPanel`, `shared/canvasText.ts`, `lib/canvasRef.ts`),
-  and the charts `chart_render` draws in the conversation (`chartTool.ts`,
-  `shared/chartSpec.ts`, `ChartEmbed`, `ChartCard`, `ui/chart.tsx`).
+  and the charts and diagrams `chart_render` / `diagram_render` draw in the
+  conversation (`chartTool.ts`, `diagramTool.ts`, `shared/chartSpec.ts`,
+  `shared/diagramSpec.ts`, `InlineVisual`, `ChartCard`, `DiagramCard`,
+  `ui/chart.tsx`).
 - **`docs/delegation.md`** — one chat's agent handing a task to another
   provider through `agents_delegate`: the child as a side chat
   (`ChatMeta.delegation`, `chat-added`), delegates' names and steering one by
@@ -561,7 +563,8 @@ through `knownProvider` on read like every other provider-keyed record.
 Carbon gives every session one MCP server, `carbon`, carrying its tool
 tables: `preview_*` drives this project's dev server and the in-app browser,
 `canvas_*` writes the documents the user reads beside the chat, and
-`chart_render` draws a chart inline in the conversation. One server and
+`chart_render` / `diagram_render` draw a chart or a flow diagram inline in the
+conversation. One server and
 one declaration is what makes a call `mcp__carbon__canvas_write` on all three
 providers, so nothing downstream can tell which backend produced a row.
 

@@ -23,6 +23,12 @@ import {
 } from './previewTools.ts'
 import { CHART_TOOL_INFO, CHART_TOOL_NAMES, runChartTool, type ChartToolName } from './chartTool.ts'
 import {
+  DIAGRAM_TOOL_INFO,
+  DIAGRAM_TOOL_NAMES,
+  runDiagramTool,
+  type DiagramToolName
+} from './diagramTool.ts'
+import {
   AGENTS_TOOL_INFO,
   AGENTS_TOOL_NAMES,
   isAgentsSideEffect,
@@ -64,6 +70,7 @@ export type CarbonToolRef =
   | { kind: 'preview'; name: PreviewToolName }
   | { kind: 'canvas'; name: CanvasToolName }
   | { kind: 'chart'; name: ChartToolName }
+  | { kind: 'diagram'; name: DiagramToolName }
   | { kind: 'agents'; name: AgentsToolName }
 
 /** Every tool the server can advertise, preview first. */
@@ -71,6 +78,7 @@ export const CARBON_TOOL_REFS: readonly CarbonToolRef[] = [
   ...PREVIEW_TOOL_NAMES.map((name) => ({ kind: 'preview' as const, name })),
   ...CANVAS_TOOL_NAMES.map((name) => ({ kind: 'canvas' as const, name })),
   ...CHART_TOOL_NAMES.map((name) => ({ kind: 'chart' as const, name })),
+  ...DIAGRAM_TOOL_NAMES.map((name) => ({ kind: 'diagram' as const, name })),
   ...AGENTS_TOOL_NAMES.map((name) => ({ kind: 'agents' as const, name }))
 ]
 
@@ -114,7 +122,7 @@ export function carbonToolId(ref: CarbonToolRef): string {
 export function parseCarbonTool(raw: string | undefined): CarbonToolRef | undefined {
   if (!raw) return undefined
   const key = raw.trim().toLowerCase().replace(/[-.]/g, '_')
-  const match = /(?:^|_|\/|:)(preview|canvas|chart|agents)_([a-z_]+)$/.exec(key)
+  const match = /(?:^|_|\/|:)(preview|canvas|chart|diagram|agents)_([a-z_]+)$/.exec(key)
   if (!match) return undefined
   const [, kind, name] = match
   if (kind === 'preview') {
@@ -128,6 +136,10 @@ export function parseCarbonTool(raw: string | undefined): CarbonToolRef | undefi
   if (kind === 'chart') {
     const found = CHART_TOOL_NAMES.find((candidate) => candidate === name)
     return found ? { kind: 'chart', name: found } : undefined
+  }
+  if (kind === 'diagram') {
+    const found = DIAGRAM_TOOL_NAMES.find((candidate) => candidate === name)
+    return found ? { kind: 'diagram', name: found } : undefined
   }
   const found = CANVAS_TOOL_NAMES.find((candidate) => candidate === name)
   return found ? { kind: 'canvas', name: found } : undefined
@@ -181,10 +193,10 @@ export function carbonToolList(scope: CarbonToolScope = {}): CarbonToolSchema[] 
         }
       }
     }
-    if (ref.kind === 'chart') {
-      // Declared as JSON Schema in the first place — its arguments are arrays
-      // of objects, which the flat param tables cannot spell.
-      const info = CHART_TOOL_INFO[ref.name]
+    if (ref.kind === 'chart' || ref.kind === 'diagram') {
+      // Declared as JSON Schema in the first place — their arguments are
+      // arrays of objects, which the flat param tables cannot spell.
+      const info = ref.kind === 'chart' ? CHART_TOOL_INFO[ref.name] : DIAGRAM_TOOL_INFO[ref.name]
       return {
         name: carbonToolName(ref),
         description: info.description,
@@ -217,6 +229,7 @@ export function carbonToolInfo(ref: CarbonToolRef): { description: string; readO
   if (ref.kind === 'preview') return PREVIEW_TOOL_INFO[ref.name]
   if (ref.kind === 'agents') return AGENTS_TOOL_INFO[ref.name]
   if (ref.kind === 'chart') return CHART_TOOL_INFO[ref.name]
+  if (ref.kind === 'diagram') return DIAGRAM_TOOL_INFO[ref.name]
   return CANVAS_TOOL_INFO[ref.name]
 }
 
@@ -242,11 +255,12 @@ export type CarbonToolInput = CanvasToolInput &
   PreviewToolInput &
   AgentsToolInput & {
     /**
-     * A chart's arguments, kept as sent: they are arrays of objects, which
-     * the string picks below would drop, and `normalizeChart` is the one
-     * place that checks them.
+     * The arguments as sent, for the tools whose arguments are arrays of
+     * objects (`chart_render`, `diagram_render`) — the string picks below
+     * would drop them, and each tool's `normalize…` is the one place that
+     * checks them.
      */
-    chart?: Record<string, unknown>
+    raw?: Record<string, unknown>
   }
 
 /**
@@ -285,7 +299,7 @@ export function carbonToolInput(raw: unknown): CarbonToolInput {
     name: str(input.name),
     agent: str(input.agent),
     message: str(input.message),
-    chart: input
+    raw: input
   }
 }
 
@@ -358,7 +372,11 @@ export async function runCarbonTool(
   if (ref.kind === 'chart') {
     // Needs no host and no project: the spec is the call's own input, and the
     // transcript draws it from there.
-    const result = runChartTool(ref.name, input.chart)
+    const result = runChartTool(ref.name, input.raw)
+    return result.isError ? { ok: false, error: result.text } : { ok: true, kind: 'text', text: result.text }
+  }
+  if (ref.kind === 'diagram') {
+    const result = runDiagramTool(ref.name, input.raw)
     return result.isError ? { ok: false, error: result.text } : { ok: true, kind: 'text', text: result.text }
   }
   if (!hosts.canvas) return { ok: false, error: 'Canvas is not available.' }
