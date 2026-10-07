@@ -213,11 +213,13 @@ neither belongs to a message the app wrote.
   case — never became idle again and never received a single report, while
   the user could send it a message at any moment. A delegate's *own* ending
   still waits for its background work: that is part of its task. A Claude
-  **continuation** — the model woken by a background agent's notification,
-  with no turn of ours open and the status never leaving `idle` — is busy for
-  this purpose (`continuationLive`, from its first output to its result, which
-  then re-emits `idle`), or a report injected mid-continuation would be
-  "answered" by output that was never its reply. The gap *before* that first
+  **continuation** — the model woken by a background job's notification,
+  with no turn of ours open — is busy for this purpose (`continuationLive`,
+  from its first output to its result), or a report injected mid-continuation would be
+  "answered" by output that was never its reply. Its status is `streaming`
+  over the same span: it used to stay `idle`, so a delegate bisecting tests
+  for ten minutes after its build finished showed spinning tool rows under a
+  composer, foot and sidebar that all said it had stopped. The gap *before* that first
   output is covered too (`wakeTimer`, raised when a job leaves the set, up to
   30 s): the job set empties ahead of the wake, and its event runs
   `pruneIdleSessions` — so with more than two chats open, the one whose build

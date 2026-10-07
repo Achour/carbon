@@ -789,11 +789,11 @@ class ClaudeSession implements AgentSession {
   // silently returning to idle with only the user's message persisted.
   private turnActive = false
   /**
-   * The model is answering with no turn of ours open — a backgrounded agent's
-   * notification woke it. The status stays `idle` through it (nothing was
-   * sent), so `acceptsTurn` reads this instead: a delegated agent's report
-   * injected mid-continuation would be answered by output that was never its
-   * reply. Cleared at the continuation's result.
+   * The model is answering with no turn of ours open — a background job's
+   * notification woke it. The status goes `streaming` at its first output like
+   * any turn's, but nothing was sent, so `acceptsTurn` reads this as well: a
+   * delegated agent's report injected mid-continuation would be answered by
+   * output that was never its reply. Cleared at the continuation's result.
    */
   private continuationLive = false
   /**
@@ -1025,7 +1025,9 @@ class ClaudeSession implements AgentSession {
    * tell", never "stale".
    */
   private isStaleResult(msg: SDKMessage & { type: 'result' }): boolean {
-    if (!this.turnUuid) return false
+    // With no turn of ours open the result is a continuation's, and it is the
+    // only thing that will take the chat back to `idle`.
+    if (!this.turnUuid || !this.turnActive) return false
     // Several sends can merge into one turn; `user_message_uuids` lists every
     // prompt it consumed, so ours being anywhere in it makes the result ours.
     const all = 'user_message_uuids' in msg ? msg.user_message_uuids : undefined
@@ -1895,10 +1897,11 @@ class ClaudeSession implements AgentSession {
         // Covers valid itemless/silent turns and failures before assistant output.
         void this.maybeGenerateTitle()
         this.turnActive = false
-        // A continuation ending changes no status — it never left `idle` — so
-        // nothing would tell the manager the chat can take a turn again; this
-        // idle is that word (deduplicated nowhere downstream that matters: the
-        // renderer's idle handling is a refresh).
+        // A continuation the user stopped is already `idle`, so the closing
+        // `setStatus` below would dedup and nothing would tell the manager the
+        // chat can take a turn again; this idle is that word (deduplicated
+        // nowhere downstream that matters: the renderer's idle handling is a
+        // refresh).
         if (this.continuationLive) {
           this.continuationLive = false
           if (this.lastEmittedStatus === 'idle') {
@@ -2221,6 +2224,10 @@ class ClaudeSession implements AgentSession {
         if (!this.turnActive) {
           this.continuationLive = true
           this.clearWake()
+          // Busy like any turn: left `idle`, the composer, the foot's
+          // "Working…", the sidebar and keep-awake all said the chat had
+          // stopped while its tool rows spun for minutes.
+          this.setStatus('streaming')
         }
         this.ensureCurrent()
         this.jsonAcc.clear()
