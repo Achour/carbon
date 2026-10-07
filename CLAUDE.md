@@ -194,8 +194,8 @@ Path aliases: `@` → `src/renderer/src`, `@shared` → `src/shared` (renderer a
 - Permissions: the SDK's `canUseTool` callback returns a Promise held in a `pending` map until the renderer answers via `chat:respond-permission`. "Always allow" uses the SDK's permission `suggestions`.
 - Changing **effort** has no live SDK setter — `setOptions` disposes the session and the next send resumes it in a fresh process. Model and permission mode change live.
 - **The system prompt is the one option that changes on neither axis.** Carbon
-  passes an `append` (`GUI_SYSTEM_APPEND`, which carries the Mermaid nudge and
-  `CANVAS_SESSION_RULES`) and `systemPrompt.snapshot: true`, so the rendered
+  passes an `append` (`GUI_SYSTEM_APPEND`, which carries the Mermaid nudge,
+  `CANVAS_SESSION_RULES` and `CHART_SESSION_RULES`) and `systemPrompt.snapshot: true`, so the rendered
   prompt is *recorded* on the conversation's first request and sent as-is after
   that. Unrecorded — which is what passing an `append` used to mean, up to
   agent-sdk 0.3.263 — the preset re-rendered its dynamic sections on every
@@ -367,7 +367,9 @@ it guards**, and put new reasoning in that file rather than back in this one.
   permissions (`previewSession.ts`).
 - **`docs/canvas.md`** — Carbon's own `carbon` MCP server and the canvas panel
   (`carbonMcp.ts`, `carbonBridge.ts`, `canvasTools.ts`, `previewTools.ts`,
-  `canvasStore.ts`, `CanvasPanel`, `shared/canvasText.ts`, `lib/canvasRef.ts`).
+  `canvasStore.ts`, `CanvasPanel`, `shared/canvasText.ts`, `lib/canvasRef.ts`),
+  and the charts `chart_render` draws in the conversation (`chartTool.ts`,
+  `shared/chartSpec.ts`, `ChartEmbed`, `ChartCard`, `ui/chart.tsx`).
 - **`docs/delegation.md`** — one chat's agent handing a task to another
   provider through `agents_delegate`: the child as a side chat
   (`ChatMeta.delegation`, `chat-added`), delegates' names and steering one by
@@ -556,9 +558,10 @@ through `knownProvider` on read like every other provider-keyed record.
 
 ### Carbon's own tools (`src/main/carbonMcp.ts`, `carbonBridge.ts`)
 
-Carbon gives every session one MCP server, `carbon`, carrying both its tool
+Carbon gives every session one MCP server, `carbon`, carrying its tool
 tables: `preview_*` drives this project's dev server and the in-app browser,
-`canvas_*` writes the documents the user reads beside the chat. One server and
+`canvas_*` writes the documents the user reads beside the chat, and
+`chart_render` draws a chart inline in the conversation. One server and
 one declaration is what makes a call `mcp__carbon__canvas_write` on all three
 providers, so nothing downstream can tell which backend produced a row.
 

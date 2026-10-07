@@ -57,6 +57,7 @@ import { cliAvailable, requireCliPath } from './providerCli.ts'
 import { deriveTitle } from './titles.ts'
 import { PREVIEW_SESSION_RULES } from './previewTools.ts'
 import { CANVAS_SESSION_RULES } from './canvasTools.ts'
+import { CHART_SESSION_RULES } from './chartTool.ts'
 import { DELEGATION_SESSION_RULES, canDelegate } from './delegation.ts'
 import type { CarbonMcpProvider, CarbonMcpSession } from './carbonBridge.ts'
 import { CARBON_MCP_NAME, carbonMcpTools, isCarbonSideEffect, isCarbonToolId } from './carbonMcp.ts'
@@ -125,7 +126,7 @@ export const ANTIGRAVITY_SLASH_COMMANDS: SlashCommand[] = [
 ]
 
 /** Read the rules into a conversation once, at its first turn. */
-const SESSION_RULES = [PREVIEW_SESSION_RULES, CANVAS_SESSION_RULES].join('\n\n')
+const SESSION_RULES = [PREVIEW_SESSION_RULES, CANVAS_SESSION_RULES, CHART_SESSION_RULES].join('\n\n')
 
 export class AntigravitySession implements AgentSession {
   private chat: ChatData

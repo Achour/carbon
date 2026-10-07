@@ -64,6 +64,25 @@
   --chart-claude: oklch(0.6 0.139 45.6);
   --chart-codex: oklch(0.54 0.124 256.5);
   /*
+   * The categorical palette for charts an agent draws in the conversation
+   * (`chart_render`), assigned to series by position and never cycled — so a
+   * ninth series does not exist (`CHART_MAX_SERIES`). The dataviz reference
+   * palette, re-validated against this app's surfaces (#fafafa / #161616):
+   * lightness band, chroma floor, adjacent CVD ΔE ≥ 9.1 light / 8.4 dark,
+   * normal-vision ΔE ≥ 19.3, all passing. Light mode warns on contrast for
+   * slots 3–5 (< 3:1), which is why every chart carries a table view. Dark is
+   * its own selected steps, not a flip. Validated on the default surfaces only;
+   * a theme that moves `--background` far would need a re-run.
+   */
+  --chart-1: #2a78d6;
+  --chart-2: #eb6834;
+  --chart-3: #1baf7a;
+  --chart-4: #eda100;
+  --chart-5: #e87ba4;
+  --chart-6: #008300;
+  --chart-7: #4a3aa7;
+  --chart-8: #e34948;
+  /*
    * The third series is a materially harder problem than the first two, and the
    * numbers say so: warm/cool alone carries a *pair* through every CVD type with
    * room to spare (ΔE00 ≥ 44), but a third hue has to clear both at once, and
@@ -200,6 +219,14 @@
   --chart-claude: oklch(0.664 0.143 46.5);
   --chart-codex: oklch(0.644 0.141 252.7);
   --chart-grok: oklch(0.55 0.08 336);
+  --chart-1: #3987e5;
+  --chart-2: #d95926;
+  --chart-3: #199e70;
+  --chart-4: #c98500;
+  --chart-5: #d55181;
+  --chart-6: #008300;
+  --chart-7: #9085e9;
+  --chart-8: #e66767;
   /* Lifted for the dark sheet and de-saturated with it: full chroma at this
      lightness reads as neon rather than as an identity. */
   --project-ink-l: 0.78;
@@ -265,6 +292,14 @@
   --color-chart-claude: var(--chart-claude);
   --color-chart-codex: var(--chart-codex);
   --color-chart-grok: var(--chart-grok);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-chart-6: var(--chart-6);
+  --color-chart-7: var(--chart-7);
+  --color-chart-8: var(--chart-8);
   --color-brand-claude: var(--brand-claude);
   --color-brand-codex: var(--brand-codex);
   --color-icon-blue: var(--icon-blue);

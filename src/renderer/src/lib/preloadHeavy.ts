@@ -1,4 +1,5 @@
 import { preloadMermaid } from '@/components/Markdown'
+import { preloadChart } from '@/components/messages/ChartEmbed'
 
 /**
  * Fetch the lazily-loaded heavy chunks once the app has nothing better to do.
@@ -34,6 +35,9 @@ const CHUNKS: { name: string; load: () => Promise<unknown> }[] = [
   // A diagram needs an agent to write one, but it arrives without being asked
   // for — and it renders into a block the user is already reading.
   { name: 'mermaid', load: () => preloadMermaid() },
+  // A chart arrives the same way — an agent draws one into the block the user
+  // is reading — so it is warmed beside the diagrams.
+  { name: 'chart', load: () => preloadChart() },
   // A terminal tab is always a deliberate act, and many sessions never open one.
   { name: 'terminal', load: () => import('@/components/TerminalPanel') }
 ]

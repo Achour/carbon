@@ -85,6 +85,7 @@ import { PREVIEW_SESSION_RULES } from './previewTools.ts'
 import type { CarbonMcpProvider, CarbonMcpSession } from './carbonBridge.ts'
 import { projectRoot } from '../shared/types.ts'
 import { CANVAS_SESSION_RULES } from './canvasTools.ts'
+import { CHART_SESSION_RULES } from './chartTool.ts'
 import { DELEGATION_SESSION_RULES, canDelegate } from './delegation.ts'
 import { describeCanvas, describeElement, describeQuote, describeSelection } from './attachmentText.ts'
 
@@ -894,6 +895,7 @@ export class CodexSession implements AgentSession {
       CODEX_BROWSER_SESSION_RULES,
       mcp ? PREVIEW_SESSION_RULES : '',
       mcp ? CANVAS_SESSION_RULES : '',
+      mcp ? CHART_SESSION_RULES : '',
       mcp && this.delegates() ? DELEGATION_SESSION_RULES : ''
     ]
       .filter(Boolean)

@@ -175,8 +175,8 @@ async function handleRequest(
     const messages = Array.isArray(parsed) ? parsed : [parsed]
     // The cap is per *tool kind* and the kind is now inside the body, so it is
     // enforced after the parse rather than before it. A canvas write carries a
-    // whole document; a preview call carries a URL at most and has no business
-    // being large.
+    // whole document and a chart its rows; a preview call carries a URL at
+    // most and has no business being large.
     if (raw.length > cap(messages)) {
       res.writeHead(413, { 'content-type': 'application/json' }).end('{"error":"payload too large"}')
       return
@@ -203,7 +203,11 @@ function cap(messages: JsonRpcRequest[]): number {
   const canvas = messages.some((message) => {
     if (message.method !== 'tools/call') return false
     const name = (message.params as { name?: unknown } | undefined)?.name
-    return parseCarbonTool(typeof name === 'string' ? name : undefined)?.kind === 'canvas'
+    // A chart carries its rows — hundreds of them — where a preview call
+    // carries a URL; under the URL-sized cap it was refused on Codex and Grok
+    // alone.
+    const kind = parseCarbonTool(typeof name === 'string' ? name : undefined)?.kind
+    return kind === 'canvas' || kind === 'chart'
   })
   return canvas ? CANVAS_BODY_CAP : BODY_CAP
 }

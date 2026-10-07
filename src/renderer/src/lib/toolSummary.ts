@@ -50,6 +50,9 @@ const ACTIVITIES: Record<string, Activity> = {
   // Beside Write, and above the reads: a canvas is a *result* of the turn, the
   // same kind of thing a written file is.
   Canvas: { rank: 1, past: 'Wrote', gerund: 'Writing', one: 'canvas', many: 'canvases' },
+  // A chart is the turn's result as much as a canvas is, and leads the reads
+  // that gathered its data: "Drew 1 chart, read 6 files".
+  Chart: { rank: 1, past: 'Drew', gerund: 'Drawing', one: 'chart', many: 'charts' },
   // A task handed to another agent is a result of the turn too, and outranks
   // the reads that led to it.
   Delegate: { rank: 1, past: 'Delegated', gerund: 'Delegating', one: 'task', many: 'tasks' },

@@ -33,6 +33,8 @@ import {
   ToolOutputImages
 } from './ToolCard'
 import { AgentGroupCard, AgentPartRow } from './AgentRows'
+import { ChartEmbed } from './ChartEmbed'
+import { chartCall } from '@shared/chartSpec'
 import { isAgentish } from '@shared/agentRuns'
 
 /**
@@ -448,7 +450,12 @@ export const AssistantBlock = React.memo(function AssistantBlock({
   // Coalesce inspection/terminal sequences into one activity row. Short progress
   // narration between calls stays available inside the expanded group instead
   // of breaking the sequence into a wall of cards.
-  const items: Array<PartRun | { kind: 'images'; part: ToolPart } | { kind: 'agents'; parts: ToolPart[] }> = []
+  const items: Array<
+    | PartRun
+    | { kind: 'images'; part: ToolPart }
+    | { kind: 'chart'; part: ToolPart }
+    | { kind: 'agents'; parts: ToolPart[] }
+  > = []
   // Folded away with the rest of the turn — see `fromPart` — except for what
   // it *produced*. A screenshot arrives as `outputImages` on the call that took
   // it, and `ToolOutputImages` deliberately draws outside the activity row's
@@ -464,7 +471,11 @@ export const AssistantBlock = React.memo(function AssistantBlock({
   for (let i = 0; i < Math.min(fromPart, parts.length); i++) {
     const part = parts[i]
     if (part?.type === 'tool' && part.outputImages?.length) items.push({ kind: 'images', part })
-    else if (part?.type === 'tool' && isAgentish(part)) survivors.push(part)
+    // A chart the call drew is a result in exactly the same sense, and draws
+    // in the same place a screenshot does.
+    else if (part?.type === 'tool' && part.status === 'success' && chartCall(part)) {
+      items.push({ kind: 'chart', part })
+    } else if (part?.type === 'tool' && isAgentish(part)) survivors.push(part)
   }
   if (survivors.length) items.push({ kind: 'agents', parts: survivors })
   items.push(
@@ -489,7 +500,6 @@ export const AssistantBlock = React.memo(function AssistantBlock({
   // Nothing to show — the wrapper alone would still be a flex item in the
   // message list and add a message-sized gap where no message is.
   if (items.length === 0) return null
-
   return (
     <div data-message-role="assistant" className="space-y-2.5">
       {items.map((item) => {
@@ -502,6 +512,9 @@ export const AssistantBlock = React.memo(function AssistantBlock({
           ) : (
             <AgentGroupCard key={`agents-${item.parts[0].toolUseId}`} parts={item.parts} />
           )
+        }
+        if (item.kind === 'chart') {
+          return <ChartEmbed key={`chart-${item.part.toolUseId}`} part={item.part} />
         }
         if (item.kind === 'images') {
           return (

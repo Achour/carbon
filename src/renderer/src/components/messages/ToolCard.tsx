@@ -4,6 +4,7 @@ import { Collapsible } from '@base-ui/react/collapsible'
 import {
   AppWindow,
   Bot,
+  ChartColumn,
   Check,
   ChevronRight,
   ClipboardList,
@@ -45,6 +46,7 @@ import {
 } from '@shared/agentRuns'
 import { cn } from '@/lib/utils'
 import { humanizeShellCommand, unwrapGrokTool } from '@/lib/toolLabels'
+import { chartCall } from '@shared/chartSpec'
 import { leadActivityLabel, summarizeActivity } from '@/lib/toolSummary'
 import { GROUP_MIN, groupToolRuns } from '@/lib/toolRuns'
 import { DISCLOSURE_PANEL } from '@/lib/disclosure'
@@ -53,6 +55,7 @@ import { parseDiff } from '@/lib/diffRows'
 import { Markdown } from '@/components/Markdown'
 import { useApp } from '@/store'
 import { DelegateCard } from './DelegateCard'
+import { ChartEmbed } from './ChartEmbed'
 import { AgentGroupCard, NativeAgentRow } from './AgentRows'
 import {
   canvasInRun,
@@ -455,6 +458,11 @@ function computeToolMeta(part: ToolPart, cwd: string): ToolMeta {
     // every chat already in the database recorded when they were two servers.
     // Dropping the old spellings would not break a call — it would quietly turn
     // months of history into anonymous wrenches.
+    // A chart drawn in the thread. The label is what kind of thing it is and
+    // the summary is the agent's own name for it; the chart itself is drawn
+    // below the row (`ChartEmbed`), so the row has nothing to open.
+    case 'mcp__carbon__chart_render':
+      return { icon: ChartColumn, label: 'Chart', summary: str(input.title) }
     case 'mcp__carbon__preview_status':
     case 'mcp__preview__status':
       return { icon: AppWindow, label: 'Preview', summary: 'Status' }
@@ -1097,7 +1105,7 @@ export const ToolCard = React.memo(function ToolCard({
   onOpenPlan,
   dense = false,
   arriving = false,
-  showOutputImages = true
+  showOutputs = true
 }: {
   part: ToolPart
   cwd: string
@@ -1131,8 +1139,12 @@ export const ToolCard = React.memo(function ToolCard({
    * rows these are.
    */
   arriving?: boolean
-  /** A containing ToolGroup owns the one always-visible image copy. */
-  showOutputImages?: boolean
+  /**
+   * Draw what the call *produced* below the row — its screenshots, and the
+   * chart it drew. A containing ToolGroup owns the one always-visible copy
+   * of both, so its rows turn this off.
+   */
+  showOutputs?: boolean
 }): React.JSX.Element {
   const meta = toolMeta(part, cwd)
   // A canvas row's summary IS its way in, so it is drawn by `CanvasLink` rather
@@ -1260,9 +1272,10 @@ export const ToolCard = React.memo(function ToolCard({
           <ToolDetails part={part} />
         </Collapsible.Panel>
       </Collapsible.Root>
-      {showOutputImages && part.outputImages?.length ? (
+      {showOutputs && part.outputImages?.length ? (
         <ToolOutputImages images={part.outputImages} />
       ) : null}
+      {showOutputs ? <ChartEmbed part={part} /> : null}
     </>
   )
 })
@@ -1531,12 +1544,16 @@ const ActivityGroup = React.memo(function ActivityGroup({
               cwd={cwd}
               dense
               arriving={arrivals.has(p.toolUseId)}
-              showOutputImages={false}
+              showOutputs={false}
             />
           ))}
         </Collapsible.Panel>
       </Collapsible.Root>
       {outputImages.length ? <ToolOutputImages images={outputImages} /> : null}
+      {/* Every chart the run drew, below it as its screenshots are. */}
+      {parts.map((part) =>
+        chartCall(part) ? <ChartEmbed key={`chart-${part.toolUseId}`} part={part} /> : null
+      )}
     </>
   )
 })

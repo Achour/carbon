@@ -48,6 +48,8 @@ import { TasksCard } from '@/components/messages/TasksCard'
 import { AgentGroupCard, AgentPartRow, TranscriptChat } from '@/components/messages/AgentRows'
 import { TurnChangesCard } from '@/components/messages/TurnChangesCard'
 import { TurnHeader } from '@/components/messages/TurnHeader'
+import { ChartEmbed } from '@/components/messages/ChartEmbed'
+import { chartCall } from '@shared/chartSpec'
 import { turnPresentations } from '@/lib/turnChanges'
 import { foldTurns, type TurnFold } from '@/lib/turnFold'
 
@@ -379,6 +381,14 @@ function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
         )
         if (images.length) {
           out.push(<ToolOutputImages key={`images-${run[0].id}`} images={images} />)
+        }
+        // A chart the run drew is a result the same way.
+        for (const message of run) {
+          for (const part of message.parts) {
+            if (part?.type === 'tool' && part.status === 'success' && chartCall(part)) {
+              out.push(<ChartEmbed key={`chart-${part.toolUseId}`} part={part} />)
+            }
+          }
         }
         // …and the agents stay too: a spawned agent outlives the turn that
         // started it, and its card is the way back into its column.

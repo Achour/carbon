@@ -99,6 +99,7 @@ import {
 import { projectRoot } from '../shared/types.ts'
 import type { CanvasManager } from './canvas.ts'
 import { CANVAS_SESSION_RULES, CANVAS_TOOL_INFO, runCanvasTool } from './canvasTools.ts'
+import { CHART_SESSION_RULES, CHART_TOOL_INFO, runChartTool } from './chartTool.ts'
 import {
   AGENTS_TOOL_INFO,
   DELEGATION_SESSION_RULES,
@@ -168,7 +169,7 @@ import {
  * here reaches a chat only once it starts or compacts — a relaunch is not
  * enough. See "the one option that changes on neither axis" in CLAUDE.md.
  */
-const GUI_SYSTEM_APPEND = `You are running inside a desktop GUI (not a terminal). The GUI renders any \`\`\`mermaid fenced code block as a real rendered diagram — this applies to your chat replies AND to plan documents you write for ExitPlanMode. When a diagram would make an explanation or a plan clearer (flows, sequences, architecture, state), draw it with a Mermaid fenced block (e.g. flowchart, sequenceDiagram) rather than ASCII art or box-drawing characters. Keep diagrams valid and reasonably small; label nodes clearly.\n\n${CANVAS_SESSION_RULES}`
+const GUI_SYSTEM_APPEND = `You are running inside a desktop GUI (not a terminal). The GUI renders any \`\`\`mermaid fenced code block as a real rendered diagram — this applies to your chat replies AND to plan documents you write for ExitPlanMode. When a diagram would make an explanation or a plan clearer (flows, sequences, architecture, state), draw it with a Mermaid fenced block (e.g. flowchart, sequenceDiagram) rather than ASCII art or box-drawing characters. Keep diagrams valid and reasonably small; label nodes clearly.\n\n${CANVAS_SESSION_RULES}\n\n${CHART_SESSION_RULES}`
 
 /**
  * A preview tool parameter as the zod field Claude's in-process server takes.
@@ -277,6 +278,22 @@ function buildCarbonServer(
             await runPreviewTool(preview, ctx.cwd, ref.name, carbonToolInput(args), { caller: ctx.chatId })
           )
         )
+      }
+      if (ref.kind === 'chart') {
+        // Derived from the one JSON Schema the HTTP providers read, property by
+        // property — `tool()` takes a shape, not a schema.
+        const info = CHART_TOOL_INFO[ref.name]
+        const required = new Set<string>(info.inputSchema.required)
+        const shape: ZodRawShape = Object.fromEntries(
+          Object.entries(info.inputSchema.properties).map(([key, prop]) => {
+            const base = z.fromJSONSchema(prop as Parameters<typeof z.fromJSONSchema>[0])
+            return [key, required.has(key) ? base : base.optional()]
+          })
+        )
+        return tool(name, info.description, shape, async (args) => {
+          const result = runChartTool(ref.name, args)
+          return result.isError ? { ...text(result.text), isError: true } : text(result.text)
+        })
       }
       const info = CANVAS_TOOL_INFO[ref.name]
       const shape: ZodRawShape = Object.fromEntries(

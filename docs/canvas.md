@@ -322,6 +322,83 @@ the file tree's idiom, for the file tree's reason — and the empty canvas carri
 a placeholder saying to ask the agent to fill it, since a blank pane reads as a
 canvas that failed to load. The agent finds it by title through `canvas list`.
 
+### Charts in the conversation (`chartTool.ts`, `shared/chartSpec.ts`, `ChartEmbed`, `ChartCard`)
+
+`chart_render` draws a chart **in the conversation**, under the call — the
+in-thread visuals T3 Code shipped, in Carbon's own chart style. The agent sends
+*data* — a form (bar, line, area, pie), the rows, the column holding each row's
+category, the numeric columns to plot, optional headline stats and a takeaway
+— and Carbon draws it natively with shadcn's chart components on Recharts
+(`components/ui/chart.tsx`, the base-ui registry copy). It sits on the `carbon`
+server beside the canvas and is deliberately **not** a canvas.
+
+**It took two wrong turns to get here, and both are worth not repeating.**
+- *An inline canvas.* A canvas is one living document per id, stored once at
+  its newest version, so drawing one in the thread raised "which version does
+  this turn show?" — the latest only (earlier turns lost what they produced),
+  or each call's own, rebuilt by replaying writes, edits and reads out of the
+  transcript, which proved 382 of 470 real edits and left the rest guessed. A
+  reply's chart has no versions: its spec is the call's own input, saved with
+  the chat like every other call, and a later "make it monthly" is a new call
+  in a new turn while the old chart stays as it was.
+- *Agent-written HTML in a sandboxed frame* (`html_render`). It worked, and
+  every chart looked like whoever wrote it — the app's charts should look like
+  the app. Data in, native components out, means one palette, one type scale,
+  real theming, no iframe, no height-reporting script, no 100vh guesswork.
+
+The rest:
+
+- **The spec is declared once, in `shared/`, and both sides read it.**
+  `CHART_INPUT_SCHEMA` is JSON Schema because the arguments are arrays of
+  objects, which the flat param tables cannot spell; Codex, Grok and
+  Antigravity read it off the wire as-is, and Claude's in-process server
+  derives its zod per property with `z.fromJSONSchema`. `normalizeChart` is the
+  one validator: main answers a bad spec with what to fix (`canvas_edit`'s
+  manner), and the renderer draws from the same normalization (`chartCall`,
+  which also reads Grok's `use_tool` wrapping), so a chart the tool accepted
+  is a chart the transcript can draw.
+- **`carbonToolInput` keeps only known string fields** for every other tool,
+  which silently dropped `data` and `series` — so the raw arguments ride
+  through as `chart`. The bridge's large body cap covers the kind too: a chart
+  carries its rows, and under the URL-sized preview cap it would have been
+  refused on Codex and Grok alone.
+- **The marks follow the dataviz rules, not the library's defaults**: bars at
+  most 24px with a 4px rounded data end and a square baseline, a 2px surface
+  gap between stacked segments and pie slices, 2px lines, area fills as a wash,
+  a solid hairline grid on the value axis only, a legend only for more than one
+  series, a tooltip on every form. Series take `--chart-1…8` **by position,
+  never cycled** — a ninth series is refused, and a pie past eight slices folds
+  its tail into "Other". The palette is the dataviz reference set, re-validated
+  against this app's surfaces; light mode warns on contrast for three slots, so
+  every chart carries a **Table** view. Model-chosen series keys are mapped to
+  `s1…s8` before they reach `ChartStyle`'s injected `<style>`, where a key with
+  a brace in it would otherwise be CSS the agent wrote.
+- **Nothing animates.** Folding and unfolding a turn remounts the chart, and an
+  entrance replayed on a remount is what this transcript treats as a bug.
+- **It is a result, so it is drawn where a screenshot is.** `outputImages` set
+  the rule — the fold hides work, never what the work produced — and the chart
+  follows it on every path: `ToolCard` (gated by the same `showOutputs` a
+  grouped row turns off), `ToolGroup`, a folded `AssistantBlock` and a folded
+  run in `renderMessages`, keyed `chart-<toolUseId>` on all of them. A folded
+  turn reads header, chart, answer. It draws once the call has succeeded:
+  before that the input is still streaming.
+- **Recharts is a lazy chunk** (`ChartEmbed` → `ChartCard`), warmed on idle
+  beside mermaid by `preloadHeavyChunks`: a large dependency most chats never
+  draw stays off the path to first paint, and the first chart does not wait on
+  a fetch either. The suspense fallback is the card's frame at about its
+  height, so the transcript does not jump when the chunk lands.
+- `demo/e2e/chart-inline.js` pins the rendering: the fold, native drawing, bar
+  count and width, legend at two series and none at one, the stats, no
+  animation, the table view, the row's label, Grok's wrapped call, and a later
+  turn's chart leaving the earlier one as it was. `demo/e2e/chart-forms.js`
+  draws every form and captures each in dark and light — it is what caught a
+  pie legend with no labels (slices named by category against a config keyed
+  by slot), line markers punching holes in their line (left to the default
+  fill), half-clipped end markers (no axis padding) and a tooltip running the
+  name into the value (`gap-3` in `ui/chart.tsx` is ours, not the registry's).
+  `test/chartSpec.test.ts` pins the spec, the refusals and the provider
+  plumbing, and `carbonMcp.test.ts` sends a ~100 KB chart across the bridge.
+
 The panel is **never auto-opened**, the agents panel's rule at one remove (`docs/transcript.md`): a
 canvas landing mid-read must not take the document you are looking at off
 screen. The `canvas` `ChatEvent` carries the summary and never the HTML, so the

@@ -56,7 +56,8 @@ test('one server carries both tool tables, each name saying which half it is', (
       'canvas_write',
       'canvas_edit',
       'canvas_list',
-      'canvas_read'
+      'canvas_read',
+      'chart_render'
     ]
   )
   const byName = Object.fromEntries(tools.map((tool) => [tool.name, tool]))
@@ -80,7 +81,8 @@ test('one server carries both tool tables, each name saying which half it is', (
   )
   // A build with no canvas host advertises the preview half rather than four
   // tools that answer "not available" to every call.
-  assert.equal(carbonToolList({ canvas: false }).length, PREVIEW_COUNT)
+  // `chart_render` stays: it needs no canvas host.
+  assert.equal(carbonToolList({ canvas: false }).length, PREVIEW_COUNT + 1)
 })
 
 test('a tool name is recognized however the provider spelled it', () => {
@@ -127,13 +129,14 @@ test('handleMcpMessage answers initialize, tools/list, and refuses the rest by n
   assert.equal(result.protocolVersion, '2025-11-25')
 
   const list = handleMcpMessage({ jsonrpc: '2.0', id: 2, method: 'tools/list' })
-  assert.equal((list?.result as { tools: unknown[] }).tools.length, PREVIEW_COUNT + 4)
+  assert.equal((list?.result as { tools: unknown[] }).tools.length, PREVIEW_COUNT + 5)
   assert.equal(
     (
       handleMcpMessage({ jsonrpc: '2.0', id: 3, method: 'tools/list' }, { canvas: false })
         ?.result as { tools: unknown[] }
     ).tools.length,
-    PREVIEW_COUNT
+    // `chart_render` needs no canvas host — the spec is the call's own input.
+    PREVIEW_COUNT + 1
   )
 
   // Grok opens with `server/discover`, which is not MCP. Answered `-32601`
@@ -267,7 +270,7 @@ test('the bridge speaks streamable-HTTP MCP behind a bearer token', async () => 
     assert.equal(notified.status, 202)
 
     const list = await rpc(bridge, session.url, { jsonrpc: '2.0', id: 1, method: 'tools/list' })
-    assert.equal((list.json as { result: { tools: unknown[] } }).result.tools.length, PREVIEW_COUNT + 4)
+    assert.equal((list.json as { result: { tools: unknown[] } }).result.tools.length, PREVIEW_COUNT + 5)
 
     const shot = await rpc(bridge, session.url, {
       jsonrpc: '2.0',
@@ -454,4 +457,31 @@ test('agents tools are listed only in scope, and refused at the call outside it'
   const started = await runCarbonTool(hosts, ctx, 'agents_delegate', input)
   assert.equal(started.ok, true)
   assert.deepEqual(calls, ['p'])
+})
+
+test('a chart larger than a preview call crosses the bridge whole', async () => {
+  const bridge = await startCarbonBridge(previewHost(), canvasHost())
+  const session = bridge.register({ cwd: '/repo', project: '/repo', chatId: 'chat-1', plan: () => true })
+  try {
+    // ~100 KB of rows: past the 64 KB a URL-sized preview call is held to,
+    // which is the cap a chart fell under on Codex and Grok alone.
+    const data = [...Array(400)].map((_, i) => ({ file: `src/some/deep/path/file-${i}.ts`.padEnd(200, '-'), lines: i }))
+    const body = {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: {
+        name: 'chart_render',
+        arguments: { kind: 'bar', title: 'Lines per file', x: 'file', data, series: [{ key: 'lines' }] }
+      }
+    }
+    assert.ok(JSON.stringify(body).length > 64 * 1024)
+    const res = await rpc(bridge, session.url, body)
+    assert.equal(res.status, 200)
+    const result = (res.json as { result: { content: { text: string }[]; isError?: boolean } }).result
+    assert.equal(result.isError, undefined)
+    assert.match(result.content[0].text, /Drew "Lines per file"/)
+  } finally {
+    await bridge.close()
+  }
 })

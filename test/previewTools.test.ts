@@ -106,7 +106,8 @@ test('the wire schema is derived from the param table, enums and required includ
   assert.ok(props.device.enum?.includes('iphone-15'))
   assert.ok(props.device.enum?.includes('fill'))
   assert.deepEqual(props.color_scheme.enum, ['light', 'dark', 'system'])
-  assert.equal(tools.length, Object.keys(PREVIEW_TOOL_INFO).length)
+  // Plus `chart_render`, which needs no canvas host.
+  assert.equal(tools.length, Object.keys(PREVIEW_TOOL_INFO).length + 1)
 })
 
 test('carbonToolInput coerces by declared type and drops what does not fit', () => {
