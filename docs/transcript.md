@@ -549,10 +549,12 @@ cached input.
   nested spawn is reachable), and a selection the loaded window no longer holds
   simply falls through to the roster: nothing keeps the two in step, which is
   what makes a chat switch, an eviction and `loadOlder` all one case. Every way
-  in is `openAgentsPanel(runId?)` — a transcript row, a roster row, an agent in
-  the header's background-jobs pill (`BackgroundJob.callId`, which is main's
-  `taskCalls` mapping travelling one layer further). Omitting the id lands on
-  the roster, which is what the activity bar does.
+  in is `openAgentsPanel(runId?)` — a transcript row or a roster row. Omitting
+  the id lands on the roster, which is what the activity bar does. The header's
+  background-jobs pill counts only shells, monitors and workflows: agents are
+  the robot menu's, which also carries a backgrounded agent's Stop (matched on
+  `BackgroundJob.callId`, main's `taskCalls` mapping travelling one layer
+  further), so one fan-out is not counted by two indicators side by side.
 
   The cost is that a roster click no longer scrolls the transcript to the spawn.
   That is not a loss worth rebuilding: the card lives inside a settled turn's

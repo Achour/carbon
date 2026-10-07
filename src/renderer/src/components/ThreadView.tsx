@@ -56,7 +56,7 @@ import {
   useApp
 } from '@/store'
 import { ChatView } from '@/components/ChatView'
-import { BackgroundJobs } from '@/components/BackgroundJobs'
+import { BackgroundJobs, isAgentJob } from '@/components/BackgroundJobs'
 import { ContextStrip } from '@/components/ContextStrip'
 import { ProviderMark } from '@/components/ui/provider-mark'
 import { Button } from '@/components/ui/button'
@@ -587,7 +587,9 @@ function ThreadPill({
  * and keep their pills. Read off `agentsStore` (each `ChatView` publishes its
  * fold there, carried forward by identity), so the menu moves when an agent
  * does and not on every token. A row opens the agent as a column, or folds an
- * open one back.
+ * open one back. A backgrounded agent is also a live job in the CLI's task set,
+ * and its Stop lives here rather than in the "running" pill, which leaves
+ * agents to this menu so one fan-out is not counted twice.
  */
 function SubagentsMenu({
   chatIds,
@@ -599,6 +601,8 @@ function SubagentsMenu({
   const byChat = useAgents((s) => s.byChat)
   const chats = useApp((s) => s.chats)
   const toggleAgentColumn = useApp((s) => s.toggleAgentColumn)
+  const backgroundJobs = useApp((s) => s.backgroundJobs)
+  const stopBackgroundJob = useApp((s) => s.stopBackgroundJob)
   const full = useApp(threadFull)
   const [open, setOpen] = React.useState(false)
   const rows = React.useMemo(
@@ -646,41 +650,57 @@ function SubagentsMenu({
             const end = run.status === 'running' ? now : run.endedAt
             const elapsed =
               run.startedAt != null && end != null ? formatAgentDuration(end - run.startedAt) : null
+            // `callId` is the spawning call's id, which is what a run is keyed by.
+            const job =
+              run.status === 'running'
+                ? backgroundJobs[chatId]?.find((j) => isAgentJob(j.type) && j.callId === run.id)
+                : undefined
             return (
-              <button
-                key={`${chatId}:${run.id}`}
-                type="button"
-                data-subagent-row={run.id}
-                disabled={!columnOpen && full}
-                title={!columnOpen && full ? 'The thread already shows four chats — close one to open this agent.' : undefined}
-                onClick={() => toggleAgentColumn(chatId, run.id)}
-                className={cn(
-                  'flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-[13px] transition-colors hover:bg-accent disabled:opacity-50',
-                  run.depth > 0 && 'pl-6'
+              <div key={`${chatId}:${run.id}`} className="group flex items-center rounded-md hover:bg-accent">
+                <button
+                  type="button"
+                  data-subagent-row={run.id}
+                  disabled={!columnOpen && full}
+                  title={!columnOpen && full ? 'The thread already shows four chats — close one to open this agent.' : undefined}
+                  onClick={() => toggleAgentColumn(chatId, run.id)}
+                  className={cn(
+                    'flex min-w-0 flex-1 items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-[13px] disabled:opacity-50',
+                    run.depth > 0 && 'pl-6'
+                  )}
+                >
+                  <span className="relative shrink-0">
+                    <ProviderMark provider={provider} className="size-3.5 text-muted-foreground" />
+                    <span
+                      className={cn(
+                        'absolute -right-1 -bottom-1 size-1.5 rounded-full',
+                        run.status === 'running'
+                          ? 'animate-pulse bg-primary'
+                          : run.status === 'failed'
+                            ? 'bg-destructive'
+                            : 'bg-success'
+                      )}
+                    />
+                  </span>
+                  <span className="min-w-0 flex-1 truncate">
+                    {run.type && <span className="text-muted-foreground">{run.type}: </span>}
+                    {run.description || 'Sub-agent'}
+                  </span>
+                  {elapsed && (
+                    <span className="shrink-0 font-mono text-[11px] text-muted-foreground/70 tabular-nums">{elapsed}</span>
+                  )}
+                  {columnOpen && <span className="size-1.5 shrink-0 rounded-full bg-foreground/60" title="Open" />}
+                </button>
+                {job && job.stoppable !== false && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="mr-1 h-6 shrink-0 px-2 text-[11px] text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:text-destructive"
+                    onClick={() => stopBackgroundJob(chatId, job.id)}
+                  >
+                    Stop
+                  </Button>
                 )}
-              >
-                <span className="relative shrink-0">
-                  <ProviderMark provider={provider} className="size-3.5 text-muted-foreground" />
-                  <span
-                    className={cn(
-                      'absolute -right-1 -bottom-1 size-1.5 rounded-full',
-                      run.status === 'running'
-                        ? 'animate-pulse bg-primary'
-                        : run.status === 'failed'
-                          ? 'bg-destructive'
-                          : 'bg-success'
-                    )}
-                  />
-                </span>
-                <span className="min-w-0 flex-1 truncate">
-                  {run.type && <span className="text-muted-foreground">{run.type}: </span>}
-                  {run.description || 'Sub-agent'}
-                </span>
-                {elapsed && (
-                  <span className="shrink-0 font-mono text-[11px] text-muted-foreground/70 tabular-nums">{elapsed}</span>
-                )}
-                {columnOpen && <span className="size-1.5 shrink-0 rounded-full bg-foreground/60" title="Open" />}
-              </button>
+              </div>
             )
           })}
         </div>

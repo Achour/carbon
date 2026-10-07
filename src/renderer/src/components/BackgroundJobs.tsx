@@ -35,14 +35,14 @@ function jobIcon(type: string): React.ElementType {
 }
 
 /**
- * Whether this job IS a spawned agent, and so has a stream to read.
- *
- * The pill and the Agents panel describe the same fan-out from two sides — the
- * CLI's live task set, and the runs folded out of the transcript — and the pill
- * was the one with no way across. The wire spellings are the CLI's `task_type`;
- * the friendly ones stay for a provider that reports those instead.
+ * Whether this job IS a spawned agent. Those are left to the header's robot
+ * menu (`SubagentsMenu`), which lists every run with its elapsed time, opens it
+ * as a column and carries the Stop a backgrounded one needs — so counting them
+ * here too drew two indicators for one fan-out, side by side. The wire
+ * spellings are the CLI's `task_type`; the friendly ones stay for a provider
+ * that reports those instead.
  */
-function isAgentJob(type: string): boolean {
+export function isAgentJob(type: string): boolean {
   return type === 'subagent' || type === 'local_agent' || type === 'remote_agent'
 }
 
@@ -67,14 +67,15 @@ function jobLabel(type: string): string {
 
 /**
  * Header pill listing the SDK's live background tasks for one chat
- * (backgrounded shell commands, sub-agents, monitors, workflows). Hidden when
- * there are none; each job can be stopped from the popover. The thread header
- * passes the focused chat, so the pill always describes the column you are in.
+ * (backgrounded shell commands, monitors, workflows — agents live in the robot
+ * menu, see `isAgentJob`). Hidden when there are none; each job can be stopped
+ * from the popover. The thread header passes the focused chat, so the pill
+ * always describes the column you are in.
  */
 export function BackgroundJobs({ chatId }: { chatId: string }): React.JSX.Element | null {
-  const jobs = useApp((s) => s.backgroundJobs[chatId]) ?? EMPTY
+  const all = useApp((s) => s.backgroundJobs[chatId]) ?? EMPTY
+  const jobs = React.useMemo(() => all.filter((j) => !isAgentJob(j.type)), [all])
   const stopBackgroundJob = useApp((s) => s.stopBackgroundJob)
-  const openAgentsPanel = useApp((s) => s.openAgentsPanel)
   const [open, setOpen] = React.useState(false)
 
   if (jobs.length === 0) return null
@@ -103,44 +104,18 @@ export function BackgroundJobs({ chatId }: { chatId: string }): React.JSX.Elemen
         <div className="max-h-80 overflow-y-auto py-1">
           {jobs.map((job) => {
             const Icon = jobIcon(job.type)
-            // An agent's row is a way into its stream; every other kind is a
-            // label. The clickable half is the text rather than the whole row,
-            // because Stop lives on the row too and a button inside a button is
-            // not a thing — the same split `AgentRow` uses.
-            const agent = isAgentJob(job.type)
-            const reveal = (): void => {
-              setOpen(false)
-              // `callId` can be missing for a beat (see BackgroundJob) — the
-              // roster is the honest landing place until it arrives.
-              openAgentsPanel(job.callId, chatId)
-            }
             return (
               <div
                 key={job.id}
                 className="group flex items-start gap-2.5 px-3 py-2 hover:bg-accent/50"
               >
                 <Icon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
-                {agent ? (
-                  <button
-                    type="button"
-                    onClick={reveal}
-                    className="min-w-0 flex-1 cursor-pointer text-left"
-                  >
-                    <div className="truncate text-[13px] leading-snug">
-                      {job.description || job.type}
-                    </div>
-                    <div className="text-[11px] text-muted-foreground/70">
-                      {jobLabel(job.type)} · open
-                    </div>
-                  </button>
-                ) : (
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-[13px] leading-snug">
-                      {job.description || job.type}
-                    </div>
-                    <div className="text-[11px] text-muted-foreground/70">{jobLabel(job.type)}</div>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[13px] leading-snug">
+                    {job.description || job.type}
                   </div>
-                )}
+                  <div className="text-[11px] text-muted-foreground/70">{jobLabel(job.type)}</div>
+                </div>
                 {job.stoppable !== false && (
                   <Button
                     size="sm"
