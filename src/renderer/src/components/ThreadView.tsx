@@ -919,6 +919,9 @@ const CLOSED_PILLS = 6
  */
 function ClosedPill({ chat, full }: { chat: ChatMeta; full: boolean }): React.JSX.Element {
   const reopenSideChat = useApp((s) => s.reopenSideChat)
+  // Delegates arrive minimized, so for a working one this pill is the header's
+  // only sign of it — drawn at full strength, not faded like a finished one.
+  const busy = useChatMark(chat.id) !== null
   const name = chat.delegation?.name
   const title = chat.title?.trim() || 'New chat'
   const label = full
@@ -932,7 +935,10 @@ function ClosedPill({ chat, full }: { chat: ChatMeta; full: boolean }): React.JS
         aria-label={`Reopen ${name ?? title}`}
         disabled={full}
         onClick={() => void reopenSideChat(chat.id)}
-        className="relative flex h-6.5 items-center gap-1.5 rounded-md border border-transparent px-1.5 text-muted-foreground opacity-50 transition-[background-color,color,opacity] hover:bg-accent hover:text-foreground hover:opacity-100 disabled:pointer-events-none disabled:opacity-30"
+        className={cn(
+          'relative flex h-6.5 items-center gap-1.5 rounded-md border border-transparent px-1.5 text-muted-foreground transition-[background-color,color,opacity] hover:bg-accent hover:text-foreground hover:opacity-100 disabled:pointer-events-none disabled:opacity-30',
+          busy ? 'opacity-100' : 'opacity-50'
+        )}
       >
         <ProviderMark provider={chat.provider} className="size-3" />
         <ChatMark id={chat.id} />

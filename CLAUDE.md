@@ -364,7 +364,9 @@ it guards**, and put new reasoning in that file rather than back in this one.
   `BrowserPane.tsx`), dev servers and port scanning (`preview.ts`,
   `devServerPlan.ts`, `localServers.ts`), viewports (`shared/previewDevices.ts`),
   the React 19 picker (`previewSource.ts`, `sourceMap.ts`) and the preview's
-  permissions (`previewSession.ts`).
+  permissions (`previewSession.ts`). Each chat drives its own pane on the
+  shared dev server (`shared/previewPane.ts`, `PreviewTab.owner`), so agents
+  test side by side; only focus and capture are serialized (`withWindow`).
 - **`docs/canvas.md`** — Carbon's own `carbon` MCP server and the canvas panel
   (`carbonMcp.ts`, `carbonBridge.ts`, `canvasTools.ts`, `previewTools.ts`,
   `canvasStore.ts`, `CanvasPanel`, `shared/canvasText.ts`, `lib/canvasRef.ts`),
@@ -375,7 +377,8 @@ it guards**, and put new reasoning in that file rather than back in this one.
 - **`docs/delegation.md`** — one chat's agent handing a task to another
   provider through `agents_delegate`: the child as a side chat
   (`ChatMeta.delegation`, `chat-added`), delegates' names and steering one by
-  name (`agents_send`, `resolveDelegate`), how an outcome is settled and
+  name (`agents_send`, `resolveDelegate`), why a delegate arrives minimized
+  and there is no cap on how many run, how an outcome is settled and
   delivered back, and the one-level / plan-mode rules (`main/delegation.ts`,
   `ChatManager.delegate`, `sendToDelegate`, `flushDeliveries`,
   `DelegationBadge`).

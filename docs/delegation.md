@@ -27,15 +27,20 @@ flowchart LR
 
 **The child is a side chat, not a new kind of chat.** It carries `sideOf` (the
 parent's *thread* — the parent itself, or the thread a parent column belongs to)
-and `ephemeral`, so it opens as a column of the thread the user is reading and
-everything `docs/threads.md` says about columns holds for it: it persists, it
-reopens from the closed list, it is deleted with its thread. What makes it a
-delegation is `ChatMeta.delegation` — the parent, the task, a role, and the one
-outcome that is reported back. Main creates it, so the renderer learns of it
-from a `chat-added` event, which opens the column when the thread is on screen
-and has room (without taking focus — the agent that delegated is the one being
-read), stashes it with the thread's columns when it is not, and otherwise leaves
-it in the closed list.
+and `ephemeral`, so everything `docs/threads.md` says about columns holds for
+it: it persists, it reopens from the closed list, it is deleted with its thread.
+What makes it a delegation is `ChatMeta.delegation` — the parent, the task, a
+role, and the one outcome that is reported back. Main creates it, so the
+renderer learns of it from a `chat-added` event, which only adds it to `chats`.
+
+**It arrives minimized.** The child is a closed pill in the thread header (with
+its working spinner) and a mark on the thread's sidebar row, and it becomes a
+column only when the user opens it — the pill, or its card in the parent. It
+used to open itself whenever the thread had room, and a turn that fanned out
+three agents took three columns' width from the conversation being read, with
+nobody having asked to watch them. The sidebar row marks every side chat that
+is *working*, open or not (`renderChatItem`'s `busy`): marking open columns
+alone meant minimizing an agent hid that it was still running.
 
 **The child sees the task and nothing else.** Parent history is not copied; the
 tool description says so, so the parent writes a complete brief. A
@@ -142,9 +147,11 @@ whenever the user refers to an existing agent, by name or by what it is doing.
   that flight (or the re-armed round would be marked delivered when the turn
   settled); otherwise it is handed over in the tool result before being
   overwritten.
-- It counts toward the three-running cap like a new delegation, is refused in
-  plan mode, and checks the parent the same way: an agent is found only among
-  the calling chat's own.
+- It is refused in plan mode, and checks the parent the same way: an agent is
+  found only among the calling chat's own. There is no cap on how many run at
+  once, here or at `agents_delegate`: there was one (three per parent, sized
+  to the four columns a thread shows), and it made the parent queue work the
+  user had asked to run now — sized to a layout delegates no longer open into.
 
 ### How a delegation ends
 
@@ -304,10 +311,9 @@ it, and swept the task before it ever ran.
 
 `agents_delegate` and `agents_send` are **serialized per parent** (`admit`).
 The delegate path awaits the model catalog, and everything checked before that
-await — the names in use, the running cap, whether delegation is still on, the
-parent's mode, whether the parent still exists — went stale across it: four
-calls in one turn each saw an empty parent and all started as `codex-a`, past
-the cap. Serialized, each sees the previous one's agent, and every check runs
+await — the names in use, whether delegation is still on, the parent's mode,
+whether the parent still exists — went stale across it: four calls in one turn
+each saw an empty parent and all started as `codex-a`. Serialized, each sees the previous one's agent, and every check runs
 *after* the await against the parent as it is now.
 
 **The permission ceiling is re-applied at every follow-up**, against the

@@ -66,6 +66,22 @@ test('runPreviewTool status/start/stop answer from the host', async () => {
   if (stopped.kind === 'text') assert.match(stopped.text, /"status":"stopped"/)
 })
 
+test('runPreviewTool stop and status carry the chat, and stop its force flag', async () => {
+  const seen: unknown[][] = []
+  const preview = host({
+    stop: (cwd, caller, force) => (seen.push(['stop', cwd, caller, force]), state('stopped')),
+    status: async (cwd, caller) => (seen.push(['status', cwd, caller]), '{}')
+  })
+  await runPreviewTool(preview, '/tmp/app', 'stop', {}, { caller: 'chat-1' })
+  await runPreviewTool(preview, '/tmp/app', 'stop', { force: true }, { caller: 'chat-1' })
+  await runPreviewTool(preview, '/tmp/app', 'status', {}, { caller: 'chat-2' })
+  assert.deepEqual(seen, [
+    ['stop', '/tmp/app', 'chat-1', false],
+    ['stop', '/tmp/app', 'chat-1', true],
+    ['status', '/tmp/app', 'chat-2']
+  ])
+})
+
 test('runPreviewTool validates required arguments before reaching the page', async () => {
   const preview = host()
   const nav = await runPreviewTool(preview, '/tmp/app', 'navigate')
@@ -90,9 +106,16 @@ test('runPreviewTool routes page ops with the caller that scopes cursors', async
 
 test('runPreviewTool screenshot returns an image or the host error', async () => {
   let asked: unknown
-  const ok = await runPreviewTool(host({ screenshot: async (_c, o) => ((asked = o), 'png') }), '/tmp/app', 'screenshot', { full_page: true })
+  const ok = await runPreviewTool(
+    host({ screenshot: async (_c, caller, o) => ((asked = [caller, o]), 'png') }),
+    '/tmp/app',
+    'screenshot',
+    { full_page: true },
+    { caller: 'chat-1' }
+  )
   assert.deepEqual(ok, { kind: 'image', data: 'png', mimeType: 'image/png' })
-  assert.deepEqual(asked, { fullPage: true })
+  // The chat rides along: each chat's screenshot is of its own pane.
+  assert.deepEqual(asked, ['chat-1', { fullPage: true }])
   const missing = await runPreviewTool(host({ screenshot: async () => ({ error: 'No preview is open' }) }), '/tmp/app', 'screenshot')
   assert.deepEqual(missing, { kind: 'text', text: 'No preview is open' })
 })

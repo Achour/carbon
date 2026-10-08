@@ -104,7 +104,6 @@ import { DIAGRAM_TOOL_INFO, runDiagramTool } from './diagramTool.ts'
 import {
   AGENTS_TOOL_INFO,
   DELEGATION_SESSION_RULES,
-  MAX_RUNNING_DELEGATIONS,
   canDelegate,
   delegateBrief,
   delegationOutcome,
@@ -4592,8 +4591,8 @@ export class ChatManager {
 
   /**
    * One admission at a time per parent. `delegate` awaits the model catalog,
-   * and checks taken before that await — the names in use, the running cap,
-   * whether delegation is even still allowed — go stale across it: four calls
+   * and checks taken before that await — the names in use, whether
+   * delegation is even still allowed — go stale across it: four calls
    * in one turn all saw an empty parent and all started as `codex-a`.
    * Serialized, each sees the last one's agent; and every check runs after
    * the await, against the parent as it is now.
@@ -4667,12 +4666,6 @@ export class ChatManager {
       const model = resolveModel(request.model, request.provider, catalog)
       if (!model.ok) return model
       request.model = model.model
-    }
-    if (running.length >= MAX_RUNNING_DELEGATIONS) {
-      return {
-        ok: false,
-        error: `${running.length} agents from this conversation are already working (${running.map((v) => v.name).join(', ')}; the limit is ${MAX_RUNNING_DELEGATIONS}). Wait for one to finish, give one of them this work with agents_send, or stop one with agents_cancel.`
-      }
     }
     const now = Date.now()
     const child: ChatData = {
@@ -4795,13 +4788,6 @@ export class ChatManager {
       return {
         ok: true,
         text: `Sent to ${view.name}, which is still working on its task; it will take this into account, and one outcome covering both will arrive in this conversation when it finishes. Do not poll or wait.`
-      }
-    }
-    const running = mine.filter((v) => v.status === 'running')
-    if (running.length >= MAX_RUNNING_DELEGATIONS) {
-      return {
-        ok: false,
-        error: `${running.length} agents are already working (${running.map((v) => v.name).join(', ')}; the limit is ${MAX_RUNNING_DELEGATIONS}). Wait for one to finish first.`
       }
     }
     // The last round's report may not have reached the parent yet — it ended

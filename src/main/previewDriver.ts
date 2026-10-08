@@ -376,8 +376,9 @@ export class PreviewDriver {
    * cannot run while an old script is still mutating the page. Capped: a
    * page that never settles must not wedge the lane for good.
    */
-  async quiesce(cwd: string, capMs = 30_000): Promise<void> {
-    const guests = this.guestsFor(cwd).filter((g) => g.inflight.size > 0)
+  async quiesce(paneId: string | undefined, capMs = 30_000): Promise<void> {
+    const pane = paneId ? this.guests.get(paneId) : undefined
+    const guests = pane && !pane.wc.isDestroyed() && pane.inflight.size > 0 ? [pane] : []
     if (!guests.length) return
     const done = await Promise.race([
       Promise.allSettled(guests.flatMap((g) => [...g.inflight])).then(() => true),

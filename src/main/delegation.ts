@@ -28,9 +28,6 @@ export const AGENTS_TOOL_NAMES = ['delegate', 'send', 'status', 'cancel'] as con
 
 export type AgentsToolName = (typeof AGENTS_TOOL_NAMES)[number]
 
-/** Running delegations one parent may hold at once — a thread has 4 columns. */
-export const MAX_RUNNING_DELEGATIONS = 3
-
 /** How much of the child's own words reach the parent. */
 export const DELEGATION_RESULT_CAP = 20_000
 
@@ -52,7 +49,7 @@ export const AGENTS_TOOL_INFO: Record<
 > = {
   delegate: {
     description:
-      "Start a NEW coding agent — a different provider (Claude, Codex, Grok, Antigravity) running in this same project folder — on a self-contained task. Carbon opens it as a new chat beside this one, where the user can watch it, and returns the agent's name (e.g. codex-a) immediately; the task runs in the background. When it ends, its outcome arrives in THIS conversation as a new message, so do not poll for it and do not wait: carry on with your own work or end your turn. The new agent sees ONLY the task text — none of this conversation — so write the task as a complete brief: what to do, which files or changes it concerns, and what to report back. To give more instructions to an agent you already started, use agents_send with its name instead of starting another. Several agents may run at once (two Codex reviewers on different files, say); each is its own chat. They share the checkout, with this chat's permission mode, so do not have two of them edit the same files; for reviews and research ask them not to modify files. One level only: a delegate cannot delegate further.",
+      "Start a NEW coding agent — a different provider (Claude, Codex, Grok, Antigravity) running in this same project folder — on a self-contained task. Carbon adds it to this thread as a new chat, minimized until the user opens it to watch, and returns the agent's name (e.g. codex-a) immediately; the task runs in the background. When it ends, its outcome arrives in THIS conversation as a new message, so do not poll for it and do not wait: carry on with your own work or end your turn. The new agent sees ONLY the task text — none of this conversation — so write the task as a complete brief: what to do, which files or changes it concerns, and what to report back. To give more instructions to an agent you already started, use agents_send with its name instead of starting another. Any number of agents may run at once (two Codex reviewers on different files, say) — there is no limit, so start every one the work calls for rather than queuing; each is its own chat. They share the checkout, with this chat's permission mode, so do not have two of them edit the same files; for reviews and research ask them not to modify files. One level only: a delegate cannot delegate further.",
     readOnly: false,
     params: {
       task: {

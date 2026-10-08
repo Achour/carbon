@@ -41,7 +41,7 @@ import { cn, missingTag, MISSING_TITLE } from '@/lib/utils'
 import { relativeTime, shortenPath } from '@/lib/format'
 import { keyForDrop } from '@/lib/chatOrder'
 import { REVEAL_LABEL } from '@/lib/platform'
-import { chatActivity, projectActivity, type ChatActivity } from '@/lib/chatActivity'
+import { chatActivity, chatActivityKind, projectActivity, type ChatActivity } from '@/lib/chatActivity'
 import {
   COLUMN_DRAG_MIME,
   draggedColumn,
@@ -1208,6 +1208,13 @@ export function Sidebar(): React.JSX.Element {
   const allChats = useApp((s) => s.chats)
   const chats = React.useMemo(() => listedChats(allChats), [allChats])
   const chatsById = React.useMemo(() => new Map(allChats.map((c) => [c.id, c])), [allChats])
+  // Each thread's side chats, open or not — the row also marks the closed ones
+  // still working, so minimizing an agent does not hide that it is running.
+  const sideChatsOf = React.useMemo(() => {
+    const by = new Map<string, ChatMeta[]>()
+    for (const c of allChats) if (c.sideOf) by.set(c.sideOf, [...(by.get(c.sideOf) ?? []), c])
+    return by
+  }, [allChats])
   const activeId = useApp((s) => s.activeId)
   const statuses = useApp((s) => s.statuses)
   const sideColumns = useApp((s) => s.sideColumns)
@@ -1640,7 +1647,15 @@ export function Sidebar(): React.JSX.Element {
     const mark = markFor(root)
     // The row stands for its whole thread: what any of its open columns is
     // doing shows here, the way a collapsed project row sums its chats.
-    const columns = columnsOf({ activeId, sideColumns, sideColumnsByChat }, chat.id)
+    const open = columnsOf({ activeId, sideColumns, sideColumnsByChat }, chat.id)
+    // Plus the minimized ones still busy: a delegate put away (or never
+    // opened — they arrive minimized) is still the thread's work.
+    const busy = (sideChatsOf.get(chat.id) ?? []).filter(
+      (c) =>
+        !open.includes(c.id) &&
+        chatActivityKind(statuses[c.id], backgroundJobs[c.id], permissions[c.id]) !== 'idle'
+    )
+    const columns = busy.length ? [...open, ...busy.map((c) => c.id)] : open
     const own = chatActivity(statuses[chat.id], backgroundJobs[chat.id], permissions[chat.id])
     const activity = columns.length
       ? projectActivity([

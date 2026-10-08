@@ -2395,6 +2395,11 @@ export interface PreviewCommand {
   cwd: string
   kind: 'ensure' | 'navigate' | 'screenshot' | 'reveal' | 'conceal' | 'viewport' | 'focus' | 'unfocus'
   paneId?: string
+  /**
+   * ensure/navigate: the chat the pane is for. Each chat drives its own pane
+   * (`pickPreviewPane`); absent takes any pane of the project.
+   */
+  owner?: string
   url?: string
   viewport?: PreviewViewportPatch
 }

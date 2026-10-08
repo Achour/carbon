@@ -43,11 +43,31 @@ key from another document; the model sees short aliases the driver issues from
 one counter across every pane and guest, and an alias names its pane. An old
 `e1` from before a reload, a replaced guest or another tab says so.
 
-**One operation per project at a time.** Parallel tool calls used to
+**Each chat drives its own pane** (`shared/previewPane.ts`). Several agents on
+one project — a parent and the delegates it started, or two threads — used to
+share one page, so one navigated away from the route another was testing, a ref
+read by one was stale for the next, and every one of them queued behind the
+others' waits. Now a pane has an `owner` (`PreviewTab.owner`), the chat id
+`runPreviewTool` passes as `caller`, carried on `ensure`/`navigate` as
+`PreviewCommand.owner`. `pickPreviewPane` takes the chat's own pane, else an
+unowned one — the user's own preview, or one whose owner chat is gone — which it
+claims in the same tick (two agents asking at once must not both take it), and
+otherwise none: the chat gets a new tab, opened **behind** whatever the panel
+shows, since five agents' tabs each coming to the front would flip the panel
+under the user five times. The one-chat case is unchanged: its first command
+claims the preview the user has open. A delegate's tab is labelled with its
+name. The dev server stays one per project, shared by every pane — which is why
+`preview_stop` from a chat is refused while another chat has used the preview
+in the last few minutes (`othersActive`), unless it passes `force`; the user's
+own Stop is never refused. A chat's sub-agents share its id, so they share its
+pane and its lane: the old per-project rule, scoped to one chat.
+
+**One operation per chat at a time.** Parallel tool calls used to
 interleave inside the page — two `type`s focused A, focused B, then typed both
-values into B. `PreviewManager.serial` runs a project's operations in order,
-and holds the lane until every CDP command has actually finished (`quiesce`),
-not merely until its caller timed out; a command still running past the cap —
+values into B. `PreviewManager.serial` runs a chat's operations in order (keyed
+by project *and* chat, so different chats' panes run side by side), and holds
+the lane until every CDP command on that chat's pane has actually finished
+(`quiesce`), not merely until its caller timed out; a command still running past the cap —
 a script awaiting forever — gets the page reloaded, which ends its context, so
 nothing from before can act under the next operation. An action that *acts*
 (click, type, press, evaluate) and had to wait records the pane and page it was
@@ -56,6 +76,20 @@ moment of input, and re-measures a click point if a device change landed in
 between. A focus that did not take is an error, not a key sent to whatever had
 focus before, and a click whose point hits anything but the target (or inside
 it) is refused.
+
+**What the window has one of is still serialized** (`withWindow`). Keyboard
+focus is one element per window, and `type`/`press` need the guest to hold it,
+so two chats typing into their own panes at once would still send one's keys
+into the other's — and a `click`, being real input, *gives* its guest focus, so
+it would pull focus out from under another chat's typing; a screenshot uncovers
+its pane under a cover or, for a full page, puts it on top. Those sections take
+a process-wide lock *inside* their own lane — a few hundred milliseconds of
+queueing — and everything else (navigation, snapshots, scrolls, waits) runs
+concurrently. A pane reclaimed from a deleted chat waits for that chat's lane
+to drain first (`drainPrevious`): its last `evaluate` may still be running, and
+would otherwise act on the new owner's page. Measured with two
+chats navigating and typing at the same moment: each read back its own page
+and its own typed value.
 
 **Typing needs the guest's keyboard focus, not a click.** `el.focus()` moves
 the DOM's focus but `insertText` still drops the text (measured); a real click
@@ -112,10 +146,11 @@ hidden guest is throttled like a background tab — timers to ~1/s,
 `Page.setWebLifecycleState('frozen')` was tried and not used: a frozen page
 also stops answering `Runtime.evaluate`, which every agent command needs.
 
-`ensure` finds a project's pane in order: one on screen, then the one most
-recently selected, then a tab that exists but is unmounted because the panel is
-closed (shown, not duplicated), and only then a new tab — and only when main
-gave a URL to open it at.
+`ensure` finds the chat's pane (its own or a free one, see above) in order: one
+on screen, then the one most recently selected, then a tab that exists but is
+unmounted because the panel is closed (the panel opened, the tab not
+duplicated), and only then a new tab — and only when main gave a URL to open it
+at.
 
 ## Screenshots
 

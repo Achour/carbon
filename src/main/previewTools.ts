@@ -114,13 +114,16 @@ export const PREVIEW_TOOL_INFO: Record<
     params: {}
   },
   stop: {
-    description: "Stop this project's dev server (only one Carbon started).",
+    description:
+      "Stop this project's dev server (only one Carbon started). The server is shared with every other chat using the preview on this project, so it is not stopped while another one is using it unless force is true.",
     readOnly: false,
-    params: {}
+    params: {
+      force: { type: 'boolean', description: 'Stop it even though another chat is using it.' }
+    }
   },
   navigate: {
     description:
-      'Load a URL in the in-app preview (e.g. a route of the running app), or go back/forward/reload. Opens the preview if it is not open.',
+      'Load a URL in the in-app preview (e.g. a route of the running app), or go back/forward/reload. Opens the preview if it is not open. Each chat has its own preview tab on the shared dev server, so other agents testing at the same time never move your page.',
     readOnly: false,
     params: {
       url: { type: 'string', description: 'The URL to load.' },
@@ -286,6 +289,7 @@ export type PreviewToolInput = {
   url?: string
   action?: string
   full_page?: boolean
+  force?: boolean
   ref?: string
   selector?: string
   text?: string
@@ -317,10 +321,12 @@ export type PreviewPageOp = Exclude<PreviewToolName, 'status' | 'start' | 'stop'
 
 export type PreviewToolHost = {
   /** The state plus any other servers found for the project. */
-  status(cwd: string): Promise<string>
+  status(cwd: string, caller: string): Promise<string>
   startAndWait(cwd: string): Promise<PreviewState>
-  stop(cwd: string): PreviewState
-  screenshot(cwd: string, opts: { fullPage?: boolean }): Promise<string | { error: string }>
+  /** `caller` set and another chat using the server: refused unless `force`. */
+  stop(cwd: string, caller: string, force?: boolean): PreviewState
+  /** `caller` is the chat whose own pane is shot (see `pickPreviewPane`). */
+  screenshot(cwd: string, caller: string, opts: { fullPage?: boolean }): Promise<string | { error: string }>
   /** Every page op answers in text; `caller` scopes the console/network cursors. */
   page(cwd: string, caller: string, op: PreviewPageOp, input: PreviewToolInput): Promise<string>
 }
@@ -336,15 +342,16 @@ export async function runPreviewTool(
   input: PreviewToolInput = {},
   options: { caller?: string } = {}
 ): Promise<PreviewToolResult> {
+  const caller = options.caller ?? cwd
   switch (name) {
     case 'status':
-      return { kind: 'text', text: await preview.status(cwd) }
+      return { kind: 'text', text: await preview.status(cwd, caller) }
     case 'start':
       return { kind: 'text', text: JSON.stringify(await preview.startAndWait(cwd)) }
     case 'stop':
-      return { kind: 'text', text: JSON.stringify(preview.stop(cwd)) }
+      return { kind: 'text', text: JSON.stringify(preview.stop(cwd, caller, input.force === true)) }
     case 'screenshot': {
-      const shot = await preview.screenshot(cwd, { fullPage: input.full_page === true })
+      const shot = await preview.screenshot(cwd, caller, { fullPage: input.full_page === true })
       if (typeof shot !== 'string') return { kind: 'text', text: shot.error }
       return { kind: 'image', data: shot, mimeType: 'image/png' }
     }
@@ -366,7 +373,7 @@ export async function runPreviewTool(
       if (!input.text && !input.selector && !input.ref) return { kind: 'text', text: 'Give text, a selector or a ref to wait for.' }
       break
   }
-  return { kind: 'text', text: await preview.page(cwd, options.caller ?? cwd, name as PreviewPageOp, input) }
+  return { kind: 'text', text: await preview.page(cwd, caller, name as PreviewPageOp, input) }
 }
 
 /** `preview_resize`'s arguments as a patch on the pane's viewport. */

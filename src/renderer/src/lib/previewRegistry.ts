@@ -1,4 +1,7 @@
 import type { PreviewViewport, PreviewViewportPatch } from '@shared/previewDevices'
+import { normalizeCwd, pickPreviewPane } from '@shared/previewPane'
+
+export { normalizeCwd }
 
 /**
  * Live browser-preview panes register an imperative handle here so the
@@ -35,16 +38,6 @@ export interface PreviewHandle {
 
 const registry = new Map<string, PreviewHandle>()
 
-/**
- * Canonicalize a project path for matching. The agent's folder (`chat.cwd`) and
- * a pane's `cwd` originate from the same value, but a stray trailing slash or
- * duplicate separator would make an exact `===` miss and the command silently
- * no-op ("No preview open"). Strip both so matching is robust.
- */
-export function normalizeCwd(cwd: string): string {
-  return cwd.replace(/\/{2,}/g, '/').replace(/\/+$/, '')
-}
-
 export function registerPreview(id: string, handle: PreviewHandle): void {
   registry.set(id, handle)
 }
@@ -58,19 +51,35 @@ export function previewHandle(id: string): PreviewHandle | undefined {
 }
 
 /**
- * The mounted pane for a project: the one on screen if there is one, else the
- * one the user had selected most recently. Every preview tab is mounted while
- * the panel is open, so a project's pane is found even behind a file tab —
- * the old registry held only the selected pane, and an agent command arriving
- * while a file was in front opened a duplicate preview.
+ * The mounted pane `owner` should act on in `cwd` (see `pickPreviewPane`):
+ * its own, else an unowned one it may claim. Every preview tab is mounted
+ * while the panel is open, so a pane is found even behind a file tab — the old
+ * registry held only the selected pane, and an agent command arriving while a
+ * file was in front opened a duplicate preview.
  */
+export function previewFor(
+  cwd: string,
+  owner: string | undefined,
+  ownerOf: (paneId: string) => string | undefined,
+  isLive: (chatId: string) => boolean
+): { id: string; handle: PreviewHandle; claim: boolean } | null {
+  const picked = pickPreviewPane(
+    [...registry].map(([id, h]) => ({
+      id,
+      cwd: h.cwd,
+      owner: ownerOf(id),
+      visible: h.isVisible(),
+      lastActive: h.lastActive()
+    })),
+    cwd,
+    owner,
+    isLive
+  )
+  const handle = picked && registry.get(picked.id)
+  return picked && handle ? { ...picked, handle } : null
+}
+
+/** Any mounted pane for a project, ownership aside — for the e2e probes. */
 export function previewForCwd(cwd: string): { id: string; handle: PreviewHandle } | null {
-  const target = normalizeCwd(cwd)
-  let best: { id: string; handle: PreviewHandle } | null = null
-  for (const [id, handle] of registry) {
-    if (normalizeCwd(handle.cwd) !== target) continue
-    if (handle.isVisible()) return { id, handle }
-    if (!best || handle.lastActive() > best.handle.lastActive()) best = { id, handle }
-  }
-  return best
+  return previewFor(cwd, undefined, () => undefined, () => false)
 }

@@ -211,6 +211,11 @@ export interface PreviewTab {
   faviconInkDark?: boolean
   /** Device size and color scheme; absent fills the pane with no emulation. */
   viewport?: PreviewViewport
+  /**
+   * The chat whose agent drives this pane (`pickPreviewPane`). Absent on a
+   * pane the user opened until an agent first acts on it.
+   */
+  owner?: string
 }
 
 export interface PlanPanelState {
@@ -901,7 +906,13 @@ interface AppState {
   /** Monotonic counter for stable "Preview N" labels. */
   previewSeq: number
   /** Opens a new browser-preview tab (optionally at a URL/project) and focuses it. */
-  openPreview(url?: string, cwd?: string): void
+  /**
+   * Opens a preview tab and returns its id. `activate: false` opens it behind
+   * the panel's current tab (an agent's pane); the panel itself still opens,
+   * since only an open panel mounts its panes.
+   */
+  openPreview(url?: string, cwd?: string, opts?: { owner?: string; activate?: boolean }): string
+  setPreviewOwner(id: string, owner: string): void
   closePreview(id: string): void
   /** Records the URL a preview navigated to, so it restores on tab switch. */
   setPreviewUrl(id: string, url: string): void
@@ -2381,19 +2392,25 @@ export const useApp = create<AppState>((set, get) => ({
   previews: [],
   previewSeq: 0,
 
-  openPreview(url, cwd) {
+  openPreview(url, cwd, opts) {
+    const n = get().previewSeq + 1
+    const id = `preview:${n}`
     set((s) => {
-      const n = s.previewSeq + 1
-      const id = `preview:${n}`
       const target = url || localStorage.getItem('previewUrl') || 'http://localhost:3000'
       const folder = cwd ?? s.selectedCwd ?? ''
+      const owner = opts?.owner
       return {
-        previews: [...s.previews, { id, n, url: target, cwd: folder }],
+        previews: [...s.previews, { id, n, url: target, cwd: folder, ...(owner ? { owner } : {}) }],
         previewSeq: n,
-        activeTab: id,
+        activeTab: opts?.activate === false && s.activeTab ? s.activeTab : id,
         ...panelPatch(s, true)
       }
     })
+    return id
+  },
+
+  setPreviewOwner(id, owner) {
+    set((s) => ({ previews: s.previews.map((p) => (p.id === id ? { ...p, owner } : p)) }))
   },
 
   previewStates: {},
@@ -5359,35 +5376,14 @@ export const useApp = create<AppState>((set, get) => ({
       }
 
       case 'chat-added': {
-        // A delegated child (`agents_delegate`). It joins `chats` like a column
-        // added by hand, and opens as a column of its thread when there is
-        // room — without taking focus: the agent that delegated is the one
-        // being read. With no room it is simply in the thread's closed list,
-        // which is drawn from `chats`.
+        // A delegated child (`agents_delegate`). It joins `chats` and nothing
+        // else: it arrives minimized, as a closed pill in its thread's header
+        // (drawn from `chats`), and the sidebar row carries its mark while it
+        // works. Opening it is the user's call — the pill, or its card in the
+        // parent — because a column that appears on its own takes width from
+        // the conversation being read, several times over when a turn fans out.
         const meta = ev.meta
-        const thread = meta.sideOf
-        let opened = false
-        set((st) => {
-          if (st.chats.some((c) => c.id === meta.id)) return {}
-          const chats = [...st.chats, meta]
-          if (!thread) return { chats }
-          if (thread === st.activeId) {
-            if (threadFull(st)) return { chats }
-            opened = true
-            return {
-              chats,
-              sideChats: { ...st.sideChats, [meta.id]: EMPTY_SIDE_SLOT },
-              sideColumns: [...st.sideColumns, meta.id]
-            }
-          }
-          const stashed = st.sideColumnsByChat[thread] ?? []
-          if (1 + stashed.length >= MAX_THREAD_CHATS) return { chats }
-          return {
-            chats,
-            sideColumnsByChat: { ...st.sideColumnsByChat, [thread]: [...stashed, meta.id] }
-          }
-        })
-        if (opened) void get().hydrateSideChats([meta.id])
+        set((st) => (st.chats.some((c) => c.id === meta.id) ? {} : { chats: [...st.chats, meta] }))
         break
       }
 

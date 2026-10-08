@@ -718,6 +718,13 @@ export function RightPanel(): React.JSX.Element | null {
   const terminalBusy = useApp((s) => s.terminalBusy)
   const closeTerminal = useApp((s) => s.closeTerminal)
   const previews = useApp((s) => s.previews)
+  // A delegate's pane is named for the agent driving it, so five agents'
+  // tabs are not five indistinguishable "Preview N"s.
+  const chats = useApp((s) => s.chats)
+  const previewLabel = (p: { n: number; owner?: string }): string => {
+    const name = p.owner ? chats.find((c) => c.id === p.owner)?.delegation?.name : undefined
+    return name ? `Preview · ${name}` : `Preview ${p.n}`
+  }
   const closePreview = useApp((s) => s.closePreview)
   const selectedCwd = useApp((s) => s.selectedCwd)
   const diffContents = useApp((s) => s.diffContents)
@@ -1173,7 +1180,7 @@ export function RightPanel(): React.JSX.Element | null {
             <Tab
               key={p.id}
               icon={<SiteMark uri={p.favicon} inkDark={p.faviconInkDark} />}
-              label={`Preview ${p.n}`}
+              label={previewLabel(p)}
               active={current === p.id}
               dragId={p.id}
               onReorder={(from, side) => reorderTab(from, p.id, side)}

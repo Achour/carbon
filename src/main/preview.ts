@@ -81,6 +81,22 @@ const SNIFF_CAP = 8192
  * `driver` (CDP in main); the renderer is asked only for what it owns — which
  * pane is a project's, its tab and its pixels — via `send`.
  */
+/** A chat's lane on a project (`PreviewManager.serial`). */
+function laneKey(cwd: string, caller: string): string {
+  return `${cwd}\u0000${caller}`
+}
+
+/**
+ * The chat a pane is for. A caller with no chat id falls back to the project
+ * folder (`runPreviewTool`), which is no chat at all: it takes any pane.
+ */
+function ownerOf(cwd: string, caller: string): string | undefined {
+  return caller === cwd ? undefined : caller
+}
+
+/** How recently another chat must have used the preview for `stop` to hold off. */
+const ACTIVE_MS = 5 * 60_000
+
 export class PreviewManager implements PreviewToolHost {
   private servers = new Map<string, Server>()
   /** In-flight starts, so a click and an agent call landing together start one server. */
@@ -430,7 +446,17 @@ export class PreviewManager implements PreviewToolHost {
     })
   }
 
-  stop(cwd: string): PreviewState {
+  stop(cwd: string, caller?: string, force = false): PreviewState {
+    // The server is shared by every chat's pane on the project, so an agent
+    // stopping it kills the page another agent is in the middle of testing.
+    // The user's own Stop (no caller) and an explicit `force` still go through.
+    const others = caller && !force ? this.othersActive(cwd, caller) : 0
+    if (others && this.servers.get(cwd)?.state.status === 'running') {
+      return {
+        ...this.state(cwd),
+        error: `Not stopped: ${others === 1 ? 'another chat is' : `${others} other chats are`} using this dev server in the preview right now, and stopping it would break their pages. Leave it running, or call preview_stop with force: true if it really has to stop.`
+      }
+    }
     this.bump(cwd)
     const server = this.servers.get(cwd)
     if (!server) return { cwd, status: 'stopped' }
@@ -471,10 +497,11 @@ export class PreviewManager implements PreviewToolHost {
    */
   private async target(
     cwd: string,
+    caller: string,
     open: boolean
   ): Promise<{ paneId: string; guest: NonNullable<ReturnType<PreviewDriver['guest']>> } | { error: string }> {
     const url = open ? this.state(cwd).url : undefined
-    const res = await this.send({ cwd, kind: 'ensure', url })
+    const res = await this.send({ cwd, kind: 'ensure', url, owner: ownerOf(cwd, caller) })
     if (!res.ok || !res.paneId) {
       return {
         error:
@@ -488,7 +515,8 @@ export class PreviewManager implements PreviewToolHost {
     for (let i = 0; i < 20; i++) {
       const guest = this.driver.guest(res.paneId)
       if (guest) {
-        this.lastPane.set(cwd, res.paneId)
+        await this.drainPrevious(laneKey(cwd, caller), res.paneId)
+        this.lastPane.set(laneKey(cwd, caller), res.paneId)
         return { paneId: res.paneId, guest }
       }
       await new Promise((r) => setTimeout(r, 100))
@@ -496,12 +524,24 @@ export class PreviewManager implements PreviewToolHost {
     return { error: 'The preview did not finish loading. Try again in a moment.' }
   }
 
-  async status(cwd: string): Promise<string> {
+  async status(cwd: string, caller: string = cwd): Promise<string> {
     const state = this.state(cwd)
     const lines = [JSON.stringify(state)]
-    const shown = this.driver.guestsFor(cwd)[0]
-    if (shown) lines.push(`The preview is showing ${shown.wc.getURL()}.`)
-    else lines.push('No preview is open for this project.')
+    const pane = this.lastPane.get(laneKey(cwd, caller))
+    const shown = pane ? this.driver.guest(pane) : undefined
+    const open = shown ? undefined : this.driver.guestsFor(cwd)[0]
+    if (shown) lines.push(`Your preview is showing ${shown.wc.getURL()}.`)
+    else if (open) {
+      lines.push(
+        `The project's preview is showing ${open.wc.getURL()}. Your first page command uses it unless another chat already drives it, in which case you get a tab of your own.`
+      )
+    } else lines.push('No preview is open for this project; preview_navigate or preview_snapshot opens one.')
+    const sharing = this.othersActive(cwd, caller)
+    if (sharing) {
+      lines.push(
+        `${sharing === 1 ? 'Another chat is' : `${sharing} other chats are`} using the preview on this project too, each in its own tab — yours is separate, so their navigation does not move your page.`
+      )
+    }
     const others = (await scanLocalServers({ excludePids: [process.pid] }).catch(() => [])).filter(
       (s) => cwdBelongsTo(s.cwd, cwd) && s.url !== state.url
     )
@@ -514,35 +554,96 @@ export class PreviewManager implements PreviewToolHost {
   }
 
   /**
-   * One preview command per project at a time. Two calls landing together —
-   * parallel tool calls, or two chats on one project — used to interleave
-   * inside the page: two `type`s focused A, focused B, then typed both values
-   * into B. Each waits for the one before it, failed or not.
+   * One preview command per chat at a time, on that chat's own pane. Two calls
+   * landing together — parallel tool calls, or a chat's sub-agents — used to
+   * interleave inside the page: two `type`s focused A, focused B, then typed
+   * both values into B. Each waits for the one before it, failed or not.
+   * Keyed by chat rather than by project, since each chat drives its own pane
+   * (`pickPreviewPane`): agents testing side by side no longer queue behind
+   * each other's waits and page loads.
    */
   private lanes = new Map<string, Promise<unknown>>()
-  /** The pane each project's last operation ran on, for admitting queued actions. */
+  /** The pane each chat's last operation ran on, for admitting queued actions. */
   private lastPane = new Map<string, string>()
-  private serial<T>(cwd: string, fn: () => Promise<T>): Promise<T> {
-    const prev = this.lanes.get(cwd) ?? Promise.resolve()
+  /** When each chat last used the preview, per project — what `stop` and `status` read. */
+  private lastUse = new Map<string, number>()
+  private serial<T>(cwd: string, caller: string, fn: () => Promise<T>): Promise<T> {
+    const key = laneKey(cwd, caller)
+    this.lastUse.set(key, Date.now())
+    const prev = this.lanes.get(key) ?? Promise.resolve()
     const next = prev.then(fn, fn)
     // The lane is held until the page has actually finished, not only until
     // the caller stopped waiting: a timed-out script still running would
     // otherwise mutate the page under the next operation.
-    const settled = next.catch(() => {}).then(() => this.driver.quiesce(cwd))
-    this.lanes.set(cwd, settled)
+    const settled = next.catch(() => {}).then(() => this.driver.quiesce(this.lastPane.get(key)))
+    this.lanes.set(key, settled)
     void settled.then(() => {
-      if (this.lanes.get(cwd) === settled) this.lanes.delete(cwd)
+      if (this.lanes.get(key) === settled) this.lanes.delete(key)
     })
     return next
   }
 
-  screenshot(cwd: string, opts: { fullPage?: boolean }): Promise<string | { error: string }> {
-    return this.serial(cwd, () => this.screenshotNow(cwd, opts))
+  /**
+   * What the app window has exactly one of: keyboard focus, and the top of
+   * the panel. Typing needs the guest's focus (see `focus`), and a capture
+   * uncovers its pane or puts it on top — so two chats typing at once on their
+   * own panes would still send one's keys into the other's. Those sections
+   * take this lock, inside their own lane; everything else runs side by side.
+   */
+  private windowLane: Promise<unknown> = Promise.resolve()
+  private withWindow<T>(fn: () => Promise<T>): Promise<T> {
+    const next = this.windowLane.then(fn, fn)
+    this.windowLane = next.catch(() => {})
+    return next
   }
 
-  private async screenshotNow(cwd: string, opts: { fullPage?: boolean }): Promise<string | { error: string }> {
-    const t = await this.target(cwd, true)
+  /**
+   * A pane is reclaimed when its owner chat is deleted (`pickPreviewPane`),
+   * and that chat's last operation can still be running in its own lane — a
+   * script mid-`evaluate` would then mutate the new owner's page, and its
+   * quiesce reload it. So the first operation on a pane another lane last used
+   * waits for that lane to drain. It cannot wait on itself, and the old lane
+   * never waits back: a deleted owner's next `ensure` gets a new pane.
+   */
+  private async drainPrevious(key: string, paneId: string): Promise<void> {
+    for (const [other, pane] of this.lastPane) {
+      if (other === key || pane !== paneId) continue
+      this.lastPane.delete(other)
+      const lane = this.lanes.get(other)
+      if (lane) await lane.catch(() => {})
+    }
+  }
+
+  /** Other chats that used the preview on `cwd` in the last few minutes. */
+  private othersActive(cwd: string, caller: string): number {
+    const since = Date.now() - ACTIVE_MS
+    let n = 0
+    for (const [key, at] of this.lastUse) {
+      const [c, who] = key.split('\u0000')
+      if (c === cwd && who !== caller && who !== cwd && (at >= since || this.lanes.has(key))) n++
+    }
+    return n
+  }
+
+  screenshot(cwd: string, caller: string, opts: { fullPage?: boolean }): Promise<string | { error: string }> {
+    return this.serial(cwd, caller, () => this.screenshotNow(cwd, caller, opts))
+  }
+
+  private async screenshotNow(
+    cwd: string,
+    caller: string,
+    opts: { fullPage?: boolean }
+  ): Promise<string | { error: string }> {
+    const t = await this.target(cwd, caller, true)
     if ('error' in t) return t
+    return this.withWindow(() => this.capture(cwd, t, opts))
+  }
+
+  private async capture(
+    cwd: string,
+    t: { paneId: string; guest: NonNullable<ReturnType<PreviewDriver['guest']>> },
+    opts: { fullPage?: boolean }
+  ): Promise<string | { error: string }> {
     if (!opts.fullPage) {
       const res = await this.send({ cwd, kind: 'screenshot', paneId: t.paneId })
       return res.ok && res.data ? res.data : { error: res.error ?? 'Capture failed.' }
@@ -561,11 +662,11 @@ export class PreviewManager implements PreviewToolHost {
     // another operation. An action that acts on the page (click, type, press,
     // evaluate) and finds, when its turn comes, a different pane or a page
     // navigated since, refuses rather than landing on what replaced it.
-    const queued = this.lanes.has(cwd)
-    const pane = queued ? this.lastPane.get(cwd) : undefined
+    const queued = this.lanes.has(laneKey(cwd, caller))
+    const pane = queued ? this.lastPane.get(laneKey(cwd, caller)) : undefined
     const guest = pane ? this.driver.guest(pane) : undefined
     const admitted = guest ? { pane: pane!, wc: guest.wc.id, doc: guest.docGen } : undefined
-    return this.serial(cwd, async () => {
+    return this.serial(cwd, caller, async () => {
       // Queued with nothing yet to bind it to — the preview was still being
       // opened by the call ahead of it — an acting call has no page it was
       // asked about, so it does not guess one.
@@ -588,7 +689,7 @@ export class PreviewManager implements PreviewToolHost {
     admitted?: { pane: string; wc: number; doc: number }
   ): Promise<string> {
     if (op === 'console') {
-      const t = await this.target(cwd, false)
+      const t = await this.target(cwd, caller, false)
       const browser = 'error' in t ? '' : this.driver.console(t.guest, caller, input.all === true)
       const server = this.serverErrors(cwd, caller, input.all === true)
       const parts: string[] = []
@@ -605,15 +706,16 @@ export class PreviewManager implements PreviewToolHost {
       if (!/^(https?:\/\/|file:\/\/)/i.test(url) && url !== 'about:blank') {
         return 'preview_navigate takes an http(s) or file URL (or about:blank).'
       }
-      const before = await this.target(cwd, false)
+      const before = await this.target(cwd, caller, false)
       const mark = 'error' in before ? 0 : before.guest.log.mark()
-      const res = await this.send({ cwd, kind: 'navigate', url })
+      const res = await this.send({ cwd, kind: 'navigate', url, owner: ownerOf(cwd, caller) })
+      if (res.ok && res.paneId) this.lastPane.set(laneKey(cwd, caller), res.paneId)
       if (!res.ok || !res.paneId) return `Failed to navigate: ${res.error ?? 'unknown'}`
       const guest = this.driver.guest(res.paneId)
       if (!guest) return `Navigating to ${url}.`
       return this.driver.afterNavigate(guest, 'error' in before || before.guest !== guest ? 0 : mark)
     }
-    const t = await this.target(cwd, op !== 'network')
+    const t = await this.target(cwd, caller, op !== 'network')
     if ('error' in t) return t.error
     const g = t.guest
     if (admitted && (admitted.pane !== t.paneId || admitted.wc !== g.wc.id || admitted.doc !== g.docGen)) {
@@ -628,15 +730,19 @@ export class PreviewManager implements PreviewToolHost {
       case 'snapshot':
         return this.driver.snapshot(g, caller)
       case 'click':
-        return this.driver.click(g, input, doc)
+        // Real input: the press gives this guest keyboard focus, which would
+        // pull it from another chat's pane in the middle of a `type`.
+        return this.withWindow(() => this.driver.click(g, input, doc))
       case 'type':
       case 'press':
-        await this.send({ cwd, kind: 'focus', paneId: t.paneId })
-        try {
-          return op === 'type' ? await this.driver.type(g, input, doc) : await this.driver.press(g, input, doc)
-        } finally {
-          await this.send({ cwd, kind: 'unfocus', paneId: t.paneId })
-        }
+        return this.withWindow(async () => {
+          await this.send({ cwd, kind: 'focus', paneId: t.paneId })
+          try {
+            return op === 'type' ? await this.driver.type(g, input, doc) : await this.driver.press(g, input, doc)
+          } finally {
+            await this.send({ cwd, kind: 'unfocus', paneId: t.paneId })
+          }
+        })
       case 'scroll':
         return this.driver.scroll(g, input)
       case 'wait_for':

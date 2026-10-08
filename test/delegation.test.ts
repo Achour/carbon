@@ -8,6 +8,7 @@ import {
   delegationOutcome,
   delegationResult,
   autoName,
+  canDelegate,
   isAgentsSideEffect,
   resolveDelegate,
   runAgentsTool,
@@ -33,6 +34,21 @@ const toolOnly = (): ChatMessage => ({
 const error = (text: string): ChatMessage => ({ id: `e-${text}`, role: 'event', kind: 'error', text, ts: 0 })
 
 const none = (): undefined => undefined
+
+test('one level: a delegate is never offered the agents tools, whatever the setting', () => {
+  const on = { allowDelegation: true }
+  const parent = { id: 'p', surface: undefined, delegation: undefined }
+  assert.equal(canDelegate(parent, on), true)
+  assert.equal(canDelegate(parent, { allowDelegation: false }), false)
+  const child = {
+    id: 'c',
+    surface: undefined,
+    delegation: { parentId: 'p', name: 'codex-a', task: 't', status: 'running' } as never
+  }
+  assert.equal(canDelegate(child, on), false)
+  assert.equal(canDelegate({ ...parent, surface: 'terminal' as const }, on), false)
+  assert.equal(canDelegate({ ...parent, id: '' }, on), false)
+})
 
 test('validate: refuses an empty task, an unknown or unavailable provider', () => {
   assert.deepEqual(validateDelegateRequest({ task: '  ', provider: 'codex' }, ['codex'], none), {
