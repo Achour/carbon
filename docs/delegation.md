@@ -38,9 +38,12 @@ its working spinner) and a mark on the thread's sidebar row, and it becomes a
 column only when the user opens it — the pill, or its card in the parent. It
 used to open itself whenever the thread had room, and a turn that fanned out
 three agents took three columns' width from the conversation being read, with
-nobody having asked to watch them. The sidebar row marks every side chat that
-is *working*, open or not (`renderChatItem`'s `busy`): marking open columns
-alone meant minimizing an agent hid that it was still running.
+nobody having asked to watch them. The sidebar row marks every side chat of the
+thread, open or minimized — the same set as the header, open columns then closed
+pills, killed delegates left out of both. Marking open columns alone meant
+minimizing an agent took its icon off the row; marking only the minimized ones
+still *working* was the next wrong answer, since the icon then vanished the
+moment the agent finished, which is when the user goes looking for it.
 
 **The child sees the task and nothing else.** Parent history is not copied; the
 tool description says so, so the parent writes a complete brief. A
