@@ -299,7 +299,9 @@ that the strip scrolls sideways rather than crushing a transcript.
   the effort and the permission's words are one click away.
 - **The sidebar row is the thread's.** `ThreadProviders` draws one provider mark per open chat
   *and* per minimized one (the header's closed pills, so not a killed delegate),
-  and the row's activity is
+  four at most and the rest a "+N" chip naming them on hover — busiest first
+  (waiting on you, then working), so what folds is finished work, never the
+  agent that needs you. The row's activity is
   `projectActivity` over all of them, so "needs your input" on a row means some
   chat in that thread does — a minimized agent included.
 

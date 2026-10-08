@@ -995,14 +995,34 @@ function ThreadProviders({
   active: boolean
 }): React.JSX.Element {
   if (!sides.length) return <RowProvider chat={chat} active={active} />
+  // A turn that fans out ten agents would push the row's marks past the
+  // timestamp, so past `THREAD_MARKS` the rest fold into a count. `sides`
+  // arrives busiest first (`renderChatItem`), so what folds is what is done.
+  const shown = [chat, ...sides]
+  const hidden = shown.length > THREAD_MARKS ? shown.splice(THREAD_MARKS) : []
   return (
     <span className="flex shrink-0 items-center gap-1">
-      {[chat, ...sides].map((c) => (
+      {shown.map((c) => (
         <RowProvider key={c.id} chat={c} active={active} titled />
       ))}
+      {hidden.length > 0 && (
+        <WithTooltip label={hidden.map((c) => c.delegation?.name ?? (c.title?.trim() || 'New chat')).join(', ')}>
+          <span
+            className={cn(
+              'flex h-[13px] shrink-0 items-center rounded-[4px] bg-sidebar-foreground/10 px-1 text-[9.5px] leading-none font-medium tabular-nums text-sidebar-foreground/70 transition-opacity',
+              active ? 'opacity-100' : 'opacity-70 group-hover:opacity-100'
+            )}
+          >
+            +{hidden.length}
+          </span>
+        </WithTooltip>
+      )}
     </span>
   )
 }
+
+/** Marks a thread's row draws before the rest fold into a "+N" chip. */
+const THREAD_MARKS = 4
 
 function sameSides(a: ChatMeta[], b: ChatMeta[]): boolean {
   return a.length === b.length && a.every((c, i) => c === b[i])
@@ -1656,6 +1676,14 @@ export function Sidebar(): React.JSX.Element {
     // chats as the thread header — open columns, then the closed pills.
     const closed = (sideChatsOf.get(chat.id) ?? []).filter((c) => !open.includes(c.id))
     const columns = closed.length ? [...open, ...closed.map((c) => c.id)] : open
+    // Busiest first — waiting on you, then working, then the rest in header
+    // order — so when the row folds past `THREAD_MARKS` it hides finished
+    // agents rather than the one that needs you.
+    const rank = (id: string): number => {
+      const kind = chatActivity(statuses[id], backgroundJobs[id], permissions[id]).kind
+      return kind === 'needs-input' ? 0 : kind === 'idle' ? 2 : 1
+    }
+    const ordered = columns.length >= THREAD_MARKS ? [...columns].sort((a, b) => rank(a) - rank(b)) : columns
     const own = chatActivity(statuses[chat.id], backgroundJobs[chat.id], permissions[chat.id])
     const activity = columns.length
       ? projectActivity([
@@ -1671,7 +1699,7 @@ export function Sidebar(): React.JSX.Element {
         active={chat.id === activeId}
         activity={activity}
         titling={!!titling[chat.id]}
-        sides={columns.flatMap((id) => chatsById.get(id) ?? [])}
+        sides={ordered.flatMap((id) => chatsById.get(id) ?? [])}
         detail={detailed ? chatDetail(chat) : null}
         mark={mark}
         // Whenever no project row is on screen to carry the project's actions —
