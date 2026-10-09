@@ -4564,6 +4564,8 @@ export const useApp = create<AppState>((set, get) => ({
       // Main persists the normalized chat model/effort during creation. Mirror
       // that exact pair so the live renderer cannot restore an older value.
       modelEfforts[meta.model ?? ''] = meta.effort ?? ''
+      const modelServiceTiers = { ...(s.defaults?.modelServiceTiers ?? {}) }
+      if (opts?.serviceTier) modelServiceTiers[meta.model ?? ''] = opts.serviceTier
       return {
         // A brand-new chat has no saved tabs, so this stashes the outgoing chat's
         // and opens an empty tab set.
@@ -4594,7 +4596,8 @@ export const useApp = create<AppState>((set, get) => ({
             {
               ...s.defaults,
               recentDirs: [cwd, ...s.defaults.recentDirs.filter((d) => d !== cwd)].slice(0, 8),
-              modelEfforts
+              modelEfforts,
+              modelServiceTiers
             }
           : s.defaults
           ? {
@@ -4609,7 +4612,8 @@ export const useApp = create<AppState>((set, get) => ({
               serviceTier: opts?.serviceTier,
               permissionMode: opts?.permissionMode ?? s.defaults.permissionMode,
               recentDirs: [cwd, ...s.defaults.recentDirs.filter((d) => d !== cwd)].slice(0, 8),
-              modelEfforts
+              modelEfforts,
+              modelServiceTiers
             }
           : s.defaults
       }
@@ -5139,8 +5143,21 @@ export const useApp = create<AppState>((set, get) => ({
         modelEfforts = { ...(modelEfforts ?? {}) }
         modelEfforts[key] = patch.effort
       }
-      // Fixed defaults: only the per-model effort memory moves, as in main.
-      if (s.defaults.fixed) return { defaults: { ...s.defaults, modelEfforts } }
+      // Speed the same way — keyed by the model it was picked on, and a model
+      // pick without one takes that model's own tier, never the last one's.
+      let modelServiceTiers = s.defaults.modelServiceTiers
+      if (patch.serviceTier !== undefined) {
+        const key = patch.model ?? s.chats.find((c) => c.id === id)?.model ?? ''
+        modelServiceTiers = { ...(modelServiceTiers ?? {}), [key]: patch.serviceTier }
+      }
+      const serviceTier =
+        patch.serviceTier ??
+        (patch.model !== undefined
+          ? (modelServiceTiers?.[patch.model || ''] ?? 'standard')
+          : s.defaults.serviceTier)
+      // Fixed defaults: only the per-model memory moves, as in main.
+      if (s.defaults.fixed)
+        return { defaults: { ...s.defaults, modelEfforts, modelServiceTiers } }
       return {
         defaults: {
           ...s.defaults,
@@ -5157,9 +5174,10 @@ export const useApp = create<AppState>((set, get) => ({
               }
             : {}),
           ...(patch.effort !== undefined ? { effort: patch.effort || undefined } : {}),
-          ...(patch.serviceTier !== undefined ? { serviceTier: patch.serviceTier } : {}),
+          serviceTier,
           ...(patch.permissionMode ? { permissionMode: patch.permissionMode } : {}),
-          modelEfforts
+          modelEfforts,
+          modelServiceTiers
         }
       }
     })

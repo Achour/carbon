@@ -157,14 +157,16 @@ export function NewChat(): React.JSX.Element {
   const [serviceTier, setServiceTier] = React.useState<ServiceTier>(
     draft?.serviceTier ?? defaults?.serviceTier ?? 'standard'
   )
-  // Creating a chat also records its options as the defaults. A tier the
-  // composer *corrected* (Fast on a model that lacks it) isn't a user choice, so
-  // it's sent as undefined — the chat still starts Standard, but the stored
-  // preference survives for the next chat on a model that does support Fast.
-  const tierCorrected = React.useRef(false)
+  // Speed is remembered per model the same way. The tier is always sent on
+  // creation, corrected or not: it is recorded against this chat's model only,
+  // so a Standard forced by a model without Fast can't spill onto another one.
+  const [modelServiceTiers, setModelServiceTiers] = React.useState<Record<string, ServiceTier>>(
+    defaults?.modelServiceTiers ?? {}
+  )
   const changeServiceTier = (next: ServiceTier, opts?: { remember?: boolean }): void => {
-    tierCorrected.current = opts?.remember === false
     setServiceTier(next)
+    if (opts?.remember === false) return
+    setModelServiceTiers((prev) => ({ ...prev, [model]: next }))
   }
   const [permissionMode, setPermissionMode] = React.useState<PermissionModeId>(
     draft?.permissionMode ?? defaults?.permissionMode ?? 'default'
@@ -291,7 +293,7 @@ export function NewChat(): React.JSX.Element {
         provider: modelProvider,
         model: model || undefined,
         effort: effort || undefined,
-        serviceTier: tierCorrected.current ? undefined : serviceTier,
+        serviceTier,
         permissionMode,
         attachments: attachments.length ? attachments : undefined,
         reviewTarget,
@@ -417,6 +419,7 @@ export function NewChat(): React.JSX.Element {
                   effort={effort}
                   onEffortChange={changeEffort}
                   modelEfforts={modelEfforts}
+                  modelServiceTiers={modelServiceTiers}
                   serviceTier={serviceTier}
                   onServiceTierChange={changeServiceTier}
                   permissionMode={permissionMode}

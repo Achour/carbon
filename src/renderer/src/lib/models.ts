@@ -6,12 +6,13 @@ import {
   SERVICE_TIER_OPTIONS,
   canonicalModelId,
   rememberedEffortForModel,
+  rememberedServiceTierForModel,
   type EffortId,
   type ModelOption,
   type Provider
 } from '@shared/types'
 
-export { canonicalModelId, rememberedEffortForModel }
+export { canonicalModelId, rememberedEffortForModel, rememberedServiceTierForModel }
 
 /**
  * The full model picker list, restricted to providers whose CLI is available.

@@ -78,6 +78,7 @@ import {
   modelKey,
   matchesModelQuery,
   rememberedEffortForModel,
+  rememberedServiceTierForModel,
   serviceTierOptionsFor,
   visibleModelOptions
 } from '@/lib/models'
@@ -1033,12 +1034,15 @@ function NewChatDefaults(): React.JSX.Element | null {
           ? effort
           : ''
     const nextTiers = serviceTierOptionsFor(next, next.provider, dynamicModels)
+    // The model's own speed, not the one being replaced — see `modelServiceTiers`.
+    const nextTier =
+      rememberedServiceTierForModel(defaults.modelServiceTiers, next.id, models) ?? 'standard'
     const nextPermissions = PROVIDER_PERMISSION_MODES[next.provider]
     void setDefaults({
       model: next.id,
       modelProvider: next.provider,
       effort: nextEffort,
-      serviceTier: nextTiers.some((t) => t.id === tier) ? tier : 'standard',
+      serviceTier: nextTiers.some((t) => t.id === nextTier) ? nextTier : 'standard',
       permissionMode: nextPermissions.some((m) => m.id === permission) ? permission : 'default'
     })
   }

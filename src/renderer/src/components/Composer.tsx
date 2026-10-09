@@ -46,6 +46,7 @@ import {
   matchesModelQuery,
   modelKey,
   rememberedEffortForModel,
+  rememberedServiceTierForModel,
   serviceTierOptionsFor,
   visibleModelOptions
 } from '@/lib/models'
@@ -728,6 +729,7 @@ export function Composer({
   effort,
   onEffortChange,
   modelEfforts,
+  modelServiceTiers,
   serviceTier = 'standard',
   onServiceTierChange,
   permissionMode,
@@ -759,6 +761,8 @@ export function Composer({
   onEffortChange: (effort: EffortId | '', opts?: { remember?: boolean }) => void
   /** Last effort chosen per model; selecting a model restores its value. */
   modelEfforts?: Record<string, EffortId | ''>
+  /** Last speed chosen per model; selecting a model restores it, else Standard. */
+  modelServiceTiers?: Record<string, ServiceTier>
   serviceTier?: ServiceTier
   onServiceTierChange?: (serviceTier: ServiceTier, opts?: { remember?: boolean }) => void
   permissionMode: PermissionModeId
@@ -910,8 +914,22 @@ export function Composer({
       const remembered = rememberedEffortForModel(modelEfforts, next, modelOptions)
       if (remembered !== undefined && remembered !== effort)
         onEffortChange(remembered, { remember: false })
+      // Speed has no fallback to carry: Fast was picked for the model being
+      // left, so a model with no remembered tier starts Standard.
+      const tier =
+        rememberedServiceTierForModel(modelServiceTiers, next, modelOptions) ?? 'standard'
+      if (tier !== serviceTier) onServiceTierChange?.(tier, { remember: false })
     },
-    [onModelChange, onEffortChange, modelEfforts, modelOptions, effort]
+    [
+      onModelChange,
+      onEffortChange,
+      onServiceTierChange,
+      modelEfforts,
+      modelServiceTiers,
+      modelOptions,
+      effort,
+      serviceTier
+    ]
   )
   const serviceTierOptions = serviceTierOptionsFor(selectedModelOption, provider, dynamicModels)
   const invalidServiceTier = !serviceTierOptions.some((option) => option.id === serviceTier)

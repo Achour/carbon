@@ -698,6 +698,7 @@ export const ChatView = React.memo(function ChatView({
   // moment the draft needs reading.
   const initialDraft = React.useMemo(() => useApp.getState().chatDrafts[chat.id], [chat.id])
   const modelEfforts = useApp((s) => s.defaults?.modelEfforts)
+  const modelServiceTiers = useApp((s) => s.defaults?.modelServiceTiers)
   // A cross-provider pick is only armed until the next send; the composer
   // previews its provider (efforts, placeholder, labels) while the chat itself
   // stays on the current backend.
@@ -1488,6 +1489,7 @@ export const ChatView = React.memo(function ChatView({
               effort={chat.effort ?? ''}
               onEffortChange={(effort, opts) => void setChatOptions(chat.id, { effort, ...opts })}
               modelEfforts={modelEfforts}
+              modelServiceTiers={modelServiceTiers}
               serviceTier={chat.serviceTier ?? 'standard'}
               onServiceTierChange={(serviceTier, opts) =>
                 void setChatOptions(chat.id, { serviceTier, ...opts })

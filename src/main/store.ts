@@ -2210,7 +2210,11 @@ export class Store {
       const key = patch.model ?? defaults.model ?? ''
       defaults.modelEfforts = { ...(defaults.modelEfforts ?? {}), [key]: patch.effort }
     }
-    if (patch.serviceTier !== undefined) defaults.serviceTier = patch.serviceTier
+    if (patch.serviceTier !== undefined) {
+      defaults.serviceTier = patch.serviceTier
+      const key = patch.model ?? defaults.model ?? ''
+      defaults.modelServiceTiers = { ...(defaults.modelServiceTiers ?? {}), [key]: patch.serviceTier }
+    }
     if (patch.hiddenModels !== undefined)
       defaults.hiddenModels = patch.hiddenModels.length ? patch.hiddenModels : undefined
     if (patch.keepAwake !== undefined) defaults.keepAwake = patch.keepAwake || undefined
@@ -2224,8 +2228,8 @@ export class Store {
   /**
    * Remember the user's last chosen options as the defaults for new chats.
    * `currentModel` is the model the effort was chosen under (the chat's model
-   * when the patch itself carries none), so effort can also be remembered
-   * per-model — see `AppDefaults.modelEfforts`.
+   * when the patch itself carries none), so effort and speed can also be
+   * remembered per-model — see `AppDefaults.modelEfforts`.
    */
   rememberOptions(
     patch: {
@@ -2251,6 +2255,15 @@ export class Store {
     }
     if (!fixed && patch.effort !== undefined) defaults.effort = patch.effort || undefined
     if (!fixed && patch.serviceTier !== undefined) defaults.serviceTier = patch.serviceTier
+    // A model pick without a speed (a chat's model switch, whose restored tier
+    // arrives as a correction) takes that model's own tier — see
+    // `AppDefaults.modelServiceTiers`.
+    else if (!fixed && patch.model !== undefined)
+      defaults.serviceTier = defaults.modelServiceTiers?.[patch.model || ''] ?? 'standard'
+    if (patch.serviceTier !== undefined) {
+      const key = patch.model !== undefined ? patch.model || '' : currentModel || ''
+      defaults.modelServiceTiers = { ...(defaults.modelServiceTiers ?? {}), [key]: patch.serviceTier }
+    }
     if (patch.effort !== undefined) {
       const key = patch.model !== undefined ? patch.model || '' : currentModel || ''
       const map = { ...(defaults.modelEfforts ?? {}) }

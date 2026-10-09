@@ -1590,6 +1590,14 @@ export interface AppDefaults {
    */
   modelEfforts?: Record<string, EffortId | ''>
   /**
+   * Last speed chosen *per model*, keyed like `modelEfforts`. Fast belongs to
+   * the model it was picked on: selecting a model restores its own tier, and a
+   * model with none recorded gets Standard — never the tier of the model just
+   * left, or one Fast pick would make every model after it Fast. `serviceTier`
+   * above follows the default model's entry for the same reason.
+   */
+  modelServiceTiers?: Record<string, ServiceTier>
+  /**
    * Settings → Chats → "New chats: Fixed". When set, the options above are
    * only ever changed from Settings — picking a model or a mode in a chat no
    * longer carries over to the next one. Absent means the original behavior:
@@ -1702,6 +1710,21 @@ export function rememberedEffortForModel(
   const target = canonicalModelId(model, options)
   for (const [storedModel, storedEffort] of Object.entries(modelEfforts ?? {})) {
     if (canonicalModelId(storedModel, options) === target) return storedEffort
+  }
+  return undefined
+}
+
+/** `rememberedEffortForModel` for speed; undefined when the model has none. */
+export function rememberedServiceTierForModel(
+  modelServiceTiers: AppDefaults['modelServiceTiers'],
+  model: string,
+  options: ModelOption[]
+): ServiceTier | undefined {
+  const direct = modelServiceTiers?.[model]
+  if (direct !== undefined) return direct
+  const target = canonicalModelId(model, options)
+  for (const [storedModel, storedTier] of Object.entries(modelServiceTiers ?? {})) {
+    if (canonicalModelId(storedModel, options) === target) return storedTier
   }
   return undefined
 }
