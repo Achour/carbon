@@ -10,9 +10,13 @@
       ;(() => {
         const saved = localStorage.getItem('themeMode')
         const mode = saved === 'light' || saved === 'system' ? saved : 'dark'
+        // An imported theme pins its own appearance (lib/themes.ts).
+        const pinned = localStorage.getItem('themeAppearance')
         const dark =
-          mode === 'dark' ||
-          (mode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+          pinned === 'dark' ||
+          (pinned !== 'light' &&
+            (mode === 'dark' ||
+              (mode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)))
         const appearance = dark ? 'dark' : 'light'
         document.documentElement.dataset.appearance = appearance
         document.documentElement.classList.toggle('dark', dark)

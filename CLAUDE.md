@@ -417,6 +417,10 @@ it guards**, and put new reasoning in that file rather than back in this one.
 - **`docs/pull-requests.md`** — the Pull requests page: every open PR you
   authored or review, across repos, with summary, diff, merge and a chat on the
   PR's branch (`main/pulls.ts`, `PullRequests.tsx`, `lib/prDiff.ts`).
+- **`docs/themes.md`** — imported themes: Open VSX search and `.vsix`
+  reading (`main/themeMarket.ts`, `main/zip.ts`), the VS Code / T3 Code →
+  Carbon mapping (`shared/themeImport.ts`), and why an imported theme pins its
+  appearance (`lib/themes.ts`, `ThemeImportDialog`).
 - **`docs/sounds.md`** — the three generated alert cues (`lib/sounds.ts`).
 - **`docs/antigravity.md`** — the Antigravity provider: why its ACP server and
   not `agy`, the install exception, its own Google sign-in, and the wire shapes

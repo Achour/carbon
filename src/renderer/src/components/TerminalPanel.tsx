@@ -90,13 +90,22 @@ function themeColors(): ITheme {
         brightCyan: '#0a6870',
         brightWhite: '#24292f'
       }
+  // An imported theme can carry its own ANSI palette as `--term-*`
+  // (`shared/themeImport.ts`); a built-in one never does, so the literals stay.
+  const root = getComputedStyle(document.documentElement)
+  const themed = Object.fromEntries(
+    Object.entries(ansi).map(([key, fallback]) => {
+      const name = `--term-${key.replace(/[A-Z]/g, (ch) => `-${ch.toLowerCase()}`)}`
+      return [key, root.getPropertyValue(name).trim() ? cssVarColor(name, fallback) : fallback]
+    })
+  )
   return {
     background: cssVarColor('--code-bg', '#1c1c1c'),
     foreground: cssVarColor('--foreground', '#e4e4e4'),
     cursor: cssVarColor('--primary', '#e4e4e4'),
     cursorAccent: cssVarColor('--code-bg', '#1c1c1c'),
     selectionBackground: cssVarColor('--accent', '#3a3a3a'),
-    ...ansi
+    ...themed
   }
 }
 

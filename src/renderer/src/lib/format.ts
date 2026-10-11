@@ -106,3 +106,10 @@ export function greeting(): string {
   if (h < 18) return 'Good afternoon'
   return 'Good evening'
 }
+
+const compactNumber = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 })
+
+/** 548744 → "548.7K". */
+export function formatCompact(n: number): string {
+  return compactNumber.format(n)
+}

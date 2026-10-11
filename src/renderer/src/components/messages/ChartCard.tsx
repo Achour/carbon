@@ -10,6 +10,7 @@ import {
   type ChartConfig
 } from '@/components/ui/chart'
 import { cn } from '@/lib/utils'
+import { formatCompact } from '@/lib/format'
 
 /**
  * A chart an agent drew with `chart_render`, drawn with the app's own chart
@@ -47,7 +48,6 @@ const slot = (i: number): string => `s${i + 1}`
  *  rather than half-clipped at its edges. */
 const EDGE = { left: 8, right: 8 }
 
-const compact = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 })
 const full = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 })
 
 /** A category label cut to fit an axis; the tooltip and table carry it whole. */
@@ -149,7 +149,7 @@ export default function ChartCard({ spec }: { spec: ChartSpec }): React.JSX.Elem
                 <CartesianGrid vertical={spec.horizontal} horizontal={!spec.horizontal} />
                 {spec.horizontal ? (
                   <>
-                    <XAxis type="number" tickLine={false} axisLine={false} tickFormatter={(v) => compact.format(v)} />
+                    <XAxis type="number" tickLine={false} axisLine={false} tickFormatter={(v) => formatCompact(v)} />
                     <YAxis
                       type="category"
                       dataKey={CAT}
@@ -162,7 +162,7 @@ export default function ChartCard({ spec }: { spec: ChartSpec }): React.JSX.Elem
                 ) : (
                   <>
                     <XAxis dataKey={CAT} tickLine={false} axisLine={false} tickMargin={8} tickFormatter={(v) => clip(v, 12)} />
-                    <YAxis tickLine={false} axisLine={false} width={44} tickFormatter={(v) => compact.format(v)} />
+                    <YAxis tickLine={false} axisLine={false} width={44} tickFormatter={(v) => formatCompact(v)} />
                   </>
                 )}
                 <ChartTooltip cursor content={<ChartTooltipContent />} />
@@ -190,7 +190,7 @@ export default function ChartCard({ spec }: { spec: ChartSpec }): React.JSX.Elem
               <LineChart data={rows} margin={{ left: 4, right: 12, top: 8 }}>
                 <CartesianGrid vertical={false} />
                 <XAxis dataKey={CAT} tickLine={false} axisLine={false} tickMargin={8} minTickGap={24} padding={EDGE} tickFormatter={(v) => clip(v, 12)} />
-                <YAxis tickLine={false} axisLine={false} width={44} tickFormatter={(v) => compact.format(v)} />
+                <YAxis tickLine={false} axisLine={false} width={44} tickFormatter={(v) => formatCompact(v)} />
                 <ChartTooltip cursor content={<ChartTooltipContent indicator="line" />} />
                 {legend && <ChartLegend content={<ChartLegendContent />} />}
                 {spec.series.map((_, i) => (
@@ -220,7 +220,7 @@ export default function ChartCard({ spec }: { spec: ChartSpec }): React.JSX.Elem
               <AreaChart data={rows} margin={{ left: 4, right: 12, top: 8 }}>
                 <CartesianGrid vertical={false} />
                 <XAxis dataKey={CAT} tickLine={false} axisLine={false} tickMargin={8} minTickGap={24} padding={EDGE} tickFormatter={(v) => clip(v, 12)} />
-                <YAxis tickLine={false} axisLine={false} width={44} tickFormatter={(v) => compact.format(v)} />
+                <YAxis tickLine={false} axisLine={false} width={44} tickFormatter={(v) => formatCompact(v)} />
                 <ChartTooltip cursor content={<ChartTooltipContent indicator="line" />} />
                 {legend && <ChartLegend content={<ChartLegendContent />} />}
                 {spec.series.map((_, i) => (

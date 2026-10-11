@@ -219,6 +219,8 @@ const api: Api = {
   setWindowAppearance: (mode: 'dark' | 'light' | 'system', resolvedDark: boolean) =>
     invoke('window:set-appearance', mode, resolvedDark),
   setDockIcon: (palette: DockIconPalette) => invoke('window:set-dock-icon', palette),
+  searchThemeExtensions: (query: string) => invoke('themes:search', query),
+  fetchThemeExtension: (id: string) => invoke('themes:extension', id),
   setWindowTranslucent: (on: boolean) => invoke('window:set-translucent', on),
   closeWindow: () => invoke('window:close'),
   platform: process.platform,

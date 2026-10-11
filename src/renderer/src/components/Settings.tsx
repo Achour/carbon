@@ -5,6 +5,8 @@ import {
   ArrowDownToLine,
   Bell,
   Brain,
+  Check,
+  Copy,
   FolderGit2,
   History,
   Info,
@@ -56,6 +58,9 @@ import { SwitchPill } from '@/components/ui/switch-pill'
 import { ArchiveSection } from '@/components/SettingsArchive'
 import { ProjectsSection } from '@/components/SettingsProjects'
 import { WithTooltip } from '@/components/ui/tooltip'
+import { MiniWindow } from '@/components/ThemePreview'
+import { ThemeImportDialog } from '@/components/ThemeImportDialog'
+import { exportTheme } from '@shared/themeImport'
 import {
   PROVIDERS,
   PROVIDER_LABELS,
@@ -1176,21 +1181,24 @@ function SidebarDensityPicker({
 
 function ThemeModePicker({
   value,
-  onChange
+  onChange,
+  disabled
 }: {
   value: ThemeMode
   onChange: (mode: ThemeMode) => void
+  disabled?: boolean
 }): React.JSX.Element {
   return (
     <div
       role="group"
       aria-label="Color mode"
-      className="grid grid-cols-3 gap-1 rounded-xl bg-secondary p-1"
+      className={cn('grid grid-cols-3 gap-1 rounded-xl bg-secondary p-1', disabled && 'opacity-55')}
     >
       {THEME_MODES.map((option) => (
         <button
           key={option.id}
           type="button"
+          disabled={disabled}
           aria-pressed={value === option.id}
           onClick={() => onChange(option.id)}
           className={cn(
@@ -1209,58 +1217,11 @@ function ThemeModePicker({
 }
 
 /**
- * A scale model of Carbon's own window in one palette: sidebar, a line of text,
- * a code block, and the composer with the accent on the send button.
- *
- * These palettes are built as a *surface ladder* (sidebar → background → card →
- * code), so the ladder is what the picker should show. A single color chip says
- * nothing about the chrome that color has to live on, which is exactly how the
- * old registry shipped 22 themes that turned out to share a light mode.
- */
-function MiniWindow({ vars }: { vars: Record<string, string> }): React.JSX.Element {
-  const v = (name: string): string => vars[name]
-  return (
-    <div className="flex h-full w-full" style={{ background: v('background') }}>
-      <div
-        className="flex w-[30%] shrink-0 flex-col gap-1 p-1.5"
-        style={{ background: v('sidebar') }}
-      >
-        <div
-          className="h-[3px] w-4/5 rounded-full"
-          style={{ background: v('sidebar-foreground'), opacity: 0.5 }}
-        />
-        <div
-          className="h-[3px] w-3/5 rounded-full"
-          style={{ background: v('sidebar-foreground'), opacity: 0.28 }}
-        />
-        <div className="h-2 w-full rounded-sm" style={{ background: v('sidebar-accent') }} />
-      </div>
-      <div className="flex min-w-0 flex-1 flex-col gap-1 p-1.5">
-        <div
-          className="h-[3px] w-3/4 rounded-full"
-          style={{ background: v('foreground'), opacity: 0.72 }}
-        />
-        <div
-          className="h-[3px] w-1/2 rounded-full"
-          style={{ background: v('muted-foreground'), opacity: 0.6 }}
-        />
-        <div className="h-3 w-full rounded-sm" style={{ background: v('code-bg') }} />
-        <div
-          className="mt-auto flex h-3 items-center justify-end rounded-sm border px-1"
-          style={{ background: v('card'), borderColor: v('border') }}
-        >
-          <div className="size-1.5 rounded-full" style={{ background: v('primary') }} />
-        </div>
-      </div>
-    </div>
-  )
-}
-
-/**
  * The two modes as facing pages of one window, joined at a seam — so a card
  * shows what the theme actually looks like in both, without a badge or a legend.
  * Light sits on the left in every card, so the column reads as one comparison
- * rather than six unrelated pictures.
+ * rather than six unrelated pictures. An imported theme has one appearance, so
+ * it fills the whole frame instead of leaving a half that would be a lie.
  */
 function ThemeCard({
   theme,
@@ -1272,36 +1233,97 @@ function ThemeCard({
   onSelect: (id: string) => void
 }): React.JSX.Element {
   return (
-    <button
-      type="button"
-      aria-pressed={selected}
-      onClick={() => onSelect(theme.id)}
-      className={cn(
-        'group flex flex-col items-stretch gap-2 rounded-xl border p-2 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring',
-        selected
-          ? 'border-primary/70 bg-accent/50'
-          : 'border-border bg-card/40 hover:bg-accent/30'
-      )}
-    >
-      <div
-        className="flex h-[74px] w-full overflow-hidden rounded-lg border border-border"
-        aria-hidden="true"
+    <div className="group relative">
+      <button
+        type="button"
+        aria-pressed={selected}
+        onClick={() => onSelect(theme.id)}
+        className={cn(
+          'flex w-full flex-col items-stretch gap-2 rounded-xl border p-2 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring',
+          selected
+            ? 'border-primary/70 bg-accent/50'
+            : 'border-border bg-card/40 hover:bg-accent/30'
+        )}
       >
-        <div className="w-1/2 border-r border-border">
-          <MiniWindow vars={theme.lightVars} />
+        <div
+          className="flex h-[74px] w-full overflow-hidden rounded-lg border border-border"
+          aria-hidden="true"
+        >
+          {theme.appearance ? (
+            <MiniWindow vars={theme.vars} />
+          ) : (
+            <>
+              <div className="w-1/2 border-r border-border">
+                <MiniWindow vars={theme.lightVars} />
+              </div>
+              <div className="w-1/2">
+                <MiniWindow vars={theme.vars} />
+              </div>
+            </>
+          )}
         </div>
-        <div className="w-1/2">
-          <MiniWindow vars={theme.vars} />
-        </div>
-      </div>
-      <span className="px-0.5 text-[13px] font-medium">{theme.name}</span>
-    </button>
+        <span className="min-w-0 px-0.5">
+          <span className="block truncate text-[13px] font-medium">{theme.name}</span>
+          {theme.custom && (
+            <span className="block truncate text-[11px] text-muted-foreground">
+              {theme.source ?? 'Imported'} · {theme.appearance === 'light' ? 'Light' : 'Dark'}
+            </span>
+          )}
+        </span>
+      </button>
+      {theme.custom && <CustomThemeActions theme={theme} />}
+    </div>
+  )
+}
+
+/**
+ * Copy and remove, over the preview's corner on hover. Siblings of the card's
+ * button rather than children, since a button cannot hold another.
+ */
+function CustomThemeActions({ theme }: { theme: ThemeDef }): React.JSX.Element {
+  const removeCustomTheme = useApp((s) => s.removeCustomTheme)
+  const [copied, setCopied] = React.useState(false)
+  const copy = (): void => {
+    const text = exportTheme({
+      name: theme.name,
+      appearance: theme.appearance ?? 'dark',
+      vars: theme.vars
+    })
+    void navigator.clipboard.writeText(text).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1400)
+    })
+  }
+  return (
+    <div className="absolute top-3 right-3 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+      <WithTooltip label={copied ? 'Copied' : 'Copy theme JSON'}>
+        <button
+          type="button"
+          onClick={copy}
+          aria-label={`Copy ${theme.name} as JSON`}
+          className="flex size-6 items-center justify-center rounded-md bg-popover/90 text-muted-foreground shadow-sm outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+        </button>
+      </WithTooltip>
+      <WithTooltip label="Remove theme">
+        <button
+          type="button"
+          onClick={() => removeCustomTheme(theme.id)}
+          aria-label={`Remove ${theme.name}`}
+          className="flex size-6 items-center justify-center rounded-md bg-popover/90 text-muted-foreground shadow-sm outline-none hover:text-destructive focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <X className="size-3.5" />
+        </button>
+      </WithTooltip>
+    </div>
   )
 }
 
 /**
  * A grid rather than a dropdown: comparing themes side by side *is* the job of
- * a theme picker, and at six they all fit at once.
+ * a theme picker. Imported themes follow the built-ins, and the last cell opens
+ * `ThemeImportDialog`, whose results are drawn as the same cards.
  */
 function ThemeGrid({
   selected,
@@ -1310,9 +1332,11 @@ function ThemeGrid({
   selected: string
   onSelect: (id: string) => void
 }): React.JSX.Element {
+  const customThemes = useApp((s) => s.customThemes)
+  const [adding, setAdding] = React.useState(false)
   return (
     <div role="group" aria-label="App theme" className="grid grid-cols-3 gap-2.5">
-      {THEMES.map((candidate) => (
+      {[...THEMES, ...customThemes].map((candidate) => (
         <ThemeCard
           key={candidate.id}
           theme={candidate}
@@ -1320,6 +1344,15 @@ function ThemeGrid({
           onSelect={onSelect}
         />
       ))}
+      <button
+        type="button"
+        onClick={() => setAdding(true)}
+        className="flex min-h-[112px] flex-col items-center justify-center gap-1.5 rounded-xl border border-dashed border-border text-muted-foreground outline-none transition-colors hover:bg-accent/30 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <Plus className="size-4" />
+        <span className="text-[13px] font-medium">Add theme</span>
+      </button>
+      <ThemeImportDialog open={adding} onOpenChange={setAdding} />
     </div>
   )
 }
@@ -1405,6 +1438,7 @@ export function Settings(): React.JSX.Element {
   const setTheme = useApp((s) => s.setTheme)
   const themeMode = useApp((s) => s.themeMode)
   const setThemeMode = useApp((s) => s.setThemeMode)
+  const pinnedTheme = useApp((s) => s.customThemes.find((def) => def.id === s.theme))
   const closeSettings = useApp((s) => s.closeSettings)
   const notifyPrefs = useApp((s) => s.notifyPrefs)
   const setNotifyPrefs = useApp((s) => s.setNotifyPrefs)
@@ -1501,16 +1535,22 @@ export function Settings(): React.JSX.Element {
                       <div className="min-w-0 flex-1">
                         <div className="text-[13px] font-medium">Color mode</div>
                         <div className="mt-0.5 text-xs text-muted-foreground">
-                          System follows your device appearance
+                          {pinnedTheme
+                            ? `Set by ${pinnedTheme.name}, a ${pinnedTheme.appearance} theme`
+                            : 'System follows your device appearance'}
                         </div>
                       </div>
-                      <ThemeModePicker value={themeMode} onChange={setThemeMode} />
+                      <ThemeModePicker
+                        value={pinnedTheme?.appearance ?? themeMode}
+                        onChange={setThemeMode}
+                        disabled={!!pinnedTheme}
+                      />
                     </div>
                     <div className="my-3 h-px bg-border" />
                     <div className="mb-3">
                       <div className="text-[13px] font-medium">App theme</div>
                       <div className="mt-0.5 text-xs text-muted-foreground">
-                        Six palettes, each designed for both light and dark
+                        Six built-in palettes for light and dark, plus any you import
                       </div>
                     </div>
                     <ThemeGrid selected={theme} onSelect={setTheme} />

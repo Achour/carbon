@@ -92,6 +92,7 @@ import { hydrateShellPath } from './shellEnv'
 import { configureManagedRoot, configureProviderClis, providerClis } from './providerCli.ts'
 import { configureAntigravityAuth } from './antigravity'
 import { dockIconSvg } from './dockIcon'
+import { fetchExtensionThemes, searchThemeExtensions } from './themeMarket'
 import {
   checkoutWorktree,
   createWorktree,
@@ -1089,6 +1090,8 @@ function registerIpc(): void {
   ipcMain.handle('window:close', () => win?.close())
 
   ipcMain.handle('window:set-dock-icon', (_e, palette: DockIconPalette) => setDockIcon(palette))
+  ipcMain.handle('themes:search', (_e, query: string) => searchThemeExtensions(query))
+  ipcMain.handle('themes:extension', (_e, id: string) => fetchExtensionThemes(id))
 
   ipcMain.handle('app:focus-window', () => {
     if (!win) return

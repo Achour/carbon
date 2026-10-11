@@ -25,6 +25,16 @@ export interface ThemeDef {
   vars: Record<string, string>
   /** Light-mode counterpart — authored, not derived. */
   lightVars: Record<string, string>
+  /**
+   * Set on an imported theme, which is written for one appearance only: it
+   * pins the window to that appearance whatever the Color mode says, and
+   * `vars` and `lightVars` are the same object.
+   */
+  appearance?: ResolvedAppearance
+  /** Imported rather than built in — removable, exportable. */
+  custom?: boolean
+  /** Where it came from, shown on its card ("Catppuccin for VSCode"). */
+  source?: string
 }
 
 export type ThemeMode = 'dark' | 'light' | 'system'
@@ -454,13 +464,115 @@ export const THEMES: ThemeDef[] = SPECS.map(theme)
 export const DEFAULT_THEME = 'carbon'
 export const DEFAULT_THEME_MODE: ThemeMode = 'dark'
 
+// ------------------------------------------------------------ imported ---
+
+const CUSTOM_KEY = 'customThemes'
+let customCache: ThemeDef[] | null = null
+
+/**
+ * Imported themes, read from localStorage — renderer-owned like the theme id
+ * itself, and synchronous, which is what lets `installThemes` paint one before
+ * React mounts. Only the converted variables are kept: the import is a one-time
+ * translation (`shared/themeImport.ts`), not a live link to the source.
+ */
+export function customThemes(): ThemeDef[] {
+  if (customCache) return customCache
+  let parsed: unknown = []
+  try {
+    parsed = JSON.parse(localStorage.getItem(CUSTOM_KEY) ?? '[]')
+  } catch {
+    parsed = []
+  }
+  customCache = (Array.isArray(parsed) ? parsed : []).flatMap((raw): ThemeDef[] => {
+    if (!raw || typeof raw !== 'object') return []
+    const { id, name, appearance, vars, source } = raw as Record<string, unknown>
+    if (typeof id !== 'string' || !/^custom-[a-z0-9-]+$/.test(id)) return []
+    if (appearance !== 'dark' && appearance !== 'light') return []
+    if (!vars || typeof vars !== 'object' || typeof name !== 'string') return []
+    const clean = safeVars(vars as Record<string, string>)
+    return [
+      {
+        id,
+        name,
+        vars: clean,
+        lightVars: clean,
+        appearance,
+        custom: true,
+        source: typeof source === 'string' ? source : undefined
+      }
+    ]
+  })
+  return customCache
+}
+
+export function saveCustomThemes(themes: ThemeDef[]): void {
+  customCache = themes
+  localStorage.setItem(
+    CUSTOM_KEY,
+    JSON.stringify(
+      themes.map(({ id, name, appearance, vars, source }) => ({ id, name, appearance, vars, source }))
+    )
+  )
+  installCustomThemes()
+}
+
+/** FNV-1a, base 36 — a short stable tag for text that slugs to nothing. */
+function hashTag(text: string): string {
+  let h = 0x811c9dc5
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i)
+    h = Math.imul(h, 0x01000193)
+  }
+  return (h >>> 0).toString(36)
+}
+
+/**
+ * A stable id per source and theme, so importing the same theme again replaces
+ * it — and only the same theme. The source is the extension's *id*, not its
+ * display name (two publishers can share one), and a name that slugs to
+ * nothing (non-Latin, or the "Imported theme" fallback every unnamed file
+ * gets) is replaced by a hash of what distinguishes it.
+ */
+export function customThemeId(name: string, vars: Record<string, string>, sourceKey?: string): string {
+  const slug = (text: string): string =>
+    text
+      .normalize('NFKD')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+  const unnamed = name === 'Imported theme'
+  const tag = unnamed
+    ? hashTag(JSON.stringify(vars))
+    : slug(name) === slug(name.replace(/[^\x20-\x7e]/g, ''))
+      ? slug(name)
+      : `${slug(name)}-${hashTag(name)}`
+  return ['custom', slug(sourceKey ?? ''), tag || hashTag(name)].filter(Boolean).join('-')
+}
+
+export function allThemes(): ThemeDef[] {
+  return [...THEMES, ...customThemes()]
+}
+
+function findTheme(id: string): ThemeDef | undefined {
+  return allThemes().find((candidate) => candidate.id === id)
+}
+
+/**
+ * The mode the native window should follow. An imported theme pins its own
+ * appearance; the stored Color mode is left alone, so picking a built-in again
+ * brings it back.
+ */
+export function effectiveThemeMode(id: string, mode: ThemeMode): ThemeMode {
+  return findTheme(id)?.appearance ?? mode
+}
+
 export function storedTheme(): string {
   const raw = localStorage.getItem('theme') ?? DEFAULT_THEME
   // Builds before the registry stored appearance names instead of theme IDs.
   const id = raw === 'dark' || raw === 'light' ? DEFAULT_THEME : raw
   // Also the migration path off a retired theme id: anything not in the
   // registry lands on Carbon rather than an unstyled app.
-  return THEMES.some((candidate) => candidate.id === id) ? id : DEFAULT_THEME
+  return findTheme(id) ? id : DEFAULT_THEME
 }
 
 export function storedThemeMode(): ThemeMode {
@@ -468,29 +580,75 @@ export function storedThemeMode(): ThemeMode {
   return raw === 'dark' || raw === 'light' || raw === 'system' ? raw : DEFAULT_THEME_MODE
 }
 
+/**
+ * The OS appearance, as last seen while the window was following it.
+ *
+ * `prefers-color-scheme` answers for `nativeTheme.themeSource`, not for the OS:
+ * while Carbon forces the window light or dark (a Light/Dark mode, an imported
+ * theme, a preview) it reports the forced value. So it is read only while the
+ * window follows the system, and remembered for the moments it doesn't —
+ * otherwise leaving a forced appearance for System resolves against the old
+ * force and paints the wrong appearance until the change event corrects it.
+ */
+let osDark: boolean | null = null
+let followingSystem = true
+
+function systemDark(): boolean {
+  if (followingSystem || osDark === null) {
+    osDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+  }
+  return osDark
+}
+
+/** Call with every mode handed to `setWindowAppearance`. */
+export function noteNativeMode(mode: ThemeMode): void {
+  if (mode !== 'system') systemDark()
+  followingSystem = mode === 'system'
+}
+
 export function resolveAppearance(
   mode: ThemeMode,
-  systemDark?: boolean
+  dark?: boolean
 ): ResolvedAppearance {
   if (mode !== 'system') return mode
-  const dark =
-    systemDark ?? window.matchMedia('(prefers-color-scheme: dark)').matches
-  return dark ? 'dark' : 'light'
+  return (dark ?? systemDark()) ? 'dark' : 'light'
 }
 
 export function applyTheme(id: string, mode: ThemeMode): ResolvedAppearance {
-  const selected =
-    THEMES.find((candidate) => candidate.id === id) ??
-    THEMES.find((candidate) => candidate.id === DEFAULT_THEME)!
-  const appearance = resolveAppearance(mode)
+  const selected = findTheme(id) ?? findTheme(DEFAULT_THEME)!
+  const appearance = selected.appearance ?? resolveAppearance(mode)
   document.documentElement.dataset.theme = selected.id
   document.documentElement.dataset.appearance = appearance
   document.documentElement.classList.toggle('dark', appearance === 'dark')
   document.documentElement.style.colorScheme = appearance
   localStorage.setItem('theme', selected.id)
   localStorage.setItem('themeMode', mode)
+  // Read by index.html's pre-paint script, which cannot see the registry.
+  if (selected.appearance) localStorage.setItem('themeAppearance', selected.appearance)
+  else localStorage.removeItem('themeAppearance')
   return appearance
 }
+
+/**
+ * Paints a theme that is not saved — a search result being tried on. Nothing
+ * is persisted: `applyTheme` with the stored id is how a preview ends, and a
+ * relaunch mid-preview comes back on the saved theme.
+ */
+export function previewTheme(vars: Record<string, string>, appearance: ResolvedAppearance): void {
+  let style = document.getElementById('theme-vars-preview')
+  if (!style) {
+    style = document.createElement('style')
+    style.id = 'theme-vars-preview'
+    document.head.appendChild(style)
+  }
+  style.textContent = cssBlock(`:root[data-theme='${PREVIEW_ID}']`, vars)
+  document.documentElement.dataset.theme = PREVIEW_ID
+  document.documentElement.dataset.appearance = appearance
+  document.documentElement.classList.toggle('dark', appearance === 'dark')
+  document.documentElement.style.colorScheme = appearance
+}
+
+const PREVIEW_ID = 'preview'
 
 let dockColorCanvas: HTMLCanvasElement | null = null
 let dockColorProbe: HTMLSpanElement | null = null
@@ -563,17 +721,52 @@ export function applyCodeFontSize(px: number): void {
   document.documentElement.style.setProperty('--code-font-size', `${px}px`)
 }
 
+/** Nothing that can end a declaration, a rule or the <style> element itself. */
+function safeVars(vars: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(vars).filter(
+      ([key, value]) =>
+        /^[a-z0-9-]+$/.test(key) && typeof value === 'string' && !/[;{}<>\\]/.test(value)
+    )
+  )
+}
+
+/**
+ * Every variable block goes through `safeVars` — imported values are someone
+ * else's text, and they reach this from a paste, a file and a download as well
+ * as from storage.
+ */
+function cssBlock(selector: string, vars: Record<string, string>): string {
+  return `${selector} {\n${Object.entries(safeVars(vars))
+    .map(([key, value]) => `  --${key}: ${value};`)
+    .join('\n')}\n}`
+}
+
+/**
+ * Imported themes get their own <style>, rewritten on every import or removal.
+ * No appearance in the selector: the theme pins it, so it always matches.
+ */
+function installCustomThemes(): void {
+  let style = document.getElementById('theme-vars-custom')
+  if (!style) {
+    style = document.createElement('style')
+    style.id = 'theme-vars-custom'
+    document.head.appendChild(style)
+  }
+  style.textContent = customThemes()
+    .map((def) => cssBlock(`:root[data-theme='${def.id}']`, def.vars))
+    .join('\n')
+}
+
 /** Injects dark and light variable blocks for every theme. */
 export function installThemes(): void {
+  installCustomThemes()
   if (document.getElementById('theme-vars')) return
   const block = (
     def: ThemeDef,
     appearance: ResolvedAppearance,
     vars: Record<string, string>
-  ): string =>
-    `:root[data-theme='${def.id}'][data-appearance='${appearance}'] {\n${Object.entries(vars)
-      .map(([key, value]) => `  --${key}: ${value};`)
-      .join('\n')}\n}`
+  ): string => cssBlock(`:root[data-theme='${def.id}'][data-appearance='${appearance}']`, vars)
   const css = THEMES.flatMap((def) => [
     block(def, 'dark', def.vars),
     block(def, 'light', def.lightVars)

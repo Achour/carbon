@@ -2489,6 +2489,30 @@ export interface SlashCommand {
 
 // ---------- Preload API ----------
 
+/** An Open VSX extension that contributes at least one color theme. */
+export interface ThemeExtension {
+  /** `namespace.name` — what `fetchThemeExtension` takes. */
+  id: string
+  namespace: string
+  name: string
+  version: string
+  displayName: string
+  description: string
+  downloads: number
+  verified: boolean
+  iconUrl?: string
+  /** One per contributed color theme, in manifest order. */
+  themes: Array<{ label: string; appearance?: 'dark' | 'light' }>
+}
+
+/** One color theme read out of an extension, its `include` chain folded in. */
+export interface ThemeExtensionFile {
+  label: string
+  appearance?: 'dark' | 'light'
+  /** The VS Code theme document, for `importThemeJson`. */
+  json: Record<string, unknown>
+}
+
 export interface DockIconPalette {
   background: string
   surface: string
@@ -2879,6 +2903,10 @@ export interface Api {
   ): Promise<void>
   /** Update the macOS Dock icon to mirror the active app theme. */
   setDockIcon(palette: DockIconPalette): Promise<void>
+  /** Open VSX extensions in the Themes category that contribute a color theme. */
+  searchThemeExtensions(query: string): Promise<ThemeExtension[]>
+  /** Downloads an extension and reads its color themes out of the `.vsix`. */
+  fetchThemeExtension(id: string): Promise<ThemeExtensionFile[]>
   /**
    * Reveal native macOS window vibrancy to match the translucency preference.
    * `true` uses a translucent backing; `false` restores an opaque backing that

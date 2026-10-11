@@ -7,14 +7,22 @@ import {
   CODE_FONT_MAX,
   CODE_FONT_MIN,
   currentDockIconPalette,
+  customThemeId,
+  customThemes,
+  DEFAULT_THEME,
+  effectiveThemeMode,
+  noteNativeMode,
+  previewTheme,
   resolveAppearance,
+  saveCustomThemes,
   storedCodeFontSize,
   storedTheme,
   storedThemeMode,
   storedTranslucent
 } from '@/lib/themes'
 import { sortChats } from '@/lib/chatOrder'
-import type { ResolvedAppearance, ThemeMode } from '@/lib/themes'
+import type { ResolvedAppearance, ThemeDef, ThemeMode } from '@/lib/themes'
+import type { ImportedTheme } from '@shared/themeImport'
 import { loadNotifyPrefs, notify, saveNotifyPrefs, type NotifyPrefs } from '@/lib/notify'
 import { playCue } from '@/lib/sounds'
 import { formatCost, formatDuration, sameDisplayedTime } from '@/lib/format'
@@ -1061,6 +1069,21 @@ interface AppState {
   closeSettings(): void
   setTheme(id: string): void
   setThemeMode(mode: ThemeMode): void
+  /** Imported themes (Settings → Appearance → Add theme). */
+  customThemes: ThemeDef[]
+  /**
+   * Saves imported themes, replacing any with the same source and name, and
+   * returns their ids in order.
+   */
+  addCustomThemes(themes: ImportedTheme[], source?: { key: string; label: string }): string[]
+  /** Deletes an imported theme; selecting it falls back to the default. */
+  removeCustomTheme(id: string): void
+  /**
+   * Tries a theme on without saving it; `null` puts the selected theme back.
+   * The native window follows, so a light preview under a dark mode is not
+   * framed in the wrong material.
+   */
+  previewTheme(theme: ImportedTheme | null): void
   /** Re-resolve System mode after an OS appearance change. */
   syncSystemAppearance(): void
   setCodeFontSize(px: number): void
@@ -2157,6 +2180,19 @@ function githubStateFor(cwd: string): Promise<GitHubState> {
   return request
 }
 
+/** Every native appearance change goes through here, so `themes.ts` knows when the OS is being followed. */
+function setNativeAppearance(mode: ThemeMode, dark: boolean): void {
+  noteNativeMode(mode)
+  void window.api.setWindowAppearance(mode, dark)
+}
+
+/**
+ * True while a theme is being tried on. The native appearance it forces fires
+ * `prefers-color-scheme`, and System mode's listener would otherwise answer it
+ * by re-applying the saved theme — ending the preview the moment it began.
+ */
+let previewing = false
+
 function syncDockIcon(): void {
   if (window.api.platform !== 'darwin') return
   void window.api.setDockIcon(currentDockIconPalette())
@@ -2681,7 +2717,8 @@ export const useApp = create<AppState>((set, get) => ({
   settingsSection: null,
   theme: storedTheme(),
   themeMode: initialThemeMode,
-  resolvedAppearance: resolveAppearance(initialThemeMode),
+  resolvedAppearance: resolveAppearance(effectiveThemeMode(storedTheme(), initialThemeMode)),
+  customThemes: customThemes(),
 
   openSettings(section) {
     // A section is only *offered* when one was named: reopening Settings with
@@ -2701,23 +2738,64 @@ export const useApp = create<AppState>((set, get) => ({
   setTheme(id) {
     const appearance = applyTheme(id, get().themeMode)
     set({ theme: id, resolvedAppearance: appearance })
-    void window.api.setWindowAppearance(get().themeMode, appearance === 'dark')
+    previewing = false
+    setNativeAppearance(effectiveThemeMode(id, get().themeMode), appearance === 'dark')
     syncDockIcon()
   },
 
   setThemeMode(mode) {
     const appearance = applyTheme(get().theme, mode)
     set({ themeMode: mode, resolvedAppearance: appearance })
-    void window.api.setWindowAppearance(mode, appearance === 'dark')
+    setNativeAppearance(effectiveThemeMode(get().theme, mode), appearance === 'dark')
     syncDockIcon()
   },
 
   syncSystemAppearance() {
-    if (get().themeMode !== 'system') return
+    if (previewing || effectiveThemeMode(get().theme, get().themeMode) !== 'system') return
     const appearance = applyTheme(get().theme, 'system')
     set({ resolvedAppearance: appearance })
-    void window.api.setWindowAppearance('system', appearance === 'dark')
+    setNativeAppearance('system', appearance === 'dark')
     syncDockIcon()
+  },
+
+  addCustomThemes(themes, source) {
+    const added: ThemeDef[] = themes.map((imported) => ({
+      id: customThemeId(imported.name, imported.vars, source?.key),
+      name: imported.name,
+      vars: imported.vars,
+      lightVars: imported.vars,
+      appearance: imported.appearance,
+      custom: true,
+      source: source?.label
+    }))
+    const ids = new Set(added.map((def) => def.id))
+    const next = [...get().customThemes.filter((def) => !ids.has(def.id)), ...added]
+    saveCustomThemes(next)
+    set({ customThemes: next })
+    // Re-importing the theme in use rewrites its variables under it; the
+    // dock icon is the one thing that would not repaint on its own.
+    if (ids.has(get().theme)) get().setTheme(get().theme)
+    return added.map((def) => def.id)
+  },
+
+  previewTheme(theme) {
+    if (!theme) {
+      get().setTheme(get().theme)
+      return
+    }
+    previewing = true
+    previewTheme(theme.vars, theme.appearance)
+    // Mermaid, the canvas and the rest read this rather than the DOM; a preview
+    // they drew in the saved appearance would misrepresent it.
+    set({ resolvedAppearance: theme.appearance })
+    setNativeAppearance(theme.appearance, theme.appearance === 'dark')
+  },
+
+  removeCustomTheme(id) {
+    const next = get().customThemes.filter((def) => def.id !== id)
+    saveCustomThemes(next)
+    set({ customThemes: next })
+    if (get().theme === id) get().setTheme(DEFAULT_THEME)
   },
 
   translucentSidebar: storedTranslucent(),
@@ -2977,7 +3055,10 @@ export const useApp = create<AppState>((set, get) => ({
   async init() {
     // Sync the native window vibrancy with the stored appearance preference
     // (the CSS flag was already applied pre-paint in main.tsx).
-    void window.api.setWindowAppearance(get().themeMode, get().resolvedAppearance === 'dark')
+    setNativeAppearance(
+      effectiveThemeMode(get().theme, get().themeMode),
+      get().resolvedAppearance === 'dark'
+    )
     syncDockIcon()
     // The native material already exists in a stable active state; reveal it at
     // boot only when the user's translucency setting is on.
