@@ -30,10 +30,16 @@ export interface PreviewHandle {
   /** Applies a viewport change and resolves with the result once the guest has it. */
   setViewport(patch: PreviewViewportPatch): Promise<PreviewViewport>
   getURL(): string
-  /** Gives the guest keyboard focus (see `PreviewCommand`'s `focus`)… */
-  focus(): void
+  /** Exposes a hidden pane and gives the guest keyboard focus (see `PreviewCommand`'s `focus`)… */
+  focus(): Promise<void>
   /** …and hands it back to whatever had it before. */
   unfocus(): void
+  /**
+   * Makes a hidden pane visible beneath its cover, where a guest takes input
+   * and paints; `unexpose` undoes it. Counted, so overlapping uses nest.
+   */
+  expose(): Promise<void>
+  unexpose(): void
 }
 
 const registry = new Map<string, PreviewHandle>()

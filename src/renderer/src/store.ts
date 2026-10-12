@@ -2439,7 +2439,9 @@ export const useApp = create<AppState>((set, get) => ({
         previews: [...s.previews, { id, n, url: target, cwd: folder, ...(owner ? { owner } : {}) }],
         previewSeq: n,
         activeTab: opts?.activate === false && s.activeTab ? s.activeTab : id,
-        ...panelPatch(s, true)
+        // Opened behind is opened without the panel too: the agent's pane is
+        // driven hidden, and the panel is the user's to open.
+        ...(opts?.activate === false ? {} : panelPatch(s, true))
       }
     })
     return id
@@ -2453,11 +2455,14 @@ export const useApp = create<AppState>((set, get) => ({
 
   applyPreviewState(state) {
     set((s) => ({ previewStates: { ...s.previewStates, [state.cwd]: state } }))
-    // When the dev server comes up in the active project, surface a preview
-    // pointed at it (reuse an existing one, else open one).
+    // When the dev server comes up in the active project, have a preview
+    // pointed at it (reuse an existing one, else open one) — behind, with the
+    // panel left as it is. The user's own Start is pressed inside a preview, so
+    // what lands here is the agent's `preview_start`, and that must not slide
+    // the panel over the chat the user is reading.
     if (state.status === 'running' && state.url && get().selectedCwd === state.cwd) {
       const existing = get().previews.find((p) => p.cwd === state.cwd)
-      if (!existing) get().openPreview(state.url, state.cwd)
+      if (!existing) get().openPreview(state.url, state.cwd, { activate: false })
     }
   },
 

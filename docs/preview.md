@@ -97,7 +97,42 @@ gives the guest input focus but also activates what it lands on — Enter on a
 submit button fired it twice. Focusing the `<webview>` element from the
 renderer gives the focus with no click (the `focus` command), and `unfocus`
 hands it back afterwards, so the user's next keystroke goes to the composer
-rather than a hidden preview.
+rather than a hidden preview. **Handed back the moment the input is in**, not
+when the tool returns: `release` runs between the dispatch and the settle, which
+can take 3 s, and the user's keystrokes went to the page for all of it. A click
+goes through the same pair — being real input it takes the focus anyway, and
+used to keep it until the user clicked back. Focus emulation
+(`Emulation.setFocusEmulationEnabled`) does not make the dance optional:
+without real focus `insertText` still drops the text (re-measured). Measured
+over a type, a click, an Enter and a scroll: 28 ms of focus held in total.
+
+**The agent never opens the panel.** It used to, three ways: `ensure`
+reopened it to mount a tab, `openPreview` opened it even when asked to open
+behind, and the auto-open on a dev server coming up (which, the user's own
+Start being pressed inside a preview, is in practice the agent's
+`preview_start`) opened it too. The root was that a pane existed only while the
+panel was open, so a user who closed it destroyed the agent's page and the next
+call had to bring it back — over the chat they had just closed it to read. Now
+a closed panel keeps its previews mounted, **parked**: taken out of the shut
+aside (docked: absolutely positioned leftward from its zero-width edge;
+floating: its slide undone), laid at the width the panel would open to,
+transparent and inert to the pointer. Both halves of that are measured
+requirements. A guest clipped to nothing or pushed off-screen is throttled as
+hidden — its capture never resolves and input goes nowhere — and at the
+panel's minimum width the agent tested a page reflowed narrower than the one
+the user would see.
+
+**A hidden pane is a hidden page, and drops input.** `visibility: hidden` — a
+tab behind another, and every pane while the panel is closed — paints nothing
+and silently discards mouse and key events: a click or an Enter reported
+success and did nothing, and only `insertText` landed (measured on a parked
+pane). A background tab is the same `visibility: hidden`, so the same
+mechanism applies there; with `expose`, a click, an Enter and a scroll were
+measured landing on a pane behind a file tab, the file tab staying in front. `expose` / `unexpose`
+(`BrowserPane`) make the pane visible beneath its opaque cover and beneath
+whatever the user is looking at, counted so a scroll can overlap a capture;
+`focus` exposes, and `scroll` is wrapped in the pair since a wheel is input
+too.
 
 - **A click is real input** (`Input.dispatchMouseEvent`), so it goes through
   hit-testing, focus and the whole pointer/mouse/click sequence with `isTrusted`

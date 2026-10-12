@@ -743,6 +743,36 @@ export function BrowserPane({
     // What had keyboard focus before an agent `focus`, to hand it back after.
     let priorFocus: HTMLElement | null = null
     const root = (): HTMLDivElement | null => rootRef.current
+    // **A hidden pane is a hidden page.** A guest whose pane is
+    // `visibility: hidden` — a tab behind another, or any pane while the panel
+    // is closed — paints no frames, so its capture never resolves, and drops
+    // mouse and key input: a click or an Enter reported success and did
+    // nothing, while `insertText` alone still landed (measured). So for as long
+    // as the agent needs one, the pane is made visible *beneath* its opaque
+    // cover and beneath the tab the user is looking at (`z-index: -1`), and
+    // hidden again after. Counted: a scroll can overlap a capture.
+    let exposed = 0
+    let exposing = false
+    const expose = async (): Promise<void> => {
+      exposed++
+      const el = root()
+      if (!el || exposing || visibleNow() || el.style.visibility === 'visible') return
+      exposing = true
+      if (coverRef.current) coverRef.current.style.display = 'block'
+      el.style.visibility = 'visible'
+      el.style.zIndex = '-1'
+      await frames()
+    }
+    const unexpose = (): void => {
+      if (exposed === 0) return
+      exposed--
+      const el = root()
+      if (exposed > 0 || !exposing || !el) return
+      exposing = false
+      el.style.visibility = ''
+      el.style.zIndex = ''
+      if (coverRef.current) coverRef.current.style.display = 'none'
+    }
 
     // Expose an imperative handle so agent commands can reach this pane by
     // project folder. Page work happens in main over CDP; this answers only for
@@ -775,21 +805,12 @@ export function BrowserPane({
         }
         if (!readyRef.current) return null
 
-        // **A hidden pane is shot where it is, under a cover.** A guest whose
-        // pane is `visibility: hidden` produces no frames, so its capture
-        // never resolves; the old answer was to switch the user's panel to the
-        // preview tab and leave it there. Measured instead: the guest's own
-        // `capturePage()` succeeds while an opaque cover sits *over* it, so
-        // the pane is made visible beneath its cover (and beneath the tab the
-        // user is looking at) for the length of the shot, then hidden again.
+        // **A hidden pane is shot where it is, under a cover** (`expose`).
+        // The old answer was to switch the user's panel to the preview tab
+        // and leave it there; measured instead, the guest's own
+        // `capturePage()` succeeds while an opaque cover sits *over* it.
         const hidden = !visibleNow()
-        const el = root()
-        if (hidden && el) {
-          if (coverRef.current) coverRef.current.style.display = 'block'
-          el.style.visibility = 'visible'
-          el.style.zIndex = '-1'
-          await frames()
-        }
+        if (hidden) await expose()
         try {
           // capturePage() can *hang* (the main-process guest-view handler
           // throws and never replies) or return an empty frame, so bound each
@@ -804,11 +825,7 @@ export function BrowserPane({
             await sleep(200)
           }
         } finally {
-          if (hidden && el) {
-            el.style.visibility = ''
-            el.style.zIndex = ''
-            if (coverRef.current) coverRef.current.style.display = 'none'
-          }
+          if (hidden) unexpose()
         }
         if (hidden) return null
 
@@ -829,9 +846,11 @@ export function BrowserPane({
         }
         return null
       },
-      focus: () => {
+      focus: async () => {
         const before = document.activeElement
         if (before && before !== wv) priorFocus = before as HTMLElement
+        // A hidden <webview> takes no focus at all, and its guest no keys.
+        await expose()
         try {
           wv.focus()
         } catch {
@@ -841,11 +860,15 @@ export function BrowserPane({
       unfocus: () => {
         const back = priorFocus
         priorFocus = null
-        if (document.activeElement !== wv) return
-        if (back && back !== document.body && back.isConnected) back.focus({ preventScroll: true })
-        // Nothing focusable had it (or it would not take it back): just let go.
-        if (document.activeElement === wv) wv.blur()
+        if (document.activeElement === wv) {
+          if (back && back !== document.body && back.isConnected) back.focus({ preventScroll: true })
+          // Nothing focusable had it (or it would not take it back): just let go.
+          if (document.activeElement === wv) wv.blur()
+        }
+        unexpose()
       },
+      expose,
+      unexpose,
       reveal: async () => {
         const el = root()
         if (!el || visibleNow()) return

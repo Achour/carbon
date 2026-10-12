@@ -590,7 +590,13 @@ export class PreviewDriver {
     return null
   }
 
-  async click(g: Guest, input: PreviewToolInput, expectDoc?: number): Promise<string> {
+  /**
+   * `release` runs the moment the input is in, before the page is waited on:
+   * the guest holds the window's keyboard focus for exactly as long as the
+   * input needs it, not for the seconds a settle can take (see `act`'s
+   * callers in `preview.ts`).
+   */
+  async click(g: Guest, input: PreviewToolInput, expectDoc?: number, release?: () => Promise<void>): Promise<string> {
     return this.act(g, () => this.exclusive(g, async () => {
       let x: number
       let y: number
@@ -622,6 +628,7 @@ export class PreviewDriver {
       const before = g.wc.getURL()
       const button = input.button === 'right' || input.button === 'middle' ? input.button : 'left'
       const refused = await this.mouse(g, x, y, button, input.double === true, expectDoc, rev, size)
+      await release?.()
       if (refused) return refused
       await this.settle(g)
       return this.report(g, `${input.double ? 'Double-clicked' : 'Clicked'} ${desc}.`, mark, before)
@@ -644,7 +651,7 @@ export class PreviewDriver {
     return null
   }
 
-  async type(g: Guest, input: PreviewToolInput, expectDoc?: number): Promise<string> {
+  async type(g: Guest, input: PreviewToolInput, expectDoc?: number, release?: () => Promise<void>): Promise<string> {
     return this.act(g, async () => {
       const t = this.target(g, { ref: input.ref, selector: input.selector })
       if (typeof t === 'string') return t
@@ -671,6 +678,7 @@ export class PreviewDriver {
         const refused = await this.key(g, 'Enter', expectDoc)
         if (refused) return refused
       }
+      await release?.()
       await this.settle(g)
       const value = await this.evaluate<unknown>(g, agentCall('valueOf', prep.ref)).catch(() => null)
       const now =
@@ -686,7 +694,7 @@ export class PreviewDriver {
     }, expectDoc)
   }
 
-  async press(g: Guest, input: PreviewToolInput, expectDoc?: number): Promise<string> {
+  async press(g: Guest, input: PreviewToolInput, expectDoc?: number, release?: () => Promise<void>): Promise<string> {
     return this.act(g, async () => {
       let where = 'the focused element'
       if (input.ref || input.selector) {
@@ -699,6 +707,7 @@ export class PreviewDriver {
       const mark = g.log.mark()
       const before = g.wc.getURL()
       const err = await this.key(g, input.key ?? '', expectDoc)
+      await release?.()
       if (err) return err
       await this.settle(g)
       return this.report(g, `Pressed ${input.key} on ${where}.`, mark, before)

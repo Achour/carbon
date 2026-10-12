@@ -2412,11 +2412,24 @@ export type PreviewEvent = { type: 'state'; state: PreviewState }
  *   the click that would otherwise be needed (and would activate the target).
  *   `unfocus` hands focus back to whatever had it, so the user's next
  *   keystroke goes to the composer they were typing in, not to the preview.
+ *   A hidden pane is also exposed for the length of it (below).
+ * - `expose` / `unexpose`: make a hidden pane visible *beneath* its cover for
+ *   input that a hidden guest drops — a wheel scroll. Counted.
  */
 export interface PreviewCommand {
   id: string
   cwd: string
-  kind: 'ensure' | 'navigate' | 'screenshot' | 'reveal' | 'conceal' | 'viewport' | 'focus' | 'unfocus'
+  kind:
+    | 'ensure'
+    | 'navigate'
+    | 'screenshot'
+    | 'reveal'
+    | 'conceal'
+    | 'viewport'
+    | 'focus'
+    | 'unfocus'
+    | 'expose'
+    | 'unexpose'
   paneId?: string
   /**
    * ensure/navigate: the chat the pane is for. Each chat drives its own pane

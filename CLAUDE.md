@@ -367,6 +367,9 @@ it guards**, and put new reasoning in that file rather than back in this one.
   permissions (`previewSession.ts`). Each chat drives its own pane on the
   shared dev server (`shared/previewPane.ts`, `PreviewTab.owner`), so agents
   test side by side; only focus and capture are serialized (`withWindow`).
+  The agent never opens the panel: a closed panel keeps its previews parked
+  (mounted, transparent, inert), and a hidden pane is exposed under its cover
+  only for the input it is sent — hidden guests drop clicks and keys.
 - **`docs/canvas.md`** — Carbon's own `carbon` MCP server and the canvas panel
   (`carbonMcp.ts`, `carbonBridge.ts`, `canvasTools.ts`, `previewTools.ts`,
   `canvasStore.ts`, `CanvasPanel`, `shared/canvasText.ts`, `lib/canvasRef.ts`),

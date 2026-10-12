@@ -730,21 +730,41 @@ export class PreviewManager implements PreviewToolHost {
       case 'snapshot':
         return this.driver.snapshot(g, caller)
       case 'click':
-        // Real input: the press gives this guest keyboard focus, which would
-        // pull it from another chat's pane in the middle of a `type`.
-        return this.withWindow(() => this.driver.click(g, input, doc))
       case 'type':
       case 'press':
+        // Typing needs the guest to hold the window's keyboard focus — with
+        // none, `insertText` drops the text even under focus emulation
+        // (measured) — and a click takes it anyway, being real input, and used
+        // to keep it: the composer lost the keyboard to a hidden pane until the
+        // user clicked back. So focus is given here, where the composer's is
+        // recorded, and handed back by `release` the moment the input is in —
+        // not after the settle, which held the user's keystrokes for up to 3 s
+        // per call. Under `withWindow`, since focus is one per window.
         return this.withWindow(async () => {
           await this.send({ cwd, kind: 'focus', paneId: t.paneId })
-          try {
-            return op === 'type' ? await this.driver.type(g, input, doc) : await this.driver.press(g, input, doc)
-          } finally {
+          let held = true
+          const release = async (): Promise<void> => {
+            if (!held) return
+            held = false
             await this.send({ cwd, kind: 'unfocus', paneId: t.paneId })
           }
+          try {
+            if (op === 'click') return await this.driver.click(g, input, doc, release)
+            if (op === 'type') return await this.driver.type(g, input, doc, release)
+            return await this.driver.press(g, input, doc, release)
+          } finally {
+            await release()
+          }
         })
-      case 'scroll':
-        return this.driver.scroll(g, input)
+      case 'scroll': {
+        // A wheel scroll is input, which a hidden guest drops like any other.
+        await this.send({ cwd, kind: 'expose', paneId: t.paneId })
+        try {
+          return await this.driver.scroll(g, input)
+        } finally {
+          await this.send({ cwd, kind: 'unexpose', paneId: t.paneId })
+        }
+      }
       case 'wait_for':
         return this.driver.waitFor(g, input)
       case 'evaluate':

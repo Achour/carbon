@@ -33,14 +33,14 @@ async function waitForPane(id: string, ms: number): Promise<{ id: string; handle
 }
 
 /**
- * `owner`'s pane for this project, mounted and attached in main — showing or
- * opening one only when it has to.
+ * `owner`'s pane for this project, mounted and attached in main — opening one
+ * only when it has to.
  *
- * In order: a mounted pane (every preview tab is mounted while the panel is
- * open, so one behind a file tab is found and used *where it is*); a tab that
- * exists but is unmounted because the panel is closed (the panel opened, the
- * tab not duplicated); and only then a new tab, and only when main gave a URL
- * to open it at. Each step takes the chat's own pane or a free one, never
+ * In order: a mounted pane (every preview tab is mounted whether or not the
+ * panel is open, so one behind a file tab or a closed panel is found and used
+ * *where it is*); a tab that exists but has not mounted yet (waited for); and
+ * only then a new tab, and only when main gave a URL to open it at. None of
+ * these opens the panel or brings a tab to the front. Each step takes the chat's own pane or a free one, never
  * another chat's (`pickPreviewPane`). A new tab is opened *behind* whatever
  * the panel shows: with several agents testing at once, each one's tab coming
  * to the front would flip the user's panel under them every time.
@@ -59,8 +59,6 @@ async function ensure(
     if (picked) {
       id = picked.id
       if (picked.claim && owner) s.setPreviewOwner(id, owner)
-      if (!s.panelOpen) s.togglePanel()
-      if (!s.activeTab) s.setActiveTab(id)
     } else if (url) {
       id = s.openPreview(url, cwd, { owner, activate: false })
       opened = true
@@ -104,7 +102,13 @@ async function handle(cmd: PreviewCommand): Promise<Omit<PreviewCommandResult, '
       pane.conceal()
       return { ok: true }
     case 'focus':
-      pane.focus()
+      await pane.focus()
+      return { ok: true }
+    case 'expose':
+      await pane.expose()
+      return { ok: true }
+    case 'unexpose':
+      pane.unexpose()
       return { ok: true }
     case 'unfocus':
       pane.unfocus()

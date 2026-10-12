@@ -761,7 +761,14 @@ export function RightPanel(): React.JSX.Element | null {
     const timer = window.setTimeout(() => setContentsMounted(false), PANEL_TRANSITION_MS)
     return () => window.clearTimeout(timer)
   }, [panelOpen])
-  const showContents = panelOpen || contentsMounted
+  // What the panel shows lives and dies with it; preview tabs outlive a close.
+  // The agent drives its pane whether or not the panel is open, and a pane that
+  // only existed while it was open forced each `preview_*` call to reopen it —
+  // the panel sliding back over the chat the user had just closed it to read.
+  // So a closed panel keeps its previews mounted (`parked`, below), and the
+  // user's close sticks.
+  const showViewer = panelOpen || contentsMounted
+  const showContents = showViewer || previews.length > 0
 
   // Markdown preview vs source; the choice sticks across files.
   const [mdMode, setMdMode] = React.useState<'preview' | 'source'>('preview')
@@ -1006,6 +1013,17 @@ export function RightPanel(): React.JSX.Element | null {
   // Same default either way: floating and docked are one panel in two places,
   // and pinning should not change its size.
   const targetWidth = width ? `min(${width}px, ${cap})` : `min(52%, ${cap})`
+  // Closed with previews alive: the contents are taken out of the shut aside
+  // and laid at the width the panel would open to — in the window, unclipped
+  // and fully transparent, inert to the pointer. A guest clipped to nothing or
+  // pushed off-screen is throttled as hidden: its capture never resolves and
+  // input sent to it goes nowhere (measured), and at the panel's minimum the
+  // agent would test a page reflowed narrower than the one the user sees.
+  const parked = !showViewer && previews.length > 0 && !panelMaximized
+  const parkedWidth = Math.max(
+    minPx,
+    Math.round(Math.min(width || (avail ?? PANEL_MIN_PX) * 0.52, room ?? Infinity))
+  )
 
   return (
     <aside
@@ -1028,6 +1046,7 @@ export function RightPanel(): React.JSX.Element | null {
             // rather than growing, so the chats beneath never reflow.
             'absolute inset-y-0 right-0 z-30 overflow-hidden bg-background shadow-2xl shadow-black/30 dark:shadow-black/70'
           : 'relative h-full overflow-hidden bg-background',
+        parked && 'overflow-visible',
         !dragging &&
           (floating
             ? 'transition-[translate,opacity] duration-200 ease-out motion-reduce:transition-none'
@@ -1046,8 +1065,23 @@ export function RightPanel(): React.JSX.Element | null {
           yielded, and the overflow was hidden past the panel's own edge. */}
       {showContents && (
       <div
-        style={panelMaximized ? undefined : { minWidth: `${minPx}px` }}
-        className="relative flex h-full w-full flex-col border-l border-border bg-card/30"
+        style={
+          panelMaximized
+            ? undefined
+            : parked
+              ? floating
+                ? // Undo the aside's own slide; its opacity-0 still applies.
+                  { transform: 'translateX(calc(-100% - 2rem))' }
+                : { position: 'absolute', insetBlock: 0, right: 0, width: `${parkedWidth}px` }
+              : { minWidth: `${minPx}px` }
+        }
+        className={cn(
+          'relative flex h-full w-full flex-col border-l border-border bg-card/30',
+          // `invisible` as well as transparent: opacity leaves the tab strip's
+          // no-drag holes punched in the title bar and its buttons in the Tab
+          // order. The pane under it still exposes itself (`expose`).
+          parked && 'pointer-events-none invisible opacity-0'
+        )}
       >
       {/* Resize handle — drag to resize, double-click to reset */}
       {!panelMaximized && (
@@ -1281,6 +1315,7 @@ export function RightPanel(): React.JSX.Element | null {
       {/* Viewer + file tree / source control docked on the right, Cursor-style */}
       <div className="flex min-h-0 flex-1">
         <div className="relative flex min-w-0 flex-1 flex-col">
+          {showViewer && (
           <div
             id="editor-find-scope"
             className={cn(
@@ -1323,9 +1358,10 @@ export function RightPanel(): React.JSX.Element | null {
               </div>
             )}
           </div>
+          )}
           {/* Each terminal stays mounted while its tab exists so scrollback
               survives switching tabs; hidden (not unmounted) when not active. */}
-          {terminals.map((t) => (
+          {showViewer && terminals.map((t) => (
             <div
               key={t.id}
               className={cn(
@@ -1344,17 +1380,23 @@ export function RightPanel(): React.JSX.Element | null {
               throttled the way a background tab is — measured: timers drop to
               ~1/s and requestAnimationFrame stops — so a background preview
               costs no frames. `visibility`, not `display:none`, which reloads
-              a <webview> when it comes back. */}
+              a <webview> when it comes back. While the panel is closed every
+              pane is hidden; the agent exposes one for the input it sends
+              (`expose` in BrowserPane). */}
           {previews.map((p) => (
             <div
               key={p.id}
-              className={cn('absolute inset-0', current !== p.id && 'invisible pointer-events-none')}
+              className={cn(
+                'absolute inset-0',
+                (current !== p.id || !showViewer) && 'invisible pointer-events-none'
+              )}
             >
               <BrowserPane id={p.id} active={current === p.id} cwd={p.cwd} />
             </div>
           ))}
         </div>
-        {dockOpen &&
+        {showViewer &&
+          dockOpen &&
           !isEmpty &&
           !currentIsPlan &&
           !currentIsAgents &&
