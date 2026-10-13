@@ -19,6 +19,7 @@ import type {
   PullEdit,
   PullMergeMethod,
   PullState,
+  RemoteAccessPatch,
   Provider,
   ProviderCliConfig,
   ProviderInstallProgress,
@@ -211,6 +212,15 @@ const api: Api = {
   focusWindow: () => invoke('app:focus-window'),
   openExternal: (url: string) => invoke('app:open-external', url),
   checkForUpdate: () => invoke('app:check-update'),
+  remoteState: () => invoke('remote:state'),
+  remoteConfigure: (patch: RemoteAccessPatch) => invoke('remote:configure', patch),
+  remotePair: () => invoke('remote:pair'),
+  remoteForget: (deviceId?: string) => invoke('remote:forget', deviceId),
+  onRemoteChanged: (cb: () => void) => {
+    const listener = (): void => cb()
+    ipcRenderer.on('remote:changed', listener)
+    return () => ipcRenderer.removeListener('remote:changed', listener)
+  },
   // Resolved once at bridge construction: `app` isn't reachable from preload,
   // and a version that can't change while the process lives has no business
   // being an async call the renderer has to await.

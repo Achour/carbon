@@ -32,6 +32,7 @@ import type {
   PreviewEvent,
   PreviewSourceFrame,
   PublishOpts,
+  RemoteAccessPatch,
   PullEdit,
   PullMergeMethod,
   PullState,
@@ -92,6 +93,7 @@ import { hydrateShellPath } from './shellEnv'
 import { configureManagedRoot, configureProviderClis, providerClis } from './providerCli.ts'
 import { configureAntigravityAuth } from './antigravity'
 import { dockIconSvg } from './dockIcon'
+import { RemoteAccess } from './remoteAccess'
 import { fetchExtensionThemes, searchThemeExtensions } from './themeMarket'
 import {
   checkoutWorktree,
@@ -117,6 +119,7 @@ let terminals: TerminalManager
 let chatTerminals: ChatTerminalManager
 let preview: PreviewManager
 let canvas: CanvasManager
+let remote: RemoteAccess
 
 // Native macOS vibrancy is created once in a stable active state. The renderer's
 // localStorage preference controls whether the window backing reveals it.
@@ -126,6 +129,7 @@ let resolvedDark = true
 
 function emit(ev: ChatEvent): void {
   win?.webContents.send('chat:event', ev)
+  remote?.observe(ev)
   if (ev.type === 'status') {
     notifyOnStatus(ev.chatId, ev.status)
     noteStatus(ev.chatId, ev.status)
@@ -660,11 +664,13 @@ function registerIpc(): void {
         store.deleteChat(chatId)
         lastStatus.delete(chatId)
         forgetChat(chatId)
+        remote.forgetChat(chatId)
       }
       for (const sideId of store.sideChatIdsOf(id)) forget(sideId)
       store.deleteChat(id)
       lastStatus.delete(id)
       forgetChat(id)
+      remote.forgetChat(id)
       return result
     }
   )
@@ -1044,6 +1050,10 @@ function registerIpc(): void {
   })
 
   ipcMain.handle('app:check-update', () => checkForUpdate())
+  ipcMain.handle('remote:state', () => remote.state())
+  ipcMain.handle('remote:configure', (_e, patch: RemoteAccessPatch) => remote.configure(patch))
+  ipcMain.handle('remote:pair', () => remote.pair())
+  ipcMain.handle('remote:forget', (_e, deviceId?: string) => remote.forget(deviceId))
 
   // Sync on purpose — the preload bridge reads it while building `window.api`,
   // and registerIpc() runs before createWindow(), so the channel always exists.
@@ -1268,6 +1278,17 @@ app.whenReady().then(() => {
     // instance owns the chat.
     onLockDenied: (chatId) => emit({ type: 'chat-locked', chatId })
   })
+  // Right after the store and before any manager, because `emit` feeds it:
+  // it keeps the statuses and open prompts a phone needs on connect.
+  remote = new RemoteAccess({
+    store,
+    rendererDir: join(__dirname, '../renderer'),
+    devServerUrl: process.env.ELECTRON_RENDERER_URL,
+    // Only the window: the phone that created it already has the row.
+    onChatCreated: (meta) =>
+      win?.webContents.send('chat:event', { type: 'chat-added', chatId: meta.id, meta } satisfies ChatEvent)
+  })
+  remote.onChange = () => win?.webContents.send('remote:changed')
   // Provider CLI settings before any manager: session construction, the model
   // catalog and the usage probes all resolve a binary through this, and a
   // resolution that ran against an empty config would cache the wrong answer
@@ -1290,7 +1311,10 @@ app.whenReady().then(() => {
   manager.reconcileDelegations()
   terminals = new TerminalManager(emitTerminal)
   chatTerminals = new ChatTerminalManager(terminals, store, emitTerminal, emit)
+  // Ahead of `registerIpc`: it records the handlers the phone may reach.
+  remote.captureIpc(ipcMain)
   registerIpc()
+  void remote.restore()
   buildMenu()
   createWindow()
 
@@ -1324,6 +1348,7 @@ app.on('before-quit', (event) => {
   terminals.disposeAll()
   preview.disposeAll()
   lsp.disposeAll()
+  void remote.stop()
   quitting = store.flushAll().finally(() => {
     readyToQuit = true
     app.quit()

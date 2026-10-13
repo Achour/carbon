@@ -100,6 +100,12 @@ in one scroller, folded down to what moved and expandable back out to the whole
 file, and carries a commit → push → `gh pr create` ladder that knows which rung
 you're on — including publishing a project that has no remote yet.
 
+**From your phone.** Settings → Remote access serves a phone-sized Carbon from
+your Mac: scan a QR code, then read chats as they stream, send messages and
+photos, approve tools and plans, and start new chats from anywhere your phone
+and Mac share a [Tailscale](https://tailscale.com) network. The agents keep
+running on the Mac, on your own CLIs.
+
 **The rest.** Permission prompts with per-tool "always allow", plan mode with an
 approve/edit review and a "build with" picker, checkpoint and rewind to any
 message, a roster of every agent a fan-out spawned with its model and token

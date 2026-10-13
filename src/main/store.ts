@@ -120,6 +120,27 @@ interface SettingsFile {
    */
   providers?: Partial<Record<Provider, ProviderCliConfig>>
   windowBounds?: { x?: number; y?: number; width: number; height: number }
+  /** Remote access (`remoteAccess.ts`). Absent until the user first opens it. */
+  remote?: RemoteSettings
+}
+
+/**
+ * A paired phone holds `<id>.<token>`; only the token's hash is kept here, so
+ * reading settings.json is not enough to impersonate one.
+ */
+export interface RemoteDeviceRecord {
+  id: string
+  name: string
+  tokenHash: string
+  pairedAt: number
+  lastSeenAt?: number
+}
+
+export interface RemoteSettings {
+  enabled: boolean
+  allowLan: boolean
+  port: number
+  devices: RemoteDeviceRecord[]
 }
 
 const DEFAULT_SETTINGS: SettingsFile = {
@@ -2180,6 +2201,15 @@ export class Store {
 
   getProviderClis(): Partial<Record<Provider, ProviderCliConfig>> {
     return this.settings.providers ?? {}
+  }
+
+  getRemote(): RemoteSettings | undefined {
+    return this.settings.remote
+  }
+
+  setRemote(remote: RemoteSettings): void {
+    this.settings.remote = remote
+    this.writeSettings()
   }
 
   /** Merge one provider's CLI settings. */
