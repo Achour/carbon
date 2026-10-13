@@ -1375,8 +1375,13 @@ export interface RemoteAccessState {
   running: boolean
   /** Why it is not, when enabling failed (a port in use, say). */
   error?: string
-  /** Where the phone should go, Tailscale first. Empty when nothing qualifies. */
-  urls: { url: string; kind: 'tailscale' | 'lan' }[]
+  /**
+   * Where the phone should go: Tailscale first, then the Mac's Bonjour name
+   * (`<name>.local`, which outlives the router handing out a new IP), then the
+   * raw LAN addresses. The pairing link uses the first. Empty when nothing
+   * qualifies.
+   */
+  urls: { url: string; kind: 'tailscale' | 'local' | 'lan' }[]
   devices: RemoteDevice[]
   /** A live pairing code, until it is used or expires. */
   pairing?: { code: string; expiresAt: number; links: string[] }

@@ -98,6 +98,13 @@ export function RemoteSection(): React.JSX.Element {
   )
 }
 
+/** The `.local` name is the Wi-Fi address to keep; the IP is its fallback. */
+const ADDRESS_LABEL: Record<RemoteAccessState['urls'][number]['kind'], string> = {
+  tailscale: 'Tailscale',
+  local: 'This Wi-Fi',
+  lan: 'Wi-Fi IP'
+}
+
 function Address({ state }: { state: RemoteAccessState }): React.JSX.Element {
   if (state.urls.length === 0) {
     return (
@@ -112,9 +119,7 @@ function Address({ state }: { state: RemoteAccessState }): React.JSX.Element {
     <div className="space-y-1 px-2 py-1">
       {state.urls.map((u) => (
         <div key={u.url} className="flex items-center gap-2 text-xs">
-          <span className="w-20 shrink-0 text-muted-foreground">
-            {u.kind === 'tailscale' ? 'Tailscale' : 'This Wi-Fi'}
-          </span>
+          <span className="w-20 shrink-0 text-muted-foreground">{ADDRESS_LABEL[u.kind]}</span>
           <code className="min-w-0 flex-1 truncate font-mono text-[12px]">{u.url}</code>
           <Button
             variant="ghost"

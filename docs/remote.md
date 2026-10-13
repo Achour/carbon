@@ -50,6 +50,16 @@ the window open. The phone is one more window onto them.
   that is off by default and the switch says so. TLS on the LAN would mean a
   self-signed certificate that iOS makes the user trust by hand in Settings, and
   that is worse than telling them to use Tailscale.
+- **The Wi-Fi address to keep is the Mac's name, not its IP.** On the local
+  network the router hands out the IP, and it can hand the Mac another one, at
+  which point a Home Screen app saved at `192.168.1.2` stops opening. The
+  server therefore lists the Bonjour name (`scutil --get LocalHostName` +
+  `.local`) ahead of the raw IPs, so the pairing link and the QR code carry it.
+  Sign-in is per address (the cookie belongs to the origin), which is why the
+  link has to be right the first time. It resolves to the Mac's LAN IPv4 or an
+  `fe80::`/`fd…` IPv6 address, all of which "Allow the local network" already
+  admits. Tailscale still comes first: its address is just as stable, and it
+  also works away from home.
 - **Pairing is a one-time six-digit code; a paired phone holds a device token.**
   "Pair a phone" makes a code that lives ten minutes and survives five wrong
   guesses, behind a global limit of twenty misses per ten minutes. The QR code

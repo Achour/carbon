@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import {
@@ -206,10 +207,13 @@ export class RemoteAccess {
 
   state(): RemoteAccessState {
     const s = this.settings()
-    const urls = remoteAddresses(networkInterfaces(), s.allowLan).map((a) => ({
-      url: `http://${a.address}:${s.port}`,
-      kind: a.kind
-    }))
+    const addresses = remoteAddresses(networkInterfaces(), s.allowLan)
+    const name = addresses.some((a) => a.kind === 'lan') ? bonjourName() : null
+    const urls: RemoteAccessState['urls'] = [
+      ...addresses.filter((a) => a.kind === 'tailscale'),
+      ...(name ? [{ address: name, kind: 'local' as const }] : []),
+      ...addresses.filter((a) => a.kind === 'lan')
+    ].map((a) => ({ url: `http://${a.address}:${s.port}`, kind: a.kind }))
     const pairing =
       this.pairing && this.pairing.expiresAt > Date.now()
         ? {
@@ -627,6 +631,28 @@ function wire(ev: ChatEvent): ChatEvent {
   const patch: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(ev.patch)) patch[k] = v === undefined ? null : v
   return { ...ev, patch: patch as typeof ev.patch }
+}
+
+let bonjour: string | null | undefined
+
+/**
+ * The name this Mac answers to on the local network — `scutil`'s
+ * LocalHostName, which is what `<name>.local` resolves over Bonjour. A Home
+ * Screen app saved at the LAN IP stops working the day the router hands the Mac
+ * another one; saved at this name, it follows the Mac. `os.hostname()` is not
+ * the same thing: it can be whatever name DHCP assigned (`MacBook-Pro.lan`).
+ */
+function bonjourName(): string | null {
+  if (bonjour !== undefined) return bonjour
+  bonjour = null
+  if (process.platform !== 'darwin') return bonjour
+  try {
+    const name = execFileSync('scutil', ['--get', 'LocalHostName'], { encoding: 'utf8', timeout: 2000 }).trim()
+    if (/^[A-Za-z0-9-]+$/.test(name)) bonjour = `${name}.local`
+  } catch {
+    // No name set: the raw addresses still answer.
+  }
+  return bonjour
 }
 
 function cookieFor(credential: string): string {
