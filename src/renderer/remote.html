@@ -13,7 +13,31 @@
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Carbon" />
-    <meta name="theme-color" content="#111111" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#171717" media="(prefers-color-scheme: dark)" />
+    <!-- Painted before any script or stylesheet arrives: the page's first frame
+         is the app's background in the phone's appearance, never white. The
+         colours are the desktop's --background, light and dark. -->
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: #fafafa;
+      }
+      @media (prefers-color-scheme: dark) {
+        html,
+        body {
+          background: #171717;
+        }
+      }
+    </style>
+    <script>
+      document.documentElement.classList.toggle(
+        'dark',
+        matchMedia('(prefers-color-scheme: dark)').matches
+      )
+    </script>
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="apple-touch-icon" href="/remote-icon.png" />
     <link rel="icon" href="/remote-icon.png" />

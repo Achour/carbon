@@ -1,6 +1,8 @@
 import * as React from 'react'
+import { ChevronDown, ClipboardList, MessageCircleQuestion, ShieldQuestion } from 'lucide-react'
 import type { PermissionDecision, PermissionRequestPayload, Provider } from '@shared/types'
 import { PROVIDER_SHORT_LABELS } from '@shared/types'
+import { cn } from '@/lib/utils'
 import { useRemote } from './state'
 import { RemoteMarkdown } from './Markdown'
 import { toolLine } from './format'
@@ -42,33 +44,113 @@ export function PermissionCard({
 
   const { label, detail } = toolLine({ name: request.toolName, input: request.input })
   const always = request.hasSuggestions && !request.noAlwaysAllow
+  const preview = previewOf(request.input)
   return (
-    <div className="prompt">
-      <div className="prompt-title">
-        {agent} wants to use {request.displayName ?? label}
-      </div>
-      {request.description && <div className="prompt-desc">{request.description}</div>}
-      {detail && <pre className="prompt-detail">{detail}</pre>}
-      {request.decisionReason && <div className="prompt-desc muted">{request.decisionReason}</div>}
-      <div className="prompt-actions">
-        <button type="button" className="btn ghost" disabled={busy} onClick={() => answer({ behavior: 'deny' })}>
+    <Card icon={<ShieldQuestion className="size-4 text-warning" />} title={`${agent} wants to use ${request.displayName ?? label}`}>
+      {(request.description || detail) && (
+        <p className="truncate font-mono text-[13px] text-muted-foreground">{request.description ?? detail}</p>
+      )}
+      {preview && (
+        <div className="max-h-48 overflow-auto rounded-xl bg-code px-3 py-2 font-mono text-[12.5px] leading-relaxed whitespace-pre-wrap break-all select-text">
+          {preview.map((l, i) => (
+            <div
+              key={i}
+              className={cn(l.kind === 'del' && 'text-destructive', l.kind === 'add' && 'text-success')}
+            >
+              {l.kind === 'del' ? '− ' : l.kind === 'add' ? '+ ' : ''}
+              {l.text}
+            </div>
+          ))}
+        </div>
+      )}
+      {request.decisionReason && <p className="text-[13px] text-muted-foreground">{request.decisionReason}</p>}
+      <Actions>
+        <Btn kind="ghost" disabled={busy} onClick={() => answer({ behavior: 'deny' })}>
           Deny
-        </button>
+        </Btn>
         {always && (
-          <button
-            type="button"
-            className="btn secondary"
-            disabled={busy}
-            onClick={() => answer({ behavior: 'allow', always: true })}
-          >
-            Always
-          </button>
+          <Btn kind="secondary" disabled={busy} onClick={() => answer({ behavior: 'allow', always: true })}>
+            Always allow
+          </Btn>
         )}
-        <button type="button" className="btn primary" disabled={busy} onClick={() => answer({ behavior: 'allow' })}>
+        <Btn kind="primary" disabled={busy} onClick={() => answer({ behavior: 'allow' })}>
           Allow
-        </button>
+        </Btn>
+      </Actions>
+    </Card>
+  )
+}
+
+type PreviewLine = { kind: 'add' | 'del' | 'plain'; text: string }
+
+/** Lines past this are cut: the card is for deciding, not for reading the file. */
+const PREVIEW_LINES = 40
+
+/**
+ * What the tool will actually do, which is what an approval is about: the
+ * whole command, the text a write puts in the file, the lines an edit swaps.
+ */
+function previewOf(input: unknown): PreviewLine[] | null {
+  const i = (input ?? {}) as Record<string, unknown>
+  const lines = (v: unknown, kind: PreviewLine['kind']): PreviewLine[] =>
+    typeof v === 'string' ? v.split('\n').map((text) => ({ kind, text })) : []
+  let out: PreviewLine[] = []
+  if (typeof i.command === 'string') out = lines(i.command, 'plain')
+  else if (typeof i.content === 'string') out = lines(i.content, 'add')
+  else if (typeof i.old_string === 'string' || typeof i.new_string === 'string')
+    out = [...lines(i.old_string, 'del'), ...lines(i.new_string, 'add')]
+  else if (Array.isArray(i.edits))
+    out = (i.edits as Record<string, unknown>[]).flatMap((e) => [
+      ...lines(e.old_string, 'del'),
+      ...lines(e.new_string, 'add')
+    ])
+  if (!out.length) return null
+  return out.length > PREVIEW_LINES
+    ? [...out.slice(0, PREVIEW_LINES), { kind: 'plain', text: `… ${out.length - PREVIEW_LINES} more lines` }]
+    : out
+}
+
+function Card({ icon, title, children }: { icon: React.ReactNode; title: string; children: React.ReactNode }): React.JSX.Element {
+  return (
+    <div className="flex animate-in flex-col gap-2.5 rounded-[20px] border border-border bg-card p-4 shadow-[0_4px_20px_rgb(0_0_0/0.08)] fade-in slide-in-from-bottom-2">
+      <div className="flex items-center gap-2 text-[15px] font-medium">
+        {icon}
+        <span className="min-w-0">{title}</span>
       </div>
+      {children}
     </div>
+  )
+}
+
+function Actions({ children }: { children: React.ReactNode }): React.JSX.Element {
+  return <div className="mt-1 flex justify-end gap-2">{children}</div>
+}
+
+function Btn({
+  kind,
+  disabled,
+  onClick,
+  children
+}: {
+  kind: 'primary' | 'secondary' | 'ghost'
+  disabled?: boolean
+  onClick: () => void
+  children: React.ReactNode
+}): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className={cn(
+        'h-10 rounded-full px-4 text-[14.5px] font-medium transition-opacity disabled:opacity-40',
+        kind === 'primary' && 'bg-foreground text-background',
+        kind === 'secondary' && 'bg-secondary text-secondary-foreground',
+        kind === 'ghost' && 'text-muted-foreground active:bg-accent'
+      )}
+    >
+      {children}
+    </button>
   )
 }
 
@@ -87,34 +169,43 @@ function PlanCard({
   const [feedback, setFeedback] = React.useState('')
   const [expanded, setExpanded] = React.useState(false)
   return (
-    <div className="prompt plan">
-      <div className="prompt-title">{agent} has a plan ready</div>
+    <Card icon={<ClipboardList className="size-4 text-sky-600 dark:text-sky-400" />} title={`${agent} has a plan ready`}>
       {plan && (
-        <div className={`plan-body ${expanded ? 'open' : ''}`} onClick={() => setExpanded(true)}>
-          <RemoteMarkdown text={plan} />
+        <div className="relative">
+          <div className={cn('overflow-hidden', !expanded && 'max-h-56')}>
+            <RemoteMarkdown text={plan} />
+          </div>
+          {!expanded && (
+            <button
+              type="button"
+              onClick={() => setExpanded(true)}
+              className="absolute inset-x-0 bottom-0 flex h-16 items-end justify-center bg-gradient-to-t from-card to-transparent pb-1 text-[13px] font-medium text-muted-foreground"
+            >
+              <span className="flex items-center gap-1">
+                Read the whole plan <ChevronDown className="size-3.5" />
+              </span>
+            </button>
+          )}
         </div>
       )}
       <textarea
-        className="feedback"
         rows={1}
         placeholder="Ask for changes…"
         value={feedback}
         onChange={(e) => setFeedback(e.target.value)}
+        className="min-h-10 w-full resize-none rounded-xl bg-muted px-3 py-2 text-[16px] outline-none placeholder:text-muted-foreground"
       />
-      <div className="prompt-actions">
-        <button
-          type="button"
-          className="btn ghost"
-          disabled={busy || !feedback.trim()}
-          onClick={() => answer({ behavior: 'deny', message: feedback.trim() })}
-        >
-          Request changes
-        </button>
-        <button type="button" className="btn primary" disabled={busy} onClick={() => answer({ behavior: 'allow' })}>
-          Approve
-        </button>
-      </div>
-    </div>
+      <Actions>
+        {feedback.trim() ? (
+          <Btn kind="secondary" disabled={busy} onClick={() => answer({ behavior: 'deny', message: feedback.trim() })}>
+            Request changes
+          </Btn>
+        ) : null}
+        <Btn kind="primary" disabled={busy} onClick={() => answer({ behavior: 'allow' })}>
+          Approve plan
+        </Btn>
+      </Actions>
+    </Card>
   )
 }
 
@@ -169,47 +260,49 @@ function QuestionCard({
   }
 
   return (
-    <div className="prompt question">
-      <div className="prompt-title">{agent} has a question</div>
-      <div className="questions">
-        {questions.map((q, i) => (
-          <div key={i} className="q">
-            <div className="q-text">{q.question}</div>
-            <div className="q-options">
-              {(q.options ?? []).map((o) => (
+    <Card
+      icon={<MessageCircleQuestion className="size-4 text-violet-600 dark:text-violet-400" />}
+      title={questions.length === 1 ? `${agent} has a question` : `${agent} has ${questions.length} questions`}
+    >
+      {questions.map((q, i) => (
+        <div key={i} className="flex flex-col gap-1.5">
+          <div className="text-[15px] leading-snug">{q.question}</div>
+          {q.multiSelect && <div className="text-[12.5px] text-muted-foreground">Pick any that apply</div>}
+          <div className="flex flex-col gap-1">
+            {(q.options ?? []).map((o) => {
+              const on = !!picked[i]?.includes(o.label) && !other[i]?.trim()
+              return (
                 <button
                   type="button"
                   key={o.label}
-                  className={`q-option ${picked[i]?.includes(o.label) && !other[i]?.trim() ? 'on' : ''}`}
                   onClick={() => toggle(i, q, o.label)}
+                  className={cn(
+                    'rounded-xl border px-3 py-2 text-left transition-colors',
+                    on ? 'border-foreground/60 bg-accent' : 'border-border'
+                  )}
                 >
-                  <span>{o.label}</span>
-                  {o.description && <small>{o.description}</small>}
+                  <span className="block text-[14.5px]">{o.label}</span>
+                  {o.description && <span className="block text-[12.5px] leading-snug text-muted-foreground">{o.description}</span>}
                 </button>
-              ))}
-            </div>
-            <input
-              className="q-other"
-              placeholder="Or type an answer"
-              value={other[i] ?? ''}
-              onChange={(e) => setOther((prev) => ({ ...prev, [i]: e.target.value }))}
-            />
+              )
+            })}
           </div>
-        ))}
-      </div>
-      <div className="prompt-actions">
-        <button
-          type="button"
-          className="btn ghost"
-          disabled={busy}
-          onClick={() => answer({ behavior: 'deny', message: 'The user dismissed the questions.' })}
-        >
+          <input
+            placeholder="Or type an answer"
+            value={other[i] ?? ''}
+            onChange={(e) => setOther((prev) => ({ ...prev, [i]: e.target.value }))}
+            className="h-10 rounded-xl bg-muted px-3 text-[16px] outline-none placeholder:text-muted-foreground"
+          />
+        </div>
+      ))}
+      <Actions>
+        <Btn kind="ghost" disabled={busy} onClick={() => answer({ behavior: 'deny', message: 'The user dismissed the questions.' })}>
           Dismiss
-        </button>
-        <button type="button" className="btn primary" disabled={busy || !complete} onClick={submit}>
+        </Btn>
+        <Btn kind="primary" disabled={busy || !complete} onClick={submit}>
           Submit
-        </button>
-      </div>
-    </div>
+        </Btn>
+      </Actions>
+    </Card>
   )
 }

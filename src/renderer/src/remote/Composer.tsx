@@ -1,6 +1,7 @@
 import * as React from 'react'
-import { ArrowUp, ImagePlus, Square, X } from 'lucide-react'
+import { ArrowUp, Paperclip, Square, X } from 'lucide-react'
 import type { Attachment } from '@shared/types'
+import { cn } from '@/lib/utils'
 import { useRemote } from './state'
 
 /** Longest side of an attached photo. A phone camera's 12 MP is wasted on a model. */
@@ -29,17 +30,31 @@ async function photoAttachment(file: File): Promise<Attachment> {
   }
 }
 
+/**
+ * The phone's composer, shaped like the desktop's: one card holding the text,
+ * the photos, and a footer of controls — attach, the option chips (`tools`),
+ * send. While a turn runs an empty composer offers Stop; anything typed is
+ * queued behind the turn instead.
+ */
 export function Composer({
   chatId,
   busy,
   queued,
   placeholder,
+  tools,
+  above,
+  autoFocus,
   onSubmit
 }: {
   chatId?: string
   busy?: boolean
   queued?: number
   placeholder?: string
+  /** The option chips, drawn in the footer between attach and send. */
+  tools?: React.ReactNode
+  /** A line above the card — a pending model switch, the project chip. */
+  above?: React.ReactNode
+  autoFocus?: boolean
   /** Replaces the default send — the new-chat screen creates the chat first. */
   onSubmit?: (text: string, attachments: Attachment[]) => Promise<void>
 }): React.JSX.Element {
@@ -60,13 +75,13 @@ export function Composer({
     el.style.height = `${Math.min(el.scrollHeight, window.innerHeight / 3)}px`
   }, [text])
 
+  const empty = !text.trim() && attachments.length === 0
   const submit = async (): Promise<void> => {
-    const body = text.trim()
-    if ((!body && attachments.length === 0) || sending) return
+    if (empty || sending) return
     setSending(true)
     try {
-      if (onSubmit) await onSubmit(body, attachments)
-      else if (chatId) await send(chatId, body, attachments)
+      if (onSubmit) await onSubmit(text.trim(), attachments)
+      else if (chatId) await send(chatId, text.trim(), attachments)
       setText('')
       setAttachments([])
     } catch (err) {
@@ -75,66 +90,95 @@ export function Composer({
       setSending(false)
     }
   }
+  const stop = busy && chatId && empty
 
   return (
-    <div className="composer">
-      {queued ? <div className="queued">{queued === 1 ? '1 message' : `${queued} messages`} queued — sends when this turn ends</div> : null}
-      {attachments.length > 0 && (
-        <div className="attachments">
-          {attachments.map((a) => (
-            <div key={a.id} className="thumb">
-              <img src={`data:${a.mediaType};base64,${a.data}`} alt={a.name} />
-              <button
-                type="button"
-                aria-label="Remove"
-                onClick={() => setAttachments((list) => list.filter((x) => x.id !== a.id))}
-              >
-                <X />
-              </button>
-            </div>
-          ))}
+    <div className="shrink-0 px-3 pt-1 pb-[max(env(safe-area-inset-bottom),10px)]">
+      {queued ? (
+        <div className="px-2 pb-1.5 text-[13px] text-muted-foreground">
+          {queued === 1 ? '1 message' : `${queued} messages`} queued — sends when this turn ends
         </div>
-      )}
-      <div className="composer-row">
-        <button type="button" className="icon-btn" aria-label="Attach photo" onClick={() => file.current?.click()}>
-          <ImagePlus />
-        </button>
-        <input
-          ref={file}
-          type="file"
-          accept="image/*"
-          multiple
-          hidden
-          onChange={(e) => {
-            const files = [...(e.target.files ?? [])]
-            e.target.value = ''
-            void Promise.all(files.map(photoAttachment))
-              .then((list) => setAttachments((prev) => [...prev, ...list]))
-              .catch(() => setError("Couldn't read that photo."))
-          }}
-        />
+      ) : null}
+      {above}
+      <div className="rounded-[22px] border border-border bg-card shadow-[0_1px_2px_rgb(0_0_0/0.04),0_4px_16px_rgb(0_0_0/0.06)] dark:shadow-none">
+        {attachments.length > 0 && (
+          <div className="flex gap-2 overflow-x-auto px-3 pt-3">
+            {attachments.map((a) => (
+              <div key={a.id} className="relative size-16 shrink-0">
+                <img
+                  src={`data:${a.mediaType};base64,${a.data}`}
+                  alt={a.name}
+                  className="size-16 rounded-xl border border-border object-cover"
+                />
+                <button
+                  type="button"
+                  aria-label="Remove"
+                  className="absolute -top-1.5 -right-1.5 flex size-5 items-center justify-center rounded-full bg-foreground text-background"
+                  onClick={() => setAttachments((list) => list.filter((x) => x.id !== a.id))}
+                >
+                  <X className="size-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         <textarea
           ref={area}
           rows={1}
           value={text}
+          autoFocus={autoFocus}
           placeholder={placeholder ?? (busy ? 'Queue a follow-up…' : 'Message')}
           onChange={(e) => setText(e.target.value)}
+          className="block max-h-[33dvh] w-full resize-none bg-transparent px-4 pt-3 pb-1 text-[16px] leading-[1.45] outline-none placeholder:text-muted-foreground/70"
         />
-        {busy && chatId && !text.trim() && attachments.length === 0 ? (
-          <button type="button" className="send stop" aria-label="Stop" onClick={() => void interrupt(chatId)}>
-            <Square />
-          </button>
-        ) : (
+        <div className="flex items-center gap-1 px-1.5 pb-1.5">
           <button
             type="button"
-            className="send"
-            aria-label="Send"
-            disabled={sending || (!text.trim() && attachments.length === 0)}
-            onClick={() => void submit()}
+            aria-label="Attach photo"
+            className="flex size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground active:bg-accent"
+            onClick={() => file.current?.click()}
           >
-            <ArrowUp />
+            <Paperclip className="size-[17px]" />
           </button>
-        )}
+          <input
+            ref={file}
+            type="file"
+            accept="image/*"
+            multiple
+            hidden
+            onChange={(e) => {
+              const files = [...(e.target.files ?? [])]
+              e.target.value = ''
+              void Promise.all(files.map(photoAttachment))
+                .then((list) => setAttachments((prev) => [...prev, ...list]))
+                .catch(() => setError("Couldn't read that photo."))
+            }}
+          />
+          {tools ?? <div className="flex-1" />}
+          {stop ? (
+            <button
+              type="button"
+              aria-label="Stop"
+              className="flex size-8 shrink-0 items-center justify-center rounded-full bg-foreground text-background active:opacity-80"
+              onClick={() => void interrupt(chatId)}
+            >
+              <Square className="size-3 fill-current" />
+            </button>
+          ) : (
+            <button
+              type="button"
+              aria-label="Send"
+              disabled={sending || empty}
+              className={cn(
+                'flex size-8 shrink-0 items-center justify-center rounded-full transition-colors',
+                empty ? 'bg-muted text-muted-foreground' : 'bg-foreground text-background active:opacity-80'
+              )}
+              onClick={() => void submit()}
+            >
+              <ArrowUp className="size-[18px]" />
+            </button>
+          )}
+        </div>
       </div>
     </div>
   )
