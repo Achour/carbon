@@ -31,6 +31,8 @@ async function post<T>(path: string, body: unknown): Promise<T> {
 }
 
 export async function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
+  // Trailing `undefined`s would serialize as `null`; leave them out instead.
+  while (args.length && args[args.length - 1] === undefined) args.pop()
   const data = await post<{ result: T }>('/api/invoke', { channel, args })
   return data.result
 }
@@ -51,6 +53,13 @@ export async function snapshot(): Promise<RemoteSnapshot> {
   const res = await fetch('/api/snapshot', { credentials: 'same-origin' })
   if (!res.ok) throw new RemoteError(`Carbon answered ${res.status}`, res.status)
   return (await res.json()) as RemoteSnapshot
+}
+
+/** Each project's mark, keyed by project root; null where it has none. */
+export async function icons(): Promise<Record<string, string | null>> {
+  const res = await fetch('/api/icons', { credentials: 'same-origin' })
+  if (!res.ok) throw new RemoteError(`Carbon answered ${res.status}`, res.status)
+  return (await res.json()) as Record<string, string | null>
 }
 
 export async function watch(conn: string, chatId: string | null): Promise<void> {

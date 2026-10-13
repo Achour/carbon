@@ -52,7 +52,8 @@ import type {
   WorktreeInfo,
   WorktreeStatus
 } from '@shared/types'
-import { effortForProvider, providerForRememberedModel } from '@shared/types'
+import { PROVIDERS, effortForProvider, providerForRememberedModel } from '@shared/types'
+import { withTimeout } from './session'
 import { ChatManager } from './claude'
 import { ChatTerminalManager } from './chatTerminal'
 import { readCodexConfigModel } from './codexConfig'
@@ -90,7 +91,12 @@ import { checkForUpdate, installedViaHomebrew } from './updates'
 import { readUsageOverview } from './usage'
 import { readUsageReport } from './usageStats'
 import { hydrateShellPath } from './shellEnv'
-import { configureManagedRoot, configureProviderClis, providerClis } from './providerCli.ts'
+import {
+  cliAvailable,
+  configureManagedRoot,
+  configureProviderClis,
+  providerClis
+} from './providerCli.ts'
 import { configureAntigravityAuth } from './antigravity'
 import { dockIconSvg } from './dockIcon'
 import { RemoteAccess } from './remoteAccess'
@@ -1286,7 +1292,21 @@ app.whenReady().then(() => {
     devServerUrl: process.env.ELECTRON_RENDERER_URL,
     // Only the window: the phone that created it already has the row.
     onChatCreated: (meta) =>
-      win?.webContents.send('chat:event', { type: 'chat-added', chatId: meta.id, meta } satisfies ChatEvent)
+      win?.webContents.send('chat:event', { type: 'chat-added', chatId: meta.id, meta } satisfies ChatEvent),
+    // The window has normally fetched the catalog long before a phone asks, and
+    // then this is the cached answer. Cold, it is the probe the desktop's
+    // New-chat screen would run — bounded, because a snapshot is what draws the
+    // phone's first screen and the static rows stand in until the next one.
+    models: async () => ({
+      models: await withTimeout(
+        manager.listModels('', store.getDefaults().recentDirs[0]),
+        4000,
+        []
+      ).catch(() => []),
+      codexConfigModel: readCodexConfigModel(),
+      available: PROVIDERS.filter((p) => cliAvailable(p))
+    }),
+    projectIcons: (roots) => projectOps.projectIcons(roots)
   })
   remote.onChange = () => win?.webContents.send('remote:changed')
   // Provider CLI settings before any manager: session construction, the model

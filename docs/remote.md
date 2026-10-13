@@ -19,7 +19,11 @@ the window open. The phone is one more window onto them.
   arguments exactly as the preload bridge would. A second implementation for
   the phone would drift the first time a handler changed. Only channels in
   `REMOTE_CHANNELS` are reachable, and that list is the conversation and nothing
-  else: no `fs:*`, no terminal, no git writes, no settings, no deleting. A lost
+  else: no `fs:*`, no terminal, no git writes, no settings, no deleting. The one
+  exception is `chat:set-options`, the composer's own pickers. Like on the
+  desktop, a pick there also becomes the Mac's New-chat default
+  (`rememberOptions`), unless it is an effort or speed that a model pick only
+  replays (`remember: false`). A lost
   phone can still steer the agents, which is the feature, but it is not a more
   direct remote shell than that.
 - **Events are the same `ChatEvent`s, as server-sent events.** `emit` feeds
@@ -73,24 +77,74 @@ the window open. The phone is one more window onto them.
   the markdown stack), which the desktop page now `modulepreload`s; it is the
   same bytes it loaded before, in two files. The server gzips text files once
   and keeps them, since the build cannot change under a running app. In
-  `npm run dev` it proxies to Vite instead, so client edits hot-reload on the
-  phone too.
-- **The client is deliberately not the desktop store.** `remote/state.ts` is the
-  slice of `applyEvent` a phone needs (chat list, one open transcript, open
-  prompts) and `remote/Markdown.tsx` is plain GFM. The desktop's `Markdown` and
-  store reach for `window.api` everywhere (file links, images off disk, the
-  editor), which a browser does not have, and importing them would pull those
-  five thousand lines into the bundle to do things a phone cannot. The prompt
-  decisions it sends are the desktop's own (`PromptDock`, `PlanPanel`), so no
-  provider can tell which screen answered.
+  `npm run dev` it proxies to Vite instead, websocket upgrades included. The
+  upgrade is not optional: Vite's client opens its hot-reload socket on the
+  page's own origin, and unanswered it falls back to polling for the dev server
+  and reloads the whole page whenever it thinks the server came back. In dev the
+  styles arrive by script, so that reload was a white flash in the middle of
+  use.
+- **The first frame is the app's background, in every build.** `remote.html`
+  paints `html` and `body` in the desktop's `--background` for the phone's
+  appearance and sets `.dark` in an inline script, all before any stylesheet or
+  module loads. The `theme-color` metas follow the same two colours, so the
+  status bar matches.
+- **Navigation is the desktop's: a sidebar, not a list screen.** `Sidebar.tsx`
+  is the compact sidebar at thumb size. New chat and Search sit on top,
+  followed by pinned chats, then each project with its real mark (`/api/icons`,
+  `projects:icons` over roots the *server* chooses, never the phone) and its
+  chats hanging under the name. The open chat sits on the accent pill, and
+  activity shows as the desktop's glyphs (`chatActivity`, `DotSpinner`). Chats
+  keep the desktop's `sortKey` order. Projects are ordered by most recent
+  activity, since the desktop's project order and custom names live in its
+  window's `localStorage`, which main cannot read. The drawer follows the
+  finger: a swipe from the left edge opens it, a swipe anywhere closes it, and on
+  release it settles by distance and speed. During a drag the transforms are
+  written straight to the elements, because a React render per touch-move would
+  re-render the transcript every frame. `#/` is the desktop's home screen (a
+  greeting, "What are we building?", the project chip and the composer).
+- **The client is deliberately not the desktop store, but it is the desktop's
+  look.** `remote/state.ts` is the slice of `applyEvent` a phone needs (chat
+  list, one open transcript, open prompts), and `remote/Markdown.tsx` is
+  GFM with highlighting. The desktop's `Markdown` and store reach for
+  `window.api` everywhere (file links, images off disk, the editor), which a
+  browser does not have, and importing them would pull those five thousand
+  lines into the bundle to do things a phone cannot. What the phone *does*
+  import is everything pure: `remote.css` pulls in the desktop's `index.css`,
+  with its tokens in both appearances, `.markdown` and syntax colours.
+  `ProviderMark`, `ProjectAvatar`, `summarizeActivity` and `humanizeShellCommand`
+  are imported too, so a chat, a project and a run of tool calls look the same on
+  both screens. The prompt decisions it sends are the desktop's own
+  (`PromptDock`, `PlanPanel`), so no provider can tell which screen answered.
+- **The pickers are the desktop composer's, computed the same way.**
+  `/api/snapshot` carries the catalog's inputs: the live model list, the Codex
+  config model and the installed providers. `remote/options.ts` runs them
+  through `assembleModelOptions`, `visibleModelOptions` (Settings → Models
+  hiding), `effortOptionsFor`, `serviceTierOptionsFor` and
+  `PROVIDER_PERMISSION_MODES`, so the phone never offers a row the Mac would
+  not. A model pick replays the effort and speed last used with that model, as
+  `Composer.handleModelChange` does. A cross-provider pick only arms
+  `pendingModel`, and the phone says so with an Undo. Probing the CLIs is never
+  a phone tap: the catalog is the one the window already fetched, and a cold
+  start gets a bounded probe with the static rows standing in.
+- **JSON cannot say `undefined`, in either direction, and both directions
+  bit.** An omitted positional argument (`chat:send` with no photos) arrives as
+  `null`, and `null` slips past a default parameter to throw on its first
+  `.length`. That broke every send the phone made. `handleInvoke` reads a
+  positional `null` back as `undefined`, and no allowlisted channel gives one a
+  meaning of its own; the client also stops sending trailing `undefined`s. The
+  other way, a `meta` patch clears a field by carrying it as `undefined` (an
+  undone model switch is `pendingModel: undefined`). The key vanishes in
+  `JSON.stringify`, so the phone kept drawing the switch. `wire()` sends those
+  as `null`, and the phone's reducer reads them as cleared.
 - **A message typed during a turn is queued on the phone**, and sent as that
   chat goes idle, the way the desktop composer queues. Sending straight into a
   live turn means something different on each provider.
 - **A chat created from the phone is announced to the window** with the
   `chat-added` event a delegate uses, so the desktop sidebar gets its row
-  without a relaunch. The phone passes the app's defaults to `chats:create`
-  explicitly. Omitting the model would make `rememberOptions` record an empty
-  one, quietly resetting the Mac's New-chat model.
+  without a relaunch. The New-chat screen seeds its pickers from the Mac's
+  defaults, exactly as the desktop's does, and passes all of them to
+  `chats:create`. Omitting the model would make `rememberOptions` record an
+  empty one, quietly resetting the Mac's New-chat model.
 
 **Known limits.** The Mac has to be awake: "Keep computer awake" only holds
 while an agent works, and a closed lid still sleeps it. The first launch after
@@ -103,7 +157,12 @@ the agent references by local path render as a placeholder, since the phone
 cannot read the Mac's disk.
 
 **Verification.** `test/remoteNet.test.ts` pins the address and credential
-logic. The server and client were driven end to end in headless Chromium at
+logic. The rebuilt client was driven in Carbon's own preview at iPhone 15
+size, in both appearances, against the real app and real Claude turns. That
+run covered: the project-grouped list; a long transcript with grouped tool
+runs; the model sheet and a cross-provider pick with its Undo; the permissions
+sheet; a send with no photos; and approving a Write and denying an Edit from
+their cards. The server and client were driven end to end in headless Chromium at
 iPhone size, against the real `RemoteAccess` and a simulated agent. That run
 covered pairing by link, the device record, the allowlist refusing `fs:read`, a
 streamed turn with a tool approval, a plan review that predates the connection,

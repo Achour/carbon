@@ -7,10 +7,13 @@ import {
   type Server,
   type ServerResponse
 } from 'node:http'
+import { connect } from 'node:net'
 import { hostname, networkInterfaces } from 'node:os'
+import type { Duplex } from 'node:stream'
 import { extname, join, normalize, sep } from 'node:path'
 import { gzipSync } from 'node:zlib'
 import type { IpcMain, IpcMainInvokeEvent } from 'electron'
+import { projectRoot } from '@shared/types'
 import type {
   AppDefaults,
   ChatEvent,
@@ -77,7 +80,11 @@ export const REMOTE_CHANNELS = new Set([
   'chats:create',
   'chat:send',
   'chat:interrupt',
-  'chat:respond-permission'
+  'chat:respond-permission',
+  // Model, effort, speed and permission mode — the composer's own pickers. A
+  // cross-provider model only arms the switch, as on the desktop; it applies
+  // at the next send (`applyPendingSwitch`).
+  'chat:set-options'
 ])
 
 /** Per-chat events, sent only to a phone looking at that chat. */
@@ -119,6 +126,10 @@ export interface RemoteHost {
   devServerUrl?: string
   /** A chat the phone created, so the desktop sidebar can add its row. */
   onChatCreated(meta: ChatMeta): void
+  /** The model picker's inputs (`RemoteSnapshot.models`). */
+  models(): Promise<Pick<RemoteSnapshot, 'models' | 'codexConfigModel' | 'available'>>
+  /** Each project's mark, as the desktop sidebar draws it (`projects:icons`). */
+  projectIcons(roots: string[]): Promise<Record<string, string | null>>
 }
 
 export class RemoteAccess {
@@ -261,6 +272,11 @@ export class RemoteAccess {
       })
     })
     this.server = server
+    // `npm run dev` only: Vite's client opens its hot-reload socket on the page's
+    // own origin. Unanswered, it gives up and polls for the dev server, and
+    // reloads the whole page each time it thinks the server came back — a
+    // white flash mid-use, since in dev the styles arrive by script.
+    if (this.host.devServerUrl) server.on('upgrade', (req, socket, head) => this.proxyUpgrade(req, socket, head))
     await new Promise<void>((resolve) => {
       server.once('error', (err: NodeJS.ErrnoException) => {
         this.error =
@@ -312,7 +328,7 @@ export class RemoteAccess {
         this.clients.delete(c.id)
         continue
       }
-      data ??= `data: ${JSON.stringify(ev)}\n\n`
+      data ??= `data: ${JSON.stringify(wire(ev))}\n\n`
       c.res.write(data)
     }
   }
@@ -342,6 +358,7 @@ export class RemoteAccess {
       }
       if (path === '/api/session') return json(res, 200, { ok: true, device: device.name })
       if (path === '/api/snapshot') return json(res, 200, await this.snapshot())
+      if (path === '/api/icons') return json(res, 200, await this.icons())
       if (path === '/api/events') return this.handleEvents(res)
       if (path === '/api/watch' && req.method === 'POST') {
         const body = (await readJson(req)) as { conn?: string; chatId?: string | null }
@@ -459,8 +476,23 @@ export class RemoteAccess {
       chats,
       statuses: Object.fromEntries(this.statuses),
       permissions: Object.fromEntries(this.permissions),
-      defaults
+      defaults,
+      ...(await this.host.models())
     }
+  }
+
+  /**
+   * Project marks for every project the phone can list. The roots are the
+   * server's own — the chats' projects and the recent folders — never the
+   * phone's: `projects:icons` reads a file out of whatever folder it is given,
+   * and a paired phone is not meant to read the Mac's disk.
+   */
+  private async icons(): Promise<Record<string, string | null>> {
+    const roots = new Set(this.host.store.getDefaults().recentDirs)
+    for (const c of this.host.store.listChats()) {
+      if (!c.archivedAt && !c.ephemeral && c.surface !== 'terminal') roots.add(projectRoot(c))
+    }
+    return this.host.projectIcons([...roots])
   }
 
   private handleEvents(res: ServerResponse): void {
@@ -481,7 +513,11 @@ export class RemoteAccess {
   private async handleInvoke(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const body = (await readJson(req)) as { channel?: unknown; args?: unknown }
     const channel = typeof body.channel === 'string' ? body.channel : ''
-    const args = Array.isArray(body.args) ? body.args : []
+    // JSON has no `undefined`: an omitted positional argument arrives as `null`,
+    // and a `null` slips past a default parameter (`attachments = []`) to throw
+    // on its first `.length`. No allowlisted channel gives a positional `null`
+    // a meaning of its own, so it is read back as what the phone left out.
+    const args = Array.isArray(body.args) ? body.args.map((a) => (a === null ? undefined : a)) : []
     const listener = REMOTE_CHANNELS.has(channel) ? this.handlers.get(channel) : undefined
     if (!listener) {
       json(res, 404, { error: `Not available remotely: ${channel}` })
@@ -536,6 +572,31 @@ export class RemoteAccess {
     }
   }
 
+  private proxyUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
+    if (!remoteAddressAllowed(req.socket.remoteAddress, this.settings().allowLan)) {
+      socket.destroy()
+      return
+    }
+    const target = new URL(this.host.devServerUrl!)
+    const upstream = connect(Number(target.port) || 80, target.hostname, () => {
+      const lines = [`${req.method} ${req.url} HTTP/${req.httpVersion}`]
+      for (let i = 0; i < req.rawHeaders.length; i += 2) {
+        const name = req.rawHeaders[i]
+        lines.push(`${name}: ${name.toLowerCase() === 'host' ? target.host : req.rawHeaders[i + 1]}`)
+      }
+      upstream.write(`${lines.join('\r\n')}\r\n\r\n`)
+      if (head.length) upstream.write(head)
+      upstream.pipe(socket)
+      socket.pipe(upstream)
+    })
+    const close = (): void => {
+      upstream.destroy()
+      socket.destroy()
+    }
+    upstream.on('error', close)
+    socket.on('error', close)
+  }
+
   /** `npm run dev`: hand the client's files to Vite, so edits hot-reload here too. */
   private proxyToDev(req: IncomingMessage, res: ServerResponse, path: string): void {
     const target = new URL(path, this.host.devServerUrl)
@@ -553,6 +614,19 @@ export class RemoteAccess {
     })
     req.pipe(upstream)
   }
+}
+
+/**
+ * A `meta` patch *clears* a field by carrying it as `undefined` — a cancelled
+ * model switch is `pendingModel: undefined` — and JSON drops such keys, so the
+ * phone would never hear the field went away and keep drawing the old value.
+ * They cross as `null`; the phone's reducer reads them back as cleared.
+ */
+function wire(ev: ChatEvent): ChatEvent {
+  if (ev.type !== 'meta') return ev
+  const patch: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(ev.patch)) patch[k] = v === undefined ? null : v
+  return { ...ev, patch: patch as typeof ev.patch }
 }
 
 function cookieFor(credential: string): string {

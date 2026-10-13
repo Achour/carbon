@@ -1394,6 +1394,15 @@ export interface RemoteSnapshot {
   statuses: Record<string, ChatStatus>
   permissions: Record<string, PermissionRequestPayload[]>
   defaults: AppDefaults
+  /**
+   * The model picker's inputs, exactly as the desktop composer gets them: the
+   * live catalog (empty until a probe has answered), the Codex config's model,
+   * and the providers whose CLI is switched on and installed. The phone runs
+   * the same `assembleModelOptions` over them, so the two pickers agree.
+   */
+  models: ModelOption[]
+  codexConfigModel: string | null
+  available: Provider[]
 }
 
 // ---------- Canvas ----------

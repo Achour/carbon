@@ -6,7 +6,13 @@ import type {
   ChatEvent,
   ChatMessage,
   ChatMeta,
+  ChatOptionsPatch,
   ChatStatus,
+  EffortId,
+  ModelOption,
+  PermissionModeId,
+  Provider,
+  ServiceTier,
   ChatView,
   OlderMessages,
   PermissionDecision,
@@ -21,6 +27,16 @@ import * as api from './api'
  * list, one open transcript, and the prompts waiting on an answer — and the
  * reducer for those is the part of `applyEvent` that is small.
  */
+
+/** What the New-chat screen's pickers hold. */
+export interface NewChatOptions {
+  cwd: string
+  provider: Provider
+  model: string
+  effort: EffortId | ''
+  serviceTier: ServiceTier
+  permissionMode: PermissionModeId
+}
 
 export type Connection = 'connecting' | 'live' | 'down' | 'unpaired'
 
@@ -38,6 +54,14 @@ interface RemoteState {
   statuses: Record<string, ChatStatus>
   permissions: Record<string, PermissionRequestPayload[]>
   defaults: AppDefaults | null
+  /** The model picker's inputs — see `RemoteSnapshot.models`. */
+  models: ModelOption[]
+  codexConfigModel: string | null
+  available: Provider[]
+  /** Project marks by root (`/api/icons`); a missing entry draws initials. */
+  icons: Record<string, string | null>
+  /** The sidebar drawer. */
+  drawer: boolean
   open: OpenChat | null
   /** Typed while a turn ran; sent, oldest first, as the chat goes idle. */
   queued: Record<string, { text: string; attachments?: Attachment[] }[]>
@@ -49,8 +73,14 @@ interface RemoteState {
   send(chatId: string, text: string, attachments?: Attachment[]): Promise<void>
   interrupt(chatId: string): Promise<void>
   respond(chatId: string, requestId: string, decision: PermissionDecision): Promise<void>
-  createChat(cwd: string, text: string, attachments?: Attachment[]): Promise<string>
+  setOptions(chatId: string, patch: ChatOptionsPatch): Promise<void>
+  createChat(
+    options: NewChatOptions,
+    text: string,
+    attachments?: Attachment[]
+  ): Promise<string>
   setError(error: string | null): void
+  setDrawer(open: boolean): void
 }
 
 let conn: string | null = null
@@ -66,8 +96,17 @@ export const useRemote = create<RemoteState>((set, get) => {
         statuses: snap.statuses,
         permissions: snap.permissions,
         defaults: snap.defaults,
+        models: snap.models ?? [],
+        codexConfigModel: snap.codexConfigModel ?? null,
+        available: snap.available ?? [],
         connection: 'live'
       })
+      // Marks are a walk of the project folders on the Mac — cached there, but
+      // never worth holding the first screen for.
+      void api
+        .icons()
+        .then((icons) => set({ icons }))
+        .catch(() => {})
       // Whatever streamed while the phone was away is in the database now;
       // refetching is simpler and surer than replaying.
       const open = get().open
@@ -144,6 +183,11 @@ export const useRemote = create<RemoteState>((set, get) => {
     statuses: {},
     permissions: {},
     defaults: null,
+    models: [],
+    codexConfigModel: null,
+    available: [],
+    icons: {},
+    drawer: false,
     open: null,
     queued: {},
     error: null,
@@ -231,18 +275,25 @@ export const useRemote = create<RemoteState>((set, get) => {
         .catch((err) => set({ error: message(err) }))
     },
 
-    async createChat(cwd, text, attachments) {
-      const d = get().defaults
-      // The app's defaults, passed explicitly: `chats:create` remembers what it
-      // is given as the next chat's defaults, so leaving the model out would
-      // reset the Mac's New-chat model to the provider default.
+    async setOptions(chatId, patch) {
+      // Drawn at once; main's `meta` event follows with what actually applied
+      // (a cross-provider model arms `pendingModel` rather than `model`).
+      const { model: _model, modelProvider: _provider, remember: _remember, effort, ...now } = patch
+      const drawn: Partial<ChatMeta> = { ...now, ...(effort !== undefined ? { effort: effort || undefined } : {}) }
+      set((s) => ({ chats: s.chats.map((c) => (c.id === chatId ? { ...c, ...drawn } : c)) }))
+      await api.invoke('chat:set-options', chatId, patch).catch((err) => set({ error: message(err) }))
+    },
+
+    async createChat(options, text, attachments) {
+      // Everything explicit, as the desktop's New-chat screen sends it:
+      // `chats:create` remembers what it is given as the next chat's defaults.
       const meta = await api.invoke<ChatMeta>('chats:create', {
-        cwd,
-        provider: d?.modelProvider,
-        model: d?.model,
-        effort: d?.effort,
-        serviceTier: d?.serviceTier,
-        permissionMode: d?.permissionMode
+        cwd: options.cwd,
+        provider: options.provider,
+        model: options.model,
+        effort: options.effort || undefined,
+        serviceTier: options.serviceTier,
+        permissionMode: options.permissionMode
       })
       set((s) => ({ chats: s.chats.some((c) => c.id === meta.id) ? s.chats : [...s.chats, meta] }))
       await get().openChat(meta.id)
@@ -252,6 +303,10 @@ export const useRemote = create<RemoteState>((set, get) => {
 
     setError(error) {
       set({ error })
+    },
+
+    setDrawer(drawer) {
+      set({ drawer })
     }
   }
 })
@@ -334,8 +389,13 @@ export function reduce(s: RemoteState, ev: ChatEvent): Partial<RemoteState> {
             }
           }
         : {}
-    case 'meta':
-      return { chats: s.chats.map((c) => (c.id === ev.chatId ? { ...c, ...ev.patch } : c)) }
+    case 'meta': {
+      // A cleared field crosses the wire as `null` (`wire` in remoteAccess.ts).
+      const patch = Object.fromEntries(
+        Object.entries(ev.patch).map(([k, v]) => [k, v === null ? undefined : v])
+      ) as typeof ev.patch
+      return { chats: s.chats.map((c) => (c.id === ev.chatId ? { ...c, ...patch } : c)) }
+    }
     case 'status':
       return { statuses: { ...s.statuses, [ev.chatId]: ev.status } }
     case 'permission-request':
