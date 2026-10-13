@@ -80,13 +80,18 @@ export function OptionChips({
   )
 }
 
-/** The chip's word for each mode; the sheet carries the full names. */
+/**
+ * The chip's word for each mode; the sheet carries the full names. One word
+ * each, because the footer also holds the model chip, the context ring and
+ * send, and at a phone's width "Full access" was the one that got cut off. The
+ * mode's icon and tint carry the rest.
+ */
 const SHORT_MODE: Partial<Record<PermissionModeId, string>> = {
   default: 'Ask',
-  acceptEdits: 'Accept edits',
+  acceptEdits: 'Edits',
   plan: 'Plan',
   auto: 'Auto',
-  bypassPermissions: 'Full access'
+  bypassPermissions: 'Full'
 }
 
 function Chip({

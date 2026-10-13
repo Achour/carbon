@@ -1,32 +1,81 @@
 import * as React from 'react'
 import { ArrowUp, Paperclip, Square, X } from 'lucide-react'
 import type { Attachment } from '@shared/types'
+import { PROVIDER_SHORT_LABELS, type Provider } from '@shared/types'
 import { cn } from '@/lib/utils'
+import { ContextDetail } from '@/components/ContextDetail'
 import { useRemote } from './state'
+import { Sheet } from './Sheet'
 
 /** Longest side of an attached photo. A phone camera's 12 MP is wasted on a model. */
 const MAX_SIDE = 2000
+
+/** What the model accepts as-is, for the fallback that sends the file untouched. */
+const SENDABLE = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp'])
+/** The API's per-image cap is 5 MB of base64, which is ~3.75 MB of bytes. */
+const MAX_RAW_BYTES = 3_700_000
+
+/**
+ * Decode through an `<img>`, not `createImageBitmap`. The bitmap is a
+ * full-resolution decode, and iOS Safari refuses one the size of a recent
+ * iPhone photo (48 MP is ~190 MB of pixels) — which failed every pick on the
+ * phone. An image element is what Safari has always decoded large photos for.
+ */
+async function decode(file: File): Promise<{ source: CanvasImageSource; width: number; height: number; done(): void }> {
+  const url = URL.createObjectURL(file)
+  try {
+    const img = new Image()
+    img.src = url
+    await img.decode()
+    return { source: img, width: img.naturalWidth, height: img.naturalHeight, done: () => URL.revokeObjectURL(url) }
+  } catch {
+    URL.revokeObjectURL(url)
+    const bitmap = await createImageBitmap(file)
+    return { source: bitmap, width: bitmap.width, height: bitmap.height, done: () => bitmap.close() }
+  }
+}
+
+function base64Of(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result).replace(/^data:[^;]*;base64,/, ''))
+    reader.onerror = () => reject(reader.error)
+    reader.readAsDataURL(file)
+  })
+}
 
 /**
  * Re-encode a picked photo as a JPEG no larger than `MAX_SIDE`. iOS hands the
  * page a full-resolution image (HEIC already converted), and sending that as
  * base64 over a phone connection is several megabytes per photo for no gain.
+ * A photo that cannot be decoded here is sent as it is, when the model can
+ * read its type and it is small enough.
  */
 async function photoAttachment(file: File): Promise<Attachment> {
-  const bitmap = await createImageBitmap(file)
-  const scale = Math.min(1, MAX_SIDE / Math.max(bitmap.width, bitmap.height))
-  const canvas = document.createElement('canvas')
-  canvas.width = Math.round(bitmap.width * scale)
-  canvas.height = Math.round(bitmap.height * scale)
-  canvas.getContext('2d')!.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
-  bitmap.close()
-  const dataUrl = canvas.toDataURL('image/jpeg', 0.85)
-  return {
-    id: crypto.randomUUID(),
-    kind: 'image',
-    name: `${file.name.replace(/\.\w+$/, '') || 'photo'}.jpg`,
-    mediaType: 'image/jpeg',
-    data: dataUrl.replace(/^data:[^;]*;base64,/, '')
+  const base = file.name.replace(/\.\w+$/, '') || 'photo'
+  try {
+    const image = await decode(file)
+    try {
+      const scale = Math.min(1, MAX_SIDE / Math.max(image.width, image.height))
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.max(1, Math.round(image.width * scale))
+      canvas.height = Math.max(1, Math.round(image.height * scale))
+      canvas.getContext('2d')!.drawImage(image.source, 0, 0, canvas.width, canvas.height)
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.85)
+      if (!dataUrl.startsWith('data:image/jpeg')) throw new Error('Could not encode the photo.')
+      return {
+        id: crypto.randomUUID(),
+        kind: 'image',
+        name: `${base}.jpg`,
+        mediaType: 'image/jpeg',
+        data: dataUrl.replace(/^data:[^;]*;base64,/, '')
+      }
+    } finally {
+      image.done()
+    }
+  } catch (err) {
+    if (!SENDABLE.has(file.type) || file.size > MAX_RAW_BYTES) throw err
+    return { id: crypto.randomUUID(), kind: 'image', name: file.name || base, mediaType: file.type, data: await base64Of(file) }
   }
 }
 
@@ -44,6 +93,7 @@ export function Composer({
   tools,
   above,
   autoFocus,
+  context,
   onSubmit
 }: {
   chatId?: string
@@ -55,6 +105,8 @@ export function Composer({
   /** A line above the card — a pending model switch, the project chip. */
   above?: React.ReactNode
   autoFocus?: boolean
+  /** The chat's context window, drawn as the desktop composer's ring. */
+  context?: { used: number; window: number; provider: Provider; chatId: string }
   /** Replaces the default send — the new-chat screen creates the chat first. */
   onSubmit?: (text: string, attachments: Attachment[]) => Promise<void>
 }): React.JSX.Element {
@@ -151,10 +203,13 @@ export function Composer({
               e.target.value = ''
               void Promise.all(files.map(photoAttachment))
                 .then((list) => setAttachments((prev) => [...prev, ...list]))
-                .catch(() => setError("Couldn't read that photo."))
+                .catch((err) =>
+                  setError(`Couldn't read that photo${err instanceof Error && err.message ? `: ${err.message}` : '.'}`)
+                )
             }}
           />
           {tools ?? <div className="flex-1" />}
+          {context && context.used > 0 && <ContextRing {...context} />}
           {stop ? (
             <button
               type="button"
@@ -181,5 +236,59 @@ export function Composer({
         </div>
       </div>
     </div>
+  )
+}
+
+/**
+ * The desktop composer's context ring, at a thumb's size. A tap opens the same
+ * breakdown the desktop's popover shows (`ContextDetail`), in a sheet.
+ */
+function ContextRing({
+  used,
+  window: win,
+  provider,
+  chatId
+}: {
+  used: number
+  window: number
+  provider: Provider
+  chatId: string
+}): React.JSX.Element {
+  const [open, setOpen] = React.useState(false)
+  const pct = Math.min(1, used / win)
+  const r = 6
+  const c = 2 * Math.PI * r
+  return (
+    <>
+      <button
+        type="button"
+        aria-label="Context window usage"
+        onClick={() => setOpen(true)}
+        className={cn(
+          'flex h-8 shrink-0 items-center gap-1 rounded-full px-1.5 active:bg-accent',
+          pct > 0.9 ? 'text-destructive' : pct > 0.7 ? 'text-amber-500' : 'text-muted-foreground'
+        )}
+      >
+        <svg width="16" height="16" viewBox="0 0 16 16" className="-rotate-90">
+          <circle cx="8" cy="8" r={r} fill="none" strokeWidth="2.5" className="stroke-border" />
+          <circle
+            cx="8"
+            cy="8"
+            r={r}
+            fill="none"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            stroke="currentColor"
+            strokeDasharray={`${c * pct} ${c}`}
+          />
+        </svg>
+        <span className="text-[12px] tabular-nums">{Math.round(pct * 100)}%</span>
+      </button>
+      <Sheet open={open} onClose={() => setOpen(false)}>
+        <div className="px-5 pt-2 pb-4">
+          <ContextDetail used={used} window={win} name={PROVIDER_SHORT_LABELS[provider]} chatId={chatId} />
+        </div>
+      </Sheet>
+    </>
   )
 }

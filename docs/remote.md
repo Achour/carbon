@@ -163,6 +163,16 @@ the window open. The phone is one more window onto them.
   undone model switch is `pendingModel: undefined`). The key vanishes in
   `JSON.stringify`, so the phone kept drawing the switch. `wire()` sends those
   as `null`, and the phone's reducer reads them as cleared.
+- **The composer is the phone's own, and carries what the desktop's does.**
+  The context ring reads the same `contextTokens` / `contextWindow` off the
+  chat and opens the desktop's `ContextDetail` in a sheet, fed by the
+  `context-usage` event the phone now keeps for its open chat. The permission
+  chip says one word ("Full", "Edits"), because at a phone's width the model
+  chip, the ring and send leave no room for "Full access". A photo is decoded
+  through an `<img>`, not `createImageBitmap`: the bitmap is a full-resolution
+  decode, and iOS Safari refuses one the size of a 48 MP photo, which failed
+  every pick. A photo that still cannot be decoded is sent untouched when the
+  model can read its type and it fits the API's size cap.
 - **A message typed during a turn is queued on the phone**, and sent as that
   chat goes idle, the way the desktop composer queues. Sending straight into a
   live turn means something different on each provider.

@@ -172,6 +172,16 @@ export function ChatScreen({ chatId }: { chatId: string }): React.JSX.Element {
       </Sheet>
       <Composer
         chatId={chatId}
+        context={
+          chat?.contextTokens
+            ? {
+                used: chat.contextTokens,
+                window: chat.contextWindow ?? 200_000,
+                provider: chat.provider,
+                chatId
+              }
+            : undefined
+        }
         busy={busy}
         queued={queued}
         above={chat?.pendingModel !== undefined && chat.pendingProvider ? <PendingSwitch chat={chat} /> : null}

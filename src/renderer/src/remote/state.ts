@@ -8,6 +8,7 @@ import type {
   ChatMeta,
   ChatOptionsPatch,
   ChatStatus,
+  ContextUsage,
   EffortId,
   ModelOption,
   PermissionModeId,
@@ -45,6 +46,8 @@ export interface OpenChat {
   messages: ChatMessage[]
   hiddenBefore: number
   loading: boolean
+  /** The context ring's breakdown; it only ever arrives as an event. */
+  contextUsage?: ContextUsage
 }
 
 interface RemoteState {
@@ -125,7 +128,13 @@ export const useRemote = create<RemoteState>((set, get) => {
       return
     }
     set((s) => ({
-      open: { id, messages: view.chat.messages, hiddenBefore: view.hiddenBefore, loading: false },
+      open: {
+        id,
+        messages: view.chat.messages,
+        hiddenBefore: view.hiddenBefore,
+        loading: false,
+        contextUsage: s.open?.id === id ? s.open.contextUsage : undefined
+      },
       chats: s.chats.some((c) => c.id === id)
         ? s.chats.map((c) => (c.id === id ? stripMessages(view.chat) : c))
         : [...s.chats, stripMessages(view.chat)]
@@ -380,6 +389,8 @@ export function reduce(s: RemoteState, ev: ChatEvent): Partial<RemoteState> {
           )
         }))
       )
+    case 'context-usage':
+      return open ? { open: { ...open, contextUsage: ev.usage } } : {}
     case 'truncate':
       return open
         ? {

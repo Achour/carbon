@@ -62,6 +62,7 @@ export function installDesktopBridge(): void {
       activeId: s.open?.id ?? null,
       messages: s.open?.messages ?? [],
       hiddenBefore: s.open?.hiddenBefore ?? 0,
+      contextUsage: s.open?.contextUsage ?? null,
       resolvedAppearance: dark.matches ? 'dark' : 'light'
     })
   }
