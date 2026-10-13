@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- viewport-fit=cover so the safe-area insets are ours to pad, under the
+         notch and the home indicator; no zoom, so focusing the composer does
+         not leave the page scaled. -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover"
+    />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Carbon" />
+    <meta name="theme-color" content="#111111" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/remote-icon.png" />
+    <link rel="icon" href="/remote-icon.png" />
+    <title>Carbon</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/remote/main.tsx"></script>
+  </body>
+</html>

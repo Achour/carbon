@@ -20,6 +20,7 @@ import {
   Plus,
   RefreshCw,
   Rows3,
+  Smartphone,
   Sparkles,
   Sun,
   Terminal,
@@ -56,6 +57,7 @@ import { Input } from '@/components/ui/input'
 import { ProviderAvatar, ProviderMark } from '@/components/ui/provider-mark'
 import { SwitchPill } from '@/components/ui/switch-pill'
 import { ArchiveSection } from '@/components/SettingsArchive'
+import { RemoteSection } from '@/components/SettingsRemote'
 import { ProjectsSection } from '@/components/SettingsProjects'
 import { WithTooltip } from '@/components/ui/tooltip'
 import { MiniWindow } from '@/components/ThemePreview'
@@ -97,6 +99,7 @@ const SECTIONS: { id: SettingsSectionId; label: string; icon: LucideIcon }[] = [
   { id: 'providers', label: 'Providers', icon: Terminal },
   { id: 'models', label: 'Models', icon: Sparkles },
   { id: 'notifications', label: 'Notifications', icon: Bell },
+  { id: 'remote', label: 'Remote access', icon: Smartphone },
   { id: 'about', label: 'About', icon: Info }
 ]
 
@@ -1635,6 +1638,17 @@ export function Settings(): React.JSX.Element {
                   row of four facts, not a collection with a detail pane like a
                   project. See `SettingsArchive`. */}
               {section === 'archive' && <ArchiveSection />}
+
+              {section === 'remote' && (
+                <section>
+                  <SectionHeader
+                    icon={Smartphone}
+                    title="Remote access"
+                    description="Follow and steer your chats from your phone while this Mac does the work."
+                  />
+                  <RemoteSection />
+                </section>
+              )}
 
 
               {section === 'notifications' && (

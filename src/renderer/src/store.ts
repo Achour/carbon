@@ -156,6 +156,7 @@ export type SettingsSectionId =
   | 'providers'
   | 'models'
   | 'notifications'
+  | 'remote'
   | 'about'
 
 export interface QueuedMessage {

@@ -1349,6 +1349,53 @@ export type ChatEvent =
   // (`agents_cancel`). Closed, never deleted: its card in the parent reopens it.
   | { type: 'chat-close'; chatId: string }
 
+// ---------- Remote access ----------
+
+/**
+ * Using Carbon from a phone. The Mac app serves a phone-sized web client of its
+ * own (`remote.html`) and relays a fixed set of `Api` channels to it over HTTP,
+ * with `ChatEvent`s pushed as server-sent events — so agents still run here,
+ * on the user's installed CLIs, and the phone is another window onto them.
+ * Reachable over Tailscale (and the local network only on opt-in); a phone is
+ * admitted by a one-time pairing code. See `docs/remote.md`.
+ */
+export interface RemoteDevice {
+  id: string
+  name: string
+  pairedAt: number
+  lastSeenAt?: number
+}
+
+export interface RemoteAccessState {
+  enabled: boolean
+  /** Also accept phones on the local network, not just over Tailscale. */
+  allowLan: boolean
+  port: number
+  /** True once the server is actually listening. */
+  running: boolean
+  /** Why it is not, when enabling failed (a port in use, say). */
+  error?: string
+  /** Where the phone should go, Tailscale first. Empty when nothing qualifies. */
+  urls: { url: string; kind: 'tailscale' | 'lan' }[]
+  devices: RemoteDevice[]
+  /** A live pairing code, until it is used or expires. */
+  pairing?: { code: string; expiresAt: number; links: string[] }
+}
+
+export interface RemoteAccessPatch {
+  enabled?: boolean
+  allowLan?: boolean
+}
+
+/** What a phone gets on connect: enough to draw the chat list and any prompt. */
+export interface RemoteSnapshot {
+  hostname: string
+  chats: ChatMeta[]
+  statuses: Record<string, ChatStatus>
+  permissions: Record<string, PermissionRequestPayload[]>
+  defaults: AppDefaults
+}
+
 // ---------- Canvas ----------
 
 /**
@@ -2897,6 +2944,15 @@ export interface Api {
    * Never rejects — offline and up-to-date are the same answer to the UI.
    */
   checkForUpdate(): Promise<UpdateInfo | null>
+  /** Settings → Remote access: the phone server's switch, address and paired devices. */
+  remoteState(): Promise<RemoteAccessState>
+  remoteConfigure(patch: RemoteAccessPatch): Promise<RemoteAccessState>
+  /** A fresh one-time pairing code (and the link that carries it). */
+  remotePair(): Promise<RemoteAccessState>
+  /** Unpair one device, or every device when no id is given. */
+  remoteForget(deviceId?: string): Promise<RemoteAccessState>
+  /** Main's remote state moved (a phone paired, the server stopped). */
+  onRemoteChanged(cb: () => void): () => void
   /** The running build's version, for the settings/about line. */
   readonly appVersion: string
   /**

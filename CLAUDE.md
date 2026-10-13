@@ -427,6 +427,11 @@ it guards**, and put new reasoning in that file rather than back in this one.
   Carbon mapping (`shared/themeImport.ts`), and why an imported theme pins its
   appearance (`lib/themes.ts`, `ThemeImportDialog`).
 - **`docs/sounds.md`** — the three generated alert cues (`lib/sounds.ts`).
+- **`docs/remote.md`** — Carbon from a phone: the server in main that relays
+  an allowlist of IPC channels and pushes `ChatEvent`s as server-sent events
+  (`main/remoteAccess.ts`, `main/remoteNet.ts`), pairing and who may connect,
+  and the phone client built beside the renderer (`remote.html`,
+  `src/renderer/src/remote/`, `SettingsRemote.tsx`).
 - **`docs/antigravity.md`** — the Antigravity provider: why its ACP server and
   not `agy`, the install exception, its own Google sign-in, and the wire shapes
   read off the server's source.

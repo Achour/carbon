@@ -27,6 +27,18 @@ export default defineConfig({
         '@': resolve('src/renderer/src'),
         '@shared': resolve('src/shared')
       }
+    },
+    build: {
+      rollupOptions: {
+        // `remote` is the phone client main serves for Remote access
+        // (`main/remoteAccess.ts`). A second page of the same build rather than
+        // a separate one, so it shares the renderer's aliases and dependencies
+        // and ships inside out/renderer with no extra packaging step.
+        input: {
+          index: resolve('src/renderer/index.html'),
+          remote: resolve('src/renderer/remote.html')
+        }
+      }
     }
   }
 })
