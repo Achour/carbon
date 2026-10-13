@@ -18,6 +18,7 @@ import {
 import type { AssistantMessage, EventMessage, ToolPart, UserMessage } from '@shared/types'
 import { CHAT_BLEED, CHAT_BLEED_PAD, CHAT_FRAME } from '@/lib/chatColumn'
 import { groupToolRuns, type PartRun } from '@/lib/toolRuns'
+import { copyText } from '@/lib/insecureContext'
 import { cn } from '@/lib/utils'
 import { formatCost } from '@/lib/format'
 import { DISCLOSURE_PANEL } from '@/lib/disclosure'
@@ -309,7 +310,7 @@ export const UserBubble = React.memo(function UserBubble({
   }
 
   const copy = (): void => {
-    void navigator.clipboard.writeText(message.text)
+    copyText(message.text)
     setCopied(true)
     setTimeout(() => setCopied(false), 1500)
   }
@@ -560,7 +561,7 @@ export const AssistantBlock = React.memo(function AssistantBlock({
 function CopyAnswer({ text }: { text: string }): React.JSX.Element {
   const [copied, setCopied] = React.useState(false)
   const copy = (): void => {
-    void navigator.clipboard.writeText(text)
+    copyText(text)
     setCopied(true)
     setTimeout(() => setCopied(false), 1500)
   }

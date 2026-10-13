@@ -2,6 +2,7 @@ import * as React from 'react'
 import { ArrowUp, Paperclip, Square, X } from 'lucide-react'
 import type { Attachment } from '@shared/types'
 import { PROVIDER_SHORT_LABELS, type Provider } from '@shared/types'
+import { randomId } from '@/lib/insecureContext'
 import { cn } from '@/lib/utils'
 import { ContextDetail } from '@/components/ContextDetail'
 import { useRemote } from './state'
@@ -64,7 +65,7 @@ async function photoAttachment(file: File): Promise<Attachment> {
       const dataUrl = canvas.toDataURL('image/jpeg', 0.85)
       if (!dataUrl.startsWith('data:image/jpeg')) throw new Error('Could not encode the photo.')
       return {
-        id: crypto.randomUUID(),
+        id: randomId(),
         kind: 'image',
         name: `${base}.jpg`,
         mediaType: 'image/jpeg',
@@ -75,7 +76,7 @@ async function photoAttachment(file: File): Promise<Attachment> {
     }
   } catch (err) {
     if (!SENDABLE.has(file.type) || file.size > MAX_RAW_BYTES) throw err
-    return { id: crypto.randomUUID(), kind: 'image', name: file.name || base, mediaType: file.type, data: await base64Of(file) }
+    return { id: randomId(), kind: 'image', name: file.name || base, mediaType: file.type, data: await base64Of(file) }
   }
 }
 

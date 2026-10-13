@@ -5,6 +5,7 @@ import remarkGfm from 'remark-gfm'
 import remarkBreaks from 'remark-breaks'
 import rehypeHighlight from 'rehype-highlight'
 import { Check, Code2, Copy, Maximize2, RotateCcw, WrapText, X, ZoomIn, ZoomOut } from 'lucide-react'
+import { copyText } from '@/lib/insecureContext'
 import { cn } from '@/lib/utils'
 import { classifyInk, inkDark, inkKnown } from '@/lib/faviconInk'
 import { WithTooltip } from '@/components/ui/tooltip'
@@ -250,7 +251,7 @@ function MermaidBlock({ code }: { code: string }): React.JSX.Element {
   }, [code, isDark, id])
 
   const copy = (): void => {
-    void navigator.clipboard.writeText(code)
+    copyText(code)
     setCopied(true)
     setTimeout(() => setCopied(false), 1500)
   }
@@ -331,7 +332,7 @@ function PreBlock({
 
   const copy = (): void => {
     const text = ref.current?.textContent ?? ''
-    void navigator.clipboard.writeText(text)
+    copyText(text)
     setCopied(true)
     setTimeout(() => setCopied(false), 1500)
   }

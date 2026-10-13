@@ -173,6 +173,15 @@ the window open. The phone is one more window onto them.
   decode, and iOS Safari refuses one the size of a 48 MP photo, which failed
   every pick. A photo that still cannot be decoded is sent untouched when the
   model can read its type and it fits the API's size cap.
+- **The page is not a secure context, and two APIs are missing there.** The
+  phone reaches the Mac at `http://<name>.local:7391`, which is neither HTTPS
+  nor localhost, so Safari leaves out `crypto.randomUUID` and
+  `navigator.clipboard`. The first made every photo pick throw before it was
+  sent; the second breaks every copy button the transcript borrows from the
+  desktop. `lib/insecureContext.ts` (`randomId`, `copyText`) is the fallback
+  for both, and anything new the phone runs has to avoid secure-only APIs or
+  go through it. Testing in a browser at `127.0.0.1` cannot catch this:
+  localhost counts as secure.
 - **A message typed during a turn is queued on the phone**, and sent as that
   chat goes idle, the way the desktop composer queues. Sending straight into a
   live turn means something different on each provider.
