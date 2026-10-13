@@ -19,11 +19,14 @@ the window open. The phone is one more window onto them.
   arguments exactly as the preload bridge would. A second implementation for
   the phone would drift the first time a handler changed. Only channels in
   `REMOTE_CHANNELS` are reachable, and that list is the conversation and nothing
-  else: no `fs:*`, no terminal, no git writes, no settings, no deleting. The one
-  exception is `chat:set-options`, the composer's own pickers. Like on the
-  desktop, a pick there also becomes the Mac's New-chat default
-  (`rememberOptions`), unless it is an effort or speed that a model pick only
-  replays (`remember: false`). A lost
+  else: no `fs:*`, no terminal, no git writes, no settings, no deleting.
+  `chat:set-options` is the composer's own pickers. Like on the desktop, a pick
+  there also becomes the Mac's New-chat default (`rememberOptions`), unless it
+  is an effort or speed that a model pick only replays (`remember: false`).
+  `chat:edit-message` (edit and resend) is a send; `chat:rewind-files` is a
+  turn's Undo, which restores only what that turn's own checkpoint recorded;
+  `canvas:list` / `canvas:get` read documents Carbon keeps in its own database,
+  not the disk. None gives the phone more than the agent it steers. A lost
   phone can still steer the agents, which is the feature, but it is not a more
   direct remote shell than that.
 - **Events are the same `ChatEvent`s, as server-sent events.** `emit` feeds
@@ -112,19 +115,33 @@ the window open. The phone is one more window onto them.
   written straight to the elements, because a React render per touch-move would
   re-render the transcript every frame. `#/` is the desktop's home screen (a
   greeting, "What are we building?", the project chip and the composer).
-- **The client is deliberately not the desktop store, but it is the desktop's
-  look.** `remote/state.ts` is the slice of `applyEvent` a phone needs (chat
-  list, one open transcript, open prompts), and `remote/Markdown.tsx` is
-  GFM with highlighting. The desktop's `Markdown` and store reach for
-  `window.api` everywhere (file links, images off disk, the editor), which a
-  browser does not have, and importing them would pull those five thousand
-  lines into the bundle to do things a phone cannot. What the phone *does*
-  import is everything pure: `remote.css` pulls in the desktop's `index.css`,
-  with its tokens in both appearances, `.markdown` and syntax colours.
-  `ProviderMark`, `ProjectAvatar`, `summarizeActivity` and `humanizeShellCommand`
-  are imported too, so a chat, a project and a run of tool calls look the same on
-  both screens. The prompt decisions it sends are the desktop's own
-  (`PromptDock`, `PlanPanel`), so no provider can tell which screen answered.
+- **The transcript is the desktop's, not a copy of it.** The first phone client
+  drew messages with its own small renderers (plain GFM, its own tool rows), on
+  the argument that the desktop's components reach for `window.api` and the
+  desktop store. It was wrong in the way copies always are: Mermaid, charts and
+  diagrams, diffs, sub-agents, the checklist, a turn's changes and the turn
+  fold were all missing, and every block the desktop gained would have been
+  missing too until someone ported it. So `ChatView`'s transcript moved into
+  `components/Transcript.tsx` (`renderMessages`, `useHistoryNodes` and the live
+  slot, behind `useTranscript`), and both screens render it. The phone supplies
+  what those components read, narrowly (`remote/desktop.ts`): a `window.api`
+  that routes the few calls the transcript makes to allowlisted channels and
+  refuses the rest, and a mirror of its own state into the desktop store's
+  `chats`, `statuses`, `permissions`, active chat and appearance. The desktop
+  store is created but never initialized, so none of its loaders run.
+  `remote/state.ts` is still the phone's own store (chat list, one open
+  transcript, open prompts), because the shell around the transcript is the
+  phone's: its sidebar, header, composer and prompt cards.
+- **What opens a panel on the desktop opens a layer on the phone.**
+  `TranscriptSurfaceContext` (`components/messages/surface.ts`) tells the
+  components where they are drawn. With `panels: false` they leave out controls
+  whose only job is to open the editor, the diff view or the preview (Open
+  diff, a file row, a path link), and route the rest through the surface: a
+  delegate opens as the chat on screen, a sub-agent's transcript and a canvas
+  open full screen (`remote/Viewers.tsx`). A canvas is framed as `CanvasDoc`
+  frames it, `allow-scripts` without `allow-same-origin`, which here also keeps
+  it away from the pairing cookie. Mermaid and images open in the desktop's own
+  lightbox.
 - **The pickers are the desktop composer's, computed the same way.**
   `/api/snapshot` carries the catalog's inputs: the live model list, the Codex
   config model and the installed providers. `remote/options.ts` runs them
@@ -149,9 +166,13 @@ the window open. The phone is one more window onto them.
 - **A message typed during a turn is queued on the phone**, and sent as that
   chat goes idle, the way the desktop composer queues. Sending straight into a
   live turn means something different on each provider.
-- **A chat created from the phone is announced to the window** with the
-  `chat-added` event a delegate uses, so the desktop sidebar gets its row
-  without a relaunch. The New-chat screen seeds its pickers from the Mac's
+- **A new chat is announced to the other screen, in both directions.** One
+  made on the phone reaches the window as the `chat-added` event a delegate
+  uses; one made on the desktop reaches phones the same way, from
+  `chats:create` itself (the window adds its own from the return value and does
+  not dedup, so it is not sent there). Both insert the row by `sortKey`: the
+  window used to append it, which put a phone's new chat under its project's
+  "Show N more", where it looked as if it had never synced. The New-chat screen seeds its pickers from the Mac's
   defaults, exactly as the desktop's does, and passes all of them to
   `chats:create`. Omitting the model would make `rememberOptions` record an
   empty one, quietly resetting the Mac's New-chat model.
@@ -162,9 +183,9 @@ turning this on may raise macOS's "accept incoming connections?" prompt, and an
 ad-hoc-signed build can raise it again after an update, because the signature
 it is keyed on changes. Two Carbons sharing `userData` (dev and packaged) share
 the setting, and the second to start reports the port as in use. Terminal chats,
-the file editor, diffs, the preview and canvases are not on the phone. Images
-the agent references by local path render as a placeholder, since the phone
-cannot read the Mac's disk.
+the file editor, diffs and the preview are not on the phone. Images the agent
+references by local path do not load, and path links read as plain text, since
+the phone cannot read the Mac's disk.
 
 **Verification.** `test/remoteNet.test.ts` pins the address and credential
 logic. The rebuilt client was driven in Carbon's own preview at iPhone 15
@@ -176,4 +197,9 @@ their cards. The server and client were driven end to end in headless Chromium a
 iPhone size, against the real `RemoteAccess` and a simulated agent. That run
 covered pairing by link, the device record, the allowlist refusing `fs:read`, a
 streamed turn with a tool approval, a plan review that predates the connection,
-creating a chat, a denial and unpairing.
+creating a chat, a denial and unpairing. The shared transcript was then driven
+the same way, against a copy of a real database on a second port: an existing
+chat's Mermaid block (and its lightbox) and inline diagram, a canvas, a
+sub-agent's transcript, a live Haiku turn with a Bash approval and a Mermaid
+reply, and its Undo reverting the file on disk. The desktop window rendered
+the same chat, and showed a phone-created chat at the top of its project.

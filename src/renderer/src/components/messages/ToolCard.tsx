@@ -54,6 +54,7 @@ import { lineDiff, type DiffLine } from '@/lib/lineDiff'
 import { parseDiff } from '@/lib/diffRows'
 import { Markdown } from '@/components/Markdown'
 import { useApp } from '@/store'
+import { useTranscriptSurface, type TranscriptSurface } from './surface'
 import { DelegateCard } from './DelegateCard'
 import { InlineVisual, isInlineVisual } from './InlineVisual'
 import { AgentGroupCard, NativeAgentRow } from './AgentRows'
@@ -624,9 +625,11 @@ function RowAction({
  * Open a canvas named by a write call. `canvasRef.ts` owns the recognizing and
  * the resolving — it is pure, and it encodes a Grok quirk worth a test.
  */
-function openWrittenCanvas(written: CanvasRef): void {
+function openWrittenCanvas(written: CanvasRef, surface: TranscriptSurface): void {
   const id = resolveCanvasId(written, useApp.getState().canvases)
-  if (id) void useApp.getState().openCanvas(id)
+  if (!id) return
+  if (surface.openCanvas) surface.openCanvas(id)
+  else void useApp.getState().openCanvas(id)
 }
 
 /**
@@ -649,12 +652,13 @@ function CanvasLink({ canvas }: { canvas: CanvasRef }): React.JSX.Element {
   // it, keyed by exactly the id the call carries. A primitive is selected
   // rather than the row, so the subscription settles on a string compare.
   const name = useApp((s) => resolveCanvasTitle(canvas, s.canvases))
+  const surface = useTranscriptSurface()
   return (
     <RowAction
       title="Open this canvas"
       ariaLabel={`Open canvas ${name ?? ''}`}
       className="flex min-w-0 shrink cursor-pointer items-center gap-1 text-[13px] text-foreground/80 underline decoration-foreground/25 underline-offset-2 hover:text-foreground hover:decoration-foreground"
-      onActivate={() => openWrittenCanvas(canvas)}
+      onActivate={() => openWrittenCanvas(canvas, surface)}
     >
       {/* No pen of its own any more. It carried one while the row had no mark at
           all; now the row leads with the canvas pen and the group row's sentence
@@ -665,10 +669,15 @@ function CanvasLink({ canvas }: { canvas: CanvasRef }): React.JSX.Element {
   )
 }
 
-function openTarget(open: NonNullable<ToolMeta['open']>, cwd: string): void {
+function openTarget(
+  open: NonNullable<ToolMeta['open']>,
+  cwd: string,
+  surface: TranscriptSurface
+): void {
   if (open.kind === 'canvas') {
     openWrittenCanvas(
-      open.target.startsWith('title:') ? { title: open.target.slice(6) } : { id: open.target }
+      open.target.startsWith('title:') ? { title: open.target.slice(6) } : { id: open.target },
+      surface
     )
     return
   }
@@ -1149,6 +1158,7 @@ export const ToolCard = React.memo(function ToolCard({
   showOutputs?: boolean
 }): React.JSX.Element {
   const meta = toolMeta(part, cwd)
+  const surface = useTranscriptSurface()
   // A canvas row's summary IS its way in, so it is drawn by `CanvasLink` rather
   // than by the generic summary slot — the same component the group row uses.
   const written = canvasWrite(part)
@@ -1236,11 +1246,11 @@ export const ToolCard = React.memo(function ToolCard({
             ) : (
               meta.summary && (
                 <span className="min-w-0 truncate font-mono text-xs text-muted-foreground/60">
-                  {meta.open ? (
+                  {meta.open && (meta.open.kind === 'canvas' || surface.panels) ? (
                     <RowAction
                       title={`${meta.open.kind === 'preview' ? 'Preview' : 'Open'} ${meta.open.target}`}
                       className="cursor-pointer underline-offset-2 hover:text-foreground hover:underline"
-                      onActivate={() => openTarget(meta.open!, cwd)}
+                      onActivate={() => openTarget(meta.open!, cwd, surface)}
                     >
                       {meta.summary}
                     </RowAction>

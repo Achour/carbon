@@ -99,11 +99,16 @@ function Shell({ activeId, children }: { activeId: string | null; children: Reac
 
   const paint = React.useCallback((offset: number, animate: boolean): void => {
     const w = Math.min(window.innerWidth * 0.86, 340)
-    const t = animate ? `transform 380ms ${EASE}, opacity 380ms ${EASE}` : 'none'
+    const t = animate
+      ? `transform 380ms ${EASE}, opacity 380ms ${EASE}, box-shadow 380ms ${EASE}`
+      : 'none'
     const p = Math.max(0, Math.min(1, offset / w))
     if (drawer.current) {
       drawer.current.style.transition = t
       drawer.current.style.transform = `translateX(${offset - w}px)`
+      // Faded with the drawer: at full strength it reaches 40px past the
+      // drawer's edge, which is onto the page while the drawer is closed.
+      drawer.current.style.boxShadow = `8px 0 32px rgb(0 0 0 / ${0.18 * p})`
     }
     if (main.current) {
       main.current.style.transition = t
@@ -190,7 +195,7 @@ function Shell({ activeId, children }: { activeId: string | null; children: Reac
       />
       <div
         ref={drawer}
-        className="absolute inset-y-0 left-0 z-40 w-[min(86vw,340px)] shadow-[8px_0_32px_rgb(0_0_0/0.18)] will-change-transform"
+        className="absolute inset-y-0 left-0 z-40 w-[min(86vw,340px)] will-change-transform"
         style={{ transform: 'translateX(-100%)' }}
       >
         <Sidebar activeId={activeId} onNavigate={() => setDrawer(false)} />

@@ -85,7 +85,17 @@ export const REMOTE_CHANNELS = new Set([
   // Model, effort, speed and permission mode — the composer's own pickers. A
   // cross-provider model only arms the switch, as on the desktop; it applies
   // at the next send (`applyPendingSwitch`).
-  'chat:set-options'
+  'chat:set-options',
+  // "Edit and resend" on a prompt: the transcript is cut back to it and the
+  // turn runs again — a send, as far as what a phone may do is concerned.
+  'chat:edit-message',
+  // A turn's Undo. It restores only the files that turn's own checkpoint
+  // recorded, which is less than the agent a phone already steers can do.
+  'chat:rewind-files',
+  // Canvases are what an agent wrote for the reader, kept by Carbon rather
+  // than read off disk: reading one is reading the conversation.
+  'canvas:list',
+  'canvas:get'
 ])
 
 /** Per-chat events, sent only to a phone looking at that chat. */

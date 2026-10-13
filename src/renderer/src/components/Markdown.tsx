@@ -10,6 +10,7 @@ import { classifyInk, inkDark, inkKnown } from '@/lib/faviconInk'
 import { WithTooltip } from '@/components/ui/tooltip'
 import { nextReveal, revealLimit } from '@/lib/streamReveal'
 import { useApp } from '@/store'
+import { useTranscriptSurface } from '@/components/messages/surface'
 import { getImageEpoch, readImageOnce, subscribeImageEpoch } from '@/lib/imageCache'
 import {
   HLJS_LANGUAGES,
@@ -797,6 +798,7 @@ const components = {
     // The *URI* that failed to decode, not a flag: a reconciled instance
     // pointing at another site must not stay blank because the last one did.
     const [badFavicon, setBadFavicon] = React.useState<string | null>(null)
+    const { panels } = useTranscriptSurface()
     if (isImage) {
       return (
         <LocalImage
@@ -826,6 +828,9 @@ const components = {
         </a>
       )
     }
+    // A path on the Mac, where nothing can open it (the phone): its words
+    // stay, the link does not — as a URL it would load this page's server.
+    if (!panels && fileLinkPath(h)) return <span {...props}>{children}</span>
     return (
       <a {...props} href={href} target="_blank" rel="noreferrer">
         {/* Nothing at all while it loads, when the site has none, and when the

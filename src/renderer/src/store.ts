@@ -5487,8 +5487,19 @@ export const useApp = create<AppState>((set, get) => ({
         // works. Opening it is the user's call — the pill, or its card in the
         // parent — because a column that appears on its own takes width from
         // the conversation being read, several times over when a turn fans out.
+        //
+        // Placed by `sortKey`, since the array's order is the sidebar's: a
+        // chat a phone created is new, and appended it sank under its
+        // project's "Show N more" where nobody could see it had arrived.
         const meta = ev.meta
-        set((st) => (st.chats.some((c) => c.id === meta.id) ? {} : { chats: [...st.chats, meta] }))
+        set((st) => {
+          if (st.chats.some((c) => c.id === meta.id)) return {}
+          const key = meta.sortKey ?? meta.updatedAt
+          const at = st.chats.findIndex((c) => (c.sortKey ?? c.updatedAt) < key)
+          const chats = st.chats.slice()
+          chats.splice(at === -1 ? chats.length : at, 0, meta)
+          return { chats }
+        })
         break
       }
 

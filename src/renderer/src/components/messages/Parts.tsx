@@ -25,6 +25,7 @@ import { AssistantMarkdown, Markdown, useStreamText } from '@/components/Markdow
 import { Button } from '@/components/ui/button'
 import { WithTooltip } from '@/components/ui/tooltip'
 import { useApp } from '@/store'
+import { useTranscriptSurface } from './surface'
 import {
   FILE_MUTATION_TOOLS,
   isGroupableTool,
@@ -190,7 +191,8 @@ function MessageEditor({
  * were attached to.
  */
 function PromptAttachments({ message }: { message: UserMessage }): React.JSX.Element | null {
-  const openCanvas = useApp((s) => s.openCanvas)
+  const desktopOpenCanvas = useApp((s) => s.openCanvas)
+  const openCanvas = useTranscriptSurface().openCanvas ?? desktopOpenCanvas
   const openLightbox = useApp((s) => s.openLightbox)
   if (!message.attachments || message.attachments.length === 0) return null
   return (

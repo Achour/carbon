@@ -14,6 +14,7 @@ import { ProviderAvatar } from '@/components/ui/provider-mark'
 import { WithTooltip } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { messagesOf, threadFull, useApp } from '@/store'
+import { useTranscriptSurface } from './surface'
 import { DelegateCard, delegateChildId } from './DelegateCard'
 
 /**
@@ -223,7 +224,8 @@ export function NativeAgentRow({ part }: { part: ToolPart }): React.JSX.Element 
       : background
         ? 'Started in the background'
         : `Finished${steps}`
-  const clickable = !!ctx && parentShown && (open || !full)
+  const { openAgent } = useTranscriptSurface()
+  const clickable = !!ctx && parentShown && (open || !full || !!openAgent)
   return (
     <AgentRowShell
       provider={ctx?.provider ?? 'claude'}
@@ -246,7 +248,11 @@ export function NativeAgentRow({ part }: { part: ToolPart }): React.JSX.Element 
       blockedReason={
         parentShown ? 'The thread already shows four chats — close one to open this agent.' : undefined
       }
-      onToggle={() => ctx && toggleAgentColumn(ctx.chatId, part.toolUseId)}
+      onToggle={() => {
+        if (!ctx) return
+        if (openAgent) openAgent(ctx.chatId, part.toolUseId)
+        else toggleAgentColumn(ctx.chatId, part.toolUseId)
+      }}
       data={{ 'data-agent-run': part.toolUseId, 'data-agent-open': open ? 'true' : undefined }}
     />
   )

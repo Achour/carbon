@@ -8,6 +8,7 @@ import { changedPathsFromParts, groupChanges, type ChangedFile } from '@/lib/tur
 import { FileIcon } from '@/lib/fileIcon'
 import { DISCLOSURE_PANEL } from '@/lib/disclosure'
 import { useApp } from '@/store'
+import { useTranscriptSurface } from './surface'
 import { LineDeltas } from '@/components/GitPanel'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -40,15 +41,18 @@ function FileRow({
   file: ChangedFile
   dir?: string
   depth: number
-  onOpen: (path: string) => void
+  /** Absent where there is nothing to open a file in (the phone). */
+  onOpen?: (path: string) => void
 }): React.JSX.Element {
   const name = file.path.split('/').pop() ?? file.path
+  const Row = onOpen ? 'button' : 'div'
   return (
-    <button
-      type="button"
-      title={`Open ${file.path}`}
-      onClick={() => onOpen(file.path)}
-      className="group flex w-full items-center gap-1.5 rounded-md py-1 pr-1.5 text-left text-xs transition-colors hover:bg-accent/50"
+    <Row
+      {...(onOpen ? { type: 'button' as const, title: `Open ${file.path}`, onClick: () => onOpen(file.path) } : {})}
+      className={cn(
+        'group flex w-full items-center gap-1.5 rounded-md py-1 pr-1.5 text-left text-xs',
+        onOpen && 'transition-colors hover:bg-accent/50'
+      )}
       style={{ paddingLeft: 6 + depth * 16 }}
     >
       <FileIcon path={file.path} className="size-3.5 shrink-0" />
@@ -56,7 +60,7 @@ function FileRow({
       {dir && <span className="min-w-0 flex-1 truncate text-muted-foreground/70">{dir}</span>}
       {!dir && <span className="flex-1" />}
       <LineDeltas additions={file.additions} deletions={file.deletions} className="text-xs" />
-    </button>
+    </Row>
   )
 }
 
@@ -77,6 +81,7 @@ export const TurnChangesCard = React.memo(function TurnChangesCard({
   const rewindFiles = useApp((state) => state.rewindFiles)
   const openDiff = useApp((state) => state.openDiff)
   const openFile = useApp((state) => state.openFile)
+  const { panels } = useTranscriptSurface()
   const paths = React.useMemo(() => changedPathsFromParts(message.parts, cwd), [message.parts, cwd])
   const files = React.useMemo(
     () => message.fileChanges ?? summarize(paths, git?.changes ?? []),
@@ -196,9 +201,11 @@ export const TurnChangesCard = React.memo(function TurnChangesCard({
                 )}
               </PopoverContent>
             </Popover>
-            <Button size="sm" variant="secondary" onClick={() => void reviewChanges()}>
-              <FileDiff /> Open diff
-            </Button>
+            {panels && (
+              <Button size="sm" variant="secondary" onClick={() => void reviewChanges()}>
+                <FileDiff /> Open diff
+              </Button>
+            )}
           </div>
         )}
       </div>
@@ -214,7 +221,7 @@ export const TurnChangesCard = React.memo(function TurnChangesCard({
                   file={entry.file}
                   dir={cut > 0 ? entry.file.path.slice(0, cut) : undefined}
                   depth={0}
-                  onOpen={openChange}
+                  onOpen={panels ? openChange : undefined}
                 />
               )
             }
@@ -244,12 +251,12 @@ export const TurnChangesCard = React.memo(function TurnChangesCard({
                 </button>
                 {dirOpen &&
                   entry.files.map((file) => (
-                    <FileRow key={file.path} file={file} depth={1} onOpen={openChange} />
+                    <FileRow key={file.path} file={file} depth={1} onOpen={panels ? openChange : undefined} />
                   ))}
               </div>
             )
           })}
-          {files.length > MAX_PREVIEW_FILES && (
+          {panels && files.length > MAX_PREVIEW_FILES && (
             <button
               type="button"
               onClick={() => void reviewChanges()}

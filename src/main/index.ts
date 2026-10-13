@@ -614,6 +614,11 @@ function registerIpc(): void {
       })
     }
     const { messages: _messages, ...meta } = chat
+    // Phones only: the window adds its own chat from this return value and does
+    // not dedup, and a chat a phone created reaches the window through
+    // `onChatCreated`. Without it a phone learned of a desktop chat only at its
+    // next snapshot.
+    remote.observe({ type: 'chat-added', chatId: meta.id, meta })
     return meta
     }
   )

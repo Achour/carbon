@@ -431,7 +431,8 @@ it guards**, and put new reasoning in that file rather than back in this one.
   an allowlist of IPC channels and pushes `ChatEvent`s as server-sent events
   (`main/remoteAccess.ts`, `main/remoteNet.ts`), pairing and who may connect,
   and the phone client built beside the renderer (`remote.html`,
-  `src/renderer/src/remote/`, `SettingsRemote.tsx`).
+  `src/renderer/src/remote/`, `SettingsRemote.tsx`), which draws the desktop's
+  own transcript (`components/Transcript.tsx`, `components/messages/surface.ts`).
 - **`docs/antigravity.md`** — the Antigravity provider: why its ACP server and
   not `agy`, the install exception, its own Google sign-in, and the wire shapes
   read off the server's source.

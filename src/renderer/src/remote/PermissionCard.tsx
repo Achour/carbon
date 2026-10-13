@@ -4,7 +4,7 @@ import type { PermissionDecision, PermissionRequestPayload, Provider } from '@sh
 import { PROVIDER_SHORT_LABELS } from '@shared/types'
 import { cn } from '@/lib/utils'
 import { useRemote } from './state'
-import { RemoteMarkdown } from './Markdown'
+import { Markdown } from '@/components/Markdown'
 import { toolLine } from './format'
 
 interface UserQuestion {
@@ -173,7 +173,7 @@ function PlanCard({
       {plan && (
         <div className="relative">
           <div className={cn('overflow-hidden', !expanded && 'max-h-56')}>
-            <RemoteMarkdown text={plan} />
+            <Markdown text={plan} />
           </div>
           {!expanded && (
             <button

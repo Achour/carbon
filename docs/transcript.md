@@ -4,6 +4,10 @@
 seams are in `CLAUDE.md`; the other surfaces are the neighbouring files in this
 directory.*
 
+`renderMessages`, `useHistoryNodes` and the live slot live in
+`components/Transcript.tsx` (`useTranscript`), which the desktop's `ChatView`
+and the phone's chat screen both render; see `docs/remote.md`.
+
 ### The transcript's activity rows (`ToolCard`, `ToolGroup`, `lib/toolSummary.ts`)
 
 What a turn *did* is narration between its paragraphs, and it used to be

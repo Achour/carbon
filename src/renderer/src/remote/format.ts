@@ -38,13 +38,6 @@ export function ago(ts: number, now = Date.now()): string {
   return new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
-export function duration(ms: number): string {
-  const secs = Math.max(1, Math.round(ms / 1000))
-  if (secs < 60) return `${secs}s`
-  const m = Math.floor(secs / 60)
-  return m < 60 ? `${m}m ${secs % 60}s` : `${Math.floor(m / 60)}h ${m % 60}m`
-}
-
 function str(v: unknown): string | undefined {
   if (typeof v === 'string' && v.trim()) return v
   if (Array.isArray(v) && v.every((x) => typeof x === 'string')) return v.join(' ')

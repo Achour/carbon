@@ -1,7 +1,10 @@
 import { createRoot } from 'react-dom/client'
 import '@fontsource-variable/inter'
 import '@fontsource-variable/jetbrains-mono'
+import { TooltipProvider } from '@/components/ui/tooltip'
+import { ImageLightbox } from '@/components/ImageView'
 import { App } from './App'
+import { installDesktopBridge } from './desktop'
 import './remote.css'
 
 // The desktop's tokens key dark mode off `.dark`; a phone follows its own
@@ -9,4 +12,12 @@ import './remote.css'
 const dark = window.matchMedia('(prefers-color-scheme: dark)')
 dark.addEventListener('change', () => document.documentElement.classList.toggle('dark', dark.matches))
 
-createRoot(document.getElementById('root')!).render(<App />)
+// Before the first render: the transcript is the desktop's components.
+installDesktopBridge()
+
+createRoot(document.getElementById('root')!).render(
+  <TooltipProvider delay={500}>
+    <App />
+    <ImageLightbox />
+  </TooltipProvider>
+)

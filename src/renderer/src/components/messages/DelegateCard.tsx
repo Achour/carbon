@@ -1,6 +1,7 @@
 import type { ChatMeta, ToolPart } from '@shared/types'
 import { PROVIDER_SHORT_LABELS, knownProvider } from '@shared/types'
 import { threadFull, useApp } from '@/store'
+import { useTranscriptSurface } from './surface'
 import { AgentRowShell, useElapsed } from './AgentRows'
 
 /**
@@ -63,11 +64,14 @@ export function DelegateCard({ part }: { part: ToolPart }): React.JSX.Element {
   const task = (d?.followUp ?? d?.task ?? (typeof input.task === 'string' ? input.task : ''))
     .replace(/\s+/g, ' ')
     .trim()
-  const clickable = !!meta && (open || !full)
+  const { openChat } = useTranscriptSurface()
+  const clickable = !!meta && (open || !full || !!openChat)
 
   const toggle = (): void => {
     if (!childId || !meta) return
-    if (open) void closeSideChat(childId)
+    // No columns here: the agent's chat is opened as the chat on screen.
+    if (openChat) openChat(childId)
+    else if (open) void closeSideChat(childId)
     else void reopenSideChat(childId)
   }
 
