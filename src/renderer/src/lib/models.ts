@@ -55,7 +55,10 @@ export function assembleModelOptions(
     ...providerOptions('claude'),
     ...codexModels,
     ...liveOnly('grok'),
-    ...liveOnly('antigravity')
+    ...liveOnly('antigravity'),
+    // Live-only for Antigravity's reason: the catalog is the plan's, and a
+    // signed-out account answers with the disabled sign-in row.
+    ...liveOnly('cursor')
   ]
 }
 

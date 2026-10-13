@@ -17,10 +17,34 @@
 // repackaging has already invalidated.
 
 const { execFileSync } = require('node:child_process')
+const { existsSync } = require('node:fs')
 const { join } = require('node:path')
+
+// electron-builder's `Arch` enum, by value — read off `builder-util` rather
+// than imported, so this hook keeps no dependency of its own.
+const ARCH = { 1: 'x64', 3: 'arm64' }
+
+/**
+ * Cursor's helpers must be where its SDK walks to (see `extraFiles` in
+ * electron-builder.yml). Not fatal when missing — Cursor still loads and only
+ * its tools fail to spawn — so a release built without
+ * `scripts/cursor-sdk-platforms.mjs` says so loudly instead.
+ */
+function checkCursorPlatform(appPath, arch) {
+  const want = ARCH[arch]
+  if (!want) return
+  const dir = join(appPath, 'Contents', 'node_modules', '@cursor', `sdk-darwin-${want}`, 'bin', 'cursorsandbox')
+  if (!existsSync(dir)) {
+    console.warn(`  • WARNING: @cursor/sdk-darwin-${want} missing; run scripts/cursor-sdk-platforms.mjs`)
+  }
+}
 
 exports.default = async function adhocSign(context) {
   if (context.electronPlatformName !== 'darwin') return
+  checkCursorPlatform(
+    join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`),
+    context.arch
+  )
   // A real identity means electron-builder is doing the signing properly; never
   // stomp on it. (If a certificate ever appears, this hook goes quiet on its own.)
   if (process.env.CSC_LINK || process.env.CSC_NAME) return

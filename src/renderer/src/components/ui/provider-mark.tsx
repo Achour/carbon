@@ -25,6 +25,10 @@ const PATHS: Record<Provider, string[]> = {
   // one-color form Google's own extension icons use.
   antigravity: [
     'M21.751 22.607c1.34 1.005 3.35.335 1.508-1.508C17.73 15.74 18.904 1 12.037 1 5.17 1 6.342 15.74.815 21.1c-2.01 2.009.167 2.511 1.507 1.506 5.192-3.517 4.857-9.714 9.715-9.714 4.857 0 4.522 6.197 9.714 9.715z'
+  ],
+  // Cursor's cube, from simple-icons (CC0) like the first two.
+  cursor: [
+    'M11.503.131 1.891 5.678a.84.84 0 0 0-.42.726v11.188c0 .3.162.575.42.724l9.609 5.55a1 1 0 0 0 .998 0l9.61-5.55a.84.84 0 0 0 .42-.724V6.404a.84.84 0 0 0-.42-.726L12.497.131a1.01 1.01 0 0 0-.996 0M2.657 6.338h18.55c.263 0 .43.287.297.515L12.23 22.918c-.062.107-.229.064-.229-.06V12.335a.59.59 0 0 0-.295-.51l-9.11-5.257c-.109-.063-.064-.23.061-.23'
   ]
 }
 
@@ -46,7 +50,8 @@ export const PROVIDER_COLOR: Record<Provider, string> = {
   claude: 'var(--brand-claude)',
   codex: 'var(--brand-codex)',
   grok: 'var(--brand-grok)',
-  antigravity: 'var(--brand-antigravity)'
+  antigravity: 'var(--brand-antigravity)',
+  cursor: 'var(--brand-cursor)'
 }
 
 export function ProviderMark({

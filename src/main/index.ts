@@ -98,6 +98,7 @@ import {
   providerClis
 } from './providerCli.ts'
 import { configureAntigravityAuth } from './antigravity'
+import { configureCursorAuth } from './cursor'
 import { dockIconSvg } from './dockIcon'
 import { RemoteAccess } from './remoteAccess'
 import { fetchExtensionThemes, searchThemeExtensions } from './themeMarket'
@@ -1270,6 +1271,10 @@ app.whenReady().then(() => {
   configureManagedRoot(join(app.getPath('userData'), 'providers'))
   // Its Google sign-in link opens in the user's browser, like any other link.
   configureAntigravityAuth((url) => {
+    if (url.startsWith('https:')) void shell.openExternal(url)
+  })
+  // Cursor's sign-in page, the same way.
+  configureCursorAuth((url) => {
     if (url.startsWith('https:')) void shell.openExternal(url)
   })
   // Finder/Dock launches do not inherit the user's shell PATH. Hydrate it

@@ -195,6 +195,12 @@ export function SessionPanel({ chatId }: { chatId: string | null }): React.JSX.E
               own MCP servers aren’t reported over ACP, and spend doesn’t appear on the Usage page.
             </div>
           )}
+          {provider === 'cursor' && (
+            <div className="text-[11px] leading-relaxed text-muted-foreground/70">
+              Signed in with a Cursor API key. Cursor bills against your plan, so turns show tokens
+              but no cost, and its spend doesn’t appear on the Usage page.
+            </div>
+          )}
           {provider === 'grok' && (
             <div className="text-[11px] leading-relaxed text-muted-foreground/70">
               Signed in via the Grok CLI. Account, plan limits and MCP status aren’t exposed

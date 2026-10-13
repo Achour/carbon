@@ -17,7 +17,10 @@ const DEFAULT_BUILD_EFFORTS: Record<Provider, EffortId[]> = {
   codex: ['low', 'medium', 'high', 'xhigh'],
   grok: ['low', 'medium', 'high', 'xhigh'],
   // Effort is part of the model id (`gemini-…-high`), not a separate knob.
-  antigravity: []
+  antigravity: [],
+  // Each Cursor model lists the levels the plan allows; with none listed the
+  // model's own setting is the only one.
+  cursor: []
 }
 import { availableProviders } from '@/lib/modelCatalog'
 import {

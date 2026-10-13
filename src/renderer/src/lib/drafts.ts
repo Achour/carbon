@@ -16,7 +16,8 @@ const DRAFT_PROVIDERS: Record<Provider, true> = {
   claude: true,
   codex: true,
   grok: true,
-  antigravity: true
+  antigravity: true,
+  cursor: true
 }
 
 /**

@@ -1,6 +1,6 @@
 import type { PreviewColorScheme, PreviewViewport, PreviewViewportPatch } from './previewDevices'
 
-export const PROVIDERS = ['claude', 'codex', 'grok', 'antigravity'] as const
+export const PROVIDERS = ['claude', 'codex', 'grok', 'antigravity', 'cursor'] as const
 
 export type Provider = (typeof PROVIDERS)[number]
 
@@ -102,7 +102,11 @@ export const PROVIDER_EFFORTS: Record<Provider, EffortId[]> = {
   codex: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
   grok: ['low', 'medium', 'high', 'xhigh'],
   // Effort is part of the model id (`gemini-3.8-flash-high`), not a knob.
-  antigravity: []
+  antigravity: [],
+  // Cursor's catalog names an `effort` / `reasoning_effort` parameter per model
+  // and lists only the values the account may send; each model's own
+  // `supportedEfforts` narrows this further.
+  cursor: ['low', 'medium', 'high', 'xhigh', 'max']
 }
 
 /** Grok's reasoning levels. Kept as a named export for the ACP spawn flag. */
@@ -1196,7 +1200,7 @@ export interface UsageTotals {
  * history in SQLite trajectories with no usage in them, and its ACP replies
  * carry none either, so there is nothing of its spend to scan.
  */
-export type UsageProvider = Exclude<Provider, 'antigravity'>
+export type UsageProvider = Exclude<Provider, 'antigravity' | 'cursor'>
 
 /** One row of the per-model breakdown. */
 export interface UsageModelRow extends UsageTotals {
@@ -1585,8 +1589,12 @@ export const CODEX_FEATURE_LABELS: Record<string, { label: string; description: 
   }
 }
 
-/** Where a resolved provider binary was found. */
-export type ProviderCliSource = 'configured' | 'path' | 'known'
+/**
+ * Where a resolved provider binary was found. `bundled` is Cursor's alone: its
+ * runtime is the `@cursor/sdk` package Carbon ships, so there is no binary of
+ * the user's to find.
+ */
+export type ProviderCliSource = 'configured' | 'path' | 'known' | 'bundled'
 
 /**
  * A provider's CLI as the app currently sees it — what Settings → Providers
@@ -1620,6 +1628,12 @@ export interface ProviderCli {
    * package manager or installer behind it.
    */
   installable?: boolean
+  /**
+   * The provider keeps a sign-in of its own that Carbon offers on the row —
+   * Antigravity's server login and Cursor's SDK key. The other three sign in
+   * from their own CLI, where Carbon never touches the account.
+   */
+  ownSignIn?: boolean
 }
 
 /** Progress of a Carbon-managed install, pushed while one runs. */
@@ -1632,7 +1646,7 @@ export interface ProviderInstallProgress {
   error?: string
 }
 
-/** Whether a provider with its own sign-in has one. Only Antigravity does. */
+/** Whether a provider with its own sign-in has one: Antigravity and Cursor. */
 export type ProviderAuthState = 'signed-in' | 'signed-out' | 'unavailable'
 
 export interface AppDefaults {
@@ -1799,6 +1813,33 @@ export const GROK_DEFAULT_MODEL = 'grok-default'
 /** Sentinel model id: use Antigravity's account default. */
 export const ANTIGRAVITY_DEFAULT_MODEL = 'antigravity-default'
 
+/**
+ * Cursor's model ids carry a `cursor/` prefix inside Carbon, and only inside.
+ *
+ * Its catalog is a mix of every lab's models under their own names —
+ * `claude-4.6-sonnet`, `gpt-5.5`, `grok-4.6`, `composer-2.5` — so a bare id is
+ * a Claude, Codex or Grok id by every shape rule `knownProviderForModel` keeps,
+ * and `grok-4.6` is even a row in Grok's static catalog. Left bare, a Cursor
+ * chat's model would be placed on another backend by the first reconcile that
+ * ran before Cursor's live catalog arrived (`dropForeignModel`,
+ * `providerForRememberedModel`), and sent to a CLI that has never heard of it.
+ * The prefix makes the namespace the id's own: no catalog, no recorded
+ * provider, nothing to drift. `cursorWireModel` strips it at the SDK boundary.
+ */
+export const CURSOR_MODEL_PREFIX = 'cursor/'
+
+/**
+ * Sentinel: the account's own pick. The SDK has a `default` selection, but a
+ * plan with a fixed model list rejects it ("Cannot use this model: default"),
+ * so the session resolves this against the live catalog instead.
+ */
+export const CURSOR_DEFAULT_MODEL = 'cursor/default'
+
+/** The SDK's id for a Carbon `cursor/…` model id. */
+export function cursorWireModel(id: string): string {
+  return id.startsWith(CURSOR_MODEL_PREFIX) ? id.slice(CURSOR_MODEL_PREFIX.length) : id
+}
+
 export const MODEL_OPTIONS: ModelOption[] = [
   { id: '', label: 'Default', description: 'Your Claude Code default', provider: 'claude' },
   { id: 'claude-fable-5', label: 'Fable 5', description: 'Most intelligent', provider: 'claude' },
@@ -1855,6 +1896,13 @@ export const MODEL_OPTIONS: ModelOption[] = [
     label: 'Antigravity (default)',
     description: "Your account's default model",
     provider: 'antigravity'
+  },
+  // Live-only like the two above: the catalog is the account's plan.
+  {
+    id: CURSOR_DEFAULT_MODEL,
+    label: 'Cursor (default)',
+    description: "Your plan's default model",
+    provider: 'cursor'
   }
 ]
 
@@ -1877,6 +1925,8 @@ export function knownProviderForModel(
 ): Provider | undefined {
   const listed = options.find((m) => m.id === id) ?? MODEL_OPTIONS.find((m) => m.id === id)
   if (listed) return listed.provider
+  // First, and before any lab's prefix: `cursor/claude-4.6-sonnet` is Cursor's.
+  if (id.startsWith(CURSOR_MODEL_PREFIX)) return 'cursor'
   if (/^claude[-.]/i.test(id)) return 'claude'
   if (/^(gpt|codex|o\d)[-.]/i.test(id)) return 'codex'
   // Grok's wire ids are the catalog ids (`grok-4.6`), but the CLI also reports
@@ -1981,7 +2031,8 @@ export const PROVIDER_LABELS: Record<Provider, string> = {
   claude: 'Claude Code',
   codex: 'Codex',
   grok: 'Grok',
-  antigravity: 'Antigravity'
+  antigravity: 'Antigravity',
+  cursor: 'Cursor'
 }
 
 /**
@@ -1994,7 +2045,8 @@ export const PROVIDER_SHORT_LABELS: Record<Provider, string> = {
   claude: 'Claude',
   codex: 'Codex',
   grok: 'Grok',
-  antigravity: 'Antigravity'
+  antigravity: 'Antigravity',
+  cursor: 'Cursor'
 }
 
 /**

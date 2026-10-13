@@ -23,6 +23,24 @@ files:
   - '!**/@openai/codex-darwin-*/**'
   - '!**/@openai/codex-linux-*/**'
   - '!**/@openai/codex-win32-*/**'
+  # @cursor/sdk is the exception that ships, on purpose: it is not a copy of a
+  # CLI but Cursor's agent runtime itself, running in main (see
+  # docs/cursor.md). Its per-platform helpers go through `extraFiles` below,
+  # not through here.
+  - '!**/@cursor/sdk-*/**'
+# **Cursor's helpers (sandbox, rg, tree-sitter) live in `Contents/node_modules`,
+# not beside the SDK in `Resources/app/node_modules`.** The SDK finds
+# `@cursor/sdk-<platform>-<arch>` only by walking up from `argv[1]` and from
+# `process.execPath` (`platform-package-locator.ts` in its bundle). A packaged
+# app's argv[1] is not its entry script, and the execPath walk passes through
+# `Contents/MacOS`, `Contents`, `Carbon.app` — never `Resources/app`. Dev works
+# only because Electron's binary sits inside the repo's own node_modules.
+# Measured: packaged without this, the arm64 package was simply absent
+# (electron-builder's collector skips optional dependencies). `${arch}` picks
+# each dmg's own; scripts/cursor-sdk-platforms.mjs puts both on disk first.
+extraFiles:
+  - from: node_modules/@cursor/sdk-darwin-${arch}
+    to: node_modules/@cursor/sdk-darwin-${arch}
 # Only the MAIN process's runtime packages are in package.json `dependencies`
 # (the two agent SDKs + node-pty); every renderer library is a devDependency
 # because vite inlines it into out/renderer at build time. electron-builder ships

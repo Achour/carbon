@@ -1724,6 +1724,8 @@ function carbonStub(): CarbonMcpProvider & { contexts: CarbonToolContext[]; disp
         codexConfig: {
           mcp_servers: { carbon: { url, http_headers: { Authorization: 'Bearer token' } } }
         },
+        tools: () => [],
+        call: async () => ({ content: [] }),
         dispose: () => {
           disposed += 1
         }

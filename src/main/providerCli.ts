@@ -1,6 +1,7 @@
 import { execFile as execFileCb } from 'node:child_process'
 import { promisify } from 'node:util'
-import { accessSync, constants, readdirSync, statSync } from 'node:fs'
+import { accessSync, constants, existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
 import { basename, delimiter, dirname, join } from 'node:path'
 // Relative and .ts-extensioned, like store.ts: these are *runtime* imports, and
@@ -33,7 +34,10 @@ const BINARY: Record<Provider, string> = {
   grok: 'grok',
   // Google's ACP server, not the `agy` CLI: `agy` has no ACP mode, and its
   // headless stream cannot prompt for a permission (see `antigravityAcp.ts`).
-  antigravity: process.platform === 'win32' ? 'agy_acp_server.exe' : 'agy_acp_server.par'
+  antigravity: process.platform === 'win32' ? 'agy_acp_server.exe' : 'agy_acp_server.par',
+  // No binary: Cursor's runtime is the `@cursor/sdk` package Carbon ships (see
+  // `cursorSdkPackage`). Never looked up on PATH.
+  cursor: ''
 }
 
 /**
@@ -44,7 +48,10 @@ const ENV_OVERRIDE: Record<Provider, string> = {
   claude: 'CARBON_CLAUDE_PATH',
   codex: 'CARBON_CODEX_PATH',
   grok: 'CARBON_GROK_PATH',
-  antigravity: 'CARBON_ANTIGRAVITY_PATH'
+  antigravity: 'CARBON_ANTIGRAVITY_PATH',
+  // Unused — there is nothing of the user's to point at — but the record is
+  // total so a provider can never fall through to `undefined` here.
+  cursor: 'CARBON_CURSOR_PATH'
 }
 
 /**
@@ -110,7 +117,8 @@ function knownLocations(provider: Provider, home: string): string[] {
         name
       ),
       newestVersioned(join(home, '.local', 'share', 'zed', 'external_agents', 'registry', 'antigravity-acp'), name)
-    ].filter((path): path is string => !!path)
+    ].filter((path): path is string => !!path),
+    cursor: []
   }
   return [...perProvider[provider], `/opt/homebrew/bin/${name}`, `/usr/local/bin/${name}`]
 }
@@ -127,7 +135,10 @@ export const MIN_CLI_VERSION: Record<Provider, string> = {
   codex: '0.140.0',
   grok: '1.0.0',
   // The first server with `session/resume` and `session/set_config_option`.
-  antigravity: '1.2.0'
+  antigravity: '1.2.0',
+  // The bundled SDK: Carbon pins it, so it is never below the floor it was
+  // built against. The first with `prewarmLocalWorkspace` and `auth.login`.
+  cursor: '1.0.37'
 }
 
 /**
@@ -144,7 +155,9 @@ export const INSTALL_COMMAND: Record<Provider, string> = {
   grok: 'npm install -g @xai-official/grok',
   // No package manager carries it; Settings → Providers installs it instead
   // (`ProviderCli.installable`), and this is what an error card says.
-  antigravity: 'Settings \u2192 Providers \u2192 Antigravity \u2192 Install'
+  antigravity: 'Settings \u2192 Providers \u2192 Antigravity \u2192 Install',
+  // Ships inside Carbon; reached only if the package went missing from a build.
+  cursor: 'Reinstall Carbon'
 }
 
 /** User settings, injected at startup so this module never imports the store. */
@@ -196,6 +209,36 @@ export function onPath(name: string, env: NodeJS.ProcessEnv): string | null {
     if (isExecutable(candidate)) return candidate
   }
   return null
+}
+
+/**
+ * Where the bundled `@cursor/sdk` lives, or null when this build lacks it.
+ *
+ * **Cursor is the one provider Carbon ships rather than finds.** Its SDK is the
+ * agent runtime itself — it runs in this process and spawns its own sandbox
+ * helper and `rg` from a per-platform package beside it — and Cursor publishes
+ * no CLI that speaks to a host the way Claude's, Codex's and Grok's do. So
+ * "installed" is a question about this build, answered by resolving the
+ * package from here; the path reported is its folder, and the version is its
+ * `package.json`'s. (`exports` hides `./package.json`, hence the walk up from
+ * the entry point.)
+ */
+export function cursorSdkPackage(): { dir: string; version: string | null } | null {
+  try {
+    const entry = createRequire(import.meta.url).resolve('@cursor/sdk')
+    let dir = dirname(entry)
+    for (let i = 0; i < 6; i++) {
+      const manifest = join(dir, 'package.json')
+      if (existsSync(manifest)) {
+        const pkg = JSON.parse(readFileSync(manifest, 'utf8')) as { name?: string; version?: string }
+        if (pkg.name === '@cursor/sdk') return { dir, version: pkg.version ?? null }
+      }
+      dir = dirname(dir)
+    }
+    return null
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -283,6 +326,23 @@ export function providerCli(provider: Provider, env: NodeJS.ProcessEnv = process
   const cacheable = env === process.env
   const hit = cacheable ? cache[provider] : undefined
   if (hit) return hit
+  if (provider === 'cursor') {
+    const sdk = cursorSdkPackage()
+    const info: ProviderCli = {
+      provider,
+      enabled: config[provider]?.enabled !== false,
+      path: sdk?.dir ?? null,
+      installed: !!sdk,
+      version: sdk?.version ?? null,
+      source: sdk ? 'bundled' : null,
+      outdated: false,
+      minVersion: MIN_CLI_VERSION[provider],
+      installCommand: INSTALL_COMMAND[provider],
+      ownSignIn: true
+    }
+    if (cacheable) cache[provider] = info
+    return info
+  }
   const { path, source } = resolve(provider, env)
   const installed = !!path && isExecutable(path)
   const minVersion = MIN_CLI_VERSION[provider]
@@ -300,7 +360,7 @@ export function providerCli(provider: Provider, env: NodeJS.ProcessEnv = process
     outdated: !!version && compareVersions(version, minVersion) < 0,
     minVersion,
     installCommand: INSTALL_COMMAND[provider],
-    ...(provider === 'antigravity' ? { installable: true } : {})
+    ...(provider === 'antigravity' ? { installable: true, ownSignIn: true } : {})
   }
   if (cacheable) cache[provider] = info
   return info
@@ -324,6 +384,8 @@ export async function providerClis(refresh = false): Promise<ProviderCli[]> {
   await Promise.all(
     PROVIDERS.map(async (provider) => {
       const { path, installed } = providerCli(provider)
+      // The bundled SDK's version is its manifest's, read at resolution.
+      if (provider === 'cursor') return
       if (!installed || !path || versions.has(path)) return
       versions.set(path, await readVersion(path))
     })

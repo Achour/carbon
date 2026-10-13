@@ -45,6 +45,17 @@ const ANTIGRAVITY_PERMISSION_MODES: { id: PermissionModeId; label: string; descr
   { id: 'bypassPermissions', label: 'Full access', description: 'Approves every tool without asking' }
 ]
 
+// The SDK has no approval callback, so nothing here can ask. The axis is the
+// sandbox, on or off, and Cursor's Auto-review classifier — both fixed when the
+// agent opens, so a change lands at the next turn. Plan is the SDK's own
+// `mode: 'plan'`, which ends in a plan Carbon raises for review.
+const CURSOR_PERMISSION_MODES: { id: PermissionModeId; label: string; description: string }[] = [
+  { id: 'plan', label: 'Plan mode', description: 'Writes a plan, then waits for your approval' },
+  { id: 'acceptEdits', label: 'Sandboxed', description: 'Edits the project; commands run in Cursor’s sandbox' },
+  { id: 'auto', label: 'Auto-review', description: 'Sandboxed, plus Cursor’s Auto-review where your plan has it' },
+  { id: 'bypassPermissions', label: 'Full access', description: 'No sandbox — use with care' }
+]
+
 /**
  * Which permission modes each backend actually implements. A menu built from
  * the wrong provider's list offers modes that silently degrade — Grok served
@@ -57,7 +68,8 @@ export const PROVIDER_PERMISSION_MODES: Record<
   claude: PERMISSION_MODES,
   codex: CODEX_PERMISSION_MODES,
   grok: GROK_PERMISSION_MODES,
-  antigravity: ANTIGRAVITY_PERMISSION_MODES
+  antigravity: ANTIGRAVITY_PERMISSION_MODES,
+  cursor: CURSOR_PERMISSION_MODES
 }
 
 export function codexPermissionValue(mode: PermissionModeId): PermissionModeId {

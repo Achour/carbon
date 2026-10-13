@@ -417,16 +417,24 @@ function ProviderDetail({ cli }: { cli: ProviderCli }): React.JSX.Element {
           {missing
             ? 'Not installed on this machine, so it offers no models.'
             : cli.enabled
-              ? 'Installed and on. Its models are in the model picker.'
+              ? cli.source === 'bundled'
+                ? 'Built into Carbon and on. Its models are in the model picker.'
+                : 'Installed and on. Its models are in the model picker.'
               : 'Turned off. It offers no models until you switch it back on.'}
         </p>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6">
         <div className="rounded-lg border border-border px-3 py-3">
-          <div className="text-xs font-medium">Binary</div>
+          <div className="text-xs font-medium">{cli.source === 'bundled' ? 'Runtime' : 'Binary'}</div>
           <div className="mt-0.5 break-all text-[11px] leading-relaxed text-muted-foreground">
-            {!missing ? (
+            {!missing && cli.source === 'bundled' ? (
+              // Cursor: the SDK is the agent, and it ships inside Carbon.
+              <>
+                Built into Carbon — <span className="font-mono">@cursor/sdk</span>, running in the
+                app rather than as a CLI.
+              </>
+            ) : !missing ? (
               <span className="font-mono">{cli.path}</span>
             ) : cli.path ? (
               // Only an env override can put a path here that doesn't run.
@@ -469,9 +477,9 @@ function ProviderDetail({ cli }: { cli: ProviderCli }): React.JSX.Element {
             </div>
           )}
 
-          {/* A provider with its own sign-in (Antigravity): its account lives
-              here, because there is no CLI of its own to sign in from. */}
-          {!missing && cli.enabled && cli.installable && (
+          {/* A provider with its own sign-in (Antigravity, Cursor): its account
+              lives here, because there is no CLI of its own to sign in from. */}
+          {!missing && cli.enabled && cli.ownSignIn && (
             <ProviderAccount provider={cli.provider} />
           )}
 
@@ -555,12 +563,36 @@ function ManagedInstall({ provider }: { provider: Provider }): React.JSX.Element
   )
 }
 
+/** What the account row says, per provider that signs in on its own. */
+const ACCOUNT_COPY: Partial<
+  Record<
+    Provider,
+    { title: string; signedIn: string; signedOut: string; unavailable: string; button: string; note?: string }
+  >
+> = {
+  antigravity: {
+    title: 'Google account',
+    signedIn: 'Signed in. Models come from your Google account.',
+    signedOut: 'Not signed in. Sign in to use Antigravity’s models.',
+    unavailable: 'Couldn’t reach the Antigravity server.',
+    button: 'Sign in with Google'
+  },
+  cursor: {
+    title: 'Cursor account',
+    signedIn: 'Signed in. Models come from your Cursor plan.',
+    signedOut:
+      'Not signed in. Sign in to use your plan’s models — the Cursor editor’s login doesn’t carry over.',
+    unavailable: 'Couldn’t load Cursor’s SDK.',
+    button: 'Sign in with Cursor',
+    note: 'Signing in creates a 90-day API key named “Carbon” in your Cursor dashboard. Signing out forgets it here; revoke it there to end it sooner.'
+  }
+}
+
 /**
  * The account of a provider that signs in on its own. Antigravity's server
- * keeps a Google login separate from the `agy` CLI's, so it is the one row
- * whose login Carbon has to offer rather than find. Signing in opens the
- * browser and the button waits on it; the server's own deadline is five
- * minutes.
+ * keeps a Google login separate from the `agy` CLI's, and Cursor's SDK mints
+ * an API key of its own, so these are the rows whose login Carbon has to offer
+ * rather than find. Signing in opens the browser and the button waits on it.
  */
 function ProviderAccount({ provider }: { provider: Provider }): React.JSX.Element {
   const auth = useApp((s) => s.providerAuth[provider])
@@ -582,21 +614,22 @@ function ProviderAccount({ provider }: { provider: Provider }): React.JSX.Elemen
     setBusy(null)
   }
 
+  const copy = ACCOUNT_COPY[provider] ?? ACCOUNT_COPY.antigravity!
   const status =
     busy === 'in'
       ? 'Finish signing in in your browser…'
       : auth === 'signed-in'
-        ? 'Signed in. Models come from your Google account.'
+        ? copy.signedIn
         : auth === 'signed-out'
-          ? 'Not signed in. Sign in to use Antigravity’s models.'
+          ? copy.signedOut
           : auth === 'unavailable'
-            ? 'Couldn’t reach the Antigravity server.'
+            ? copy.unavailable
             : 'Checking…'
   return (
     <div className="mt-3 space-y-2 border-t border-border pt-3">
       <div className="flex items-center gap-3">
         <div className="min-w-0 flex-1">
-          <div className="text-xs font-medium">Google account</div>
+          <div className="text-xs font-medium">{copy.title}</div>
           <div className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">{status}</div>
         </div>
         {auth === 'signed-in' ? (
@@ -612,10 +645,13 @@ function ProviderAccount({ provider }: { provider: Provider }): React.JSX.Elemen
             disabled={!!busy || !auth}
           >
             {busy === 'in' && <DotSpinner />}
-            Sign in with Google
+            {copy.button}
           </Button>
         )}
       </div>
+      {copy.note && (
+        <div className="text-[11px] leading-relaxed text-muted-foreground/70">{copy.note}</div>
+      )}
       {error && (
         <div className="flex items-start gap-2 text-xs text-warning">
           <TriangleAlert className="mt-px size-3.5 shrink-0" />

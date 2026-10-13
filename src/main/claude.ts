@@ -55,6 +55,8 @@ import type {
 } from '@shared/types'
 import {
   ANTIGRAVITY_DEFAULT_MODEL,
+  CURSOR_DEFAULT_MODEL,
+  CURSOR_MODEL_PREFIX,
   CODEX_DEFAULT_MODEL,
   GROK_DEFAULT_MODEL,
   MODEL_OPTIONS,
@@ -134,6 +136,14 @@ import {
   signOutOfAntigravity
 } from './antigravity'
 import { installAntigravity } from './antigravityInstall'
+import {
+  CursorSession,
+  cursorAuthState,
+  fetchCursorModels,
+  generateCursorText,
+  signInToCursor,
+  signOutOfCursor
+} from './cursor'
 import { spawnEnv } from './parentEnv.ts'
 import { cliAvailable, cliPath, requireCliPath } from './providerCli.ts'
 import { claudeFeatureEnv, claudeFeatureStates, codexFeatureStates } from './providerFeatures.ts'
@@ -3011,7 +3021,10 @@ const CONVERSATION_FORKS: Record<Provider, ConversationFork> = {
   grok: { needsSession: false, fork: forkGrokBefore },
   // The server has `session/fork` but no cut point — it copies a conversation
   // whole — so an edit-and-resend replays, as Grok's does.
-  antigravity: { needsSession: false, fork: async () => undefined }
+  antigravity: { needsSession: false, fork: async () => undefined },
+  // The SDK has no fork or rollback (T3 Code reached the same answer), so an
+  // edit-and-resend replays the kept turns into a fresh agent.
+  cursor: { needsSession: false, fork: async () => undefined }
 }
 
 /**
@@ -3024,7 +3037,8 @@ const PERSISTED_PLAN_REVIEW: Record<Provider, boolean> = {
   claude: false,
   codex: true,
   grok: true,
-  antigravity: true
+  antigravity: true,
+  cursor: true
 }
 
 interface HandoffSnapshot {
@@ -3297,7 +3311,7 @@ export class ChatManager {
   async providerFeatures(provider: Provider): Promise<ProviderFeatureState[]> {
     if (!cliAvailable(provider)) return []
     if (provider === 'claude') return claudeFeatureStates()
-    if (provider === 'grok' || provider === 'antigravity') return []
+    if (provider === 'grok' || provider === 'antigravity' || provider === 'cursor') return []
     const client = new CodexAppServerClient({})
     try {
       return codexFeatureStates(await fetchCodexFeatures(client))
@@ -3319,18 +3333,24 @@ export class ChatManager {
   }
 
   async providerAuthState(provider: Provider): Promise<ProviderAuthState> {
-    return provider === 'antigravity' ? antigravityAuthState() : 'unavailable'
+    if (provider === 'antigravity') return antigravityAuthState()
+    if (provider === 'cursor') return cursorAuthState()
+    return 'unavailable'
   }
 
   async providerSignIn(provider: Provider): Promise<OpResult> {
-    if (provider !== 'antigravity') return { ok: false, error: 'This provider signs in from its CLI.' }
-    const result = await signInToAntigravity()
+    if (provider !== 'antigravity' && provider !== 'cursor') {
+      return { ok: false, error: 'This provider signs in from its CLI.' }
+    }
+    const result = await (provider === 'cursor' ? signInToCursor() : signInToAntigravity())
     if (result.ok) this.forgetCatalog(provider)
     return result
   }
 
   async providerSignOut(provider: Provider): Promise<OpResult> {
-    if (provider !== 'antigravity') return { ok: false, error: 'This provider signs out from its CLI.' }
+    if (provider !== 'antigravity' && provider !== 'cursor') {
+      return { ok: false, error: 'This provider signs out from its CLI.' }
+    }
     // Live sessions hold the credentials being removed; the server tears its
     // own down, so Carbon's wrappers go with them.
     // Through `disposeChat`, so a delegate cut off here is reported as
@@ -3341,7 +3361,7 @@ export class ChatManager {
         this.emit({ type: 'status', chatId, status: 'idle' })
       }
     }
-    const result = await signOutOfAntigravity()
+    const result = await (provider === 'cursor' ? signOutOfCursor() : signOutOfAntigravity())
     this.forgetCatalog(provider)
     return result
   }
@@ -3441,7 +3461,8 @@ export class ChatManager {
         new CodexSession(chat, sessionEmit, this.store, onDead, undefined, undefined, this.preview),
       grok: () => new GrokSession(chat, sessionEmit, this.store, onDead, onCommands, this.preview),
       antigravity: () =>
-        new AntigravitySession(chat, sessionEmit, this.store, onDead, onCommands, this.preview)
+        new AntigravitySession(chat, sessionEmit, this.store, onDead, onCommands, this.preview),
+      cursor: () => new CursorSession(chat, sessionEmit, this.store, onDead, this.preview)
     }
     const session = build[chat.provider]()
     this.sessions.set(chat.id, session)
@@ -3792,7 +3813,8 @@ export class ChatManager {
         claude: () => generateClaudeText(chat.cwd, handoff.model, HANDOFF_BRIEF_SYSTEM, prompt),
         codex: () => generateCodexText(chat.cwd, handoff.model, joined),
         grok: () => generateGrokText(chat.cwd, handoff.model, joined),
-        antigravity: () => generateAntigravityText(handoff.model, joined)
+        antigravity: () => generateAntigravityText(handoff.model, joined),
+        cursor: () => generateCursorText(handoff.model, joined)
       }
       const gen = generate[handoff.provider]()
       const brief = await withTimeout(gen, HANDOFF_TIMEOUT_MS, null)
@@ -4276,7 +4298,8 @@ export class ChatManager {
     const haveGrok = this.probed.has('grok') || this.models?.some((option) => option.provider === 'grok')
     const haveAntigravity =
       this.probed.has('antigravity') || this.models?.some((option) => option.provider === 'antigravity')
-    if (haveClaude && haveCodex && haveGrok && haveAntigravity) return this.models!
+    const haveCursor = this.probed.has('cursor') || this.models?.some((option) => option.provider === 'cursor')
+    if (haveClaude && haveCodex && haveGrok && haveAntigravity && haveCursor) return this.models!
     const folder = this.store.getMeta(chatId)?.cwd || cwd
     if (!folder) return this.models ?? []
     this.modelWarmup ??= Promise.all([
@@ -4287,12 +4310,15 @@ export class ChatManager {
       // that fail on send.
       haveGrok ? Promise.resolve([]) : fetchGrokModels(folder),
       // Same rule, and one more reason to answer `[]`: nobody signed in.
-      haveAntigravity ? Promise.resolve([]) : fetchAntigravityModels()
+      haveAntigravity ? Promise.resolve([]) : fetchAntigravityModels(),
+      // No spawn: one HTTPS call against the account, or the sign-in row.
+      haveCursor ? Promise.resolve([]) : fetchCursorModels()
     ])
-      .then(([claude, codex, grok, antigravity]) => {
+      .then(([claude, codex, grok, antigravity, cursor]) => {
         this.probed.add('grok')
         this.probed.add('antigravity')
-        this.mergeModels([...claude, ...codex, ...grok, ...antigravity])
+        this.probed.add('cursor')
+        this.mergeModels([...claude, ...codex, ...grok, ...antigravity, ...cursor])
         return this.models ?? []
       })
       .finally(() => {
@@ -4361,7 +4387,7 @@ export class ChatManager {
       live.respondPermission(requestId, decision)
       return
     }
-    // Codex, Grok and Antigravity plan reviews are persisted. Recreate the session wrapper on
+    // Codex, Grok, Antigravity and Cursor plan reviews are persisted. Recreate the session wrapper on
     // demand so an approval made after an app restart can still continue.
     if (
       chat &&
@@ -4673,7 +4699,13 @@ export class ChatManager {
       title: '',
       cwd: parent.cwd,
       provider: request.provider,
-      model: request.model ?? this.defaultModelFor(request.provider),
+      // A parent names a Cursor model the way Cursor does (`grok-4.6`); inside
+      // Carbon it carries the `cursor/` namespace, or the first reconcile would
+      // read it as Grok's and drop it (see `CURSOR_MODEL_PREFIX`).
+      model:
+        request.provider === 'cursor' && request.model && !request.model.startsWith(CURSOR_MODEL_PREFIX)
+          ? `${CURSOR_MODEL_PREFIX}${request.model}`
+          : (request.model ?? this.defaultModelFor(request.provider)),
       effort: effortForProvider(parent.effort, request.provider),
       serviceTier: 'standard',
       // Never above the parent's: a delegate is the parent's agent acting
@@ -4835,7 +4867,8 @@ export class ChatManager {
       claude: undefined,
       codex: CODEX_DEFAULT_MODEL,
       grok: GROK_DEFAULT_MODEL,
-      antigravity: ANTIGRAVITY_DEFAULT_MODEL
+      antigravity: ANTIGRAVITY_DEFAULT_MODEL,
+      cursor: CURSOR_DEFAULT_MODEL
     }
     return defaults[provider]
   }

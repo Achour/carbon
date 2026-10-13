@@ -3,12 +3,14 @@ import { randomUUID } from 'node:crypto'
 import {
   carbonAcpServer,
   carbonCodexConfig,
+  carbonToolList,
   handleMcpCall,
   handleMcpMessage,
   parseCarbonTool,
   runCarbonTool,
   type CarbonToolContext,
   type CarbonToolHosts,
+  type CarbonToolSchema,
   type HttpMcpServer,
   type JsonRpcRequest,
   type JsonRpcResponse
@@ -44,8 +46,25 @@ export interface CarbonMcpSession {
   acpServer: HttpMcpServer
   /** `config.mcp_servers` overlay (Codex). */
   codexConfig: Record<string, unknown>
+  /**
+   * The same tools without the HTTP hop, for a provider that takes callbacks
+   * (Cursor's `local.customTools`). It is not a convenience: Cursor refuses
+   * *every* MCP-server call while its sandbox is on — "Local SDK runs cannot
+   * request interactive approval for this MCP tool call", measured — and
+   * in-process tools are the one kind it exempts. `call` runs through the
+   * bridge's own `answer`, so plan-mode refusals and the delegation check
+   * cannot differ from the HTTP path.
+   */
+  tools(): CarbonToolSchema[]
+  call(name: string, args: unknown): Promise<CarbonCallResult>
   /** Drop the context. Called when the provider session is disposed. */
   dispose(): void
+}
+
+/** An MCP `tools/call` result: what the tool returned, as content blocks. */
+export interface CarbonCallResult {
+  content: ({ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string })[]
+  isError?: boolean
 }
 
 /**
@@ -102,10 +121,24 @@ export function startCarbonBridge(
           const id = randomUUID()
           sessions.set(id, ctx)
           const url = `${base}/mcp/${id}`
+          const state: BridgeState = { token, sessions, preview, canvas, agents }
           return {
             url,
             acpServer: carbonAcpServer(url, token),
             codexConfig: carbonCodexConfig(url, token),
+            tools: () =>
+              carbonToolList({ canvas: !!canvas, agents: !!agents?.() && ctx.delegate?.() === true }),
+            call: async (name, args) => {
+              const reply = await answer(
+                { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } },
+                state,
+                ctx
+              )
+              return (reply?.result as CarbonCallResult | undefined) ?? {
+                content: [{ type: 'text', text: 'The tool returned nothing.' }],
+                isError: true
+              }
+            },
             dispose: () => {
               sessions.delete(id)
             }

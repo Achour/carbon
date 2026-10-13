@@ -61,6 +61,11 @@ jobs:
       - name: Build
         run: npm run build
 
+      # npm installs only this runner's @cursor/sdk platform package; the x64
+      # dmg needs Intel's too. `extraFiles` copies only each app's own.
+      - name: Cursor SDK platform packages
+        run: node scripts/cursor-sdk-platforms.mjs
+
       - name: Package (arm64 + x64 dmg)
         run: npx electron-builder --mac --publish never
 

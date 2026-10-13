@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-An Electron desktop GUI for coding agents. Claude sessions run through `@anthropic-ai/claude-agent-sdk`; Codex sessions run through `@openai/codex-sdk`; Grok sessions speak ACP to the `grok` CLI, which ships no SDK. All three live in the Electron main process, drive **the CLIs the user installed** (see Provider CLIs below), reuse their existing provider login, and operate in whatever project folder the user picks.
+An Electron desktop GUI for coding agents. Claude sessions run through `@anthropic-ai/claude-agent-sdk`; Codex sessions run through `@openai/codex-sdk`; Grok sessions speak ACP to the `grok` CLI, which ships no SDK; Antigravity speaks ACP to Google's server; Cursor runs on `@cursor/sdk`, which *is* its agent runtime and so ships inside the app. All live in the Electron main process, drive **the CLIs the user installed** where there is one (see Provider CLIs below), reuse their existing provider login, and operate in whatever project folder the user picks.
 
 ## Commands
 
@@ -436,12 +436,17 @@ it guards**, and put new reasoning in that file rather than back in this one.
 - **`docs/antigravity.md`** — the Antigravity provider: why its ACP server and
   not `agy`, the install exception, its own Google sign-in, and the wire shapes
   read off the server's source.
+- **`docs/cursor.md`** — the Cursor provider on `@cursor/sdk`: why it ships
+  when nothing else does, the SDK's own sign-in, the plan-shaped catalog and the
+  `cursor/` id namespace, sandbox-not-approval permissions, and Carbon's tools
+  as in-process callbacks.
 
 ## Provider integration
 
 ### Provider CLIs (`src/main/providerCli.ts`)
 
-**Carbon spawns the CLIs the user installed. It ships none of its own.**
+**Carbon spawns the CLIs the user installed. It ships none of its own.** (Cursor
+is the exception and has no CLI to spawn; see "Cursor" below.)
 
 That was not always true, and it was never decided — it was a default. Both SDKs
 carry the provider's entire CLI as an *optional dependency* (`@anthropic-ai/
@@ -520,6 +525,23 @@ and it reports no usage, so the Usage page excludes it (`UsageProvider`).
 `acpRpc.ts` is the generic JSON-RPC-over-stdio transport (Grok predates it and
 keeps its own). Every shape and the reasoning behind it is in
 `docs/antigravity.md`; read it first.
+
+### Cursor (`src/main/cursor.ts`, `cursorSdk.ts`)
+
+The fifth provider runs on **`@cursor/sdk` in the main process**, not on a CLI.
+The SDK is Cursor's agent runtime, and it spawns its own sandbox helper and `rg`
+from `@cursor/sdk-darwin-<arch>`. It is therefore the one provider Carbon
+*ships*: `providerCli` reports it as `bundled`, the SDK loads lazily on first
+use, and its helpers ship in `Contents/node_modules`: the SDK finds them only
+by walking up from `process.execPath`, which never passes `Resources/app`.
+`scripts/cursor-sdk-platforms.mjs` puts both arches on disk for `extraFiles`. Sign-in is the SDK's own: a browser flow
+mints a 90-day API key stored in `~/.cursor/sdk/auth.json`. Model ids carry a
+`cursor/` prefix inside Carbon, because Cursor's catalog reuses other labs' ids
+(`grok-4.6`), which every shape rule would place elsewhere. There are no
+approval prompts: the modes are sandbox on/off plus Auto-review. Carbon's tools
+go to it as `local.customTools`, because with the sandbox on Cursor refuses
+every MCP-server call. Every shape, measured, is in `docs/cursor.md`; read it
+first.
 
 ### Per-provider capabilities (`src/main/providerFeatures.ts`)
 
