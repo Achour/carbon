@@ -195,9 +195,23 @@ time.
   parked at the previous height, so the reply's last line sat just below the
   fold and the stream read as stuttering. A `ResizeObserver` on the reading
   column (and on the scroller, for a window resize) fires after layout for all
-  of them, and `pinnedRef` is the only guard it needs — older history is only
-  prepended under an unpinned reader (or into a window too short to scroll),
-  so a prepend never snaps the reader back down.
+  of them and kicks the follow; older history is only prepended under an
+  unpinned reader (or into a window too short to scroll), so a prepend never
+  snaps the reader back down.
+- **The follow glides, and the pin is intent rather than position.** Each
+  frame closes `1 - e^(-dt/τ)` of the gap (`FOLLOW_TAU_MS`, 80ms) and re-reads
+  `scrollTop`, so a tool card landing 400px tall eases in instead of lurching
+  and a wheel tick in between is never written over. The pin used to be
+  recomputed from position (≤90px from the bottom) on every scroll event,
+  including the follow's own — which land a frame late, so a card mounting in
+  that frame read as the reader leaving and the follow stopped for the rest of
+  the turn; and a nudge up *inside* the 90px stayed pinned and was yanked back
+  down. Now only a move up unpins (a passive `wheel` listener catches the tick
+  the follow would out-run), only reaching the bottom pins, and a move up that
+  leaves the scroller at the bottom — a clamp, or scroll anchoring under a
+  collapse — is not one. The jump button pins and lets the follow carry it,
+  since a native smooth scroll freezes its target at the click.
+  `demo/e2e/follow-probe.js` checks all of it.
 - **A message keeps its DOM when it stops being live.** With the pacing right,
   the last visible seam was the *transitions*, and there were two, measured
   with `demo/e2e/stream-probe.js` (which pumps a Claude-shaped and a

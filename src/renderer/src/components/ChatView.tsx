@@ -68,6 +68,14 @@ const GROUP_MIN = 2
 const QUIET_MS = 700
 
 /**
+ * Time constant of the pinned follow's glide: each frame closes
+ * `1 - e^(-dt/τ)` of the distance to the bottom, so ~95% of any jump is gone
+ * in 3τ. Short enough that a streamed line never sits below the fold long
+ * enough to read as lag, long enough that a tool card landing doesn't lurch.
+ */
+const FOLLOW_TAU_MS = 80
+
+/**
  * How much of a streaming tool input has arrived, without serializing it.
  *
  * The clock below only needs a number that *moves* as the input fills in, and
@@ -743,25 +751,122 @@ export const ChatView = React.memo(function ChatView({
 
   const busy = status !== 'idle'
 
-  const scrollToBottom = React.useCallback((smooth = false): void => {
-    const el = scrollRef.current
-    if (!el) return
-    el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' })
+  /**
+   * The follow loop's frame, or 0 when it is parked. One loop at a time: a
+   * resize that lands while it runs only has to keep it alive, since every
+   * frame re-reads where the bottom is.
+   */
+  const followFrame = React.useRef(0)
+  /** `scrollTop` at the last scroll event — what "moved up" is measured from. */
+  const lastTop = React.useRef(0)
+
+  const setPinned = React.useCallback((pinned: boolean): void => {
+    if (pinned === pinnedRef.current) return
+    pinnedRef.current = pinned
+    setShowJump(!pinned)
   }, [])
 
-  // Fires per scroll event — dozens a second on a wheel — so the state write
-  // is skipped unless the answer moved; the pin itself is a ref and free.
+  /** Snap to the bottom with no animation — a chat switch, a window resize. */
+  const jumpToBottom = React.useCallback((): void => {
+    const el = scrollRef.current
+    if (!el) return
+    cancelAnimationFrame(followFrame.current)
+    followFrame.current = 0
+    el.scrollTop = el.scrollHeight
+  }, [])
+
+  /**
+   * Glide to the bottom, and keep gliding for as long as it keeps moving.
+   *
+   * Each frame closes a fixed *fraction* of what is left (frame-rate
+   * independent, τ = FOLLOW_TAU_MS), so a line of streamed text eases in over a
+   * few frames and a tool card that lands 400px tall catches up just as
+   * smoothly, instead of the transcript lurching by its height. The position is
+   * re-read every frame rather than carried in the loop, so a wheel tick the
+   * reader makes in between is never written over — and the loop stops the
+   * moment they unpin.
+   */
+  const followBottom = React.useCallback((): void => {
+    if (followFrame.current) return
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      jumpToBottom()
+      return
+    }
+    let last = performance.now()
+    const step = (now: number): void => {
+      const el = scrollRef.current
+      if (!el || !pinnedRef.current) {
+        followFrame.current = 0
+        return
+      }
+      const dt = Math.min(now - last, 64)
+      last = now
+      const gap = el.scrollHeight - el.clientHeight - el.scrollTop
+      if (gap <= 0.5) {
+        followFrame.current = 0
+        return
+      }
+      // At least a pixel a frame, or the tail of the ease crawls through
+      // sub-pixel steps the scroller rounds away.
+      const move = Math.max(1, gap * (1 - Math.exp(-dt / FOLLOW_TAU_MS)))
+      el.scrollTop = Math.min(el.scrollTop + move, el.scrollHeight - el.clientHeight)
+      lastTop.current = el.scrollTop
+      followFrame.current = requestAnimationFrame(step)
+    }
+    followFrame.current = requestAnimationFrame(step)
+  }, [jumpToBottom])
+
+  React.useEffect(() => () => cancelAnimationFrame(followFrame.current), [])
+
+  /**
+   * The pin is the reader's *intent*, not the scroller's position.
+   *
+   * It used to be recomputed from position on every scroll event — 90px from
+   * the bottom or closer — and that included the events the follow itself
+   * produced. A scroll event lands a frame after the `scrollTo` that caused it,
+   * so when a tool card or a code block mounted in that frame the handler
+   * measured the *new* height against the *old* position, read "scrolled away",
+   * and the follow was off for the rest of the turn with nobody having touched
+   * anything. Now only a move *up* unpins, and only reaching the bottom pins:
+   * the follow only ever moves down, so it can never unpin itself, however far
+   * behind the column it is when its event lands.
+   *
+   * "Moved up" is checked before the threshold, or a small nudge up inside it
+   * would leave the reader pinned and the next resize would yank them back.
+   * The `gap > 2` guard excludes the moves up nobody made: content shrinking
+   * under a scroller at the bottom clamps it, and so does Chromium's scroll
+   * anchoring when something above collapses — both leave it at the bottom.
+   *
+   * Fires per scroll event — dozens a second on a wheel — so the state write
+   * happens only on a transition (`setPinned`); the pin itself is a ref and free.
+   */
   const onScroll = (): void => {
     const el = scrollRef.current
     if (!el) return
     maybeLoadEarlier()
-    const pinned = el.scrollHeight - el.scrollTop - el.clientHeight < 90
-    if (pinned === pinnedRef.current) return
-    pinnedRef.current = pinned
-    setShowJump(!pinned)
+    const top = el.scrollTop
+    const gap = el.scrollHeight - top - el.clientHeight
+    if (top < lastTop.current - 1 && gap > 2) setPinned(false)
+    else if (gap < 90) setPinned(true)
+    lastTop.current = top
   }
 
-  // Follow the stream while the user is pinned to the bottom.
+  // A wheel tick up is intent before it is a position: the follow can move the
+  // scroller further down in the same frame than a small tick moved it up, and
+  // then no scroll event ever shows the reader leaving. Only while the column
+  // overflows — in a window too short to scroll there is nowhere to leave to,
+  // and unpinning there would stop the follow the moment it starts to.
+  React.useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const onWheel = (e: WheelEvent): void => {
+      if (e.deltaY < 0 && el.scrollHeight > el.clientHeight + 1) setPinned(false)
+    }
+    el.addEventListener('wheel', onWheel, { passive: true })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [setPinned])
+
+  // Follow the stream while the reader is pinned to the bottom.
   //
   // This keys on the column's *height*, not on the store. A store-keyed effect
   // (`[messages, permissions, status]`) was the first version, and it missed
@@ -772,32 +877,39 @@ export const ChatView = React.memo(function ChatView({
   // over 200ms. Each of those grew the column under a scroller that was still
   // parked at the previous height, so the reply's last line sat just below the
   // fold — a lag that read as the stream stuttering. A ResizeObserver fires
-  // after layout for every one of them, and `pinnedRef` is the only guard it
-  // needs: `maybeLoadEarlier` only prepends under an unpinned reader (or into
-  // a window too short to scroll), so a prepend never snaps the reader down. The scroller itself is observed too, so a window
-  // resize while pinned keeps the bottom rather than the top.
+  // after layout for every one of them and kicks the glide; `pinnedRef` guards
+  // it, and `maybeLoadEarlier` only prepends under an unpinned reader (or into
+  // a window too short to scroll), so a prepend never snaps the reader down.
+  // The scroller itself is observed too, so a window resize while pinned keeps
+  // the bottom rather than the top — snapped, since a resize is the reader's
+  // own gesture and a glide after it reads as lag.
   React.useEffect(() => {
     const scroller = scrollRef.current
     const column = columnRef.current
     if (!scroller || !column) return
-    const observer = new ResizeObserver(() => {
-      if (pinnedRef.current) scrollToBottom()
+    const observer = new ResizeObserver((entries) => {
+      if (!pinnedRef.current) return
+      if (entries.some((e) => e.target === scroller)) jumpToBottom()
+      else followBottom()
     })
     observer.observe(column)
     observer.observe(scroller)
     return () => observer.disconnect()
-  }, [scrollToBottom])
+  }, [followBottom, jumpToBottom])
 
   // Jump to the bottom when switching chats.
   React.useEffect(() => {
     pinnedRef.current = true
-    // The scroll handler now writes state only on a transition, so the pin
-    // and the control have to be reset together here rather than by the
-    // scroll event that follows.
+    // The scroll handler writes state only on a transition, so the pin and
+    // the control have to be reset together here rather than by the scroll
+    // event that follows.
     setShowJump(false)
     bottomAnchor.current = null
-    requestAnimationFrame(() => scrollToBottom())
-  }, [chat.id, scrollToBottom])
+    requestAnimationFrame(() => {
+      jumpToBottom()
+      lastTop.current = scrollRef.current?.scrollTop ?? 0
+    })
+  }, [chat.id, jumpToBottom])
 
   /**
    * Fold or unfold a turn, animated, with the row you clicked held still.
@@ -856,7 +968,7 @@ export const ChatView = React.memo(function ChatView({
    * that would ask for more, so it fills until it overflows. A pinned reader of
    * a chat that does overflow is left alone, which is what keeps opening a chat
    * from fetching history nobody scrolled towards — the scroller sits at 0 for
-   * a frame before `scrollToBottom` moves it.
+   * a frame before `jumpToBottom` moves it.
    *
    * Called from the scroll handler and again whenever a load settles, because a
    * restore that lands near the top fires no scroll of its own if `scrollTop`
@@ -1352,7 +1464,13 @@ export const ChatView = React.memo(function ChatView({
               size="icon-sm"
               variant="secondary"
               className="pointer-events-auto rounded-full shadow-lg"
-              onClick={() => scrollToBottom(true)}
+              onClick={() => {
+                // Pin first and let the follow carry it: a native smooth
+                // scroll freezes its target at the click, so it lands short
+                // of a column that is still growing.
+                setPinned(true)
+                followBottom()
+              }}
               aria-label="Scroll to bottom"
             >
               <ArrowDown />
