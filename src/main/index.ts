@@ -156,7 +156,6 @@ function notifyOnStatus(chatId: string, status: string): void {
   const n = new Notification({ title, body })
   n.on('click', () => {
     if (!win) return
-    suppressForegroundUntil = 0 // a click is a real request to come forward
     if (win.isMinimized()) win.restore()
     win.show()
     win.focus()
@@ -225,16 +224,6 @@ function emitPreview(ev: PreviewEvent): void {
 // for them over a request/response channel keyed by a generated id.
 const previewPending = new Map<string, (r: PreviewCommandResult) => void>()
 
-// The preview <webview> guest (and capturePage) can yank the app to the
-// foreground on macOS when the agent navigates/screenshots while the user is
-// working in another app. When a command is dispatched with the app already in
-// the background, we note it so any focus the window grabs in the next moment
-// is bounced straight back (see the win.on('focus') handler).
-let suppressForegroundUntil = 0
-function markPreviewActivity(): void {
-  if (win && !win.isFocused()) suppressForegroundUntil = Date.now() + 1500
-}
-
 function sendPreviewCommand(cmd: Omit<PreviewCommand, 'id'>): Promise<PreviewCommandResult> {
   const id = randomUUID()
   return new Promise<PreviewCommandResult>((resolve) => {
@@ -242,7 +231,6 @@ function sendPreviewCommand(cmd: Omit<PreviewCommand, 'id'>): Promise<PreviewCom
       resolve({ id, ok: false, error: 'No window' })
       return
     }
-    markPreviewActivity()
     const timer = setTimeout(() => {
       if (previewPending.delete(id)) resolve({ id, ok: false, error: 'Preview command timed out' })
     }, 25_000)
@@ -292,18 +280,8 @@ function createWindow(): void {
   })
 
   win.on('ready-to-show', () => win?.show())
-  // Hand focus back to the user's app when the preview <webview> steals it
-  // mid-navigate/screenshot. Only fires in the brief window after a preview
-  // command dispatched while we were already in the background — a focus the
-  // user didn't ask for — so manual clicks and notification-clicks are safe.
-  if (process.platform === 'darwin') {
-    win.on('focus', () => {
-      if (Date.now() < suppressForegroundUntil) {
-        suppressForegroundUntil = 0
-        win?.blur()
-      }
-    })
-  }
+  // No focus bounce after preview commands, on purpose: on macOS `blur()` is
+  // `orderBack:`. See "That focus is the renderer's" in docs/preview.md.
   win.on('close', (event) => {
     // A dev-override size is not a choice the user made, so it is never saved.
     if (win && !devSize) store.setWindowBounds(win.getBounds())
@@ -1095,8 +1073,6 @@ function registerIpc(): void {
 
   ipcMain.handle('app:focus-window', () => {
     if (!win) return
-    // The user asked for the window (clicked a notification) — never bounce it.
-    suppressForegroundUntil = 0
     if (win.isMinimized()) win.restore()
     win.show()
     win.focus()

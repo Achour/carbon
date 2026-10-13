@@ -106,6 +106,17 @@ used to keep it until the user clicked back. Focus emulation
 without real focus `insertText` still drops the text (re-measured). Measured
 over a type, a click, an Enter and a scroll: 28 ms of focus held in total.
 
+**That focus is the renderer's, never main's.** `<webview>.focus()`, CDP
+input, `capturePage` and navigation all leave a backgrounded app where it is
+(measured on Electron 43 with another app in front); a main-process
+`webContents.focus()` on the guest does not — Electron makes it focus the owner
+window, which *activates the app* over whatever the user is working in. There
+is deliberately no guard in `index.ts` to undo a steal: the one that existed
+`blur()`ed the window when it gained focus shortly after a preview command,
+and on macOS `blur()` is `orderBack:` — it fired mostly when the *user*
+switched back to Carbon while an agent drove the preview, and threw the window
+behind every other app's.
+
 **The agent never opens the panel.** It used to, three ways: `ensure`
 reopened it to mount a tab, `openPreview` opened it even when asked to open
 behind, and the auto-open on a dev server coming up (which, the user's own
