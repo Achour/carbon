@@ -1,9 +1,9 @@
 // A follow probe, not a shot: streams synthetic turns through the real
 // `applyEvent` reducer and checks what the transcript's scroller did with them.
 //
-// - pinned at the bottom, it keeps up — through a tool card and a tall block
-//   that land in one frame, which is what used to unpin it with nobody touching
-//   anything — and it glides rather than jumping;
+// - pinned at the bottom, it keeps up — through growth landing between the
+//   follow's scroll and that scroll's event, which used to unpin it with nobody
+//   touching anything — and it glides rather than jumping;
 // - scrolled up (far, or a nudge of a few lines), it leaves the reader alone;
 // - back at the bottom, or via the jump button, it follows again.
 //
@@ -54,6 +54,22 @@
     ev({ type: 'status', status: 'streaming' });
     await sleep(300);
     out.startGap = gap();
+
+    // 0. The race that used to stop the follow: the column grows after the
+    //    follow's scroll lands and before that scroll's event is dispatched,
+    //    so a position-derived pin read the new height against the old
+    //    position and unpinned with nobody touching anything (5 of 6 runs).
+    const raceRuns = [];
+    for (let k = 0; k < 6; k++) {
+      const m = textMsg();
+      ev({ type: 'part-delta', messageId: m, partIndex: 0, delta: 'short line ' });
+      await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
+      ev({ type: 'part-delta', messageId: m, partIndex: 0, delta: CODE });
+      await sleep(150);
+      raceRuns.push(!!jumpButton());
+    }
+    out.raceUnpinned = raceRuns;
+    await sleep(600);
 
     // 1. Pinned through text, then a tool card and a 40-line block in one frame.
     await stream(textMsg(), PARA.repeat(3));

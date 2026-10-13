@@ -859,8 +859,21 @@ export const ChatView = React.memo(function ChatView({
   React.useEffect(() => {
     const el = scrollRef.current
     if (!el) return
+    // A tick over a nested scroller that can still take it — a tool's output,
+    // a long code block — scrolls that box, not the transcript, so it is not
+    // the reader leaving.
+    const consumedInside = (target: EventTarget | null): boolean => {
+      for (let n = target instanceof Element ? target : null; n && n !== el; n = n.parentElement) {
+        if (n.scrollTop > 0 && n.scrollHeight > n.clientHeight) {
+          const { overflowY } = getComputedStyle(n)
+          if (overflowY === 'auto' || overflowY === 'scroll') return true
+        }
+      }
+      return false
+    }
     const onWheel = (e: WheelEvent): void => {
-      if (e.deltaY < 0 && el.scrollHeight > el.clientHeight + 1) setPinned(false)
+      if (e.deltaY >= 0 || el.scrollHeight <= el.clientHeight + 1) return
+      if (!consumedInside(e.target)) setPinned(false)
     }
     el.addEventListener('wheel', onWheel, { passive: true })
     return () => el.removeEventListener('wheel', onWheel)
