@@ -101,6 +101,14 @@ the window open. The phone is one more window onto them.
   appearance and sets `.dark` in an inline script, all before any stylesheet or
   module loads. The `theme-color` metas follow the same two colours, so the
   status bar matches.
+- **A Home Screen app is one status bar short of `100dvh`.** It draws under
+  its translucent status bar (`black-translucent`, `viewport-fit=cover`), yet
+  iOS reports the viewport as the screen minus that bar. A shell sized
+  `100dvh` therefore left a strip the bar's height empty below the composer.
+  Running standalone at full width, `main.tsx` sets `--app-height` to the
+  screen's own height, and the shell uses `var(--app-height, 100dvh)`. It
+  only ever grows the shell, so a WebKit that stops doing this leaves the
+  variable unset.
 - **Navigation is the desktop's: a sidebar, not a list screen.** `Sidebar.tsx`
   is the compact sidebar at thumb size. New chat and Search sit on top,
   followed by pinned chats, then each project with its real mark (`/api/icons`,

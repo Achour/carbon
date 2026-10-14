@@ -58,7 +58,7 @@ export function App(): React.JSX.Element {
     if (paired) void useRemote.getState().openChat(openId)
   }, [paired, openId])
 
-  if (paired === null) return <div className="h-dvh" />
+  if (paired === null) return <div className="h-[var(--app-height,100dvh)]" />
   if (!paired || connection === 'unpaired') {
     return <PairScreen initialCode={pairCode ?? ''} onPaired={() => location.reload()} />
   }
@@ -177,7 +177,7 @@ function Shell({ activeId, children }: { activeId: string | null; children: Reac
 
   return (
     <div
-      className="relative h-dvh overflow-hidden"
+      className="relative h-[var(--app-height,100dvh)] overflow-hidden"
       onTouchStart={onTouchStart}
       onTouchMove={onTouchMove}
       onTouchEnd={onTouchEnd}
