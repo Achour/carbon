@@ -113,6 +113,13 @@ provider, project or model, and chips name both. Cost per kind comes from
 `priceCell`; Grok's reported cost keeps its total and borrows the rate table's
 split, since xAI reports one figure per turn.
 
+**24 hours is rolling and hourly.** A one-day window means the last 24
+hours, one column per hour — "today" would read as nearly empty every morning.
+Cells carry their local hour (`UsageCell.hour`, cache version 5), and facts are
+keyed by a *bucket* — `YYYY-MM-DD` or `YYYY-MM-DD HH` — that sorts as a string
+in both spellings, so the window tests, the pruned-log cutoff and the previous
+window all stay plain string compares whatever the grain.
+
 **One measure for the whole page.** The Cost / Tokens switch re-expresses the
 headline, the composition, the chart and every column; the old page moved only
 the chart, under a dollar headline and beside a table carrying both. The

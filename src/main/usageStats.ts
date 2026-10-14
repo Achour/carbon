@@ -1,7 +1,7 @@
 import { createReadStream, type Dirent } from 'node:fs'
 import { readFile, readdir, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
-import type { UsageFact, UsageProvider, UsageReport } from '@shared/types'
+import type { UsageFact, UsageProvider, UsageReport, UsageUnit } from '@shared/types'
 import {
   CodexFileReader,
   addSample,
@@ -10,6 +10,7 @@ import {
   emptyCell,
   emptyKinds,
   localDay,
+  localHour,
   parseClaudeLine,
   parseGrokLine,
   priceCell,
@@ -29,8 +30,8 @@ import { resolveProjects } from './usageProjects'
  * `(path, mtime, size)`, persisted to `userData/usage-cache.json`. Session logs
  * are append-only, so a file whose mtime and size are unchanged cannot have
  * changed content; a re-scan then costs one `stat` per file and reads only what
- * was written since. That is also why changing the range (7 / 30 / 90 days) never
- * re-reads anything: cells are stored per day and simply re-filtered.
+ * was written since. That is also why changing the range (24 hours to 90 days)
+ * never re-reads anything: cells are stored per hour and simply re-filtered.
  */
 
 /** Skip anything modified before the window — an append-only log can't hide newer entries. */
@@ -59,8 +60,10 @@ const CACHE_FILE = 'usage-cache.json'
  *
  * 4 adds the folder each file ran in (`CacheEntry.cwd`), which the project
  * split needs and no earlier entry recorded.
+ *
+ * 5 splits cells by hour (`UsageCell.hour`) for the 24-hour view.
  */
-const CACHE_VERSION = 4
+const CACHE_VERSION = 5
 /** Don't let the cache grow unbounded as sessions accumulate. */
 const CACHE_MAX_FILES = 20_000
 
@@ -199,11 +202,12 @@ async function readClaudeFile(path: string): Promise<FileRead> {
     }
     cwd ??= s.cwd
     const day = localDay(s.ts)
+    const hour = localHour(s.ts)
     // Speed is part of the key: fast mode is a different SKU on the same model
     // id, so folding the two together would make the cell unpriceable later.
-    const k = `${s.model} ${s.speed ?? ''} ${day}`
+    const k = `${s.model} ${s.speed ?? ''} ${day} ${hour}`
     let c = cells.get(k)
-    if (!c) cells.set(k, (c = emptyCell('claude', s.model, day, s.speed)))
+    if (!c) cells.set(k, (c = emptyCell('claude', s.model, day, s.speed, hour)))
     addSample(c, s)
   })
   return { cells: [...cells.values()], cwd }
@@ -215,9 +219,10 @@ async function readCodexFile(path: string): Promise<FileRead> {
   await forEachLine(path, (line) => reader.push(line))
   for (const s of reader.take()) {
     const day = localDay(s.ts)
-    const k = `${s.model} ${day}`
+    const hour = localHour(s.ts)
+    const k = `${s.model} ${day} ${hour}`
     let c = cells.get(k)
-    if (!c) cells.set(k, (c = emptyCell('codex', s.model, day)))
+    if (!c) cells.set(k, (c = emptyCell('codex', s.model, day, undefined, hour)))
     addSample(c, {
       input: s.input,
       cacheRead: s.cacheRead,
@@ -252,9 +257,10 @@ async function readGrokFile(path: string): Promise<FileRead> {
     if (!samples) return
     for (const s of samples) {
       const day = localDay(s.ts)
-      const k = `${s.model} ${day}`
+      const hour = localHour(s.ts)
+      const k = `${s.model} ${day} ${hour}`
       let c = cells.get(k)
-      if (!c) cells.set(k, (c = emptyCell('grok', s.model, day)))
+      if (!c) cells.set(k, (c = emptyCell('grok', s.model, day, undefined, hour)))
       addSample(c, {
         input: s.input,
         cacheRead: s.cacheRead,
@@ -358,13 +364,30 @@ async function claudeRetentionDays(home: string): Promise<number> {
 
 // ---------- Aggregation ----------
 
-/** Every local day in `[from, to]`, so the chart has no gaps to interpolate. */
-function dayRange(from: Date, to: Date): string[] {
+const pad2 = (n: number): string => String(n).padStart(2, '0')
+
+/**
+ * A cell's column: its day, or its day and hour for the 24-hour view. Both
+ * spellings sort as strings, so every window test below is a string compare.
+ */
+function bucketOf(cell: UsageCell, unit: UsageUnit): string {
+  return unit === 'hour' ? `${cell.day} ${pad2(cell.hour)}` : cell.day
+}
+
+function bucketAt(ms: number, unit: UsageUnit): string {
+  return unit === 'hour' ? `${localDay(ms)} ${pad2(localHour(ms))}` : localDay(ms)
+}
+
+/** Every bucket in `[from, to]`, so the chart has no gaps to interpolate. */
+function bucketRange(from: Date, to: Date, unit: UsageUnit): string[] {
   const out: string[] = []
   const cur = new Date(from)
   while (cur <= to) {
-    out.push(localDay(cur.getTime()))
-    cur.setDate(cur.getDate() + 1)
+    const key = bucketAt(cur.getTime(), unit)
+    // The autumn DST hour repeats a wall-clock hour; one column for both.
+    if (out.at(-1) !== key) out.push(key)
+    if (unit === 'hour') cur.setHours(cur.getHours() + 1)
+    else cur.setDate(cur.getDate() + 1)
   }
   return out
 }
@@ -375,16 +398,26 @@ let inflight: Promise<UsageReport> | null = null
 let inflightKey = ''
 
 async function scan(opts: UsageStatsOptions, days: number, refresh: boolean): Promise<UsageReport> {
+  // A one-day window is the last 24 hours, rolling, one column per hour —
+  // "today" would read as nearly empty every morning. Longer windows are whole
+  // calendar days ending today.
+  const unit: UsageUnit = days === 1 ? 'hour' : 'day'
   const now = new Date()
   const end = new Date(now)
-  end.setHours(23, 59, 59, 999)
   const start = new Date(now)
-  start.setDate(start.getDate() - (days - 1))
-  start.setHours(0, 0, 0, 0)
+  if (unit === 'hour') {
+    end.setMinutes(59, 59, 999)
+    start.setHours(start.getHours() - 23, 0, 0, 0)
+  } else {
+    end.setHours(23, 59, 59, 999)
+    start.setDate(start.getDate() - (days - 1))
+    start.setHours(0, 0, 0, 0)
+  }
   // The same-length window just before this one, for the change line. It is
   // read through the same cache, so after the first scan it costs nothing.
   const prevStart = new Date(start)
-  prevStart.setDate(prevStart.getDate() - days)
+  if (unit === 'hour') prevStart.setHours(prevStart.getHours() - 24)
+  else prevStart.setDate(prevStart.getDate() - days)
 
   // Rates and the file list are independent; fetch and walk together so a cold
   // rate fetch never adds to the scan's wall clock.
@@ -451,16 +484,19 @@ async function scan(opts: UsageStatsOptions, days: number, refresh: boolean): Pr
   }
   void saveCache(opts.cacheDir, cache)
 
-  const from = localDay(start.getTime())
-  const to = localDay(end.getTime())
-  const prevFrom = localDay(prevStart.getTime())
-  const dayList = dayRange(start, end)
-  const dayIndex = new Map(dayList.map((d, i) => [d, i]))
+  const from = bucketAt(start.getTime(), unit)
+  const to = bucketAt(end.getTime(), unit)
+  const prevFrom = bucketAt(prevStart.getTime(), unit)
+  const buckets = bucketRange(start, end, unit)
+  const bucketIndex = new Map(buckets.map((b, i) => [b, i]))
 
   // Only folders that contributed to the window are worth resolving.
   const cwds = new Set<string>()
   for (const entry of live.values()) {
-    if (entry.cwd && entry.cells.some((c) => c.day >= from && c.day <= to)) cwds.add(entry.cwd)
+    if (!entry.cwd) continue
+    if (entry.cells.some((c) => c.day >= from.slice(0, 10) && bucketOf(c, unit) >= from)) {
+      cwds.add(entry.cwd)
+    }
   }
   const owner = await resolveProjects(cwds, opts.home)
   const projects: string[] = []
@@ -477,7 +513,7 @@ async function scan(opts: UsageStatsOptions, days: number, refresh: boolean): Pr
   }
 
   const facts = new Map<string, UsageFact>()
-  const daySessions = dayList.map(() => 0)
+  const bucketSessions = buckets.map(() => 0)
   const previous = { costUsd: 0, tokens: 0 }
   let sessions = 0
 
@@ -485,28 +521,32 @@ async function scan(opts: UsageStatsOptions, days: number, refresh: boolean): Pr
     // A subagent transcript is part of its parent session, not another one —
     // counting the files would roughly double the number a user recognizes.
     const isSession = !path.includes('/subagents/')
-    const activeDays = new Set<number>()
+    const active = new Set<number>()
     let project = -1
     for (const cell of entry.cells) {
-      if (cell.day < prevFrom || cell.day > to) continue
+      // The day test first: it rejects nearly every cell of a long history
+      // without building the hour key.
+      if (cell.day < prevFrom.slice(0, 10)) continue
+      const bucket = bucketOf(cell, unit)
+      if (bucket < prevFrom || bucket > to) continue
       // Priced here rather than at parse time: cells are cached per file and
       // rates refresh daily, so cost has to be a function of the current table
       // and not a number frozen into a file that never changes again.
       const cost = priceCell(cell, rates)
-      if (cell.day < from) {
+      if (bucket < from) {
         previous.costUsd += cost.costUsd
         previous.tokens += cellTokens(cell)
         continue
       }
-      activeDays.add(dayIndex.get(cell.day) ?? -1)
+      active.add(bucketIndex.get(bucket) ?? -1)
       if (project === -1) project = projectOf(entry.cwd)
-      const key = `${cell.day} ${cell.provider} ${cell.model} ${project}`
+      const key = `${bucket} ${cell.provider} ${cell.model} ${project}`
       let fact = facts.get(key)
       if (!fact) {
         facts.set(
           key,
           (fact = {
-            day: cell.day,
+            bucket,
             provider: cell.provider,
             model: cell.model,
             project,
@@ -529,21 +569,22 @@ async function scan(opts: UsageStatsOptions, days: number, refresh: boolean): Pr
       fact.responses += cell.responses
       fact.unpriced += cost.unpricedTokens
     }
-    if (isSession && activeDays.size) {
+    if (isSession && active.size) {
       sessions++
-      for (const i of activeDays) if (i >= 0) daySessions[i]++
+      for (const i of active) if (i >= 0) bucketSessions[i]++
     }
   }
 
   return {
+    unit,
     from,
     to,
-    days: dayList,
+    buckets,
     facts: [...facts.values()],
     projects,
-    daySessions,
+    bucketSessions,
     sessions,
-    previous,
+    previous: { ...previous, from: prevFrom },
     keptFrom: { claude: localDay(claudeKept.getTime()) },
     scannedAt: Date.now(),
     notes

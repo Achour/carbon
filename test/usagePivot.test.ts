@@ -4,16 +4,16 @@ import type { UsageFact } from '../src/shared/types.ts'
 import {
   OTHER,
   change,
-  dailyStack,
+  columnStack,
   filterFacts,
   groupFacts,
   totalOf,
   valueOf
 } from '../src/renderer/src/lib/usagePivot.ts'
 
-function fact(day: string, provider: UsageFact['provider'], model: string, project: number, usd: number, tokens: number): UsageFact {
+function fact(bucket: string, provider: UsageFact['provider'], model: string, project: number, usd: number, tokens: number): UsageFact {
   return {
-    day,
+    bucket,
     provider,
     model,
     project,
@@ -44,14 +44,14 @@ test('a model is keyed with its provider', () => {
 })
 
 test('filters combine day and focus', () => {
-  const only = filterFacts(facts, { day: '2026-10-02', focus: { by: 'project', key: '1' } })
+  const only = filterFacts(facts, { bucket: '2026-10-02', focus: { by: 'project', key: '1' } })
   assert.equal(only.length, 2)
   assert.equal(valueOf(totalOf(only), 'cost'), 3)
   assert.equal(filterFacts(facts, {}), facts)
 })
 
-test('daily stack keeps every day and folds the tail into Other', () => {
-  const s = dailyStack(facts, ['2026-09-30', '2026-10-01', '2026-10-02'], 'model', 'cost', 1)
+test('the column stack keeps every bucket and folds the tail into Other', () => {
+  const s = columnStack(facts, ['2026-09-30', '2026-10-01', '2026-10-02'], 'model', 'cost', 1)
   assert.deepEqual(s.keys, ['claude\u0000opus', OTHER])
   assert.deepEqual(s.values, [
     [0, 10, 1],

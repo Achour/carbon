@@ -1260,6 +1260,8 @@ export interface UsageOverview {
 
 /** Windows the Usage page offers, shortest first — the order they're read in. */
 export const USAGE_RANGES = [
+  // One day is the last 24 hours, rolling, drawn by the hour.
+  { days: 1, label: '24 hours' },
   { days: 7, label: '7 days' },
   { days: 30, label: '30 days' },
   { days: 90, label: '90 days' }
@@ -1292,9 +1294,12 @@ export type UsageProvider = Exclude<Provider, 'antigravity' | 'cursor'>
  * by whichever dimension is on screen and filters them by the selected day or
  * row, so every view is a fold over the same array rather than a second report.
  */
+/** A report's column grain: an hour for the 24-hour view, a day otherwise. */
+export type UsageUnit = 'day' | 'hour'
+
 export interface UsageFact {
-  /** `YYYY-MM-DD`, local. */
-  day: string
+  /** The column it falls in: `YYYY-MM-DD`, or `YYYY-MM-DD HH` by the hour. Local. */
+  bucket: string
   provider: UsageProvider
   model: string
   /** Index into `UsageReport.projects`. */
@@ -1321,23 +1326,24 @@ export interface UsageFact {
  * drive the same CLIs and write to the same logs.
  */
 export interface UsageReport {
-  /** Inclusive local-day bounds, `YYYY-MM-DD`. */
+  unit: UsageUnit
+  /** Inclusive bounds, as buckets (`YYYY-MM-DD`, or `YYYY-MM-DD HH` by the hour). */
   from: string
   to: string
-  /** Every day in the window, oldest first — the chart's columns, gaps included. */
-  days: string[]
+  /** Every bucket in the window, oldest first — the chart's columns, gaps included. */
+  buckets: string[]
   facts: UsageFact[]
   /**
    * Project roots, indexed by `UsageFact.project`. A worktree is folded into
    * the repository it belongs to; `''` is a log that never recorded a folder.
    */
   projects: string[]
-  /** Distinct sessions active on each of `days`, by index. */
-  daySessions: number[]
+  /** Distinct sessions active in each of `buckets`, by index. */
+  bucketSessions: number[]
   /** Distinct sessions in the whole window (subagent files count with their parent). */
   sessions: number
   /** The same-length window just before this one, for the change line. */
-  previous: { costUsd: number; tokens: number }
+  previous: { costUsd: number; tokens: number; from: string }
   /**
    * Per provider, the first day its CLI still keeps logs for, when it deletes
    * older ones. Claude Code does — `cleanupPeriodDays`, 30 by default — so a

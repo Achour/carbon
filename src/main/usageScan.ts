@@ -41,6 +41,13 @@ export interface UsageCell {
   speed?: string
   /** Local calendar day, `YYYY-MM-DD`. */
   day: string
+  /**
+   * Local hour of the day, 0–23 — what the 24-hour view draws a column per.
+   * Kept on every cell rather than only recent ones: a file's cells are cached
+   * once and re-filtered for every range, so the grain has to be the finest
+   * any range asks for.
+   */
+  hour: number
   /** Input tokens billed at the full rate (cache misses). */
   input: number
   /** Input tokens served from cache, billed at ~10% of input. */
@@ -76,13 +83,15 @@ export function emptyCell(
   provider: UsageCell['provider'],
   model: string,
   day: string,
-  speed?: string
+  speed?: string,
+  hour = 0
 ): UsageCell {
   return {
     provider,
     model,
     speed,
     day,
+    hour,
     input: 0,
     cacheRead: 0,
     cacheWrite5m: 0,
@@ -96,6 +105,11 @@ export function emptyCell(
 /** Every token in a cell, whatever kind. */
 export function cellTokens(c: UsageCell): number {
   return c.input + c.cacheRead + c.cacheWrite5m + c.cacheWrite1h + c.output
+}
+
+/** The local hour, 0–23 — the 24-hour view's grain. */
+export function localHour(ms: number): number {
+  return new Date(ms).getHours()
 }
 
 /** `YYYY-MM-DD` in the *local* zone — the day the user remembers working. */

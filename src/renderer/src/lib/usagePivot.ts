@@ -5,7 +5,7 @@ import type { UsageAmounts, UsageFact, UsageKind } from '@shared/types'
  *
  * Main reduces the logs to (day, provider, model, project) slices and stops
  * there; this file is what turns them into whatever the page is showing — a
- * headline, a stacked column per day, a table grouped by provider, project or
+ * headline, a stacked column per day or hour, a table grouped by provider, project or
  * model — under whichever filters are set. Keeping it here, and pure, is what
  * lets a click on a column or a row re-cut the whole page instantly without a
  * second report or a round trip.
@@ -79,17 +79,17 @@ export function keyOf(f: UsageFact, by: UsageGroup): string {
 }
 
 export interface UsageFilter {
-  /** `YYYY-MM-DD`: only that day. */
-  day?: string | null
+  /** Only that column — a day, or an hour in the 24-hour view. */
+  bucket?: string | null
   /** Only facts filing under this key of `by`. */
   focus?: { by: UsageGroup; key: string } | null
 }
 
 export function filterFacts(facts: readonly UsageFact[], filter: UsageFilter): UsageFact[] {
-  const { day, focus } = filter
-  if (!day && !focus) return facts as UsageFact[]
+  const { bucket, focus } = filter
+  if (!bucket && !focus) return facts as UsageFact[]
   return facts.filter(
-    (f) => (!day || f.day === day) && (!focus || keyOf(f, focus.by) === focus.key)
+    (f) => (!bucket || f.bucket === bucket) && (!focus || keyOf(f, focus.by) === focus.key)
   )
 }
 
@@ -130,25 +130,25 @@ export function groupFacts(
 /** The key the chart files everything past its named series under. */
 export const OTHER = '\u0000other'
 
-export interface DailyStack {
+export interface ColumnStack {
   /** Series keys, bottom of the stack first; `OTHER` last when present. */
   keys: string[]
-  /** `values[series][day]`, in `measure`. */
+  /** `values[series][bucket]`, in `measure`. */
   values: number[][]
 }
 
 /**
- * One stacked column per day: the `limit` largest series by name, the rest
- * folded into `OTHER`. Series are ranked over the whole window, not per day, so
- * a series keeps its place in the stack from one column to the next.
+ * One stacked column per bucket: the `limit` largest series by name, the rest
+ * folded into `OTHER`. Series are ranked over the whole window, not per column,
+ * so a series keeps its place in the stack from one column to the next.
  */
-export function dailyStack(
+export function columnStack(
   facts: readonly UsageFact[],
-  days: readonly string[],
+  buckets: readonly string[],
   by: UsageGroup,
   measure: UsageMeasure,
   limit: number
-): DailyStack {
+): ColumnStack {
   const ranked = groupFacts(facts, by, measure)
     .filter((r) => valueOf(r.slice, measure) > 0)
     .map((r) => r.key)
@@ -156,10 +156,10 @@ export function dailyStack(
   const hasOther = ranked.length > limit
   const keys = hasOther ? [...named, OTHER] : named
   const slot = new Map(keys.map((k, i) => [k, i]))
-  const dayAt = new Map(days.map((d, i) => [d, i]))
-  const values = keys.map(() => days.map(() => 0))
+  const at = new Map(buckets.map((b, i) => [b, i]))
+  const values = keys.map(() => buckets.map(() => 0))
   for (const f of facts) {
-    const d = dayAt.get(f.day)
+    const d = at.get(f.bucket)
     if (d === undefined) continue
     const s = slot.get(keyOf(f, by)) ?? (hasOther ? keys.length - 1 : undefined)
     if (s === undefined) continue

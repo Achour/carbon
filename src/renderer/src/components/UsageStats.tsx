@@ -2,7 +2,7 @@ import * as React from 'react'
 import { DotSpinner } from '@/components/ui/dot-spinner'
 import { RefreshCw, X } from 'lucide-react'
 import { PROVIDER_LABELS, USAGE_KINDS, USAGE_RANGES } from '@shared/types'
-import type { UsageFact, UsageKind, UsageProvider, UsageReport } from '@shared/types'
+import type { UsageFact, UsageKind, UsageProvider, UsageReport, UsageUnit } from '@shared/types'
 import { cn } from '@/lib/utils'
 import { formatTokens, formatUsd, relativeTime } from '@/lib/format'
 import { projectLabel } from '@/lib/projects'
@@ -11,7 +11,7 @@ import {
   OTHER,
   amountsOf,
   change,
-  dailyStack,
+  columnStack,
   filterFacts,
   groupFacts,
   keyOf,
@@ -28,7 +28,7 @@ import { WithTooltip } from '@/components/ui/tooltip'
 import { ProjectAvatar } from '@/components/ui/project-avatar'
 
 /**
- * The Usage page: what was spent, where, over the last 7/30/90 days.
+ * The Usage page: what was spent, where, over the last 24 hours to 90 days.
  *
  * Deliberately a page and not another popover. The sidebar's Usage chip answers
  * "can I start a big turn right now" in one number and belongs next to the
@@ -43,7 +43,7 @@ import { ProjectAvatar } from '@/components/ui/project-avatar'
  *
  * **Every number is a fold over one array of facts** (`lib/usagePivot.ts`), so
  * the page is explorable rather than fixed: a column of the chart filters the
- * page to that day, a row of the table filters it to that provider, project or
+ * page to that day (or hour), a row of the table filters it to that provider, project or
  * model, and both clear from the chips that name them.
  *
  * The cost is *list price*, not a bill. On a subscription nobody is charged per
@@ -135,13 +135,25 @@ function shortDay(day: string, weekday = false): string {
   })
 }
 
-/** `day` moved by `n` days, `YYYY-MM-DD` in and out, local. */
-function addDays(day: string, n: number): string {
-  const [y, m, d] = day.split('-').map(Number)
-  const t = new Date(y, m - 1, d + n)
-  const p = (v: number): string => String(v).padStart(2, '0')
-  return `${t.getFullYear()}-${p(t.getMonth() + 1)}-${p(t.getDate())}`
+/**
+ * A column's name: `Jul 9` for a day, `9 PM` for an hour. `long` adds the
+ * weekday — for the tooltip and the filter chip, which stand alone.
+ */
+function bucketLabel(bucket: string, long = false): string {
+  if (bucket.length <= 10) return shortDay(bucket, long)
+  const [y, m, d] = bucket.slice(0, 10).split('-').map(Number)
+  const at = new Date(y, m - 1, d, Number(bucket.slice(11)))
+  return long
+    ? at.toLocaleString(undefined, { weekday: 'short', hour: 'numeric' })
+    : at.toLocaleTimeString(undefined, { hour: 'numeric' })
 }
+
+/** The window, said the way the range picker says it. */
+function windowLabel(report: UsageReport): string {
+  return report.unit === 'hour' ? '24 hours' : `${report.buckets.length} days`
+}
+
+const PER: Record<UsageUnit, string> = { day: 'a day', hour: 'an hour' }
 
 /**
  * The first day every provider still has logs for, or null when nothing is
@@ -333,31 +345,33 @@ function Summary({
   facts,
   measure,
   filtered,
-  day
+  bucket
 }: {
   report: UsageReport
   facts: UsageFact[]
   measure: UsageMeasure
   filtered: boolean
-  day: string | null
+  bucket: string | null
 }): React.JSX.Element {
   const slice = totalOf(facts)
   const amounts = amountsOf(slice, measure)
   const value = sumAmounts(amounts)
   const tokens = sumAmounts(slice.tokens)
-  const span = day ? 1 : report.days.length
+  const span = bucket ? 1 : report.buckets.length
   const previous = measure === 'cost' ? report.previous.costUsd : report.previous.tokens
   // A previous window that reaches past a provider's pruned logs is missing that
   // provider's spend, and the change it implies is an artifact of the deletion.
   const kept = completeFrom(report)
-  const comparable = !kept || addDays(report.from, -report.days.length) >= kept
+  const comparable = !kept || report.previous.from >= kept
   const delta = filtered || !comparable ? null : change(value, previous)
   const observedInput = slice.tokens.input + slice.tokens.cacheRead
-  const sessions = day ? report.daySessions[report.days.indexOf(day)] ?? 0 : report.sessions
+  const sessions = bucket
+    ? (report.bucketSessions[report.buckets.indexOf(bucket)] ?? 0)
+    : report.sessions
 
   const details: string[] = []
-  if (!day) details.push(`${compact(value / span, measure)} a day`)
-  if (!filtered || day) details.push(`${sessions.toLocaleString()} session${sessions === 1 ? '' : 's'}`)
+  if (!bucket) details.push(`${compact(value / span, measure)} ${PER[report.unit]}`)
+  if (!filtered || bucket) details.push(`${sessions.toLocaleString()} session${sessions === 1 ? '' : 's'}`)
   details.push(`${slice.responses.toLocaleString()} responses`)
 
   return (
@@ -369,7 +383,7 @@ function Summary({
         {measure === 'tokens' && <span className="text-[15px] text-muted-foreground">tokens</span>}
         {delta != null && (
           <WithTooltip
-            label={`${fmt(previous, measure)} in the ${report.days.length} days before`}
+            label={`${fmt(previous, measure)} in the ${windowLabel(report)} before`}
           >
             <span
               className={cn(
@@ -378,7 +392,7 @@ function Summary({
               )}
             >
               {delta >= 0 ? '↑' : '↓'} {Math.abs(delta).toFixed(Math.abs(delta) >= 10 ? 0 : 1)}% vs
-              previous {report.days.length} days
+              previous {windowLabel(report)}
             </span>
           </WithTooltip>
         )}
@@ -447,7 +461,8 @@ const CHART_H = 220
 const PAD = { top: 10, right: 4, bottom: 22, left: 48 }
 
 /**
- * One column per day, stacked by the current grouping.
+ * One column per day — per hour in the 24-hour view — stacked by the current
+ * grouping.
  *
  * Stacked *columns*, where the page used to overlay *areas*. The objection to
  * stacking was right for lines — a stacked line draws a small series at the
@@ -456,17 +471,19 @@ const PAD = { top: 10, right: 4, bottom: 22, left: 48 }
  * column's height is the day's, so both questions are answered at a glance.
  * Columns are also discrete, which is what makes a day *clickable*.
  */
-function DailyColumns({
-  days,
+function Columns({
+  buckets: days,
+  unit,
   stack,
   info,
   measure,
-  day,
-  onDay,
+  selectedBucket: day,
+  onBucket: onDay,
   keptFrom,
   prunedLabel
 }: {
-  days: string[]
+  buckets: string[]
+  unit: UsageUnit
   stack: { keys: string[]; values: number[][] }
   /** Days before this have only partial logs; drawn as a shaded band. */
   keptFrom: string | null
@@ -474,8 +491,8 @@ function DailyColumns({
   prunedLabel: string
   info: (key: string) => SeriesInfo
   measure: UsageMeasure
-  day: string | null
-  onDay: (day: string | null) => void
+  selectedBucket: string | null
+  onBucket: (bucket: string | null) => void
 }): React.JSX.Element {
   const box = React.useRef<HTMLDivElement>(null)
   const pruned = keptFrom ? days.filter((d) => d < keptFrom).length : 0
@@ -502,11 +519,13 @@ function DailyColumns({
     return i >= 0 && i < n ? i : null
   }
 
-  // Ends and a midpoint for a month or more; every day for a week.
-  const labels =
-    n <= 10
-      ? days.map((_, i) => i)
-      : [0, Math.floor((n - 1) / 2), n - 1]
+  // Every day for a week, every third hour for a day, and the ends and a
+  // midpoint for a month or more. Hours are centred under their column like
+  // a week's days; only the long ranges pin their ends to the plot's edges.
+  const centred = n <= 10 || unit === 'hour'
+  const labels = centred
+    ? days.map((_, i) => i).filter((i) => unit !== 'hour' || (n - 1 - i) % 3 === 0)
+    : [0, Math.floor((n - 1) / 2), n - 1]
   const active = hover ?? (selected >= 0 ? selected : null)
 
   return (
@@ -515,7 +534,7 @@ function DailyColumns({
         width={width || 1}
         height={CHART_H}
         role="img"
-        aria-label={`Daily ${measure} by ${stack.keys.length} series`}
+        aria-label={`${measure} by ${unit}, ${stack.keys.length} series`}
         className="cursor-pointer"
         onMouseMove={(e) => setHover(indexAt(e))}
         onMouseLeave={() => setHover(null)}
@@ -614,7 +633,7 @@ function DailyColumns({
           <text
             key={days[i]}
             x={
-              n <= 10
+              centred
                 ? x(i) + barW / 2
                 : i === 0
                   ? PAD.left
@@ -623,13 +642,13 @@ function DailyColumns({
                     : x(i) + barW / 2
             }
             y={CHART_H - 5}
-            textAnchor={n <= 10 ? 'middle' : i === 0 ? 'start' : i === n - 1 ? 'end' : 'middle'}
+            textAnchor={centred ? 'middle' : i === 0 ? 'start' : i === n - 1 ? 'end' : 'middle'}
             className={cn(
               'text-[10px]',
               i === selected ? 'fill-foreground font-medium' : 'fill-muted-foreground'
             )}
           >
-            {shortDay(days[i])}
+            {bucketLabel(days[i])}
           </text>
         ))}
       </svg>
@@ -644,7 +663,7 @@ function DailyColumns({
           }
         >
           <div className="mb-1 flex items-baseline justify-between gap-3">
-            <span className="font-medium">{shortDay(days[active], true)}</span>
+            <span className="font-medium">{bucketLabel(days[active], true)}</span>
             <span className="tabular-nums font-medium">{fmt(totals[active], measure)}</span>
           </div>
           {stack.keys
@@ -665,7 +684,7 @@ function DailyColumns({
             })}
           {totals[active] === 0 && <div className="text-muted-foreground">Nothing recorded</div>}
           <div className="mt-1.5 border-t border-border pt-1 text-muted-foreground">
-            {days[active] === day ? 'Click to show every day' : 'Click to see this day'}
+            {days[active] === day ? `Click to show every ${unit}` : `Click to see this ${unit}`}
           </div>
         </div>
       )}
@@ -809,7 +828,7 @@ function Caveats({ report, facts }: { report: UsageReport; facts: UsageFact[] })
   const claudeKept = report.keptFrom.claude
   if (claudeKept && report.from < claudeKept) {
     lines.push(
-      `Claude Code deletes its session logs after ${daysBetween(claudeKept, report.to)} days (cleanupPeriodDays in ~/.claude/settings.json), so its usage before ${shortDay(claudeKept)} can’t be counted.`
+      `Claude Code deletes its session logs after ${daysBetween(claudeKept, report.to.slice(0, 10))} days (cleanupPeriodDays in ~/.claude/settings.json), so its usage before ${shortDay(claudeKept)} can’t be counted.`
     )
   }
   if (slice.unpriced > 0 && all > 0) {
@@ -848,12 +867,12 @@ export function UsageStats(): React.JSX.Element {
 
   const [measure, setMeasure] = React.useState<UsageMeasure>('cost')
   const [by, setBy] = React.useState<UsageGroup>('provider')
-  const [day, setDay] = React.useState<string | null>(null)
+  const [bucket, setBucket] = React.useState<string | null>(null)
   const [focus, setFocus] = React.useState<string | null>(null)
 
-  // A filter names a day or a row of *this* report; a new window drops both.
+  // A filter names a column or a row of *this* report; a new window drops both.
   React.useEffect(() => {
-    setDay((d) => (d && report?.days.includes(d) ? d : null))
+    setBucket((b) => (b && report?.buckets.includes(b) ? b : null))
     setFocus(null)
   }, [report])
 
@@ -861,13 +880,13 @@ export function UsageStats(): React.JSX.Element {
     if (report) void loadProjectIcons(report.projects.filter(Boolean))
   }, [report, loadProjectIcons])
 
-  const filtered = day != null || focus != null
+  const filtered = bucket != null || focus != null
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape') return
       // Esc peels a filter before it closes the page.
       if (filtered) {
-        setDay(null)
+        setBucket(null)
         setFocus(null)
       } else closeUsage()
     }
@@ -876,16 +895,16 @@ export function UsageStats(): React.JSX.Element {
   }, [closeUsage, filtered])
 
   const facts = report?.facts ?? []
-  // The chart is never cut by the day — it is what you pick the day from.
+  // The chart is never cut by its column — it is what you pick the column from.
   const chartFacts = React.useMemo(
     () => filterFacts(facts, { focus: focus ? { by, key: focus } : null }),
     [facts, focus, by]
   )
-  const pageFacts = React.useMemo(() => filterFacts(chartFacts, { day }), [chartFacts, day])
+  const pageFacts = React.useMemo(() => filterFacts(chartFacts, { bucket }), [chartFacts, bucket])
   // The table is never cut by its own focus — it is what you pick the row from.
   const rows = React.useMemo(
-    () => groupFacts(filterFacts(facts, { day }), by, measure),
-    [facts, day, by, measure]
+    () => groupFacts(filterFacts(facts, { bucket }), by, measure),
+    [facts, bucket, by, measure]
   )
   const ranked = React.useMemo(
     () => groupFacts(facts, by, measure).map((r) => r.key),
@@ -894,7 +913,7 @@ export function UsageStats(): React.JSX.Element {
   const info = useSeriesInfo(report ?? EMPTY, by, ranked)
   const stack = React.useMemo(() => {
     if (!report) return { keys: [], values: [] }
-    return dailyStack(chartFacts, report.days, by, measure, SERIES_LIMIT)
+    return columnStack(chartFacts, report.buckets, by, measure, SERIES_LIMIT)
   }, [report, chartFacts, by, measure])
 
   const focusSample = focus ? facts.find((f) => keyOf(f, by) === focus) : undefined
@@ -923,9 +942,11 @@ export function UsageStats(): React.JSX.Element {
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex min-w-0 flex-wrap items-center gap-2">
                 <h1 className="text-[15px] font-semibold">
-                  {shortDay(report.from)} – {shortDay(report.to)}
+                  {report.unit === 'hour'
+                    ? 'Last 24 hours'
+                    : `${shortDay(report.from)} – ${shortDay(report.to)}`}
                 </h1>
-                {day && <Chip onClear={() => setDay(null)}>{shortDay(day, true)}</Chip>}
+                {bucket && <Chip onClear={() => setBucket(null)}>{bucketLabel(bucket, true)}</Chip>}
                 {focus && (
                   <Chip onClear={() => setFocus(null)}>
                     <RowLabel info={info(focus, focusSample)} size="xs" />
@@ -962,12 +983,18 @@ export function UsageStats(): React.JSX.Element {
               </div>
             </div>
 
-            <Summary report={report} facts={pageFacts} measure={measure} filtered={filtered} day={day} />
+            <Summary
+              report={report}
+              facts={pageFacts}
+              measure={measure}
+              filtered={filtered}
+              bucket={bucket}
+            />
 
             <section>
               <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
                 <h2 className="text-[13px] font-semibold">
-                  {measure === 'cost' ? 'Cost' : 'Tokens'} by day
+                  {measure === 'cost' ? 'Cost' : 'Tokens'} by {report.unit}
                 </h2>
                 <Segmented
                   ariaLabel="Group by"
@@ -979,13 +1006,14 @@ export function UsageStats(): React.JSX.Element {
                   options={GROUPS}
                 />
               </div>
-              <DailyColumns
-                days={report.days}
+              <Columns
+                buckets={report.buckets}
+                unit={report.unit}
                 stack={stack}
                 info={info}
                 measure={measure}
-                day={day}
-                onDay={setDay}
+                selectedBucket={bucket}
+                onBucket={setBucket}
                 keptFrom={completeFrom(report)}
                 prunedLabel={`${(Object.keys(report.keptFrom) as UsageProvider[])
                   .filter((p) => (report.keptFrom[p] ?? '') > report.from)
@@ -1039,14 +1067,15 @@ export function UsageStats(): React.JSX.Element {
 }
 
 const EMPTY: UsageReport = {
+  unit: 'day',
   from: '',
   to: '',
-  days: [],
+  buckets: [],
   facts: [],
   projects: [],
-  daySessions: [],
+  bucketSessions: [],
   sessions: 0,
-  previous: { costUsd: 0, tokens: 0 },
+  previous: { costUsd: 0, tokens: 0, from: '' },
   keptFrom: {},
   scannedAt: 0,
   notes: []
