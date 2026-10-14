@@ -1,4 +1,7 @@
 import type { PreviewColorScheme, PreviewViewport, PreviewViewportPatch } from './previewDevices'
+import type { Schedule } from './schedule'
+
+export type { Schedule }
 
 export const PROVIDERS = ['claude', 'codex', 'grok', 'antigravity', 'cursor'] as const
 
@@ -463,9 +466,98 @@ export interface ChatMeta {
    * here rather than lost with it, and delivered like any other.
    */
   delegationInbox?: DelegationRecord[]
+  /**
+   * Set on a chat a **scheduled task** started — every run is a chat of its
+   * own. The record is the run's: which task, when it fired, and how it ended.
+   * See `docs/scheduled.md`.
+   */
+  scheduled?: ScheduledRun
   createdAt: number
   updatedAt: number
 }
+
+/**
+ * How a scheduled run ended. `running` is the only live state; `interrupted`
+ * is what a relaunch finds a `running` record as — the provider died with the
+ * app, and nothing can say whether the work finished.
+ */
+export type ScheduledRunStatus = 'running' | 'completed' | 'failed' | 'stopped' | 'interrupted'
+
+export interface ScheduledRun {
+  taskId: string
+  /** The task's name when it fired — the run outlives a rename or a delete. */
+  taskName: string
+  firedAt: number
+  /**
+   * When the run was due, when that was well before it fired: a catch-up for
+   * a time missed while Carbon was closed or the Mac asleep.
+   */
+  dueAt?: number
+  /** Started from "Run now", not by the clock. */
+  manual?: true
+  status: ScheduledRunStatus
+  /** The prompt that opened the run; its outcome is read from there on. */
+  promptId?: string
+  finishedAt?: number
+  /** Why a `failed` run failed. */
+  error?: string
+  /**
+   * The user wrote in it, so it is a conversation now — never archived when
+   * the task's next run arrives.
+   */
+  touched?: true
+  /**
+   * It ended before its prompt was sent — its worktree could not be made, or
+   * Stop came during setup — so the chat is in the project's checkout, which
+   * the task asked to stay out of. Messages queued during setup are held
+   * rather than sent there; the user's own next send clears it, since that
+   * send is the choice to work in the checkout.
+   */
+  notStarted?: true
+}
+
+/**
+ * A prompt Carbon sends on a schedule, each time in a new chat. Lives in its
+ * own table in `chats.db` (`main/scheduleStore.ts`), not in `settings.json`:
+ * dev and packaged builds share `userData` and both run a scheduler, and only
+ * a row in a database can be claimed atomically by exactly one of them.
+ */
+export interface ScheduledTask {
+  id: string
+  name: string
+  prompt: string
+  /** The project the runs work in — its root, even when runs use worktrees. */
+  cwd: string
+  provider: Provider
+  model?: string
+  effort?: EffortId
+  serviceTier?: ServiceTier
+  permissionMode: PermissionModeId
+  /** Run each time in a new worktree off the project's current branch. */
+  worktree?: boolean
+  schedule: Schedule
+  enabled: boolean
+  /**
+   * When it next fires; null when it never will — paused, or a one-off that
+   * has run. Its own column in the table, and the value the scheduler's
+   * compare-and-swap claims.
+   */
+  nextRunAt: number | null
+  lastRunAt?: number
+  /** The chat of its most recent run. */
+  lastChatId?: string
+  /** The chat whose agent created it (`schedule_create`), if one did. */
+  createdBy?: string
+  createdAt: number
+  updatedAt: number
+}
+
+/** What the page and the agent send to create (no `id`) or update a task. */
+export type ScheduledTaskInput = Pick<
+  ScheduledTask,
+  'name' | 'prompt' | 'cwd' | 'provider' | 'schedule' | 'permissionMode'
+> &
+  Partial<Pick<ScheduledTask, 'id' | 'model' | 'effort' | 'serviceTier' | 'worktree' | 'enabled'>>
 
 /**
  * How a delegated task ended, as far as the parent is told.
@@ -3035,6 +3127,16 @@ export interface Api {
   remoteForget(deviceId?: string): Promise<RemoteAccessState>
   /** Main's remote state moved (a phone paired, the server stopped). */
   onRemoteChanged(cb: () => void): () => void
+  /** Every scheduled task, soonest first. */
+  listScheduledTasks(): Promise<ScheduledTask[]>
+  /** Create (no `id`) or update a task; throws a readable reason when invalid. */
+  saveScheduledTask(input: ScheduledTaskInput): Promise<ScheduledTask>
+  /** Delete a task. Its runs stay: they are chats. */
+  deleteScheduledTask(id: string): Promise<void>
+  /** Run it now, off schedule. The next scheduled run is unaffected. */
+  runScheduledTask(id: string): Promise<{ ok: true; chatId: string } | { ok: false; error: string }>
+  /** The task list moved — a run fired, or an agent created or changed one. */
+  onScheduledTasksChanged(cb: (tasks: ScheduledTask[]) => void): () => void
   /** The running build's version, for the settings/about line. */
   readonly appVersion: string
   /**

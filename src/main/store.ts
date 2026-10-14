@@ -14,6 +14,7 @@ import { DatabaseSync, backup, type StatementSync } from 'node:sqlite'
 // `node --test` runs this file directly with no bundler to resolve `@shared`.
 import { knownProvider } from '../shared/types.ts'
 import { CanvasStore } from './canvasStore.ts'
+import { SCHEDULE_SCHEMA, ScheduleStore } from './scheduleStore.ts'
 import type {
   AppDefaults,
   DefaultsPatch,
@@ -418,6 +419,7 @@ export class Store {
    * surface: nothing about a canvas goes through the chat read/write path.
    */
   readonly canvases: CanvasStore
+  readonly schedules: ScheduleStore
 
   /** Strong residency set, in LRU order (Map preserves insertion order). */
   private resident = new Map<string, Resident>()
@@ -519,6 +521,11 @@ export class Store {
     this.db = this.openDb(join(userDataDir, 'chats.db'))
     this.prepare()
     this.canvases = new CanvasStore(this.db)
+    // A task edit is a reason to refresh the rolling backup like a chat edit
+    // is — without it a session that only touched tasks never backed them up.
+    this.schedules = new ScheduleStore(this.db, () => {
+      this.backupDue = true
+    })
     this.migrate()
     this.seedSortKeys()
     // unref: a heartbeat must never be the reason the process stays alive.
@@ -594,6 +601,33 @@ export class Store {
         }
       } catch (kvErr) {
         console.error('Could not salvage kv (tombstones/migration marker):', kvErr)
+      }
+      // Scheduled tasks ride the same precedence: the newer source's rows win,
+      // a backup only fills ids it lacks. The table may not exist yet on
+      // either side — `ScheduleStore` creates it after recovery.
+      try {
+        into.exec(SCHEDULE_SCHEMA)
+        const hasTasks = old
+          .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'scheduled_tasks'")
+          .get()
+        if (hasTasks) {
+          // Gap-fill from an older backup brings a task back **paused** and
+          // with no next run: tasks keep no tombstones, so the row may be one
+          // the user deleted, and an overdue next run would fire it on the
+          // first tick. The page shows it; resuming is the user's call.
+          const insTask = into.prepare(
+            onlyMissing
+              ? "INSERT OR IGNORE INTO scheduled_tasks (id, data, next_run, updated_at) VALUES (?, json_set(?, '$.enabled', json('false')), NULL, ?)"
+              : 'INSERT OR REPLACE INTO scheduled_tasks (id, data, next_run, updated_at) VALUES (?, ?, ?, ?)'
+          )
+          for (const raw of old.prepare('SELECT id, data, next_run, updated_at FROM scheduled_tasks').all()) {
+            const t = raw as unknown as { id: string; data: string; next_run: number | null; updated_at: number }
+            if (onlyMissing) insTask.run(t.id, t.data, t.updated_at)
+            else insTask.run(t.id, t.data, t.next_run, t.updated_at)
+          }
+        }
+      } catch (taskErr) {
+        console.error('Could not salvage scheduled tasks:', taskErr)
       }
       const insChat = into.prepare(
         'INSERT OR REPLACE INTO chats (id, updated_at, cwd, meta) VALUES (?, ?, ?, ?)'
@@ -1592,6 +1626,32 @@ export class Store {
     return this.idsWhere(
       (m) => m.delegation?.status === 'running',
       "json_extract(meta, '$.delegation.status') = 'running'"
+    )
+  }
+
+  /**
+   * A chat's meta as the database has it, bypassing any resident copy — for a
+   * chat another instance owns, whose state here can be a view from before
+   * that instance's last write.
+   */
+  storedMeta(id: string): ChatMeta | null {
+    const row = this.selMeta.get(id) as { meta: string } | undefined
+    return row ? safeMeta(row.meta) : null
+  }
+
+  /** Scheduled runs that were still running when last written. */
+  runningScheduledIds(): string[] {
+    return this.idsWhere(
+      (m) => m.scheduled?.status === 'running',
+      "json_extract(meta, '$.scheduled.status') = 'running'"
+    )
+  }
+
+  /** Every run of one scheduled task. */
+  scheduledRunIdsOf(taskId: string): string[] {
+    return this.idsWhere(
+      (m) => m.scheduled?.taskId === taskId,
+      "json_extract(meta, '$.scheduled.taskId') IS NOT NULL"
     )
   }
 

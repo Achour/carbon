@@ -23,6 +23,7 @@ import {
   PinOff,
   Plus,
   Search,
+  CalendarClock,
   GitPullRequest,
   Settings,
   SquareStack,
@@ -253,6 +254,23 @@ function TerminalMark({ active }: { active: boolean }): React.JSX.Element {
  * changed was which side of a divider a row sat on. The glyph travels with the
  * row, so a pinned chat is recognizable wherever it is drawn.
  */
+/**
+ * A run of a scheduled task. The task's name is the row's title, so this is
+ * what tells a run apart from a chat someone happened to call the same.
+ */
+function ScheduledMark({ active, chat }: { active: boolean; chat: ChatMeta }): React.JSX.Element {
+  return (
+    <WithTooltip label={`Scheduled run · ${chat.scheduled?.taskName ?? ''}`}>
+      <CalendarClock
+        className={cn(
+          'size-3 shrink-0 transition-colors',
+          active ? 'text-sidebar-foreground/70' : 'text-sidebar-foreground/40'
+        )}
+      />
+    </WithTooltip>
+  )
+}
+
 function PinMark({ active }: { active: boolean }): React.JSX.Element {
   return (
     <WithTooltip label="Pinned">
@@ -482,6 +500,7 @@ function ChatItemRow({
               {chat.surface === 'terminal' && chat.sessionId && (
                 <TerminalMark active={active} />
               )}
+              {chat.scheduled && <ScheduledMark active={active} chat={chat} />}
               <ThreadProviders chat={chat} sides={sides} active={active} />
             </span>
           </span>
@@ -518,6 +537,7 @@ function ChatItemRow({
             </WithTooltip>
           )}
           {chat.surface === 'terminal' && <TerminalMark active={active} />}
+          {chat.scheduled && <ScheduledMark active={active} chat={chat} />}
           <span className={titleClass}>{chat.title || 'New chat'}</span>
           {sides.length > 0 && <ThreadProviders chat={chat} sides={sides} active={active} />}
           {trailing}
@@ -1313,6 +1333,16 @@ export function Sidebar(): React.JSX.Element {
   const openUsage = useApp((s) => s.openUsage)
   const openPulls = useApp((s) => s.openPulls)
   const pullsOpen = useApp((s) => s.pullsOpen)
+  const scheduledOpen = useApp((s) => s.scheduledOpen)
+  const openScheduled = useApp((s) => s.openScheduled)
+  const scheduledAttention = useApp((s) => {
+    let n = 0
+    for (const c of s.chats) {
+      if (!c.scheduled || c.archivedAt) continue
+      if (s.unreadChats[c.id] || s.statuses[c.id] === 'waiting-permission') n++
+    }
+    return n
+  })
   const searchOpen = useApp((s) => s.searchOpen)
   const setSearchOpen = useApp((s) => s.setSearchOpen)
   const newChatOpen = useApp((s) => s.newChatOpen)
@@ -1804,6 +1834,25 @@ export function Sidebar(): React.JSX.Element {
         >
           <GitPullRequest className="size-4 shrink-0 text-muted-foreground" />
           Pull requests
+        </button>
+        <button
+          type="button"
+          onClick={openScheduled}
+          aria-pressed={scheduledOpen}
+          className={cn(
+            'group flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] text-sidebar-foreground transition-colors hover:bg-sidebar-accent/60',
+            scheduledOpen && 'bg-sidebar-accent'
+          )}
+        >
+          <CalendarClock className="size-4 shrink-0 text-muted-foreground" />
+          Scheduled
+          {/* Runs that finished while nobody looked, or that are stuck on an
+              approval — the two reasons to open the page unprompted. */}
+          {scheduledAttention > 0 && (
+            <span className="ml-auto rounded-full bg-primary/15 px-1.5 text-[11px] font-medium text-primary tabular-nums">
+              {scheduledAttention}
+            </span>
+          )}
         </button>
         {/* The project filter, as the third primary row rather than a heading
             over the list.

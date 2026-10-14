@@ -38,6 +38,16 @@ import {
   type AgentsToolName,
   type DelegationView
 } from './delegation.ts'
+import {
+  SCHEDULE_TOOL_INFO,
+  SCHEDULE_TOOL_NAMES,
+  isScheduleSideEffect,
+  runScheduleTool,
+  type ScheduleToolHost,
+  type ScheduleToolInput,
+  type ScheduleToolName
+} from './scheduleTools.ts'
+import type { ScheduledTask } from '../shared/types.ts'
 
 /**
  * **One MCP server, `carbon`, for every provider.**
@@ -72,6 +82,7 @@ export type CarbonToolRef =
   | { kind: 'chart'; name: ChartToolName }
   | { kind: 'diagram'; name: DiagramToolName }
   | { kind: 'agents'; name: AgentsToolName }
+  | { kind: 'schedule'; name: ScheduleToolName }
 
 /** Every tool the server can advertise, preview first. */
 export const CARBON_TOOL_REFS: readonly CarbonToolRef[] = [
@@ -79,22 +90,26 @@ export const CARBON_TOOL_REFS: readonly CarbonToolRef[] = [
   ...CANVAS_TOOL_NAMES.map((name) => ({ kind: 'canvas' as const, name })),
   ...CHART_TOOL_NAMES.map((name) => ({ kind: 'chart' as const, name })),
   ...DIAGRAM_TOOL_NAMES.map((name) => ({ kind: 'diagram' as const, name })),
-  ...AGENTS_TOOL_NAMES.map((name) => ({ kind: 'agents' as const, name }))
+  ...AGENTS_TOOL_NAMES.map((name) => ({ kind: 'agents' as const, name })),
+  ...SCHEDULE_TOOL_NAMES.map((name) => ({ kind: 'schedule' as const, name }))
 ]
 
 /**
  * Which tools one session is offered. `canvas` is off only for a build with no
  * canvas host; `agents` is off for a delegate (one level only), for a chat-less
- * session, and when Settings turns delegation off.
+ * session, and when Settings turns delegation off. `schedule` is off for a
+ * scheduled run's own chat and for a delegate (`canSchedule`).
  */
 export interface CarbonToolScope {
   canvas?: boolean
   agents?: boolean
+  schedule?: boolean
 }
 
 export function inScope(ref: CarbonToolRef, scope: CarbonToolScope = {}): boolean {
   if (ref.kind === 'canvas') return scope.canvas !== false
   if (ref.kind === 'agents') return scope.agents === true
+  if (ref.kind === 'schedule') return scope.schedule === true
   return true
 }
 
@@ -122,7 +137,7 @@ export function carbonToolId(ref: CarbonToolRef): string {
 export function parseCarbonTool(raw: string | undefined): CarbonToolRef | undefined {
   if (!raw) return undefined
   const key = raw.trim().toLowerCase().replace(/[-.]/g, '_')
-  const match = /(?:^|_|\/|:)(preview|canvas|chart|diagram|agents)_([a-z_]+)$/.exec(key)
+  const match = /(?:^|_|\/|:)(preview|canvas|chart|diagram|agents|schedule)_([a-z_]+)$/.exec(key)
   if (!match) return undefined
   const [, kind, name] = match
   if (kind === 'preview') {
@@ -132,6 +147,10 @@ export function parseCarbonTool(raw: string | undefined): CarbonToolRef | undefi
   if (kind === 'agents') {
     const found = AGENTS_TOOL_NAMES.find((candidate) => candidate === name)
     return found ? { kind: 'agents', name: found } : undefined
+  }
+  if (kind === 'schedule') {
+    const found = SCHEDULE_TOOL_NAMES.find((candidate) => candidate === name)
+    return found ? { kind: 'schedule', name: found } : undefined
   }
   if (kind === 'chart') {
     const found = CHART_TOOL_NAMES.find((candidate) => candidate === name)
@@ -162,6 +181,7 @@ export function isCarbonToolId(name: string): boolean {
 export function isCarbonSideEffect(name: string): boolean {
   const ref = parseCarbonTool(name)
   if (ref?.kind === 'agents') return isAgentsSideEffect(ref.name)
+  if (ref?.kind === 'schedule') return isScheduleSideEffect(ref.name)
   return ref?.kind === 'preview' && isPreviewSideEffect(ref.name)
 }
 
@@ -203,7 +223,12 @@ export function carbonToolList(scope: CarbonToolScope = {}): CarbonToolSchema[] 
         inputSchema: info.inputSchema as unknown as Record<string, unknown>
       }
     }
-    const info = ref.kind === 'agents' ? AGENTS_TOOL_INFO[ref.name] : CANVAS_TOOL_INFO[ref.name]
+    const info =
+      ref.kind === 'agents'
+        ? AGENTS_TOOL_INFO[ref.name]
+        : ref.kind === 'schedule'
+          ? SCHEDULE_TOOL_INFO[ref.name]
+          : CANVAS_TOOL_INFO[ref.name]
     const entries: [string, { type: string; required?: boolean; enum?: readonly string[]; description: string }][] =
       Object.entries(info.params)
     const required = entries.filter(([, p]) => p.required).map(([key]) => key)
@@ -228,6 +253,7 @@ export function carbonToolList(scope: CarbonToolScope = {}): CarbonToolSchema[] 
 export function carbonToolInfo(ref: CarbonToolRef): { description: string; readOnly: boolean } {
   if (ref.kind === 'preview') return PREVIEW_TOOL_INFO[ref.name]
   if (ref.kind === 'agents') return AGENTS_TOOL_INFO[ref.name]
+  if (ref.kind === 'schedule') return SCHEDULE_TOOL_INFO[ref.name]
   if (ref.kind === 'chart') return CHART_TOOL_INFO[ref.name]
   if (ref.kind === 'diagram') return DIAGRAM_TOOL_INFO[ref.name]
   return CANVAS_TOOL_INFO[ref.name]
@@ -253,7 +279,8 @@ function previewParamSchema(p: PreviewParam): Record<string, unknown> {
 /** The union of every tool table's arguments. */
 export type CarbonToolInput = CanvasToolInput &
   PreviewToolInput &
-  AgentsToolInput & {
+  AgentsToolInput &
+  ScheduleToolInput & {
     /**
      * The arguments as sent, for the tools whose arguments are arrays of
      * objects (`chart_render`, `diagram_render`) — the string picks below
@@ -279,6 +306,12 @@ export function carbonToolInput(raw: unknown): CarbonToolInput {
   const input = (raw ?? {}) as Record<string, unknown>
   const str = (value: unknown): string | undefined =>
     typeof value === 'string' ? value : undefined
+  // The schedule tools declare these as strings, but a model sends `60` and
+  // `true` as often as `"60"` and `"true"`.
+  const num = (value: unknown): string | undefined =>
+    typeof value === 'number' && Number.isFinite(value) ? String(value) : str(value)
+  const bool = (value: unknown): string | undefined =>
+    typeof value === 'boolean' ? String(value) : str(value)
   const preview: Record<string, unknown> = {}
   for (const [key, param] of Object.entries(PREVIEW_PARAMS)) {
     const value = coercePreviewParam(param, input[key])
@@ -299,6 +332,13 @@ export function carbonToolInput(raw: unknown): CarbonToolInput {
     name: str(input.name),
     agent: str(input.agent),
     message: str(input.message),
+    prompt: str(input.prompt),
+    cron: str(input.cron),
+    at: str(input.at),
+    in_minutes: num(input.in_minutes),
+    permission_mode: str(input.permission_mode),
+    enabled: bool(input.enabled),
+    worktree: bool(input.worktree),
     raw: input
   }
 }
@@ -328,6 +368,16 @@ export interface CarbonToolHosts {
   preview: PreviewToolHost
   canvas?: CanvasToolHost
   agents?: AgentsToolHost & { agentLabel(view: DelegationView): string }
+  schedule?: ScheduleHost
+}
+
+/**
+ * The schedule host — `ChatManager`. `allowed` is read live, at `tools/list`
+ * and again at every call, for the reason `CarbonToolContext.delegate` is.
+ */
+export type ScheduleHost = ScheduleToolHost & {
+  allowed(chatId: string | null | undefined): boolean
+  lastStatus(task: ScheduledTask): string | undefined
 }
 
 export type CarbonToolResponse =
@@ -364,6 +414,25 @@ export async function runCarbonTool(
     const result = await runAgentsTool(
       hosts.agents,
       { chatId: ctx.chatId, agentLabel: (v) => hosts.agents!.agentLabel(v) },
+      ref.name,
+      input
+    )
+    return result.isError ? { ok: false, error: result.text } : { ok: true, kind: 'text', text: result.text }
+  }
+  if (ref.kind === 'schedule') {
+    if (!hosts.schedule?.allowed(ctx.chatId)) {
+      return { ok: false, error: 'Scheduling is not available in this session.' }
+    }
+    if (isScheduleSideEffect(ref.name) && ctx.plan?.() === true) {
+      return {
+        ok: false,
+        error: 'Scheduling is not allowed in plan mode. Note in the plan what should be scheduled, and when.'
+      }
+    }
+    const host = hosts.schedule
+    const result = await runScheduleTool(
+      host,
+      { chatId: ctx.chatId, lastStatus: (task) => host.lastStatus(task) },
       ref.name,
       input
     )

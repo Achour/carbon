@@ -47,6 +47,9 @@ import type {
   EditMessageResult,
   EventMessage,
   RewindResult,
+  ScheduledRun,
+  ScheduledTask,
+  ScheduledTaskInput,
   ServiceTier,
   SlashCommand,
   ThinkingPart,
@@ -69,8 +72,10 @@ import {
   knownProviderForModel,
   modelDisplayName,
   modelLabel,
-  providerForModel
+  providerForModel,
+  providerForRememberedModel
 } from '@shared/types'
+import { describeSchedule, formatMoment, nextRun, validateSchedule } from '@shared/schedule'
 import {
   CODEX_SLASH_COMMANDS,
   parseCodexGoalCommand,
@@ -123,6 +128,15 @@ import {
   type DelegateOutcome,
   type DelegationView
 } from './delegation.ts'
+import {
+  SCHEDULE_PROMPT_CAP,
+  SCHEDULE_SESSION_RULES,
+  SCHEDULE_TOOL_INFO,
+  canSchedule,
+  type ScheduleRequest
+} from './scheduleTools.ts'
+import type { ScheduleHost } from './carbonMcp.ts'
+import { createWorktree } from './worktree.ts'
 import { CodexSession, fetchCodexFeatures, fetchCodexModels, generateCodexText } from './codex'
 import { CodexAppServerClient } from './codexAppServer'
 import { fetchGrokModels, forkGrokBefore, generateGrokText, GrokSession } from './grok'
@@ -252,10 +266,12 @@ function buildCarbonServer(
     // this codebase keeps ruling out, arriving by the mechanism it warns about.
     // The agents tools are listed only when this chat may delegate at spawn —
     // never for a delegate — and `runCarbonTool` re-checks at every call.
-    tools: CARBON_TOOL_REFS.filter((ref) => inScope(ref, { agents: ctx.delegate() })).map((ref) => {
+    tools: CARBON_TOOL_REFS.filter((ref) =>
+      inScope(ref, { agents: ctx.delegate(), schedule: !!preview.scheduleHost()?.allowed(ctx.chatId) })
+    ).map((ref) => {
       const name = carbonToolName(ref)
-      if (ref.kind === 'agents') {
-        const info = AGENTS_TOOL_INFO[ref.name]
+      if (ref.kind === 'agents' || ref.kind === 'schedule') {
+        const info = ref.kind === 'agents' ? AGENTS_TOOL_INFO[ref.name] : SCHEDULE_TOOL_INFO[ref.name]
         const shape: ZodRawShape = Object.fromEntries(
           Object.entries(info.params).map(([key, p]) => {
             const base = p.enum ? z.enum(p.enum as [string, ...string[]]) : z.string()
@@ -266,7 +282,7 @@ function buildCarbonServer(
         // the delegate check and the plan-mode refusal cannot drift apart.
         return tool(name, info.description, shape, async (args) => {
           const result = await runCarbonTool(
-            { preview, canvas, agents: preview.agentsHost() },
+            { preview, canvas, agents: preview.agentsHost(), schedule: preview.scheduleHost() },
             ctx,
             name,
             carbonToolInput(args)
@@ -942,9 +958,13 @@ class ClaudeSession implements AgentSession {
         systemPrompt: {
           type: 'preset',
           preset: 'claude_code',
-          append: canDelegate(chat, store.getDefaults())
-            ? `${GUI_SYSTEM_APPEND}\n\n${DELEGATION_SESSION_RULES}`
-            : GUI_SYSTEM_APPEND,
+          append: [
+            GUI_SYSTEM_APPEND,
+            canDelegate(chat, store.getDefaults()) ? DELEGATION_SESSION_RULES : '',
+            canSchedule(chat) ? SCHEDULE_SESSION_RULES : ''
+          ]
+            .filter(Boolean)
+            .join('\n\n'),
           snapshot: true
         },
         settingSources: ['user', 'project', 'local'],
@@ -3103,6 +3123,43 @@ function codexReviewLabel(target: CodexReviewTarget): string {
   }
 }
 
+/** A run that starts this long after it was due is a catch-up, and says so. */
+const SCHEDULE_LATE_MS = 2 * 60_000
+
+/** `scheduled/morning-pr-check-20261014-0900` — one branch per run, by name and time. */
+function scheduledBranch(name: string, at: number): string {
+  const d = new Date(at)
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  const slug =
+    name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 40) || 'task'
+  return `scheduled/${slug}-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
+}
+
+/** The line a run opens with, above its prompt: what fired it, and when. */
+function scheduledIntro(task: ScheduledTask, run: ScheduledRun): string {
+  if (run.manual) return `Scheduled task “${task.name}”, run now by hand · ${describeSchedule(task.schedule)}`
+  const missed = run.dueAt
+    ? ` · due ${formatMoment(run.dueAt, run.firedAt)}, run late because Carbon was closed or the Mac was asleep`
+    : ''
+  return `Scheduled task “${task.name}” · ${describeSchedule(task.schedule)}${missed}`
+}
+
+/**
+ * The context riding a run's prompt, never shown in its transcript: nobody
+ * pressed send, so the model is told the user is probably not watching and
+ * that its last message is what they will read.
+ */
+function scheduledBrief(task: ScheduledTask): string {
+  return [
+    `This turn was started by a scheduled task in Carbon ("${task.name}", ${describeSchedule(task.schedule).toLowerCase()}), not typed by the user just now — they may not be watching.`,
+    'Do the task below on your own. Finish with a short summary of what you found or did: it is what the user reads when they open this chat later.'
+  ].join(' ')
+}
+
 export class ChatManager {
   private sessions = new Map<string, AgentSession>()
   private static readonly MAX_IDLE_SESSIONS = 2
@@ -3154,6 +3211,30 @@ export class ChatManager {
    */
   private deleting = new Set<string>()
   private shuttingDown = false
+  /**
+   * Scheduled runs whose turn has actually begun, and the ones the user
+   * pressed Stop in — `delegationStarted` / `delegationStopped`'s twins, for
+   * the same two reasons: an idle before the turn shows is a session
+   * announcing itself, and a stopped turn's transcript looks finished.
+   */
+  private scheduledStarted = new Set<string>()
+  private scheduledStopped = new Set<string>()
+  /**
+   * Runs created and still being set up — a worktree checking out — so live
+   * with no session yet. While one is here the chat shows as working, a Stop
+   * cancels it (`cancelled`), and a message the user sends is held and sent
+   * after the run's prompt, never on a session opened in the wrong folder.
+   */
+  private scheduledStarting = new Map<
+    string,
+    { cancelled: boolean; held: [string, Attachment[] | undefined, string | undefined][] }
+  >()
+  /** Told when a scheduled run ends — the native notification. */
+  onScheduledSettled: (chat: ChatMeta) => void = () => {}
+  /** Told whenever the task list changes, to push it to the renderer. */
+  onScheduleChanged: () => void = () => {}
+  /** Re-arms the scheduler's timer after an edit here. */
+  private pokeScheduler: () => void = () => {}
 
   constructor(
     private store: Store,
@@ -3184,10 +3265,12 @@ export class ChatManager {
     // Never a running delegate's session, and never a parent with a report in
     // flight: whether that report was answered is read off the live session
     // (`promptAnswered`), which a prune would throw away mid-question.
+    // A scheduled run's likewise: it is settled off its own session.
     const idle = [...this.sessions.entries()].filter(
       ([chatId, session]) =>
         session.idle &&
         this.store.getMeta(chatId)?.delegation?.status !== 'running' &&
+        this.store.getMeta(chatId)?.scheduled?.status !== 'running' &&
         !this.deliveryInFlight.has(chatId)
     )
     while (idle.length > ChatManager.MAX_IDLE_SESSIONS) {
@@ -3437,6 +3520,9 @@ export class ChatManager {
       if (event.type === 'status' && event.status !== 'idle' && chat.delegation?.status === 'running') {
         this.delegationStarted.add(chat.id)
       }
+      if (event.type === 'status' && event.status !== 'idle' && chat.scheduled?.status === 'running') {
+        this.scheduledStarted.add(chat.id)
+      }
       if (
         (event.type === 'status' && event.status === 'idle') ||
         (event.type === 'background-jobs' && event.jobs.length === 0)
@@ -3471,8 +3557,14 @@ export class ChatManager {
   }
 
   send(chatId: string, text: string, attachments?: Attachment[], label?: string): void {
+    const setup = this.scheduledStarting.get(chatId)
+    if (setup) {
+      setup.held.push([text, attachments, label])
+      return
+    }
     const chat = this.store.getChat(chatId)
     if (!chat) return
+    this.touchScheduled(chat)
     // A pending model pick from the other provider applies now — the send is
     // the commitment; until here it was only a chip in the composer.
     const handoff = this.applyPendingSwitch(chat)
@@ -3704,6 +3796,7 @@ export class ChatManager {
       // No session means no idle event will ever settle a delegate that could
       // not start; the error card just pushed is its outcome.
       if (chat.delegation?.status === 'running') this.settleDelegation(chat)
+      if (chat.scheduled?.status === 'running') this.settleScheduled(chat)
       return false
     }
   }
@@ -4343,6 +4436,12 @@ export class ChatManager {
     // The stopped turn will read as finished once it idles; this is how its
     // delegation is reported as stopped instead.
     if (this.store.getMeta(chatId)?.delegation?.status === 'running') this.delegationStopped.add(chatId)
+    if (this.store.getMeta(chatId)?.scheduled?.status === 'running') this.scheduledStopped.add(chatId)
+    const setup = this.scheduledStarting.get(chatId)
+    if (setup) {
+      setup.cancelled = true
+      return
+    }
     const session = this.sessionFor(chatId)
     if (session) {
       await session.interrupt()
@@ -4988,6 +5087,14 @@ export class ChatManager {
     }
     // As a parent: anything that ended while this chat was busy goes now.
     this.flushDeliveries(chat.id)
+    // As a scheduled run, the same rule as a delegate — over when nothing of
+    // it runs — read *after* the flush, since a delivery it just took is a
+    // turn the run is still in.
+    if (chat.scheduled?.status === 'running' && this.scheduledStarted.has(chat.id)) {
+      const now = this.sessions.get(chat.id)
+      const idle = !now || now.dead || now.idle
+      if (idle && !this.scheduledWorkOutstanding(chat)) this.settleScheduled(chat)
+    }
   }
 
   /** Record how a delegated task ended, and report it if the parent is free. */
@@ -5216,7 +5323,445 @@ export class ChatManager {
         this.delegationStopped.add(chatId)
         this.settleDelegation(chat)
       }
+      if (chat?.scheduled?.status === 'running') {
+        this.scheduledStopped.add(chatId)
+        this.settleScheduled(chat)
+      }
     }
+  }
+
+  // ---------- Scheduled tasks ----------
+
+  /** The scheduler, once `index.ts` has built it; edits here re-arm its timer. */
+  attachScheduler(poke: () => void): void {
+    this.pokeScheduler = poke
+  }
+
+  readonly scheduleHost: ScheduleHost = {
+    allowed: (chatId) => !!chatId && canSchedule(this.store.getMeta(chatId)),
+    lastStatus: (task) => (task.lastChatId ? this.store.getMeta(task.lastChatId)?.scheduled?.status : undefined),
+    list: () => this.store.schedules.list(),
+    create: (chatId, request) => this.scheduleFromChat(chatId, null, request),
+    update: (chatId, id, request) => this.scheduleFromChat(chatId, id, request),
+    delete: (id) => this.deleteScheduledTask(id),
+    run: (chatId, id) => this.runScheduledFromChat(chatId, id)
+  }
+
+  /**
+   * Create or update a task — the page's save and the agent's create/update
+   * both land here, so a task is checked one way whoever wrote it. Throws a
+   * readable reason, which the page shows under its form.
+   */
+  saveScheduledTask(input: ScheduledTaskInput, extra: { createdBy?: string } = {}): ScheduledTask {
+    const prompt = (input.prompt ?? '').trim()
+    if (!prompt) throw new Error('Write the prompt the task should send.')
+    if (prompt.length > SCHEDULE_PROMPT_CAP) {
+      throw new Error(`The prompt is ${prompt.length} characters; keep it under ${SCHEDULE_PROMPT_CAP}.`)
+    }
+    if (!input.cwd) throw new Error('Pick the project the task runs in.')
+    const invalid = validateSchedule(input.schedule)
+    if (invalid) throw new Error(invalid)
+    // The model has the last word on the backend, as at `chats:create`.
+    const provider = providerForRememberedModel(input.model, input.provider, this.modelCatalog())
+    // Decided against the row as it is inside the store's write lock — see
+    // `ScheduleStore.save` for what deciding outside it lost to.
+    const saved = this.store.schedules.save(input.id ?? null, (existing) => {
+      const now = Date.now()
+      const enabled = input.enabled ?? existing?.enabled ?? true
+      const sameWhen =
+        !!existing &&
+        existing.enabled === enabled &&
+        JSON.stringify(existing.schedule) === JSON.stringify(input.schedule)
+      // An edit that leaves *when* alone keeps the claim it had — rewording
+      // the prompt must not skip or move a run that is about to fire.
+      // Anything else is recomputed from now, which is also what resuming a
+      // paused task means: it picks up at its next time, not with the runs it
+      // was paused through.
+      let nextRunAt: number | null
+      if (sameWhen) nextRunAt = existing!.nextRunAt
+      else if (!enabled) nextRunAt = null
+      else {
+        nextRunAt = nextRun(input.schedule, now)
+        if (nextRunAt === null && input.schedule.kind === 'once') {
+          throw new Error(`${formatMoment(input.schedule.at, now)} has already passed.`)
+        }
+      }
+      const createdBy = existing ? existing.createdBy : extra.createdBy
+      const task: ScheduledTask = {
+        id: existing?.id ?? randomUUID(),
+        name: (input.name ?? '').trim().slice(0, 80) || prompt.split('\n')[0].slice(0, 60),
+        prompt,
+        cwd: input.cwd,
+        provider,
+        ...(input.model ? { model: input.model } : {}),
+        ...(input.effort ? { effort: effortForProvider(input.effort, provider) } : {}),
+        ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
+        permissionMode: input.permissionMode,
+        ...(input.worktree ? { worktree: true } : {}),
+        schedule: input.schedule,
+        enabled,
+        nextRunAt,
+        ...(existing?.lastRunAt ? { lastRunAt: existing.lastRunAt } : {}),
+        ...(existing?.lastChatId ? { lastChatId: existing.lastChatId } : {}),
+        ...(createdBy ? { createdBy } : {}),
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now
+      }
+      return { task, keepClaim: sameWhen }
+    })
+    this.onScheduleChanged()
+    this.pokeScheduler()
+    return saved
+  }
+
+  deleteScheduledTask(id: string): void {
+    this.store.schedules.delete(id)
+    this.onScheduleChanged()
+    this.pokeScheduler()
+  }
+
+  /**
+   * `schedule_create` / `schedule_update`: the calling chat supplies what the
+   * agent did not — its provider, model, effort and project — and its mode is
+   * the ceiling, as a delegate's is: an agent the user put in Ask cannot
+   * schedule work that runs with full access.
+   */
+  private async scheduleFromChat(
+    chatId: string,
+    id: string | null,
+    request: ScheduleRequest
+  ): Promise<{ ok: true; task: ScheduledTask } | { ok: false; error: string }> {
+    // The catalog first, and every check after it: the await is long enough
+    // for the chat to be put in plan mode, narrowed, or deleted, and a check
+    // made before it would admit the call on the chat as it was.
+    const catalog = request.model
+      ? await withTimeout(this.listModels(chatId), 15_000, this.modelCatalog())
+      : this.modelCatalog()
+    const chat = this.store.getMeta(chatId)
+    if (!chat || !canSchedule(chat)) return { ok: false, error: 'Scheduling is not available in this chat.' }
+    if (chat.permissionMode === 'plan') return { ok: false, error: 'Scheduling is not allowed in plan mode.' }
+    const existing = id ? this.store.schedules.get(id) : null
+    if (id && !existing) return { ok: false, error: 'That scheduled task no longer exists.' }
+    // A task that runs with more than this chat may do is the user's to
+    // change: rewriting its prompt would be running new work at that level.
+    const above = this.aboveCeiling(existing, chat)
+    if (above) return { ok: false, error: above }
+    const provider = existing?.provider ?? chat.provider
+    let model = existing ? existing.model : chat.provider === provider ? chat.model : undefined
+    if (request.model) {
+      const resolved = resolveModel(request.model, provider, catalog)
+      if (!resolved.ok) return resolved
+      model =
+        provider === 'cursor' && !resolved.model.startsWith(CURSOR_MODEL_PREFIX)
+          ? `${CURSOR_MODEL_PREFIX}${resolved.model}`
+          : resolved.model
+    }
+    const wanted = request.permissionMode ?? existing?.permissionMode ?? chat.permissionMode
+    const permissionMode = MODE_RANK[wanted] > MODE_RANK[chat.permissionMode] ? chat.permissionMode : wanted
+    try {
+      const task = this.saveScheduledTask(
+        {
+          id: existing?.id,
+          name: request.name ?? existing?.name ?? '',
+          prompt: request.prompt ?? existing?.prompt ?? '',
+          cwd: existing?.cwd ?? projectRoot(chat),
+          provider,
+          model: model ?? (existing ? undefined : this.defaultModelFor(provider)),
+          effort: existing ? existing.effort : chat.effort,
+          serviceTier: existing ? existing.serviceTier : chat.serviceTier,
+          permissionMode,
+          worktree: request.worktree ?? existing?.worktree ?? false,
+          schedule: request.schedule ?? existing!.schedule,
+          enabled: request.enabled ?? existing?.enabled ?? true
+        },
+        { createdBy: chatId }
+      )
+      return { ok: true, task }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  }
+
+  /**
+   * Why `chat` may not touch `task`, or null: a task set to run with more than
+   * the chat's own permission mode. The ceiling a delegate gets, applied to
+   * what an agent can start or rewrite.
+   */
+  private aboveCeiling(task: ScheduledTask | null, chat: ChatMeta): string | null {
+    if (!task || MODE_RANK[task.permissionMode] <= MODE_RANK[chat.permissionMode]) return null
+    return `"${task.name}" runs in ${task.permissionMode} mode, more than this chat's ${chat.permissionMode}. The user can run or change it from the Scheduled page.`
+  }
+
+  /** `schedule_run`: the page's "Run now", inside the calling chat's ceiling. */
+  private async runScheduledFromChat(
+    chatId: string,
+    id: string
+  ): Promise<{ ok: true; chatId: string } | { ok: false; error: string }> {
+    const chat = this.store.getMeta(chatId)
+    if (!chat || !canSchedule(chat)) return { ok: false, error: 'Scheduling is not available in this chat.' }
+    const task = this.store.schedules.get(id)
+    if (!task) return { ok: false, error: 'That scheduled task no longer exists.' }
+    const above = this.aboveCeiling(task, chat)
+    if (above) return { ok: false, error: above }
+    return this.runScheduled(task, { manual: true })
+  }
+
+  /** "Run now" — the page's button. The schedule is untouched. */
+  async runScheduledNow(id: string): Promise<{ ok: true; chatId: string } | { ok: false; error: string }> {
+    const task = this.store.schedules.get(id)
+    if (!task) return { ok: false, error: 'That scheduled task no longer exists.' }
+    return this.runScheduled(task, { manual: true })
+  }
+
+  /**
+   * Start one run: a new chat in the task's project (or a fresh worktree of
+   * it), titled with the task's name, sent the task's prompt. The same path as
+   * a delegate's first round — `addChat`, `chat-added`, `deliver` — so it is
+   * an ordinary chat from the first event on.
+   *
+   * A clock-fired run is skipped while the task's previous run is still going:
+   * two copies of the same job racing each other in one checkout is never the
+   * intent of "every 15 minutes". "Run now" is a deliberate second one.
+   */
+  async runScheduled(
+    task: ScheduledTask,
+    opts: { dueAt?: number; manual?: boolean } = {}
+  ): Promise<{ ok: true; chatId: string } | { ok: false; error: string }> {
+    if (this.shuttingDown) return { ok: false, error: 'Carbon is quitting.' }
+    if (!opts.manual && this.scheduledRunLive(task.id)) {
+      return { ok: false, error: 'Its previous run is still going.' }
+    }
+    const firedAt = Date.now()
+    const provider = providerForRememberedModel(task.model, task.provider, this.modelCatalog())
+    const late = opts.dueAt !== undefined && firedAt - opts.dueAt > SCHEDULE_LATE_MS
+    const run: ScheduledRun = {
+      taskId: task.id,
+      taskName: task.name,
+      firedAt,
+      ...(late ? { dueAt: opts.dueAt } : {}),
+      ...(opts.manual ? { manual: true as const } : {}),
+      status: 'running'
+    }
+    // The run's record exists *before* anything is awaited. A worktree can
+    // take seconds to check out, and a guard that only sees chats would let
+    // the next slot of an every-minute task start a second run in that gap —
+    // here through `scheduledStarting`, and in another instance through the
+    // persisted `running` record and the lock `addChat` takes.
+    const chat: ChatData = {
+      id: randomUUID(),
+      title: task.name,
+      // Named by the task, never by a title turn: forty runs of one task are
+      // easier to tell apart by date than by forty paraphrases of its prompt.
+      titleManual: true,
+      cwd: task.cwd,
+      provider,
+      model: task.model ?? this.defaultModelFor(provider),
+      effort: effortForProvider(task.effort, provider),
+      serviceTier: task.serviceTier ?? 'standard',
+      permissionMode: task.permissionMode,
+      scheduled: run,
+      createdAt: firedAt,
+      updatedAt: firedAt,
+      sortKey: firedAt,
+      messages: []
+    }
+    const setup: { cancelled: boolean; held: [string, Attachment[] | undefined, string | undefined][] } = {
+      cancelled: false,
+      held: []
+    }
+    this.scheduledStarting.set(chat.id, setup)
+    try {
+      this.store.addChat(chat)
+      const { messages: _messages, ...meta } = chat
+      this.emit({ type: 'chat-added', chatId: chat.id, meta })
+      this.store.schedules.patch(task.id, { lastRunAt: firedAt, lastChatId: chat.id })
+      this.pushEvent(chat, scheduledIntro(task, run))
+      this.archiveEarlierRuns(task.id, chat.id)
+      this.onScheduleChanged()
+      let setupError: string | undefined
+      if (task.worktree) {
+        // Working, as far as the composer is concerned: a Stop cancels the
+        // setup, and anything typed is queued behind the run's own prompt.
+        this.emit({ type: 'status', chatId: chat.id, status: 'streaming' })
+        try {
+          const created = await createWorktree(task.cwd, scheduledBranch(task.name, firedAt))
+          chat.cwd = created.path
+          chat.worktree = { repoRoot: created.repoRoot, branch: created.branch }
+          this.store.saveChat(chat.id)
+          this.emit({ type: 'meta', chatId: chat.id, patch: { cwd: chat.cwd, worktree: chat.worktree } })
+        } catch (err) {
+          setupError = `Could not create a worktree for this run: ${err instanceof Error ? err.message : String(err)}`
+        }
+      }
+      // Quitting during setup leaves the record `running`; the next launch's
+      // reconcile calls it interrupted, as it would any run cut off by a quit.
+      if (this.shuttingDown) return { ok: false, error: 'Carbon is quitting.' }
+      // Deleted while it was being set up: nothing is started for it.
+      if (this.deleting.has(chat.id) || !this.store.getMeta(chat.id)) {
+        return { ok: false, error: 'The run was deleted before it started.' }
+      }
+      const stopped = setup.cancelled
+      if (setupError || stopped) {
+        this.scheduledStopped.delete(chat.id)
+        this.pushEvent(chat, setupError ?? 'Stopped before it started.', setupError ? 'error' : 'info')
+        this.patchScheduled(chat, {
+          status: setupError ? 'failed' : 'stopped',
+          ...(setupError ? { error: setupError } : {}),
+          finishedAt: Date.now(),
+          notStarted: true
+        })
+        this.emit({ type: 'status', chatId: chat.id, status: 'idle' })
+        this.onScheduledSettled(chat)
+      } else if (this.deliver(chat, task.prompt, undefined, undefined, scheduledBrief(task))) {
+        const prompt = chat.messages[chat.messages.length - 1]
+        if (prompt?.role === 'user' && chat.scheduled?.status === 'running') {
+          this.patchScheduled(chat, { promptId: prompt.id })
+        }
+      }
+      this.scheduledStarting.delete(chat.id)
+      // What the user sent during setup goes now, after the run's prompt, on
+      // a session that opened in the worktree. If the run never started there
+      // is no worktree, and sending it would run it in the checkout the task
+      // asked to stay out of — so it is said back instead, unsent.
+      if (stopped || setupError) {
+        if (setup.held.length) {
+          this.pushEvent(
+            chat,
+            `Not sent, since the run never started (this chat is in ${chat.cwd}):\n\n${setup.held.map(([text]) => text).join('\n\n')}`
+          )
+        }
+      } else {
+        for (const [text, attachments, label] of setup.held) this.send(chat.id, text, attachments, label)
+      }
+      this.onScheduleChanged()
+      return { ok: true, chatId: chat.id }
+    } finally {
+      this.scheduledStarting.delete(chat.id)
+    }
+  }
+
+  /**
+   * One row per task in the sidebar: when a run starts, the task's earlier
+   * runs that are over and were never written in move to the archive. They
+   * are still the task's history on the Scheduled page, and opening one
+   * restores it. A run the user answered, pinned, or that is still working is
+   * a conversation and stays put — so an hourly task is one row, not 168 a
+   * week.
+   */
+  private archiveEarlierRuns(taskId: string, keepId: string): void {
+    const now = Date.now()
+    for (const id of this.store.scheduledRunIdsOf(taskId)) {
+      if (id === keepId) continue
+      const meta = this.store.getMeta(id)
+      const run = meta?.scheduled
+      if (!meta || !run || meta.archivedAt || meta.pinnedAt !== undefined || run.touched) continue
+      if (run.status === 'running' || meta.pendingPlanReview || meta.sideOf) continue
+      const session = this.sessions.get(id)
+      if (session && !session.dead && !session.idle) continue
+      if (this.store.lockedElsewhere(id)) continue
+      const chat = this.store.getChat(id)
+      if (!chat) continue
+      chat.archivedAt = now
+      this.store.saveChat(id)
+      this.emit({ type: 'meta', chatId: id, patch: { archivedAt: now } })
+    }
+  }
+
+  /**
+   * Whether a run of `taskId` is really still going. A `running` record is
+   * believed only when something is behind it: a session here, or another
+   * instance holding the chat's lock. Anything else died with an instance that
+   * quit or crashed after this one's launch-time reconcile gave up on it, and
+   * is called interrupted on the spot — trusting the record would skip every
+   * future run of the task for good.
+   */
+  private scheduledRunLive(taskId: string): boolean {
+    let live = false
+    for (const id of this.store.scheduledRunIdsOf(taskId)) {
+      if (this.store.getMeta(id)?.scheduled?.status !== 'running') continue
+      // Ours: the session and the in-memory record are the truth.
+      if (this.sessions.has(id) || this.scheduledStarted.has(id) || this.scheduledStarting.has(id)) {
+        live = true
+        continue
+      }
+      // Not ours: what is resident here can be a view from before the owner
+      // finished it (opening a chat keeps its meta), so ask the database.
+      if (this.store.storedMeta(id)?.scheduled?.status !== 'running') continue
+      if (this.store.lockedElsewhere(id)) {
+        live = true
+        continue
+      }
+      const chat = this.store.getChat(id)
+      if (chat?.scheduled?.status === 'running') {
+        this.patchScheduled(chat, { status: 'interrupted', finishedAt: Date.now() })
+      }
+    }
+    return live
+  }
+
+  /**
+   * Work a run started that is still out: a delegate still working, or its
+   * report not yet delivered back. The run is over only after its own
+   * reporting turn — not at the idle that follows `agents_delegate`. A parent
+   * whose delivery is parked (its provider failed to take it) has nothing more
+   * coming on its own, so it does not hold the run.
+   */
+  private scheduledWorkOutstanding(chat: ChatData): boolean {
+    if (this.delegationsOf(chat.id).some((v) => v.status === 'running')) return true
+    if (this.deliveryInFlight.has(chat.id)) return true
+    return !this.deliveryParked.has(chat.id) && this.undelivered(chat).length > 0
+  }
+
+  private patchScheduled(chat: ChatData, patch: Partial<ScheduledRun>): void {
+    if (!chat.scheduled) return
+    chat.scheduled = { ...chat.scheduled, ...patch }
+    this.store.saveChat(chat.id)
+    this.emit({ type: 'meta', chatId: chat.id, patch: { scheduled: chat.scheduled } })
+  }
+
+  /** Record how a run ended, off its transcript — `settleDelegation`'s rule. */
+  private settleScheduled(chat: ChatData): void {
+    if (this.shuttingDown) return
+    const run = chat.scheduled
+    if (!run || run.status !== 'running') return
+    const stopped = this.scheduledStopped.delete(chat.id)
+    this.scheduledStarted.delete(chat.id)
+    const outcome = delegationOutcome(chat.messages, stopped, run.promptId)
+    this.patchScheduled(chat, {
+      status: outcome.status === 'cancelled' ? 'stopped' : outcome.status,
+      ...(outcome.error ? { error: outcome.error } : {}),
+      finishedAt: Date.now()
+    })
+    this.onScheduledSettled(chat)
+    this.onScheduleChanged()
+  }
+
+  /**
+   * A run still `running` on disk died with the last process — the same
+   * reasoning, lock check and retry as `reconcileDelegations`.
+   */
+  reconcileScheduled(attempt = 0): void {
+    const now = Date.now()
+    let held = 0
+    for (const id of this.store.runningScheduledIds()) {
+      if (this.sessions.has(id) || this.scheduledStarted.has(id) || this.scheduledStarting.has(id)) continue
+      if (this.store.lockedElsewhere(id)) {
+        held++
+        continue
+      }
+      const chat = this.store.getChat(id)
+      if (!chat?.scheduled || chat.scheduled.status !== 'running') continue
+      this.patchScheduled(chat, { status: 'interrupted', finishedAt: now })
+    }
+    if (held && attempt < RECONCILE_RETRIES) {
+      setTimeout(() => this.reconcileScheduled(attempt + 1), RECONCILE_RETRY_MS).unref?.()
+    }
+  }
+
+  /** The user wrote in a run: it is a conversation now, kept out of the archive sweep. */
+  private touchScheduled(chat: ChatData): void {
+    if (!chat.scheduled || (chat.scheduled.touched && !chat.scheduled.notStarted)) return
+    this.patchScheduled(chat, { touched: true, notStarted: undefined })
   }
 
   disposeAll(): void {

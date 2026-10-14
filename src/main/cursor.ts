@@ -34,6 +34,7 @@ import { PREVIEW_SESSION_RULES } from './previewTools.ts'
 import { CANVAS_SESSION_RULES } from './canvasTools.ts'
 import { CHART_SESSION_RULES } from './chartTool.ts'
 import { DELEGATION_SESSION_RULES, canDelegate } from './delegation.ts'
+import { SCHEDULE_SESSION_RULES, canSchedule } from './scheduleTools.ts'
 import type { CarbonMcpProvider, CarbonMcpSession } from './carbonBridge.ts'
 import { CARBON_MCP_NAME, carbonMcpTools } from './carbonMcp.ts'
 import {
@@ -724,7 +725,13 @@ export class CursorSession implements AgentSession {
         label = chosen.label
         let text = turn.text
         if (this.needsRules) {
-          const rules = this.delegates() ? `${SESSION_RULES}\n\n${DELEGATION_SESSION_RULES}` : SESSION_RULES
+          const rules = [
+          SESSION_RULES,
+          this.delegates() ? DELEGATION_SESSION_RULES : '',
+          canSchedule(this.chat) ? SCHEDULE_SESSION_RULES : ''
+        ]
+          .filter(Boolean)
+          .join('\n\n')
           text = `${text}\n\n<carbon_session_rules>\n${rules}\n</carbon_session_rules>`
         }
         if (this.disposed || this.interrupted) throw new Error('Stopped before the prompt was sent.')

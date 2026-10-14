@@ -4,6 +4,7 @@ import { Collapsible } from '@base-ui/react/collapsible'
 import {
   AppWindow,
   Bot,
+  CalendarClock,
   ChartColumn,
   Check,
   ChevronRight,
@@ -40,6 +41,7 @@ import {
 } from 'lucide-react'
 import type { AssistantPart, ToolPart } from '@shared/types'
 import { PROVIDER_SHORT_LABELS, knownProvider } from '@shared/types'
+import { describeSchedule, formatMoment, parseLocalDateTime } from '@shared/schedule'
 import {
   formatAgentDuration,
   DELEGATE_TOOL,
@@ -117,6 +119,20 @@ interface ToolMeta {
 
 function str(v: unknown): string | undefined {
   return typeof v === 'string' && v.length > 0 ? v : undefined
+}
+
+/** When a `schedule_*` call says to run, in the words the Scheduled page uses. */
+function scheduleWords(input: Record<string, unknown>): string | undefined {
+  const cron = str(input.cron)
+  if (cron) return describeSchedule({ kind: 'cron', cron })
+  const at = str(input.at)
+  const when = at ? parseLocalDateTime(at) : null
+  if (when !== null) return `Once, ${formatMoment(when)}`
+  const minutes = Number(input.in_minutes)
+  if (Number.isFinite(minutes) && minutes > 0) return `In ${minutes} min`
+  if (input.enabled === 'false' || input.enabled === false) return 'Pause'
+  if (input.enabled === 'true' || input.enabled === true) return 'Resume'
+  return undefined
 }
 
 /** What a preview click or scroll aimed at, as the row names it. */
@@ -564,6 +580,20 @@ function computeToolMeta(part: ToolPart, cwd: string): ToolMeta {
         label: 'Delegation',
         summary: str(input.agent) ? `Kill ${str(input.agent)}` : 'Kill an agent'
       }
+    // A scheduled task, set up from the conversation: its name, then when.
+    case 'mcp__carbon__schedule_create':
+    case 'mcp__carbon__schedule_update':
+      return {
+        icon: CalendarClock,
+        label: part.name.endsWith('create') ? 'Schedule' : 'Reschedule',
+        summary: [str(input.name) ?? str(input.id), scheduleWords(input)].filter(Boolean).join(' · ') || undefined
+      }
+    case 'mcp__carbon__schedule_list':
+      return { icon: CalendarClock, label: 'Schedule', summary: 'List scheduled tasks' }
+    case 'mcp__carbon__schedule_run':
+      return { icon: CalendarClock, label: 'Schedule', summary: str(input.id) ? `Run ${str(input.id)} now` : 'Run now' }
+    case 'mcp__carbon__schedule_delete':
+      return { icon: CalendarClock, label: 'Schedule', summary: str(input.id) ? `Delete ${str(input.id)}` : 'Delete a task' }
     default: {
       if (browserPrefix(part.name)) return browserMeta(part.name, input)
       const firstString = Object.values(input).find((v) => typeof v === 'string') as

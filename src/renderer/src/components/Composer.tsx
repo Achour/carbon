@@ -658,7 +658,8 @@ export function Composer({
   onDraftChange,
   clearToken = 0,
   header,
-  collapsible = false
+  collapsible = false,
+  submitLabel
 }: {
   /** May be async; if it rejects, the composer restores the draft. */
   onSend: (text: string, attachments: Attachment[]) => void | Promise<void>
@@ -735,6 +736,11 @@ export function Composer({
    * each column. See `collapsed` below for what counts as writing.
    */
   collapsible?: boolean
+  /**
+   * Words on the send button instead of the arrow, for a composer whose send
+   * is not a message — the Scheduled page's, where it saves the task.
+   */
+  submitLabel?: string
 }): React.JSX.Element {
   const [text, setText] = React.useState(() => draft?.text ?? '')
   const [attachments, setAttachments] = React.useState<Attachment[]>(() => draft?.attachments ?? [])
@@ -1260,6 +1266,15 @@ export function Composer({
           <Square className="fill-current" />
         </Button>
       </WithTooltip>
+    ) : submitLabel ? (
+      <Button
+        size="sm"
+        onClick={submit}
+        disabled={!canSend}
+        className={cn('shrink-0 rounded-full px-3.5', collapsed && 'order-2')}
+      >
+        {submitLabel}
+      </Button>
     ) : (
       <Button
         size="icon"

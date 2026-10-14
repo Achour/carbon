@@ -7,6 +7,7 @@ import {
   nativeImage,
   nativeTheme,
   Notification,
+  powerMonitor,
   shell
 } from 'electron'
 import { randomUUID } from 'node:crypto'
@@ -15,6 +16,8 @@ import { existsSync, writeFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type {
+  ChatMeta,
+  ScheduledTaskInput,
   DefaultsPatch,
   Attachment,
   ChatData,
@@ -86,6 +89,7 @@ import { resolveFrame } from './previewSource.ts'
 import { configurePreviewSession } from './previewSession.ts'
 import { CanvasManager } from './canvas.ts'
 import { Store } from './store'
+import { Scheduler } from './scheduler'
 import { TerminalManager } from './terminal'
 import { checkForUpdate, installedViaHomebrew } from './updates'
 import { readUsageOverview } from './usage'
@@ -122,6 +126,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 let win: BrowserWindow | null = null
 let store: Store
 let manager: ChatManager
+let scheduler: Scheduler
 let terminals: TerminalManager
 let chatTerminals: ChatTerminalManager
 let preview: PreviewManager
@@ -149,6 +154,18 @@ const lastStatus = new Map<string, string>()
 function notifyOnStatus(chatId: string, status: string): void {
   const prev = lastStatus.get(chatId)
   lastStatus.set(chatId, status)
+  const run = store.getMeta(chatId)?.scheduled
+  // A scheduled run's ending has its own notice (`notifyScheduled`), which
+  // says how it went; this one would only say "finished" a second time.
+  if (run?.status === 'running' && status === 'idle') return
+  // A run waiting on an approval is the one case worth a notice with no
+  // window at all: nobody started it, so nobody is looking for it.
+  if (run && prev !== 'waiting-permission' && status === 'waiting-permission') {
+    if ((!win || !win.isFocused()) && Notification.isSupported()) {
+      showChatNotification(chatId, run.taskName, 'A scheduled run is waiting for your approval')
+    }
+    return
+  }
   if (!win || win.isFocused() || !Notification.isSupported()) return
   // A chat of a thread's column is notified about like any other: clicking
   // sends `ui:open-chat`, and the renderer opens the thread with that column in
@@ -173,6 +190,48 @@ function notifyOnStatus(chatId: string, status: string): void {
     win.webContents.send('ui:open-chat', chatId)
   })
   n.show()
+}
+
+/**
+ * A notice whose click opens a chat — creating the window first when it was
+ * closed, which is the ordinary case for a scheduled run (on macOS closing the
+ * window leaves the app, and its scheduler, running).
+ */
+function showChatNotification(chatId: string, title: string, body: string): void {
+  const n = new Notification({ title, body })
+  n.on('click', () => {
+    if (!win) {
+      createWindow()
+      // The renderer opens a chat only once it has loaded its list. (Re-read:
+      // the compiler still has `win` narrowed to null from the check above.)
+      const fresh = win as BrowserWindow | null
+      fresh?.webContents.once('did-finish-load', () => {
+        setTimeout(() => win?.webContents.send('ui:open-chat', chatId), 1200)
+      })
+      return
+    }
+    if (win.isMinimized()) win.restore()
+    win.show()
+    win.focus()
+    win.webContents.send('ui:open-chat', chatId)
+  })
+  n.show()
+}
+
+/** A scheduled run ended — said even with no window, unless the user is looking. */
+function notifyScheduled(chat: ChatMeta): void {
+  const run = chat.scheduled
+  if (!run || !Notification.isSupported()) return
+  if (win?.isFocused()) return
+  const body =
+    run.status === 'completed'
+      ? 'Scheduled run finished'
+      : run.status === 'failed'
+        ? `Scheduled run failed${run.error ? `: ${run.error.slice(0, 120)}` : ''}`
+        : run.status === 'stopped'
+          ? 'Scheduled run stopped'
+          : null
+  if (body) showChatNotification(chat.id, run.taskName, body)
 }
 
 /**
@@ -827,6 +886,11 @@ function registerIpc(): void {
   // chat is already out of every list this would remove it from, and is reached
   // only through its thread — archiving one would hide it from the one place it
   // can be reopened, so the flag is refused rather than silently written.
+  ipcMain.handle('scheduled:list', () => store.schedules.list())
+  ipcMain.handle('scheduled:save', (_e, input: ScheduledTaskInput) => manager.saveScheduledTask(input))
+  ipcMain.handle('scheduled:delete', (_e, id: string) => manager.deleteScheduledTask(id))
+  ipcMain.handle('scheduled:run', (_e, id: string) => manager.runScheduledNow(id))
+
   ipcMain.handle('chats:set-archived', (_e, id: string, archived: boolean) => {
     const chat = store.getChat(id)
     if (!chat || chat.ephemeral) return
@@ -1339,6 +1403,20 @@ app.whenReady().then(() => {
   manager = new ChatManager(store, emit, preview, canvas, forgetChat)
   preview.setAgentsHost(manager.agentsHost)
   manager.reconcileDelegations()
+  preview.setScheduleHost(manager.scheduleHost)
+  manager.reconcileScheduled()
+  const pushSchedules = (): void => win?.webContents.send('scheduled:changed', store.schedules.list())
+  scheduler = new Scheduler(store.schedules, {
+    fire: (task, dueAt) => {
+      void manager.runScheduled(task, { dueAt }).then((result) => {
+        if (!result.ok) console.warn(`Scheduled task "${task.name}" skipped: ${result.error}`)
+      })
+    },
+    changed: pushSchedules
+  })
+  manager.attachScheduler(() => scheduler.poke())
+  manager.onScheduleChanged = pushSchedules
+  manager.onScheduledSettled = notifyScheduled
   terminals = new TerminalManager(emitTerminal)
   chatTerminals = new ChatTerminalManager(terminals, store, emitTerminal, emit)
   // Ahead of `registerIpc`: it records the handlers the phone may reach.
@@ -1347,6 +1425,13 @@ app.whenReady().then(() => {
   void remote.restore()
   buildMenu()
   createWindow()
+  // A few seconds in rather than at once: anything overdue fires on this first
+  // tick, and a launch that also spawns its catch-up runs should paint first.
+  setTimeout(() => scheduler.start(), 4000).unref?.()
+  // Timers do not advance while the Mac sleeps; waking is when a missed run
+  // is noticed, not up to a minute later.
+  powerMonitor.on('resume', () => scheduler.poke())
+  powerMonitor.on('unlock-screen', () => scheduler.poke())
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
@@ -1373,6 +1458,7 @@ app.on('before-quit', (event) => {
     })
     return
   }
+  scheduler.stop()
   manager.disposeAll()
   chatTerminals.disposeAll()
   terminals.disposeAll()

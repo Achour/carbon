@@ -135,7 +135,7 @@ export class PreviewManager implements PreviewToolHost {
      */
     canvas?: CanvasToolHost
   ) {
-    this.mcp = startCarbonBridge(this, canvas, () => this.agents).catch((err) => {
+    this.mcp = startCarbonBridge(this, canvas, () => this.agents, () => this.schedule).catch((err) => {
       console.warn('[preview] MCP bridge failed to start:', err)
       return null
     })
@@ -150,6 +150,17 @@ export class PreviewManager implements PreviewToolHost {
 
   agentsHost(): CarbonToolHosts['agents'] {
     return this.agents
+  }
+
+  /** The scheduled-tasks host — `ChatManager` as well. */
+  private schedule: CarbonToolHosts['schedule']
+
+  setScheduleHost(host: CarbonToolHosts['schedule']): void {
+    this.schedule = host
+  }
+
+  scheduleHost(): CarbonToolHosts['schedule'] {
+    return this.schedule
   }
 
   /**

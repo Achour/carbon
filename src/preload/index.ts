@@ -20,6 +20,8 @@ import type {
   PullMergeMethod,
   PullState,
   RemoteAccessPatch,
+  ScheduledTask,
+  ScheduledTaskInput,
   Provider,
   ProviderCliConfig,
   ProviderInstallProgress,
@@ -220,6 +222,15 @@ const api: Api = {
     const listener = (): void => cb()
     ipcRenderer.on('remote:changed', listener)
     return () => ipcRenderer.removeListener('remote:changed', listener)
+  },
+  listScheduledTasks: () => invoke('scheduled:list'),
+  saveScheduledTask: (input: ScheduledTaskInput) => invoke('scheduled:save', input),
+  deleteScheduledTask: (id: string) => invoke('scheduled:delete', id),
+  runScheduledTask: (id: string) => invoke('scheduled:run', id),
+  onScheduledTasksChanged: (cb: (tasks: ScheduledTask[]) => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, tasks: ScheduledTask[]): void => cb(tasks)
+    ipcRenderer.on('scheduled:changed', listener)
+    return () => ipcRenderer.removeListener('scheduled:changed', listener)
   },
   // Resolved once at bridge construction: `app` isn't reachable from preload,
   // and a version that can't change while the process lives has no business

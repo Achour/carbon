@@ -11,6 +11,7 @@ import {
   type CarbonToolContext,
   type CarbonToolHosts,
   type CarbonToolSchema,
+  type CarbonToolScope,
   type HttpMcpServer,
   type JsonRpcRequest,
   type JsonRpcResponse
@@ -98,13 +99,15 @@ export function startCarbonBridge(
    * The delegation host is `ChatManager`, which is built after the bridge
    * starts — so it is read through a getter at each call rather than captured.
    */
-  agents?: () => CarbonToolHosts['agents']
+  agents?: () => CarbonToolHosts['agents'],
+  /** The schedule host — `ChatManager` too, so read the same way. */
+  schedule?: () => CarbonToolHosts['schedule']
 ): Promise<CarbonBridgeHandle> {
   return new Promise((resolve, reject) => {
     const token = randomUUID()
     const sessions = new Map<string, CarbonToolContext>()
     const server = createServer((req, res) => {
-      void handleRequest(req, res, { token, sessions, preview, canvas, agents })
+      void handleRequest(req, res, { token, sessions, preview, canvas, agents, schedule })
     })
     server.once('error', reject)
     server.listen(0, '127.0.0.1', () => {
@@ -121,13 +124,12 @@ export function startCarbonBridge(
           const id = randomUUID()
           sessions.set(id, ctx)
           const url = `${base}/mcp/${id}`
-          const state: BridgeState = { token, sessions, preview, canvas, agents }
+          const state: BridgeState = { token, sessions, preview, canvas, agents, schedule }
           return {
             url,
             acpServer: carbonAcpServer(url, token),
             codexConfig: carbonCodexConfig(url, token),
-            tools: () =>
-              carbonToolList({ canvas: !!canvas, agents: !!agents?.() && ctx.delegate?.() === true }),
+            tools: () => carbonToolList(scopeOf(state, ctx)),
             call: async (name, args) => {
               const reply = await answer(
                 { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } },
@@ -161,6 +163,16 @@ interface BridgeState {
   preview: PreviewToolHost
   canvas?: CanvasToolHost
   agents?: () => CarbonToolHosts['agents']
+  schedule?: () => CarbonToolHosts['schedule']
+}
+
+/** Which tools this session is offered right now. */
+function scopeOf(state: BridgeState, ctx: CarbonToolContext): CarbonToolScope {
+  return {
+    canvas: !!state.canvas,
+    agents: !!state.agents?.() && ctx.delegate?.() === true,
+    schedule: !!state.schedule?.()?.allowed(ctx.chatId)
+  }
 }
 
 async function handleRequest(
@@ -251,13 +263,11 @@ async function answer(
   state: BridgeState,
   ctx: CarbonToolContext
 ): Promise<JsonRpcResponse | null> {
-  const agents = state.agents?.()
   if (message.method === 'tools/call' && message.id != null) {
-    return handleMcpCall(message, (name, input) =>
-      runCarbonTool({ preview: state.preview, canvas: state.canvas, agents }, ctx, name, input)
-    )
+    const hosts = { preview: state.preview, canvas: state.canvas, agents: state.agents?.(), schedule: state.schedule?.() }
+    return handleMcpCall(message, (name, input) => runCarbonTool(hosts, ctx, name, input))
   }
-  return handleMcpMessage(message, { canvas: !!state.canvas, agents: !!agents && ctx.delegate?.() === true })
+  return handleMcpMessage(message, scopeOf(state, ctx))
 }
 
 function readBody(req: IncomingMessage): Promise<string> {

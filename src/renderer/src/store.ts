@@ -85,6 +85,7 @@ import type {
   ChatMessage,
   ContextUsage,
   ChatMeta,
+  ScheduledTask,
   ChatStatus,
   CodexGoal,
   CodexGoalStatus,
@@ -1044,6 +1045,19 @@ interface AppState {
   pullsOpen: boolean
   openPulls(): void
   closePulls(): void
+
+  // ---- Scheduled page ----
+  /**
+   * The fourth full-window page, exclusive with the other three. The task
+   * list is held here rather than in the page because the sidebar's row reads
+   * it too, and main pushes it whenever a run fires or an agent edits a task.
+   */
+  scheduledOpen: boolean
+  scheduledTasks: ScheduledTask[]
+  openScheduled(): void
+  closeScheduled(): void
+  loadScheduledTasks(): Promise<void>
+  setScheduledTasks(tasks: ScheduledTask[]): void
 
   // ---- Settings ----
   /** When true the main area shows the settings page instead of a chat. */
@@ -2680,7 +2694,7 @@ export const useApp = create<AppState>((set, get) => ({
   usageReportLoading: false,
 
   openUsage() {
-    set({ usageOpen: true, settingsOpen: false, pullsOpen: false })
+    set({ usageOpen: true, settingsOpen: false, pullsOpen: false, scheduledOpen: false })
     void get().loadUsageReport()
   },
 
@@ -2711,11 +2725,37 @@ export const useApp = create<AppState>((set, get) => ({
   pullsOpen: false,
 
   openPulls() {
-    set({ pullsOpen: true, usageOpen: false, settingsOpen: false })
+    set({ pullsOpen: true, usageOpen: false, settingsOpen: false, scheduledOpen: false })
   },
 
   closePulls() {
     set({ pullsOpen: false })
+  },
+
+  // ---- Scheduled page ----
+
+  scheduledOpen: false,
+  scheduledTasks: [],
+
+  openScheduled() {
+    set({ scheduledOpen: true, pullsOpen: false, usageOpen: false, settingsOpen: false })
+    void get().loadScheduledTasks()
+  },
+
+  closeScheduled() {
+    set({ scheduledOpen: false })
+  },
+
+  async loadScheduledTasks() {
+    try {
+      set({ scheduledTasks: await window.api.listScheduledTasks() })
+    } catch (err) {
+      console.error('scheduled tasks failed to load:', err)
+    }
+  },
+
+  setScheduledTasks(tasks) {
+    set({ scheduledTasks: tasks })
   },
 
   // ---- Settings ----
@@ -2731,7 +2771,13 @@ export const useApp = create<AppState>((set, get) => ({
     // A section is only *offered* when one was named: reopening Settings with
     // no argument must land where the user last was, which is the page's own
     // business, not this call's.
-    set({ settingsOpen: true, usageOpen: false, pullsOpen: false, ...(section ? { settingsSection: section } : {}) })
+    set({
+      settingsOpen: true,
+      usageOpen: false,
+      pullsOpen: false,
+      scheduledOpen: false,
+      ...(section ? { settingsSection: section } : {})
+    })
   },
 
   setSettingsSection(section) {
@@ -4486,6 +4532,7 @@ export const useApp = create<AppState>((set, get) => ({
         settingsOpen: false,
         usageOpen: false,
         pullsOpen: false,
+        scheduledOpen: false,
         panelMaximized: false,
         // The right panel is per chat; a fresh/draft chat starts collapsed.
         panelOpen: false
@@ -4516,6 +4563,7 @@ export const useApp = create<AppState>((set, get) => ({
       settingsOpen: false,
       usageOpen: false,
       pullsOpen: false,
+      scheduledOpen: false,
       panelMaximized: false,
       // Panel visibility is per chat; unvisited chats start closed.
       panelOpen: s.panelOpenByChat[id] ?? false
@@ -4669,6 +4717,7 @@ export const useApp = create<AppState>((set, get) => ({
         settingsOpen: false,
         usageOpen: false,
         pullsOpen: false,
+        scheduledOpen: false,
         panelMaximized: false,
         // A terminal chat mirrors only the folder into the defaults — the same
         // line `chats:create` draws: nobody chose its model, the pickers are
@@ -4748,7 +4797,7 @@ export const useApp = create<AppState>((set, get) => ({
         }
       )
     }
-    set({ pullsOpen: false, pendingTarget: target })
+    set({ pullsOpen: false, scheduledOpen: false, pendingTarget: target })
     await get().openChat(null)
     get().setSelectedCwd(cwd)
   },
@@ -5430,6 +5479,18 @@ export const useApp = create<AppState>((set, get) => ({
         break
       }
       case 'meta': {
+        // A scheduled run that ended off screen is unread — the Scheduled
+        // row's count and the run's dot in the page's history read this. The
+        // thread rule below (`finishedUnseen`) covers only columns of the
+        // thread being read, and a run is never one.
+        const prevRun = s.chats.find((c) => c.id === ev.chatId)?.scheduled
+        const runEnded =
+          prevRun?.status === 'running' &&
+          ev.patch.scheduled !== undefined &&
+          ev.patch.scheduled.status !== 'running' &&
+          // A full-window page covers the transcript while keeping `activeId`.
+          (!onScreen(s, ev.chatId) || s.settingsOpen || s.usageOpen || s.pullsOpen || s.scheduledOpen)
+        if (runEnded) set((st) => ({ unreadChats: { ...st.unreadChats, [ev.chatId]: true as const } }))
         set((st) => ({
           // Patch in place. A title landing, a model change or a branch switch
           // is not a reason to move the row — and sorting on `updatedAt` here
@@ -5454,7 +5515,12 @@ export const useApp = create<AppState>((set, get) => ({
         // patched-in-place flag would leave a transcript on screen with no row
         // anywhere and a composer still willing to send into it.
         if (ev.patch.archivedAt !== undefined && get().activeId === ev.chatId) {
-          void get().openChat(null)
+          // Except a scheduled run the task's next run swept into the archive
+          // (`archiveEarlierRuns`) while it was on screen: being read is the
+          // best reason there is to keep it, so it comes straight back.
+          if (get().chats.find((c) => c.id === ev.chatId)?.scheduled) {
+            void get().setChatArchived(ev.chatId, false)
+          } else void get().openChat(null)
         }
         break
       }
@@ -5628,9 +5694,13 @@ export const useApp = create<AppState>((set, get) => ({
           // inside refreshUsage — turn boundaries come far faster than limits
           // move, and each real read spawns a CLI process per provider.
           void get().refreshUsage()
-          // A queued message goes out as soon as the chat is free again.
+          // A queued message goes out as soon as the chat is free again —
+          // except into a scheduled run that never started: it has no
+          // worktree, and the message was written expecting one. It waits
+          // until the user's own next send says to work in the checkout.
           const next = get().queued[ev.chatId]?.[0]
-          if (next) {
+          const notStarted = get().chats.find((c) => c.id === ev.chatId)?.scheduled?.notStarted
+          if (next && !notStarted) {
             set((st) => ({
               queued: { ...st.queued, [ev.chatId]: st.queued[ev.chatId].slice(1) }
             }))

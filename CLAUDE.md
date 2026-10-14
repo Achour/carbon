@@ -387,6 +387,13 @@ it guards**, and put new reasoning in that file rather than back in this one.
   delivered back, and the one-level / plan-mode rules (`main/delegation.ts`,
   `ChatManager.delegate`, `sendToDelegate`, `flushDeliveries`,
   `DelegationBadge`).
+- **`docs/scheduled.md`** — prompts Carbon sends on a schedule, each run a new
+  chat: cron in local time and its DST rule (`shared/schedule.ts`), the task
+  table and the compare-and-swap claim that keeps two instances from firing one
+  run (`main/scheduleStore.ts`), the clock and its one-catch-up policy
+  (`main/scheduler.ts`), a run's lifecycle in `ChatManager` (`runScheduled`,
+  `settleScheduled`, `archiveEarlierRuns`), the agent's `schedule_*` tools
+  (`main/scheduleTools.ts`) and the page (`Scheduled.tsx`).
 - **`docs/terminal-chats.md`** — a chat that is your shell in a pty, with the
   CLI session you start in it found and resumed (`ChatMeta.surface`,
   `main/chatTerminal.ts`, `main/termTitle.ts`, `ChatTerminal` in

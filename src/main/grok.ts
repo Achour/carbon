@@ -72,6 +72,7 @@ import { projectRoot } from '../shared/types.ts'
 import { CANVAS_SESSION_RULES } from './canvasTools.ts'
 import { CHART_SESSION_RULES } from './chartTool.ts'
 import { DELEGATION_SESSION_RULES, canDelegate } from './delegation.ts'
+import { SCHEDULE_SESSION_RULES, canSchedule } from './scheduleTools.ts'
 
 /**
  * Grok Build as an `AgentSession`, on top of the ACP client in `grokAcp.ts`.
@@ -313,7 +314,13 @@ export class GrokSession implements AgentSession {
       autoMode: baseline === 'auto',
       mcpServers,
       extraRules: mcp
-        ? [PREVIEW_SESSION_RULES, CANVAS_SESSION_RULES, CHART_SESSION_RULES, this.delegates() ? DELEGATION_SESSION_RULES : '']
+        ? [
+            PREVIEW_SESSION_RULES,
+            CANVAS_SESSION_RULES,
+            CHART_SESSION_RULES,
+            this.delegates() ? DELEGATION_SESSION_RULES : '',
+            canSchedule(this.chat) ? SCHEDULE_SESSION_RULES : ''
+          ]
             .filter(Boolean)
             .join('\n\n')
         : undefined,

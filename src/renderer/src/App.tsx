@@ -18,6 +18,7 @@ import { warmCues } from '@/lib/sounds'
 import { Settings } from '@/components/Settings'
 import { UsageStats } from '@/components/UsageStats'
 import { PullRequests } from '@/components/PullRequests'
+import { Scheduled } from '@/components/Scheduled'
 import { isChatTerminalId } from '@shared/types'
 import { useApp } from '@/store'
 import { installPreviewCommands } from '@/lib/previewCommands'
@@ -44,6 +45,11 @@ export default function App(): React.JSX.Element {
     const offNewChat = window.api.onNewChat(() => useApp.getState().startNewChat())
     const offCloseTab = window.api.onCloseTab(() => useApp.getState().closeActiveTab())
     const offOpenChat = window.api.onOpenChat((id) => void openChat(id))
+    // Held in the store because the sidebar's row reads it as well as the page.
+    void useApp.getState().loadScheduledTasks()
+    const offScheduled = window.api.onScheduledTasksChanged((tasks) =>
+      useApp.getState().setScheduledTasks(tasks)
+    )
     const offPreview = window.api.onPreviewEvent((ev) => {
       if (ev.type === 'state') useApp.getState().applyPreviewState(ev.state)
     })
@@ -123,6 +129,7 @@ export default function App(): React.JSX.Element {
       offNewChat()
       offCloseTab()
       offOpenChat()
+      offScheduled()
       offPreview()
       offTerminal()
       offPreviewCmd()
@@ -142,10 +149,11 @@ export default function App(): React.JSX.Element {
   const settingsOpen = useApp((s) => s.settingsOpen)
   const usageOpen = useApp((s) => s.usageOpen)
   const pullsOpen = useApp((s) => s.pullsOpen)
+  const scheduledOpen = useApp((s) => s.scheduledOpen)
   const panelFullscreen = useApp((s) => s.panelOpen && s.panelMaximized)
   // Both are full-window pages that stand in for the chat, and both hide the
   // right panel — a diff or file tab belongs to a chat, and neither page has one.
-  const pageOpen = settingsOpen || usageOpen || pullsOpen
+  const pageOpen = settingsOpen || usageOpen || pullsOpen || scheduledOpen
 
   return (
     <TooltipProvider delay={500}>
@@ -166,6 +174,8 @@ export default function App(): React.JSX.Element {
               <UsageStats />
             ) : pullsOpen ? (
               <PullRequests />
+            ) : scheduledOpen ? (
+              <Scheduled />
             ) : panelFullscreen ? null : loading ? (
               <div className="flex flex-1 items-center justify-center bg-background">
                 <span className="shimmer-text text-sm font-medium">Loading…</span>

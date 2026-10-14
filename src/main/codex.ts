@@ -87,6 +87,7 @@ import { projectRoot } from '../shared/types.ts'
 import { CANVAS_SESSION_RULES } from './canvasTools.ts'
 import { CHART_SESSION_RULES } from './chartTool.ts'
 import { DELEGATION_SESSION_RULES, canDelegate } from './delegation.ts'
+import { SCHEDULE_SESSION_RULES, canSchedule } from './scheduleTools.ts'
 import { describeCanvas, describeElement, describeQuote, describeSelection } from './attachmentText.ts'
 
 const OUTPUT_CAP = 100_000
@@ -896,7 +897,8 @@ export class CodexSession implements AgentSession {
       mcp ? PREVIEW_SESSION_RULES : '',
       mcp ? CANVAS_SESSION_RULES : '',
       mcp ? CHART_SESSION_RULES : '',
-      mcp && this.delegates() ? DELEGATION_SESSION_RULES : ''
+      mcp && this.delegates() ? DELEGATION_SESSION_RULES : '',
+      mcp && canSchedule(this.chat) ? SCHEDULE_SESSION_RULES : ''
     ]
       .filter(Boolean)
       .join('\n\n')
