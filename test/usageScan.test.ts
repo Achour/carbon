@@ -162,9 +162,21 @@ test('a cell is priced at read time, banking cost and the saving cache bought', 
   const cost = priceCell(cell)
   // 5 + 0.5 + 10 + 25
   assert.equal(cost.costUsd, 40.5)
+  assert.deepEqual(cost.byKind, { input: 5, cacheRead: 0.5, cacheWrite: 10, output: 25 })
   // The million cached tokens would have cost $5 uncached and cost $0.50.
   assert.equal(cost.savingsUsd, 4.5)
   assert.equal(cost.unpricedTokens, 0)
+})
+
+test("a reported cost keeps its total and borrows the table's split", () => {
+  const cell = emptyCell('grok', 'grok-4.6-build', '2026-08-08')
+  // At the derived grok rate: input $2, output $10 per MTok → a 1:5 split.
+  addSample(cell, { input: 1_000_000, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0, output: 1_000_000 })
+  cell.costUsd = 6
+  const cost = priceCell(cell)
+  assert.equal(cost.costUsd, 6)
+  assert.equal(cost.byKind.input, 1)
+  assert.equal(cost.byKind.output, 5)
 })
 
 test('an unpriced cell counts tokens but never invents a cost', () => {

@@ -1176,67 +1176,83 @@ export const USAGE_RANGES = [
 /** The window the page opens on: a month is the span a habit shows up over. */
 export const USAGE_DEFAULT_DAYS = 30
 
-/** Token counts and their list-price cost, for one slice of the report. */
-export interface UsageTotals {
-  /** Input tokens billed at the full rate (cache misses). */
-  input: number
-  cacheRead: number
-  cacheWrite: number
-  output: number
-  /** Reasoning tokens — a *subset* of `output`; Codex reports them, Claude doesn't. */
-  reasoning: number
-  costUsd: number
-  /** What `cacheRead` would have cost uncached, minus what it did cost. */
-  savingsUsd: number
-  /** Assistant responses (Claude) / sampled turns (Codex). */
-  responses: number
-  /** Tokens with no published rate; excluded from `costUsd`. */
-  unpricedTokens: number
-}
+/**
+ * The four ways a token is billed, in the order the page lists them. Each is
+ * priced differently — a cache read costs a tenth of fresh input, a cache write
+ * up to twice it — so a token count only means something split this way.
+ */
+export const USAGE_KINDS = ['input', 'cacheRead', 'cacheWrite', 'output'] as const
+export type UsageKind = (typeof USAGE_KINDS)[number]
+export type UsageAmounts = Record<UsageKind, number>
 
 /**
  * The providers the Usage page can account for: the ones whose CLI writes a
  * local session log carrying token counts. Antigravity's server keeps its
  * history in SQLite trajectories with no usage in them, and its ACP replies
- * carry none either, so there is nothing of its spend to scan.
+ * carry none either, so there is nothing of its spend to scan. Cursor's SDK
+ * writes no session log at all; its per-turn usage reaches only the turn card.
  */
 export type UsageProvider = Exclude<Provider, 'antigravity' | 'cursor'>
 
-/** One row of the per-model breakdown. */
-export interface UsageModelRow extends UsageTotals {
+/**
+ * One (day, provider, model, project) slice of the window — the page's only
+ * unit of data. Main does no grouping beyond this; the renderer pivots facts
+ * by whichever dimension is on screen and filters them by the selected day or
+ * row, so every view is a fold over the same array rather than a second report.
+ */
+export interface UsageFact {
+  /** `YYYY-MM-DD`, local. */
+  day: string
   provider: UsageProvider
   model: string
-}
-
-/** One point on the daily chart. `YYYY-MM-DD`, local. */
-export interface UsageDay {
-  day: string
-  claude: UsageTotals
-  codex: UsageTotals
-  grok: UsageTotals
+  /** Index into `UsageReport.projects`. */
+  project: number
+  tokens: UsageAmounts
+  /** List-price cost of `tokens`, per kind. Zero for an unpriced model. */
+  cost: UsageAmounts
+  /** Reasoning tokens — a *subset* of `tokens.output`; only some CLIs report them. */
+  reasoning: number
+  /** What `tokens.cacheRead` would have cost uncached, minus what it did cost. */
+  savedUsd: number
+  /** Assistant responses (Claude) / sampled turns (Codex, Grok). */
+  responses: number
+  /** Tokens on models with no published rate — counted, but absent from `cost`. */
+  unpriced: number
 }
 
 /**
  * Token spend over a window, read from the CLIs' own session logs.
  *
  * Distinct from `UsageOverview`, which is "how much plan headroom is left right
- * now". This is history: what was spent, on which models, on which days —
- * including turns run outside Carbon, because both SDKs drive the same CLIs and
- * write to the same logs.
+ * now". This is history: what was spent, on which models, in which projects, on
+ * which days — including turns run outside Carbon, because the providers' SDKs
+ * drive the same CLIs and write to the same logs.
  */
 export interface UsageReport {
   /** Inclusive local-day bounds, `YYYY-MM-DD`. */
   from: string
   to: string
-  days: UsageDay[]
-  /** Sorted by cost, descending. */
-  models: UsageModelRow[]
-  claude: UsageTotals
-  codex: UsageTotals
-  grok: UsageTotals
-  total: UsageTotals
-  /** Distinct session files that contributed to the window. */
+  /** Every day in the window, oldest first — the chart's columns, gaps included. */
+  days: string[]
+  facts: UsageFact[]
+  /**
+   * Project roots, indexed by `UsageFact.project`. A worktree is folded into
+   * the repository it belongs to; `''` is a log that never recorded a folder.
+   */
+  projects: string[]
+  /** Distinct sessions active on each of `days`, by index. */
+  daySessions: number[]
+  /** Distinct sessions in the whole window (subagent files count with their parent). */
   sessions: number
+  /** The same-length window just before this one, for the change line. */
+  previous: { costUsd: number; tokens: number }
+  /**
+   * Per provider, the first day its CLI still keeps logs for, when it deletes
+   * older ones. Claude Code does — `cleanupPeriodDays`, 30 by default — so a
+   * window reaching further back holds Codex's history and not Claude's, and
+   * the page has to say so rather than draw the gap as a quiet month.
+   */
+  keptFrom: Partial<Record<UsageProvider, string>>
   /** When the scan ran (epoch ms). */
   scannedAt: number
   /** Sources that couldn't be read at all, in the user's words. */

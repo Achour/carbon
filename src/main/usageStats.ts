@@ -1,19 +1,22 @@
 import { createReadStream, type Dirent } from 'node:fs'
 import { readFile, readdir, stat, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
-import type { UsageProvider, UsageDay, UsageModelRow, UsageReport, UsageTotals } from '@shared/types'
+import { basename, dirname, join } from 'node:path'
+import type { UsageFact, UsageProvider, UsageReport } from '@shared/types'
 import {
   CodexFileReader,
   addSample,
+  cellKinds,
+  cellTokens,
   emptyCell,
+  emptyKinds,
   localDay,
   parseClaudeLine,
   parseGrokLine,
   priceCell,
-  type CellCost,
   type UsageCell
 } from './usageScan'
 import { loadRates } from './usageRates'
+import { resolveProjects } from './usageProjects'
 
 /**
  * Walks every CLI's session logs and turns them into the Usage page's report.
@@ -53,8 +56,11 @@ const CACHE_FILE = 'usage-cache.json'
  * skipping a fork's replayed lines (`forkedFrom`, `usageScan.ts`) moves the
  * derivation of cells already on disk — the double-counted ones sit in files
  * that will never be modified again — so only a rescan can correct them.
+ *
+ * 4 adds the folder each file ran in (`CacheEntry.cwd`), which the project
+ * split needs and no earlier entry recorded.
  */
-const CACHE_VERSION = 3
+const CACHE_VERSION = 4
 /** Don't let the cache grow unbounded as sessions accumulate. */
 const CACHE_MAX_FILES = 20_000
 
@@ -62,6 +68,17 @@ interface CacheEntry {
   mtimeMs: number
   size: number
   cells: UsageCell[]
+  /**
+   * The folder the session ran in, as the log recorded it — *not* the project
+   * root. Resolving a folder to its repository reads the disk, and the answer
+   * moves when a worktree is removed, so it is done per scan and never cached.
+   */
+  cwd?: string
+}
+
+interface FileRead {
+  cells: UsageCell[]
+  cwd?: string
 }
 
 interface Source {
@@ -166,8 +183,9 @@ function forEachLine(path: string, onLine: (line: string) => void): Promise<void
 
 // ---------- Per-file reduction ----------
 
-async function readClaudeFile(path: string): Promise<UsageCell[]> {
+async function readClaudeFile(path: string): Promise<FileRead> {
   const cells = new Map<string, UsageCell>()
+  let cwd: string | undefined
   // A single API response is written once per content block, so a turn with text
   // and a tool call appears twice carrying identical usage. Dedupe within the
   // file: a message id never crosses sessions.
@@ -179,6 +197,7 @@ async function readClaudeFile(path: string): Promise<UsageCell[]> {
       if (seen.has(s.key)) return
       seen.add(s.key)
     }
+    cwd ??= s.cwd
     const day = localDay(s.ts)
     // Speed is part of the key: fast mode is a different SKU on the same model
     // id, so folding the two together would make the cell unpriceable later.
@@ -187,10 +206,10 @@ async function readClaudeFile(path: string): Promise<UsageCell[]> {
     if (!c) cells.set(k, (c = emptyCell('claude', s.model, day, s.speed)))
     addSample(c, s)
   })
-  return [...cells.values()]
+  return { cells: [...cells.values()], cwd }
 }
 
-async function readCodexFile(path: string): Promise<UsageCell[]> {
+async function readCodexFile(path: string): Promise<FileRead> {
   const cells = new Map<string, UsageCell>()
   const reader = new CodexFileReader()
   await forEachLine(path, (line) => reader.push(line))
@@ -210,10 +229,23 @@ async function readCodexFile(path: string): Promise<UsageCell[]> {
       reasoning: s.reasoning
     })
   }
-  return [...cells.values()]
+  return { cells: [...cells.values()], cwd: reader.cwd }
 }
 
-async function readGrokFile(path: string): Promise<UsageCell[]> {
+/**
+ * Grok records no folder inside the log; the session directory's parent *is*
+ * the folder, percent-encoded: `sessions/%2FUsers%2Fme%2Fapp/<id>/updates.jsonl`.
+ */
+function grokCwd(path: string): string | undefined {
+  try {
+    const decoded = decodeURIComponent(basename(dirname(dirname(path))))
+    return decoded.startsWith('/') ? decoded : undefined
+  } catch {
+    return undefined
+  }
+}
+
+async function readGrokFile(path: string): Promise<FileRead> {
   const cells = new Map<string, UsageCell>()
   await forEachLine(path, (line) => {
     const samples = parseGrokLine(line)
@@ -236,7 +268,7 @@ async function readGrokFile(path: string): Promise<UsageCell[]> {
       c.costUsd = (c.costUsd ?? 0) + s.costUsd
     }
   })
-  return [...cells.values()]
+  return { cells: [...cells.values()], cwd: grokCwd(path) }
 }
 
 /**
@@ -244,7 +276,7 @@ async function readGrokFile(path: string): Promise<UsageCell[]> {
  * ternaries so a fourth provider is a missing key the compiler names, not a
  * silent fall-through into Codex's parser.
  */
-const READERS: Record<UsageProvider, (path: string) => Promise<UsageCell[]>> = {
+const READERS: Record<UsageProvider, (path: string) => Promise<FileRead>> = {
   claude: readClaudeFile,
   codex: readCodexFile,
   grok: readGrokFile
@@ -300,34 +332,31 @@ function saveCache(dir: string, cache: Cache): Promise<void> {
   return writing
 }
 
-// ---------- Aggregation ----------
+// ---------- Retention ----------
 
-function emptyTotals(): UsageTotals {
-  return {
-    input: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    output: 0,
-    reasoning: 0,
-    costUsd: 0,
-    savingsUsd: 0,
-    responses: 0,
-    unpricedTokens: 0
+/** Claude Code's default `cleanupPeriodDays`. */
+const CLAUDE_RETENTION_DAYS = 30
+
+/**
+ * How many days of transcripts Claude Code keeps. It deletes older ones at
+ * startup, so the logs are not a history past this point — on a default
+ * install, the oldest Claude transcript on disk is a month old however long
+ * the CLI has been in use. Codex and Grok keep everything.
+ */
+async function claudeRetentionDays(home: string): Promise<number> {
+  const claudeHome = process.env.CLAUDE_CONFIG_DIR || join(home, '.claude')
+  try {
+    const settings = JSON.parse(await readFile(join(claudeHome, 'settings.json'), 'utf8')) as {
+      cleanupPeriodDays?: unknown
+    }
+    const days = settings.cleanupPeriodDays
+    return typeof days === 'number' && Number.isFinite(days) && days > 0 ? days : CLAUDE_RETENTION_DAYS
+  } catch {
+    return CLAUDE_RETENTION_DAYS
   }
 }
 
-/** Fold a cell and its freshly-computed cost into a running total. */
-function accumulate(into: UsageTotals, cell: UsageCell, cost: CellCost): void {
-  into.input += cell.input
-  into.cacheRead += cell.cacheRead
-  into.cacheWrite += cell.cacheWrite5m + cell.cacheWrite1h
-  into.output += cell.output
-  into.reasoning += cell.reasoning
-  into.responses += cell.responses
-  into.costUsd += cost.costUsd
-  into.savingsUsd += cost.savingsUsd
-  into.unpricedTokens += cost.unpricedTokens
-}
+// ---------- Aggregation ----------
 
 /** Every local day in `[from, to]`, so the chart has no gaps to interpolate. */
 function dayRange(from: Date, to: Date): string[] {
@@ -352,23 +381,30 @@ async function scan(opts: UsageStatsOptions, days: number, refresh: boolean): Pr
   const start = new Date(now)
   start.setDate(start.getDate() - (days - 1))
   start.setHours(0, 0, 0, 0)
+  // The same-length window just before this one, for the change line. It is
+  // read through the same cache, so after the first scan it costs nothing.
+  const prevStart = new Date(start)
+  prevStart.setDate(prevStart.getDate() - days)
 
   // Rates and the file list are independent; fetch and walk together so a cold
   // rate fetch never adds to the scan's wall clock.
-  const [cache, sources, rates] = await Promise.all([
+  const [cache, sources, rates, claudeDays] = await Promise.all([
     refresh ? Promise.resolve(new Map<string, CacheEntry>()) : loadCache(opts.cacheDir),
     listSources(opts.home),
-    loadRates(opts.cacheDir)
+    loadRates(opts.cacheDir),
+    claudeRetentionDays(opts.home)
   ])
+  const claudeKept = new Date(now)
+  claudeKept.setDate(claudeKept.getDate() - claudeDays)
   const notes: string[] = []
   if (!sources.length) {
-    notes.push('No Claude Code or Codex session logs found in your home directory.')
+    notes.push('No Claude Code, Codex or Grok session logs found in your home directory.')
   }
 
   // An append-only log last written before the window began can hold nothing
   // inside it, so it never has to be opened — the single biggest saving on a
   // 7-day view over years of history.
-  const floor = start.getTime() - MTIME_SLACK_MS
+  const floor = prevStart.getTime() - MTIME_SLACK_MS
   const live = new Map<string, CacheEntry>()
   const pending: { source: Source; mtimeMs: number; size: number }[] = []
 
@@ -394,8 +430,8 @@ async function scan(opts: UsageStatsOptions, days: number, refresh: boolean): Pr
   let failures = 0
   await runPool(pending, CONCURRENCY, async ({ source, mtimeMs, size }) => {
     try {
-      const cells = await READERS[source.provider](source.path)
-      live.set(source.path, { mtimeMs, size, cells })
+      const { cells, cwd } = await READERS[source.provider](source.path)
+      live.set(source.path, { mtimeMs, size, cells, cwd })
     } catch {
       failures++
     }
@@ -417,66 +453,101 @@ async function scan(opts: UsageStatsOptions, days: number, refresh: boolean): Pr
 
   const from = localDay(start.getTime())
   const to = localDay(end.getTime())
-  const byDay = new Map<string, UsageDay>()
-  for (const day of dayRange(start, end)) {
-    byDay.set(day, { day, claude: emptyTotals(), codex: emptyTotals(), grok: emptyTotals() })
+  const prevFrom = localDay(prevStart.getTime())
+  const dayList = dayRange(start, end)
+  const dayIndex = new Map(dayList.map((d, i) => [d, i]))
+
+  // Only folders that contributed to the window are worth resolving.
+  const cwds = new Set<string>()
+  for (const entry of live.values()) {
+    if (entry.cwd && entry.cells.some((c) => c.day >= from && c.day <= to)) cwds.add(entry.cwd)
   }
-  const byModel = new Map<string, UsageModelRow>()
-  const claude = emptyTotals()
-  const codex = emptyTotals()
-  const grok = emptyTotals()
-  const total = emptyTotals()
-  // Hoisted: the loop below runs once per cached cell across every session file
-  // in the window — tens of thousands on a real corpus — and an inline
-  // `{ claude, codex, grok }[cell.provider]` would allocate a throwaway object
-  // on each pass purely to do a lookup.
-  const providerTotals: Record<UsageProvider, UsageTotals> = { claude, codex, grok }
+  const owner = await resolveProjects(cwds, opts.home)
+  const projects: string[] = []
+  const projectIndex = new Map<string, number>()
+  const projectOf = (cwd: string | undefined): number => {
+    const root = cwd ? (owner.get(cwd) ?? cwd) : ''
+    let i = projectIndex.get(root)
+    if (i === undefined) {
+      i = projects.length
+      projects.push(root)
+      projectIndex.set(root, i)
+    }
+    return i
+  }
+
+  const facts = new Map<string, UsageFact>()
+  const daySessions = dayList.map(() => 0)
+  const previous = { costUsd: 0, tokens: 0 }
   let sessions = 0
 
   for (const [path, entry] of live) {
-    let counted = false
+    // A subagent transcript is part of its parent session, not another one —
+    // counting the files would roughly double the number a user recognizes.
+    const isSession = !path.includes('/subagents/')
+    const activeDays = new Set<number>()
+    let project = -1
     for (const cell of entry.cells) {
-      if (cell.day < from || cell.day > to) continue
-      counted = true
+      if (cell.day < prevFrom || cell.day > to) continue
       // Priced here rather than at parse time: cells are cached per file and
       // rates refresh daily, so cost has to be a function of the current table
       // and not a number frozen into a file that never changes again.
       const cost = priceCell(cell, rates)
-      const dayRow = byDay.get(cell.day)
-      if (dayRow) accumulate(dayRow[cell.provider], cell, cost)
-      const key = `${cell.provider} ${cell.model}`
-      let row = byModel.get(key)
-      if (!row) {
-        byModel.set(key, (row = { provider: cell.provider, model: cell.model, ...emptyTotals() }))
+      if (cell.day < from) {
+        previous.costUsd += cost.costUsd
+        previous.tokens += cellTokens(cell)
+        continue
       }
-      accumulate(row, cell, cost)
-      accumulate(providerTotals[cell.provider], cell, cost)
-      accumulate(total, cell, cost)
+      activeDays.add(dayIndex.get(cell.day) ?? -1)
+      if (project === -1) project = projectOf(entry.cwd)
+      const key = `${cell.day} ${cell.provider} ${cell.model} ${project}`
+      let fact = facts.get(key)
+      if (!fact) {
+        facts.set(
+          key,
+          (fact = {
+            day: cell.day,
+            provider: cell.provider,
+            model: cell.model,
+            project,
+            tokens: emptyKinds(),
+            cost: emptyKinds(),
+            reasoning: 0,
+            savedUsd: 0,
+            responses: 0,
+            unpriced: 0
+          })
+        )
+      }
+      const tokens = cellKinds(cell)
+      for (const k of ['input', 'cacheRead', 'cacheWrite', 'output'] as const) {
+        fact.tokens[k] += tokens[k]
+        fact.cost[k] += cost.byKind[k]
+      }
+      fact.reasoning += cell.reasoning
+      fact.savedUsd += cost.savingsUsd
+      fact.responses += cell.responses
+      fact.unpriced += cost.unpricedTokens
     }
-    // A subagent transcript is part of its parent session, not another one —
-    // counting the files would roughly double the number a user recognizes.
-    if (counted && !path.includes('/subagents/')) sessions++
+    if (isSession && activeDays.size) {
+      sessions++
+      for (const i of activeDays) if (i >= 0) daySessions[i]++
+    }
   }
 
   return {
     from,
     to,
-    days: [...byDay.values()],
-    models: [...byModel.values()].sort(
-      (a, b) => b.costUsd - a.costUsd || tokensOf(b) - tokensOf(a)
-    ),
-    claude,
-    codex,
-    grok,
-    total,
+    days: dayList,
+    facts: [...facts.values()],
+    projects,
+    daySessions,
     sessions,
+    previous,
+    keptFrom: { claude: localDay(claudeKept.getTime()) },
     scannedAt: Date.now(),
     notes
   }
-}
-
-function tokensOf(t: UsageTotals): number {
-  return t.input + t.cacheRead + t.cacheWrite + t.output
 }
 
 /** Run `fn` over `items` with at most `limit` in flight. */

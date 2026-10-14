@@ -414,8 +414,10 @@ it guards**, and put new reasoning in that file rather than back in this one.
   project's mark (`lib/projectIdentity.ts`, `ui/project-avatar.tsx`,
   `--project-ink-*`).
 - **`docs/usage.md`** — the spend history page and its scan
-  (`main/usageScan.ts`, `usageStats.ts`, `usageRates.ts`,
-  `components/UsageStats.tsx`), and `--chart-*`.
+  (`main/usageScan.ts`, `usageStats.ts`, `usageRates.ts`, `usageProjects.ts`,
+  `lib/usagePivot.ts`, `components/UsageStats.tsx`): facts pivoted in the
+  renderer, one Cost/Tokens measure for the whole page, projects resolved
+  through worktrees, Claude Code's 30-day log deletion, and `--chart-*`.
 - **`docs/worktrees.md`** — running a chat in a worktree (`main/worktree.ts`,
   `WorktreePicker.tsx`, `BranchPicker.tsx`, `branchVsDefault`) and publishing a
   project (`main/github.ts`, `PublishDialog.tsx`, `ensureRootCommit`).

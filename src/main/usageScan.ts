@@ -294,13 +294,55 @@ export function addSample(
   cell.responses += 1
 }
 
+/** The four ways a token is billed. Mirrors `UsageKind` in `@shared/types`. */
+export interface KindAmounts {
+  /** Fresh input — cache misses, billed at the full input rate. */
+  input: number
+  cacheRead: number
+  cacheWrite: number
+  output: number
+}
+
+export function emptyKinds(): KindAmounts {
+  return { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 }
+}
+
+/** A cell's tokens, folded into the four kinds the page shows. */
+export function cellKinds(c: UsageCell): KindAmounts {
+  return {
+    input: c.input,
+    cacheRead: c.cacheRead,
+    cacheWrite: c.cacheWrite5m + c.cacheWrite1h,
+    output: c.output
+  }
+}
+
 /** What a cell cost, and what caching saved on it. */
 export interface CellCost {
   costUsd: number
+  /**
+   * `costUsd`, split by the kind of token that incurred it — what lets the page
+   * say "cache reads were a third of the bill". Always sums to `costUsd`.
+   */
+  byKind: KindAmounts
   /** What `cacheRead` would have cost at the full input rate, minus what it did. */
   savingsUsd: number
   /** Tokens with no rate. `costUsd` excludes them rather than counting them free. */
   unpricedTokens: number
+}
+
+function kindCost(cell: UsageCell, rate: Rate): KindAmounts {
+  const m = 1e6
+  return {
+    input: (cell.input * rate.input) / m,
+    cacheRead: (cell.cacheRead * rate.cacheRead) / m,
+    cacheWrite: (cell.cacheWrite5m * rate.cacheWrite5m + cell.cacheWrite1h * rate.cacheWrite1h) / m,
+    output: (cell.output * rate.output) / m
+  }
+}
+
+function sumKinds(k: KindAmounts): number {
+  return k.input + k.cacheRead + k.cacheWrite + k.output
 }
 
 /** Price a cell. Applied at read time, so a rate refresh reprices everything. */
@@ -310,23 +352,33 @@ export function priceCell(cell: UsageCell, lookup: RateLookup = staticRate): Cel
   // come from the rate when one exists, since no provider reports those; with no
   // rate the cost stands alone rather than dragging the cell into `unpriced`.
   if (cell.costUsd != null) {
+    // The provider reports one figure per turn, not one per kind, so the split
+    // is the table's *shape* scaled to the reported *total*: the total stays
+    // exactly what was settled, and only its division is an estimate. With no
+    // rate to take a shape from, tokens stand in for it.
+    const shape = rate ? kindCost(cell, rate) : cellKinds(cell)
+    const whole = sumKinds(shape)
+    const f = whole > 0 ? cell.costUsd / whole : 0
     return {
       costUsd: cell.costUsd,
+      byKind: {
+        input: shape.input * f,
+        cacheRead: shape.cacheRead * f,
+        cacheWrite: shape.cacheWrite * f,
+        output: whole > 0 ? shape.output * f : cell.costUsd
+      },
       savingsUsd: rate ? (cell.cacheRead * (rate.input - rate.cacheRead)) / 1e6 : 0,
       unpricedTokens: 0
     }
   }
-  if (!rate) return { costUsd: 0, savingsUsd: 0, unpricedTokens: cellTokens(cell) }
-  const m = 1e6
+  if (!rate) {
+    return { costUsd: 0, byKind: emptyKinds(), savingsUsd: 0, unpricedTokens: cellTokens(cell) }
+  }
+  const byKind = kindCost(cell, rate)
   return {
-    costUsd:
-      (cell.input * rate.input +
-        cell.cacheRead * rate.cacheRead +
-        cell.cacheWrite5m * rate.cacheWrite5m +
-        cell.cacheWrite1h * rate.cacheWrite1h +
-        cell.output * rate.output) /
-      m,
-    savingsUsd: (cell.cacheRead * (rate.input - rate.cacheRead)) / m,
+    costUsd: sumKinds(byKind),
+    byKind,
+    savingsUsd: (cell.cacheRead * (rate.input - rate.cacheRead)) / 1e6,
     unpricedTokens: 0
   }
 }
@@ -437,6 +489,8 @@ export interface ClaudeSample {
   cacheWrite1h: number
   output: number
   speed?: string
+  /** The folder the session ran in — what the Usage page groups projects by. */
+  cwd?: string
 }
 
 function num(v: unknown): number {
@@ -516,7 +570,8 @@ export function parseClaudeLine(line: string): ClaudeSample | null {
     cacheWrite5m: w5,
     cacheWrite1h: w1,
     output: num(usage.output_tokens),
-    speed: typeof usage.speed === 'string' ? usage.speed : undefined
+    speed: typeof usage.speed === 'string' ? usage.speed : undefined,
+    cwd: typeof o.cwd === 'string' && o.cwd ? o.cwd : undefined
   }
 }
 
@@ -546,6 +601,11 @@ export interface CodexSample {
 export class CodexFileReader {
   private model = ''
   private samples: CodexSample[] = []
+  /**
+   * The folder the thread ran in, from the first `turn_context` that names one.
+   * A thread cannot move folders, so the first answer is the file's answer.
+   */
+  cwd: string | undefined
 
   /** Feed one line; returns nothing — collect with `take()` at end of file. */
   push(line: string): void {
@@ -561,6 +621,7 @@ export class CodexFileReader {
 
     if (o.type === 'turn_context') {
       if (typeof payload.model === 'string') this.model = payload.model
+      if (!this.cwd && typeof payload.cwd === 'string' && payload.cwd) this.cwd = payload.cwd
       return
     }
     if (o.type === 'event_msg' && payload.type === 'thread_settings_applied') {

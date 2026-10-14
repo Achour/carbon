@@ -1170,7 +1170,8 @@ interface AppState {
   /** Drop a chosen mark: to the project's initials, or back to the scan. */
   clearProjectIcon(root: string, mode: 'initials' | 'auto'): Promise<void>
   /** Resolves marks for any project that hasn't got one yet. */
-  loadProjectIcons(): Promise<void>
+  /** Icons for `roots`, or for every sidebar project when omitted. */
+  loadProjectIcons(roots?: string[]): Promise<void>
   /** One project's worktrees and branches; fetched when its card is expanded. */
   projectDetails: Record<string, ProjectDetail>
   loadProjectDetail(root: string, refresh?: boolean): Promise<void>
@@ -3026,13 +3027,13 @@ export const useApp = create<AppState>((set, get) => ({
     await get().loadProjectIcons()
   },
 
-  async loadProjectIcons() {
+  async loadProjectIcons(wanted) {
     const s = get()
     // Only what is unanswered: main caches the walk, but every root asked for
     // ships its base64 URI back across IPC, so re-asking for the whole list
     // each time a project appears re-sends every icon the sidebar already has.
-    const roots = projectRoots(visibleChats(s.chats), s.projectOrder).filter(
-      (root) => !(root in s.projectIcons)
+    const roots = (wanted ?? projectRoots(visibleChats(s.chats), s.projectOrder)).filter(
+      (root) => root && !(root in s.projectIcons)
     )
     if (roots.length === 0) return
     try {

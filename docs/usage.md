@@ -4,7 +4,7 @@
 seams are in `CLAUDE.md`; the other surfaces are the neighbouring files in this
 directory.*
 
-### Usage (`src/main/usageScan.ts`, `usageStats.ts`, `components/UsageStats.tsx`)
+### Usage (`src/main/usageScan.ts`, `usageStats.ts`, `usageProjects.ts`, `lib/usagePivot.ts`, `components/UsageStats.tsx`)
 
 Two different questions wear the word "usage", and they share nothing. `usage.ts`
 + `UsagePanel` ask the providers **how much plan headroom is left right now** —
@@ -82,6 +82,51 @@ chat lands in the same files as a terminal one. That is also why the page does *
   refreshing rate feed would otherwise introduce. A cold scan is ~2 GB and ~5 s,
   a warm one ~20 ms, and switching range never re-reads. `CACHE_VERSION` now
   tracks only the *parsing* — rate changes reprice for free.
+
+- **Claude Code deletes its own history.** Its `cleanupPeriodDays` (30 by
+  default, read from `~/.claude/settings.json`) removes older transcripts at
+  startup, so on a default install the oldest Claude log is a month old while
+  Codex's go back to the install. A 90-day window therefore holds 90 days of
+  Codex and 30 of Claude, and the page drew the gap as a quiet two months.
+  `UsageReport.keptFrom` names the cutoff; the chart shades the days before it,
+  a caveat says so in words, and the "vs previous" change is withheld whenever
+  the previous window reaches past it — otherwise a 30-day view compares a full
+  month against a month of Codex alone and reports +360%.
+- **Projects are repositories, not folders.** Each file's `cwd` (Claude's
+  `cwd` field, Codex's `turn_context.cwd`, Grok's percent-encoded session
+  directory) is cached raw and resolved per scan in `usageProjects.ts`: up to
+  the git root, through a worktree's `.git` pointer to the repo that owns it.
+  Most worktrees are deleted by the time anyone looks, so those are placed by
+  path against the roots that did resolve — Claude Code's
+  `<repo>/.claude/worktrees/`, Carbon's `<repo>-<sha256[:8]>`, any tool's
+  `…/worktrees/<repo>/` — and left as their own folder when nothing claims
+  them. The walk stops at `$HOME` so a dotfiles repo cannot swallow everything.
+
+### The page
+
+The report is **facts, not views**: one row per (day, provider, model,
+project) with tokens and cost each split four ways (fresh input, cache reads,
+cache writes, output). `lib/usagePivot.ts` folds them into whatever is on
+screen, which is what makes the page explorable without a second report — a
+chart column filters the page to that day, a table row filters it to that
+provider, project or model, and chips name both. Cost per kind comes from
+`priceCell`; Grok's reported cost keeps its total and borrows the rate table's
+split, since xAI reports one figure per turn.
+
+**One measure for the whole page.** The Cost / Tokens switch re-expresses the
+headline, the composition, the chart and every column; the old page moved only
+the chart, under a dollar headline and beside a table carrying both. The
+composition is by kind in both measures because that is where they diverge —
+cache reads are ~98% of tokens and ~58% of cost — and kinds draw as one ink at
+four strengths (darker is dearer per token) rather than four more hues
+competing with the provider set.
+
+**Stacked columns, where it used to overlay areas.** Stacking *lines* draws a
+small series at the total's height, which is why the overlay existed; a
+*column's* segments are each their own height and the column is the day, and a
+discrete column is something to click. Series past the sixth fold into Other.
+Projects take the hue their sidebar mark already wears (a collision steps the
+second lighter); models, an open set, take `--chart-1…6` by rank.
 
 `--chart-claude` / `--chart-codex` / `--chart-grok` (`index.css`) are the one place
 the app carries hue a theme does not set: on a page whose job is comparing
