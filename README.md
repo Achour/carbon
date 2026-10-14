@@ -103,8 +103,9 @@ you're on — including publishing a project that has no remote yet.
 **From your phone.** Settings → Remote access serves a phone-sized Carbon from
 your Mac: scan a QR code, then read chats as they stream, send messages and
 photos, approve tools and plans, and start new chats from anywhere your phone
-and Mac share a [Tailscale](https://tailscale.com) network. The agents keep
-running on the Mac, on your own CLIs.
+and Mac share a [Tailscale](https://tailscale.com) network — with a
+notification when an agent finishes or needs you. The agents keep running on the
+Mac, on your own CLIs. Setup is [below](#use-it-from-your-phone).
 
 **The rest.** Permission prompts with per-tool "always allow", plan mode with an
 approve/edit review and a "build with" picker, checkpoint and rewind to any
@@ -113,6 +114,59 @@ count, a usage page reading the CLIs' own logs for what you spent by provider,
 model and day, a real terminal, a browser preview that starts your dev server and
 can hand screenshots back to the agent, MCP server status, alert sounds, and
 light/dark themes with macOS vibrancy.
+
+## Use it from your phone
+
+The phone gets a Carbon web app served by your Mac. Nothing runs on the phone and
+nothing goes through a server of ours: the phone talks to your Mac directly,
+through [Tailscale](https://tailscale.com), a free private network between your
+own devices. That is what lets it work away from home, on mobile data or any
+Wi-Fi.
+
+**Set it up once:**
+
+1. Install Tailscale on the Mac and on the iPhone, and sign both into the
+   **same account**. On the phone, allow the VPN and check it says *Connected*.
+2. In the [Tailscale admin console](https://login.tailscale.com/admin/dns), under
+   **DNS**, turn on **MagicDNS** and **HTTPS Certificates**. Carbon uses these to
+   get a real HTTPS certificate for your Mac, which notifications need.
+3. In Carbon: **Settings → Remote access**, turn it on, wait for the
+   `https://…ts.net` address to appear (the first certificate can take a
+   minute), then **Pair a phone** and scan the QR code.
+4. On the phone: **Share → Add to Home Screen**, open Carbon from the Home
+   Screen, and tap **Turn on** to allow notifications. (iOS only delivers web
+   notifications to an app opened from the Home Screen.)
+
+If the page stays blank after scanning, the phone isn't on your Tailscale
+network yet — open the Tailscale app on it and check it's connected. If the
+HTTPS address doesn't appear, Settings says what's missing.
+
+The Mac has to be awake and online. *Settings → Chats → Keep computer awake*
+holds it awake while an agent works, but a closed lid still sleeps it.
+
+**Who can get in.** A device has to pass two checks. It must be on your Tailscale
+network — your own devices, plus anyone you invite or share the Mac with in
+Tailscale — and it must have been paired with a one-time code you created on the
+Mac, which works once, for ten minutes. Paired devices are listed in Settings →
+Remote access; the trash icon unpairs one, at once. Traffic is encrypted by
+Tailscale and again by HTTPS, and notifications are encrypted for your phone,
+so Apple, which delivers them, can't read them.
+
+A paired phone can steer your agents, and in *Full access* mode that means
+anything on your Mac — so keep a passcode on the phone, turn on two-factor
+sign-in for the account you use with Tailscale, and unpair a phone you lose.
+Notifications show the start of an agent's reply on the lock screen; *iOS
+Settings → Notifications → Show Previews → When Unlocked* hides it.
+
+<details>
+<summary>Without Tailscale, on your home Wi-Fi</summary>
+
+**Allow the local network** in Settings → Remote access also accepts phones on
+the same Wi-Fi, at `http://<your-mac>.local`. It works only at home, has no
+notifications (they need HTTPS), and is plain HTTP, so others on the network
+could read the traffic, including the phone's sign-in. Leave it off on Wi-Fi
+you don't trust, and turn it off once you've moved to Tailscale.
+</details>
 
 ## Development
 
