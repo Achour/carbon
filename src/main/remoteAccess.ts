@@ -640,7 +640,12 @@ export class RemoteAccess {
 
   private async snapshot(): Promise<RemoteSnapshot> {
     const defaults: AppDefaults = this.host.store.getDefaults()
-    const chats = this.host.store.listChats()
+    // Side chats too, which `listChats` leaves out for the sidebar's sake: a
+    // delegate's live state is read off its own chat (`AgentGroupCard`,
+    // `DelegateCard`), and without the row the phone reads the delegate as
+    // gone, so three running agents showed as "finished". The phone's lists
+    // filter them back out (`listedChats`).
+    const chats = [...this.host.store.listChats(), ...this.host.store.listSideChats()]
     return {
       hostname: hostname().replace(/\.local$/, ''),
       chats,

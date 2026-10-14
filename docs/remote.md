@@ -43,6 +43,13 @@ the window open. The phone is one more window onto them.
   same two maps from launch onwards, whether or not the server is on, and
   `/api/snapshot` hands them over. A plan review that opened before the phone
   connected therefore shows up on it.
+- **The snapshot carries side chats, which the desktop's list leaves out.**
+  `listChats` drops ephemeral chats for the sidebar's sake, and the desktop
+  keeps its side chats in a list of their own. A delegate's live state is read
+  off its own chat (`AgentGroupCard`, `DelegateCard`), so a phone holding only
+  `listChats` found no row, read every delegate as deleted, and showed three
+  running agents as finished. `/api/snapshot` sends both lists, and the phone's
+  lists filter side chats back out (`listedChats`).
 - **Who may connect: Tailscale and loopback always, the LAN only on opt-in, the
   internet never.** The server binds every interface so a Tailscale that comes
   up after Carbon needs no restart. `remoteAddressAllowed` then drops any peer
