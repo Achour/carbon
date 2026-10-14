@@ -87,6 +87,7 @@ interface RemoteState {
 }
 
 let conn: string | null = null
+const visible = (): boolean => document.visibilityState === 'visible'
 let closeEvents: (() => void) | null = null
 
 export const useRemote = create<RemoteState>((set, get) => {
@@ -110,6 +111,12 @@ export const useRemote = create<RemoteState>((set, get) => {
         .icons()
         .then((icons) => set({ icons }))
         .catch(() => {})
+      // A queue only drains on a live "idle" event, and a phone that was
+      // locked when the turn ended never heard one: send what is waiting
+      // behind any chat the snapshot says has finished.
+      for (const chatId of Object.keys(get().queued)) {
+        if ((snap.statuses[chatId] ?? 'idle') === 'idle') void drainQueue(chatId)
+      }
       // Whatever streamed while the phone was away is in the database now;
       // refetching is simpler and surer than replaying.
       const open = get().open
@@ -147,7 +154,7 @@ export const useRemote = create<RemoteState>((set, get) => {
     closeEvents = api.connectEvents({
       onHello: (id) => {
         conn = id
-        void api.watch(id, get().open?.id ?? null).catch(() => {})
+        void api.watch(id, get().open?.id ?? null, visible()).catch(() => {})
         void resync()
       },
       onEvent: (ev) => {
@@ -206,6 +213,9 @@ export const useRemote = create<RemoteState>((set, get) => {
       // iOS freezes a backgrounded page's sockets without telling it. Coming
       // back, a stream that is not live is reopened rather than waited on.
       document.addEventListener('visibilitychange', () => {
+        // Going away: tell the Mac first, so a turn that finishes while the
+        // stream is still half-open notifies instead of assuming it was seen.
+        if (!visible() && conn) void api.watch(conn, get().open?.id ?? null, false).catch(() => {})
         if (document.visibilityState === 'visible' && get().connection !== 'unpaired') {
           if (get().connection !== 'live' || !conn) connect()
           else void resync()
@@ -216,7 +226,7 @@ export const useRemote = create<RemoteState>((set, get) => {
     async openChat(id) {
       if (get().open?.id === id) return
       set({ open: id ? { id, messages: [], hiddenBefore: 0, loading: true } : null })
-      if (conn) void api.watch(conn, id).catch(() => {})
+      if (conn) void api.watch(conn, id, visible()).catch(() => {})
       if (id) {
         try {
           await fetchOpen(id)

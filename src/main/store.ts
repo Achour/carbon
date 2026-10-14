@@ -135,6 +135,8 @@ export interface RemoteDeviceRecord {
   tokenHash: string
   pairedAt: number
   lastSeenAt?: number
+  /** Its Web Push subscription, once the phone turned notifications on. */
+  push?: { endpoint: string; p256dh: string; auth: string }
 }
 
 export interface RemoteSettings {
@@ -142,6 +144,12 @@ export interface RemoteSettings {
   allowLan: boolean
   port: number
   devices: RemoteDeviceRecord[]
+  /**
+   * This Mac's VAPID key pair, made the first time a phone asks for it. It
+   * signs every push, and a phone's subscription is bound to its public half —
+   * so it is kept, not regenerated, or every subscription would stop working.
+   */
+  vapid?: { publicKey: string; privateKey: string }
 }
 
 const DEFAULT_SETTINGS: SettingsFile = {

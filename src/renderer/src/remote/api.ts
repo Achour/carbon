@@ -18,10 +18,11 @@ export class RemoteError extends Error {
   }
 }
 
-async function post<T>(path: string, body: unknown): Promise<T> {
+async function post<T>(path: string, body: unknown, keepalive = false): Promise<T> {
   const res = await fetch(path, {
     method: 'POST',
     credentials: 'same-origin',
+    keepalive,
     headers: { 'content-type': 'application/json', 'x-carbon-remote': '1' },
     body: JSON.stringify(body)
   })
@@ -62,8 +63,25 @@ export async function icons(): Promise<Record<string, string | null>> {
   return (await res.json()) as Record<string, string | null>
 }
 
-export async function watch(conn: string, chatId: string | null): Promise<void> {
-  await post('/api/watch', { conn, chatId })
+/**
+ * Which chat this page is reading, and whether it is on screen — the Mac
+ * skips the notification for a chat the phone is looking at. `keepalive` so
+ * the "hidden" report still leaves when iOS suspends the page right after it
+ * (`sendBeacon` would, too, but cannot carry the CSRF header).
+ */
+export async function watch(conn: string, chatId: string | null, visible = true): Promise<void> {
+  await post('/api/watch', { conn, chatId, visible }, true)
+}
+
+export async function pushInfo(): Promise<{ publicKey: string; subscribed: boolean }> {
+  const res = await fetch('/api/push', { credentials: 'same-origin' })
+  if (!res.ok) throw new RemoteError(`Carbon answered ${res.status}`, res.status)
+  return (await res.json()) as { publicKey: string; subscribed: boolean }
+}
+
+/** Hand the Mac this phone's subscription, or `null` to stop notifications. */
+export async function setPushSubscription(subscription: PushSubscriptionJSON | null): Promise<void> {
+  await post('/api/push', { subscription })
 }
 
 export interface EventHandlers {

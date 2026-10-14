@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { ChevronRight, MessageCircleQuestion, MessageSquarePlus, Pin, Plus, Search, X } from 'lucide-react'
+import { Bell, BellOff, ChevronRight, MessageCircleQuestion, MessageSquarePlus, Pin, Plus, Search, X } from 'lucide-react'
 import { projectRoot, type ChatMeta } from '@shared/types'
 import { ProjectAvatar } from '@/components/ui/project-avatar'
 import { DotSpinner } from '@/components/ui/dot-spinner'
@@ -9,6 +9,7 @@ import { cn } from '@/lib/utils'
 import { useRemote } from './state'
 import { navigate } from './App'
 import { baseName, chatTitle, listedChats } from './format'
+import { PUSH_HINT, usePush } from './push'
 
 /** Rows a project shows before "Show more" — the desktop sidebar's fold. */
 const FOLD = 5
@@ -146,18 +147,64 @@ export function Sidebar({ activeId, onNavigate }: { activeId: string | null; onN
         )}
       </div>
 
-      <div className="flex shrink-0 items-center gap-2.5 border-t border-sidebar-border px-5 pt-3 pb-[max(env(safe-area-inset-bottom),12px)] text-[13px] text-muted-foreground">
-        <span
-          className={cn(
-            'size-2 shrink-0 rounded-full',
-            connection === 'live' ? 'bg-success' : connection === 'down' ? 'bg-warning' : 'bg-muted-foreground/50'
-          )}
-        />
-        <span className="min-w-0 truncate">
-          {connection === 'live' ? hostname || 'Connected' : connection === 'down' ? 'Reconnecting…' : 'Connecting…'}
-        </span>
+      <div className="relative shrink-0 border-t border-sidebar-border pb-[max(env(safe-area-inset-bottom),12px)] text-[13px] text-muted-foreground">
+        <div className="flex items-center gap-2.5 pt-1.5 pr-2 pl-5">
+          <span
+            className={cn(
+              'size-2 shrink-0 rounded-full',
+              connection === 'live' ? 'bg-success' : connection === 'down' ? 'bg-warning' : 'bg-muted-foreground/50'
+            )}
+          />
+          <span className="min-w-0 flex-1 truncate">
+            {connection === 'live' ? hostname || 'Connected' : connection === 'down' ? 'Reconnecting…' : 'Connecting…'}
+          </span>
+          <NotificationsButton />
+        </div>
       </div>
     </aside>
+  )
+}
+
+/**
+ * The bell: turns this phone's notifications on and off. Where they cannot
+ * work yet, it is still there, and tapping it says what to do instead.
+ */
+function NotificationsButton(): React.JSX.Element | null {
+  const { state, busy, toggle } = usePush()
+  const setError = useRemote((s) => s.setError)
+  const [hint, setHint] = React.useState(false)
+  React.useEffect(() => {
+    if (!hint) return
+    const t = setTimeout(() => setHint(false), 8000)
+    return () => clearTimeout(t)
+  }, [hint])
+  if (state === 'loading') return <span className="size-10" />
+  const on = state === 'on'
+  const text = PUSH_HINT[state]
+  return (
+    <>
+      <button
+        type="button"
+        disabled={busy}
+        aria-label={on ? 'Turn off notifications' : 'Turn on notifications'}
+        aria-pressed={on}
+        onClick={() => {
+          if (text) return setHint((h) => !h)
+          toggle().catch((err) => setError(err instanceof Error ? err.message : String(err)))
+        }}
+        className={cn(
+          'flex size-10 shrink-0 items-center justify-center rounded-full active:bg-sidebar-accent disabled:opacity-50',
+          on ? 'text-primary' : 'text-muted-foreground'
+        )}
+      >
+        {on ? <Bell className="size-[18px] fill-current" /> : <BellOff className="size-[18px]" />}
+      </button>
+      {hint && text && (
+        <div className="absolute inset-x-3 bottom-full z-50 mb-2 animate-in rounded-2xl border border-border bg-popover px-4 py-3 text-[13.5px] leading-snug text-popover-foreground shadow-lg fade-in slide-in-from-bottom-2">
+          {text}
+        </div>
+      )}
+    </>
   )
 }
 

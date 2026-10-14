@@ -36,6 +36,9 @@ Dev utilities (env vars for `npm run dev`, used for UI iteration without a human
   `CARBON_ANTIGRAVITY_PATH` — pin a provider's
   CLI to a specific binary, above the Settings → Providers value. Useful for testing
   a prerelease CLI, or the "not installed" path (point one at a path that isn't there).
+- `CARBON_TAILSCALE_PATH` — the `tailscale` CLI remote access asks for its HTTPS
+  certificate. Point it at a stub that answers `status --json` and `cert` to
+  exercise the HTTPS and notification path on a Mac without Tailscale.
 - `CARBON_UPDATE_REPO=owner/repo` — points the update check at another repo, so a real
   "newer release" can be faked (any repo whose latest tag outranks `package.json`).
 - `CARBON_FAKE_HOMEBREW=1` — forces `installedViaHomebrew`, the only way to reach the

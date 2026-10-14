@@ -5,6 +5,7 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { ImageLightbox } from '@/components/ImageView'
 import { App } from './App'
 import { installDesktopBridge } from './desktop'
+import { installPushWorker } from './push'
 import './remote.css'
 
 // The desktop's tokens key dark mode off `.dark`; a phone follows its own
@@ -14,6 +15,8 @@ dark.addEventListener('change', () => document.documentElement.classList.toggle(
 
 // Before the first render: the transcript is the desktop's components.
 installDesktopBridge()
+// So a tap on a notification can open its chat, whatever screen this launched on.
+installPushWorker()
 
 createRoot(document.getElementById('root')!).render(
   <TooltipProvider delay={500}>

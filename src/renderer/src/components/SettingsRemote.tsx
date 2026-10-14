@@ -1,6 +1,6 @@
 import * as React from 'react'
 import QRCode from 'qrcode'
-import { Copy, Smartphone, Trash2, TriangleAlert } from 'lucide-react'
+import { Bell, Copy, Lock, Smartphone, Trash2, TriangleAlert } from 'lucide-react'
 import type { RemoteAccessState } from '@shared/types'
 import { relativeTime } from '@/lib/format'
 import { Button } from '@/components/ui/button'
@@ -71,6 +71,7 @@ export function RemoteSection(): React.JSX.Element {
       {state.enabled && state.running && (
         <>
           <Address state={state} />
+          <Https state={state} />
           <Pairing state={state} busy={busy} onPair={() => void run(() => window.api.remotePair())} />
         </>
       )}
@@ -100,6 +101,7 @@ export function RemoteSection(): React.JSX.Element {
 
 /** The `.local` name is the Wi-Fi address to keep; the IP is its fallback. */
 const ADDRESS_LABEL: Record<RemoteAccessState['urls'][number]['kind'], string> = {
+  https: 'HTTPS',
   tailscale: 'Tailscale',
   local: 'This Wi-Fi',
   lan: 'Wi-Fi IP'
@@ -131,6 +133,41 @@ function Address({ state }: { state: RemoteAccessState }): React.JSX.Element {
           </Button>
         </div>
       ))}
+    </div>
+  )
+}
+
+/**
+ * Whether the phone can get notifications: they need the HTTPS address, and
+ * that needs a certificate from the user's Tailscale. When there is none, the
+ * reason main found is the instruction — it names the one thing to fix.
+ */
+function Https({ state }: { state: RemoteAccessState }): React.JSX.Element | null {
+  const https = state.https
+  if (https.status === 'off') return null
+  if (https.status === 'on') {
+    return (
+      <div className="flex items-start gap-2 px-2 py-1.5 text-xs text-muted-foreground">
+        <Lock className="mt-0.5 size-3.5 shrink-0 text-success" />
+        <span>
+          Notifications are available at the HTTPS address. Pair the phone there, add it to the Home Screen,
+          then turn them on from the bell in Carbon's sidebar on the phone.
+        </span>
+      </div>
+    )
+  }
+  if (https.status === 'pending') {
+    return (
+      <div className="flex items-start gap-2 px-2 py-1.5 text-xs text-muted-foreground">
+        <Lock className="mt-0.5 size-3.5 shrink-0" />
+        <span>Asking Tailscale for a certificate… The first one can take a minute.</span>
+      </div>
+    )
+  }
+  return (
+    <div className="mx-2 rounded-lg border border-border bg-secondary/40 px-3 py-2.5 text-xs text-muted-foreground">
+      <div className="font-medium text-foreground">No notifications on the phone yet</div>
+      They need an HTTPS address, which Carbon gets from Tailscale. {https.reason}
     </div>
   )
 }
@@ -247,6 +284,7 @@ function Devices({
               {d.lastSeenAt ? ` · last used ${ago(d.lastSeenAt)}` : ''}
             </div>
           </div>
+          {d.notifications && <Bell className="size-3.5 text-muted-foreground" aria-label="Notifications on" />}
           <Button variant="ghost" size="icon-sm" aria-label={`Unpair ${d.name}`} onClick={() => onForget(d.id)}>
             <Trash2 />
           </Button>

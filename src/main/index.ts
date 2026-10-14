@@ -105,6 +105,7 @@ import { configureAntigravityAuth } from './antigravity'
 import { configureCursorAuth } from './cursor'
 import { dockIconSvg } from './dockIcon'
 import { RemoteAccess } from './remoteAccess'
+import { lastReplyText } from './remoteNet.ts'
 import { fetchExtensionThemes, searchThemeExtensions } from './themeMarket'
 import {
   checkoutWorktree,
@@ -1126,7 +1127,10 @@ function registerIpc(): void {
   })
 
   ipcMain.handle('app:check-update', () => checkForUpdate())
-  ipcMain.handle('remote:state', () => remote.state())
+  ipcMain.handle('remote:state', () => {
+    remote.recheckHttps()
+    return remote.state()
+  })
   ipcMain.handle('remote:configure', (_e, patch: RemoteAccessPatch) => remote.configure(patch))
   ipcMain.handle('remote:pair', () => remote.pair())
   ipcMain.handle('remote:forget', (_e, deviceId?: string) => remote.forget(deviceId))
@@ -1380,7 +1384,8 @@ app.whenReady().then(() => {
       codexConfigModel: readCodexConfigModel(),
       available: PROVIDERS.filter((p) => cliAvailable(p))
     }),
-    projectIcons: (roots) => projectOps.projectIcons(roots)
+    projectIcons: (roots) => projectOps.projectIcons(roots),
+    lastReply: (chatId) => lastReplyText(store.getChat(chatId)?.messages ?? [])
   })
   remote.onChange = () => win?.webContents.send('remote:changed')
   // Provider CLI settings before any manager: session construction, the model

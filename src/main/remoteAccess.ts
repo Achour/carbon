@@ -8,7 +8,9 @@ import {
   type Server,
   type ServerResponse
 } from 'node:http'
-import { connect } from 'node:net'
+import { createServer as createHttpsServer, type Server as HttpsServer } from 'node:https'
+import { connect, createServer as createNetServer, type Server as NetServer, type Socket } from 'node:net'
+import type { TLSSocket } from 'node:tls'
 import { hostname, networkInterfaces } from 'node:os'
 import type { Duplex } from 'node:stream'
 import { extname, join, normalize, sep } from 'node:path'
@@ -23,9 +25,12 @@ import type {
   PermissionRequestPayload,
   RemoteAccessPatch,
   RemoteAccessState,
+  RemoteHttpsState,
   RemoteSnapshot
 } from '@shared/types'
 import type { RemoteSettings, Store } from './store'
+import { fetchTailscaleCert } from './tailscaleCert'
+import { generateVapidKeys, sendPush, type VapidKeys } from './webPush'
 import {
   hashToken,
   newPairingCode,
@@ -67,6 +72,12 @@ const MAX_BUFFERED = 8 * 1024 * 1024
 const HEARTBEAT_MS = 20_000
 const SEEN_PERSIST_MS = 5 * 60_000
 const COOKIE = 'carbon_device'
+/** A live certificate is re-asked for this often; Tailscale renews it well before expiry. */
+const CERT_REFRESH_MS = 12 * 3600_000
+/** No certificate yet: Tailscale may have been installed or switched on since. */
+const CERT_RETRY_MS = 5 * 60_000
+/** VAPID's `sub` claim: who to contact about this sender. Apple requires one. */
+const PUSH_SUBJECT = 'https://github.com/Achour/carbon'
 
 /**
  * What a phone may call: exactly what the client uses, and that is the
@@ -127,6 +138,22 @@ interface EventClient {
   id: string
   res: ServerResponse
   watch: string | null
+  deviceId: string
+  /**
+   * The page says whether it is on screen (`/api/watch`). A phone looking at
+   * a chat needs no notification about it; one whose app is in the
+   * background does, even while iOS has yet to close its stream.
+   */
+  visible: boolean
+}
+
+/** What the service worker draws (`public/remote-sw.js`). */
+interface PushMessage {
+  title: string
+  body: string
+  chatId: string
+  /** Replaces the chat's previous notification instead of stacking another. */
+  tag: string
 }
 
 export interface RemoteHost {
@@ -141,6 +168,8 @@ export interface RemoteHost {
   models(): Promise<Pick<RemoteSnapshot, 'models' | 'codexConfigModel' | 'available'>>
   /** Each project's mark, as the desktop sidebar draws it (`projects:icons`). */
   projectIcons(roots: string[]): Promise<Record<string, string | null>>
+  /** The chat's last reply as plain text, for a notification's body. */
+  lastReply(chatId: string): string | null
 }
 
 export class RemoteAccess {
@@ -148,7 +177,20 @@ export class RemoteAccess {
   private statuses = new Map<string, ChatStatus>()
   private permissions = new Map<string, PermissionRequestPayload[]>()
   private clients = new Map<string, EventClient>()
-  private server: Server | null = null
+  /**
+   * The listening socket. It reads each connection's first byte and hands it
+   * to `plain` or, once there is a certificate, `tls` — one port for both, so
+   * the address keeps its port when it gains the `s`.
+   */
+  private server: NetServer | null = null
+  private plain: Server | null = null
+  private tls: HttpsServer | null = null
+  private cert: { name: string; expiresAt: number } | null = null
+  /** Why there is no certificate; null while the first ask is in flight. */
+  private certReason: string | null = null
+  private certTimer: ReturnType<typeof setTimeout> | null = null
+  private certFetching = false
+  private certTriedAt = 0
   private heartbeat: ReturnType<typeof setInterval> | null = null
   private error: string | undefined
   private pairing: { code: string; expiresAt: number; attempts: number } | null = null
@@ -185,9 +227,12 @@ export class RemoteAccess {
    * waiting on an answer, and both were only ever told as events.
    */
   observe(ev: ChatEvent): void {
+    let fresh = true
     if (ev.type === 'status') this.statuses.set(ev.chatId, ev.status)
     else if (ev.type === 'permission-request') {
-      const list = (this.permissions.get(ev.chatId) ?? []).filter((r) => r.id !== ev.request.id)
+      const prior = this.permissions.get(ev.chatId) ?? []
+      fresh = !prior.some((r) => r.id === ev.request.id)
+      const list = prior.filter((r) => r.id !== ev.request.id)
       this.permissions.set(ev.chatId, [...list, ev.request])
     } else if (ev.type === 'permission-resolved') {
       const list = (this.permissions.get(ev.chatId) ?? []).filter((r) => r.id !== ev.requestId)
@@ -195,6 +240,8 @@ export class RemoteAccess {
       else this.permissions.delete(ev.chatId)
     }
     if (this.clients.size) this.broadcast(ev)
+    // A prompt re-announced (a reload re-emits the open ones) was already pushed.
+    if (fresh) this.maybePush(ev)
   }
 
   forgetChat(chatId: string): void {
@@ -224,6 +271,9 @@ export class RemoteAccess {
       ...(name ? [{ address: name, kind: 'local' as const }] : []),
       ...addresses.filter((a) => a.kind === 'lan')
     ].map((a) => ({ url: `http://${a.address}:${s.port}`, kind: a.kind }))
+    // Only the certificate's own name can be reached over HTTPS, and only that
+    // address can deliver notifications — so it leads, and pairs.
+    if (this.cert && this.server?.listening) urls.unshift({ url: `https://${this.cert.name}:${s.port}`, kind: 'https' })
     const pairing =
       this.pairing && this.pairing.expiresAt > Date.now()
         ? {
@@ -239,9 +289,23 @@ export class RemoteAccess {
       running: !!this.server?.listening,
       ...(this.error ? { error: this.error } : {}),
       urls,
-      devices: s.devices.map(({ id, name, pairedAt, lastSeenAt }) => ({ id, name, pairedAt, lastSeenAt })),
+      https: this.httpsState(),
+      devices: s.devices.map(({ id, name, pairedAt, lastSeenAt, push }) => ({
+        id,
+        name,
+        pairedAt,
+        lastSeenAt,
+        notifications: !!push
+      })),
       ...(pairing ? { pairing } : {})
     }
+  }
+
+  private httpsState(): RemoteHttpsState {
+    if (!this.server?.listening) return { status: 'off' }
+    if (this.cert) return { status: 'on', name: this.cert.name, expiresAt: this.cert.expiresAt }
+    if (this.certReason) return { status: 'unavailable', reason: this.certReason }
+    return { status: 'pending' }
   }
 
   async configure(patch: RemoteAccessPatch): Promise<RemoteAccessState> {
@@ -275,22 +339,56 @@ export class RemoteAccess {
 
   // ---------- Server ----------
 
-  private async start(): Promise<void> {
-    if (this.server?.listening) return
-    const port = this.settings().port
-    const server = createServer((req, res) => {
-      this.route(req, res).catch((err) => {
-        console.error('[remote] request failed:', err)
-        if (!res.headersSent) json(res, 500, { error: 'Internal error' })
-        else res.end()
-      })
+  private handle = (req: IncomingMessage, res: ServerResponse): void => {
+    this.route(req, res).catch((err) => {
+      console.error('[remote] request failed:', err)
+      if (!res.headersSent) json(res, 500, { error: 'Internal error' })
+      else res.end()
     })
-    this.server = server
+  }
+
+  /** Both protocols answer the same routes, and dev's hot-reload socket. */
+  private withRoutes<T extends Server | HttpsServer>(server: T): T {
     // `npm run dev` only: Vite's client opens its hot-reload socket on the page's
     // own origin. Unanswered, it gives up and polls for the dev server, and
     // reloads the whole page each time it thinks the server came back — a
     // white flash mid-use, since in dev the styles arrive by script.
     if (this.host.devServerUrl) server.on('upgrade', (req, socket, head) => this.proxyUpgrade(req, socket, head))
+    server.on('clientError', (_err, socket) => socket.destroy())
+    return server
+  }
+
+  /**
+   * A TLS connection opens with a handshake record, `0x16`; no HTTP method
+   * does. So the first byte says which server gets the socket, and the byte
+   * goes back on the stream for it to read. Before there is a certificate a
+   * TLS hello has nowhere to go and is dropped.
+   */
+  private dispatch(socket: Socket): void {
+    socket.on('error', () => socket.destroy())
+    if (!remoteAddressAllowed(socket.remoteAddress, this.settings().allowLan)) {
+      socket.destroy()
+      return
+    }
+    socket.once('data', (first: Buffer) => {
+      socket.pause()
+      socket.unshift(first)
+      const target = first[0] === 0x16 ? this.tls : this.plain
+      if (!target) {
+        socket.destroy()
+        return
+      }
+      target.emit('connection', socket)
+      process.nextTick(() => socket.resume())
+    })
+  }
+
+  private async start(): Promise<void> {
+    if (this.server?.listening) return
+    const port = this.settings().port
+    this.plain = this.withRoutes(createServer(this.handle))
+    const server = createNetServer((socket) => this.dispatch(socket))
+    this.server = server
     await new Promise<void>((resolve) => {
       server.once('error', (err: NodeJS.ErrnoException) => {
         this.error =
@@ -313,17 +411,68 @@ export class RemoteAccess {
       }, HEARTBEAT_MS)
     }
     this.onChange?.()
+    // Plain HTTP is up now; the certificate can take a minute the first time
+    // (an ACME challenge), and nothing waits on it.
+    if (this.server) void this.refreshCert()
   }
 
   async stop(): Promise<void> {
     this.dropClients()
     if (this.heartbeat) clearInterval(this.heartbeat)
     this.heartbeat = null
+    if (this.certTimer) clearTimeout(this.certTimer)
+    this.certTimer = null
     const server = this.server
     this.server = null
     this.pairing = null
+    // Keep-alive connections belong to these two, and would hold the listener
+    // open past `close` — the front server counts every socket it handed over.
+    this.plain?.closeAllConnections()
+    this.tls?.closeAllConnections()
+    this.plain = null
+    this.tls = null
+    this.cert = null
+    this.certReason = null
     if (server) await new Promise<void>((resolve) => server.close(() => resolve()))
     this.onChange?.()
+  }
+
+  /**
+   * Ask the user's Tailscale for this Mac's certificate, and keep asking: on
+   * a schedule once there is one (Tailscale hands back its cached copy until
+   * renewal is due), and every few minutes while there is none, since the fix
+   * is usually a switch the user flips in Tailscale with Carbon still open.
+   */
+  private async refreshCert(): Promise<void> {
+    if (this.certFetching) return
+    if (this.certTimer) clearTimeout(this.certTimer)
+    this.certTimer = null
+    this.certFetching = true
+    this.certTriedAt = Date.now()
+    const result = await fetchTailscaleCert().finally(() => (this.certFetching = false))
+    if (!this.server) return
+    if (result.ok) {
+      const context = { cert: result.cert, key: result.key }
+      if (this.tls) this.tls.setSecureContext(context)
+      else this.tls = this.withRoutes(createHttpsServer(context, this.handle))
+      this.cert = { name: result.name, expiresAt: result.expiresAt }
+      this.certReason = null
+    } else if (!this.cert || this.cert.expiresAt <= Date.now()) {
+      // A failed renewal keeps a certificate that is still good.
+      this.cert = null
+      this.certReason = result.reason
+      console.warn('[remote] no HTTPS:', result.reason)
+    }
+    this.certTimer = setTimeout(() => void this.refreshCert(), this.cert ? CERT_REFRESH_MS : CERT_RETRY_MS)
+    this.certTimer.unref?.()
+    this.onChange?.()
+  }
+
+  /** Settings → Remote access opened: someone may have just set Tailscale up. */
+  recheckHttps(): void {
+    // Each answer fires `onChange`, which is what reloads Settings: without the
+    // floor, a missing Tailscale would be asked about in a loop.
+    if (this.server?.listening && !this.cert && Date.now() - this.certTriedAt > 60_000) void this.refreshCert()
   }
 
   private dropClients(): void {
@@ -373,12 +522,19 @@ export class RemoteAccess {
       if (path === '/api/session') return json(res, 200, { ok: true, device: device.name })
       if (path === '/api/snapshot') return json(res, 200, await this.snapshot())
       if (path === '/api/icons') return json(res, 200, await this.icons())
-      if (path === '/api/events') return this.handleEvents(res)
+      if (path === '/api/events') return this.handleEvents(res, device.id)
       if (path === '/api/watch' && req.method === 'POST') {
-        const body = (await readJson(req)) as { conn?: string; chatId?: string | null }
+        const body = (await readJson(req)) as { conn?: string; chatId?: string | null; visible?: boolean }
         const client = body.conn ? this.clients.get(body.conn) : undefined
-        if (client) client.watch = body.chatId ?? null
+        if (client && client.deviceId === device.id) {
+          client.watch = body.chatId ?? null
+          if (typeof body.visible === 'boolean') client.visible = body.visible
+        }
         return json(res, 200, { ok: !!client })
+      }
+      if (path === '/api/push') {
+        if (req.method === 'POST') return this.handlePushSubscription(req, res, device.id)
+        return json(res, 200, { publicKey: this.vapid().publicKey, subscribed: !!device.push })
       }
       if (path === '/api/invoke' && req.method === 'POST') return this.handleInvoke(req, res)
       json(res, 404, { error: 'Not found' })
@@ -411,7 +567,7 @@ export class RemoteAccess {
     const carried = url.searchParams.get('device')
     if (path === '/' && carried) {
       const headers: Record<string, string> = { location: '/', 'cache-control': 'no-store' }
-      if (this.deviceFor(carried)) headers['set-cookie'] = cookieFor(carried)
+      if (this.deviceFor(carried)) headers['set-cookie'] = cookieFor(carried, encrypted(req))
       res.writeHead(302, headers)
       res.end()
       return
@@ -478,7 +634,7 @@ export class RemoteAccess {
     const name = typeof body.name === 'string' && body.name.trim() ? body.name.trim().slice(0, 60) : 'Phone'
     const s = this.settings()
     this.save({ ...s, devices: [...s.devices, { id, name, tokenHash: hashToken(token), pairedAt: now, lastSeenAt: now }] })
-    res.writeHead(200, { 'content-type': 'application/json', 'set-cookie': cookieFor(`${id}.${token}`) })
+    res.writeHead(200, { 'content-type': 'application/json', 'set-cookie': cookieFor(`${id}.${token}`, encrypted(req)) })
     res.end(JSON.stringify({ ok: true }))
   }
 
@@ -509,7 +665,7 @@ export class RemoteAccess {
     return this.host.projectIcons([...roots])
   }
 
-  private handleEvents(res: ServerResponse): void {
+  private handleEvents(res: ServerResponse, deviceId: string): void {
     const id = randomUUID()
     res.writeHead(200, {
       'content-type': 'text/event-stream',
@@ -520,8 +676,103 @@ export class RemoteAccess {
     // The connection's own id first, so the phone can say which chat it is
     // reading (`/api/watch`) and receive that chat's transcript events.
     res.write(`event: hello\ndata: ${JSON.stringify({ conn: id })}\n\n`)
-    this.clients.set(id, { id, res, watch: null })
+    // Opening the stream is something only a page on screen does.
+    this.clients.set(id, { id, res, watch: null, deviceId, visible: true })
     res.on('close', () => this.clients.delete(id))
+  }
+
+  // ---------- Push ----------
+
+  /** This Mac's VAPID keys, made once and kept: every subscription is bound to them. */
+  private vapid(): VapidKeys {
+    const s = this.settings()
+    if (s.vapid) return s.vapid
+    const vapid = generateVapidKeys()
+    this.save({ ...s, vapid })
+    return vapid
+  }
+
+  /** `{ subscription }` from `PushSubscription.toJSON()`, or `{ subscription: null }` to stop. */
+  private async handlePushSubscription(req: IncomingMessage, res: ServerResponse, deviceId: string): Promise<void> {
+    const body = (await readJson(req)) as {
+      subscription?: { endpoint?: unknown; keys?: { p256dh?: unknown; auth?: unknown } } | null
+    }
+    const sub = body.subscription
+    let push: NonNullable<RemoteSettings['devices'][number]['push']> | undefined
+    if (sub) {
+      const { endpoint } = sub
+      const p256dh = sub.keys?.p256dh
+      const auth = sub.keys?.auth
+      if (
+        typeof endpoint !== 'string' ||
+        !endpoint.startsWith('https://') ||
+        typeof p256dh !== 'string' ||
+        typeof auth !== 'string'
+      ) {
+        json(res, 400, { error: 'Not a push subscription.' })
+        return
+      }
+      push = { endpoint, p256dh, auth }
+    }
+    const s = this.settings()
+    this.save({ ...s, devices: s.devices.map((d) => (d.id === deviceId ? { ...d, push } : d)) })
+    json(res, 200, { subscribed: !!push })
+  }
+
+  /**
+   * The same moments the desktop notifies about (`notifyOnStatus`): a turn
+   * that finished or failed, and an agent waiting on an answer. Decided here
+   * rather than in the service worker, because iOS revokes a subscription
+   * whose pushes show nothing — so every push sent must be one worth drawing.
+   */
+  private maybePush(ev: ChatEvent): void {
+    if (!this.server?.listening) return
+    let body: string | null = null
+    if (ev.type === 'message' && ev.message.role === 'event') {
+      if (ev.message.kind === 'turn') body = this.host.lastReply(ev.chatId) || 'Finished'
+      else if (ev.message.kind === 'error') body = `Failed: ${ev.message.text}`
+    } else if (ev.type === 'permission-request') {
+      body = promptLine(ev.request)
+    }
+    if (!body) return
+    const meta = this.host.store.getMeta(ev.chatId)
+    // Nowhere to land: an ephemeral chat with no thread to open it in.
+    if (!meta || (meta.ephemeral && !meta.sideOf)) return
+    const s = this.settings()
+    const targets = s.devices.filter((d) => d.push && !this.looking(d.id, ev.chatId))
+    if (!targets.length) return
+    const message: PushMessage = {
+      title: clip(meta.title?.trim() || meta.scheduled?.taskName || 'Carbon', 80),
+      body: clip(body, 240),
+      chatId: ev.chatId,
+      tag: ev.chatId
+    }
+    const keys = this.vapid()
+    for (const d of targets) {
+      void sendPush(d.push!, message, keys, { subject: PUSH_SUBJECT })
+        .then((r) => {
+          if (r.gone) this.dropSubscription(d.id, d.push!.endpoint)
+          else if (r.status >= 400) console.warn(`[remote] push to ${d.name} answered ${r.status}`)
+        })
+        .catch((err) => console.warn(`[remote] push to ${d.name} failed:`, err))
+    }
+  }
+
+  /** The device has that chat open on screen right now. */
+  private looking(deviceId: string, chatId: string): boolean {
+    for (const c of this.clients.values()) {
+      if (c.deviceId === deviceId && c.visible && c.watch === chatId) return true
+    }
+    return false
+  }
+
+  /** The push service forgot the subscription (the app was deleted, or iOS revoked it). */
+  private dropSubscription(deviceId: string, endpoint: string): void {
+    const s = this.settings()
+    this.save({
+      ...s,
+      devices: s.devices.map((d) => (d.id === deviceId && d.push?.endpoint === endpoint ? { ...d, push: undefined } : d))
+    })
   }
 
   private async handleInvoke(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -665,11 +916,42 @@ function bonjourName(): string | null {
   return bonjour
 }
 
-function cookieFor(credential: string): string {
-  // Not `Secure`: the transport is plain HTTP, made private by Tailscale's
-  // WireGuard tunnel rather than by TLS. A year, because re-pairing a phone is
-  // the user's chore and unpairing it is one button in Settings.
-  return `${COOKIE}=${encodeURIComponent(credential)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000`
+function encrypted(req: IncomingMessage): boolean {
+  return !!(req.socket as TLSSocket).encrypted
+}
+
+function cookieFor(credential: string, secure: boolean): string {
+  // `Secure` only over HTTPS: the plain addresses are made private by
+  // Tailscale's WireGuard tunnel (or are the LAN opt-in), not by TLS, and a
+  // `Secure` cookie would never be sent back on them. A year, because
+  // re-pairing a phone is the user's chore and unpairing it is one button in
+  // Settings.
+  return `${COOKIE}=${encodeURIComponent(credential)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000${secure ? '; Secure' : ''}`
+}
+
+/** What a waiting prompt is asking, in a line. */
+function promptLine(r: PermissionRequestPayload): string {
+  if (r.toolName === 'ExitPlanMode') return 'A plan is ready for your review'
+  if (r.toolName === 'AskUserQuestion') return 'Has a question for you'
+  if (r.title?.trim()) return r.title.trim()
+  // The thing being approved, where the input says it plainly: the command,
+  // or the file. "Bash" alone gives the reader nothing to decide on.
+  const input = (r.input ?? {}) as Record<string, unknown>
+  const detail =
+    typeof input.command === 'string'
+      ? input.command
+      : typeof input.file_path === 'string'
+        ? input.file_path.split('/').pop()
+        : ''
+  return `Approve ${r.displayName || r.toolName}${detail ? `: ${detail}` : ''}`
+}
+
+/** One line of at most `max` characters, cut on a word. */
+function clip(text: string, max: number): string {
+  const flat = text.replace(/\s+/g, ' ').trim()
+  if (flat.length <= max) return flat
+  const cut = flat.slice(0, max - 1)
+  return `${cut.slice(0, Math.max(cut.lastIndexOf(' '), max * 0.6))}…`
 }
 
 function json(res: ServerResponse, status: number, body: unknown): void {

@@ -173,17 +173,21 @@ the window open. The phone is one more window onto them.
   decode, and iOS Safari refuses one the size of a 48 MP photo, which failed
   every pick. A photo that still cannot be decoded is sent untouched when the
   model can read its type and it fits the API's size cap.
-- **The page is not a secure context, and two APIs are missing there.** The
-  phone reaches the Mac at `http://<name>.local:7391`, which is neither HTTPS
-  nor localhost, so Safari leaves out `crypto.randomUUID` and
+- **Only the HTTPS address is a secure context, and the others miss two
+  APIs.** At `http://<name>.local:7391` or a raw Tailscale IP the page is
+  neither HTTPS nor localhost, so Safari leaves out `crypto.randomUUID` and
   `navigator.clipboard`. The first made every photo pick throw before it was
   sent; the second breaks every copy button the transcript borrows from the
   desktop. `lib/insecureContext.ts` (`randomId`, `copyText`) is the fallback
-  for both, and anything new the phone runs has to avoid secure-only APIs or
-  go through it. Testing in a browser at `127.0.0.1` cannot catch this:
-  localhost counts as secure.
+  for both. The HTTPS address (below) is secure, but the plain ones stay
+  supported, so anything new the phone runs still has to avoid secure-only
+  APIs or go through that file. Testing in a browser at `127.0.0.1` cannot
+  catch this: localhost counts as secure.
 - **A message typed during a turn is queued on the phone**, and sent as that
-  chat goes idle, the way the desktop composer queues. Sending straight into a
+  chat goes idle, the way the desktop composer queues. "Goes idle" is not only
+  the live event: a phone that was locked when the turn ended never heard it,
+  and the message sat there for good. So every resync also sends what is
+  waiting behind a chat the snapshot reports idle. Sending straight into a
   live turn means something different on each provider.
 - **A new chat is announced to the other screen, in both directions.** One
   made on the phone reaches the window as the `chat-added` event a delegate
@@ -196,6 +200,81 @@ the window open. The phone is one more window onto them.
   `chats:create`. Omitting the model would make `rememberOptions` record an
   empty one, quietly resetting the Mac's New-chat model.
 
+### Notifications (`main/webPush.ts`, `main/tailscaleCert.ts`, `remote/push.ts`)
+
+A phone in a pocket hears about a turn that finished, failed, or is waiting on
+an approval, the way the desktop does when its window is in the background.
+
+- **The constraint is iOS, not where Carbon runs.** A backgrounded app is
+  frozen within seconds and its stream to the Mac goes with it, so nothing on
+  the phone is listening. Only Apple's push service can wake it. For a native
+  app that means APNs, and APNs needs the paid Developer Program; the free
+  account cannot even enable the capability. Web Push to a Home Screen web
+  app (iOS 16.4+) also goes through Apple, but needs no developer account:
+  the subscription accepts any sender that signs with the VAPID key it was
+  made for. So the phone client stays a web app.
+- **Web Push needs a secure context, and that is what Tailscale is for.**
+  Service workers exist only on HTTPS. `tailscale cert` issues a real Let's
+  Encrypt certificate for the Mac's `<name>.<tailnet>.ts.net`, with nothing for
+  the phone to trust by hand, which is what made a self-signed LAN certificate
+  the wrong answer earlier. Carbon asks the user's own Tailscale for it
+  (`fetchTailscaleCert`). Both halves go to stdout (`--cert-file -`), never to
+  a path: the App Store build's CLI is sandboxed, and a path Carbon named would
+  be written into Tailscale's container. The answer is cached by Tailscale, so
+  it is re-asked every 12 h and swapped in live (`setSecureContext`). With no
+  certificate it is retried every 5 minutes, and whenever Settings opens,
+  because the fix is a switch flipped in Tailscale while Carbon runs. Each way
+  it can be missing is a sentence (`certDomainFromStatus`): not installed,
+  signed out, not connected, or "HTTPS Certificates" off for the tailnet.
+  That last one only the user can fix, in the admin console's DNS page. The
+  `.local` address has no way in, so a Wi-Fi-only phone gets no notifications.
+- **One port, both protocols.** The listener reads each connection's first
+  byte: `0x16` opens a TLS handshake and no HTTP method does, so the byte
+  decides which of two servers gets the socket. The address keeps its port
+  when it gains the `s`, there is one "port in use" message, and a TLS hello
+  before there is a certificate is simply dropped. The address check runs on
+  the raw socket too, before either server sees it. Over HTTPS the device
+  cookie is `Secure`. The HTTPS address leads `urls` and is the one the
+  pairing link carries. Sign-in is per origin, so a phone paired at an `http`
+  address pairs once more there and is re-added to the Home Screen.
+- **The encryption is written here, against the RFC's own numbers.** RFC 8291
+  (`aes128gcm`) and RFC 8292 (VAPID) are a page of `node:crypto`.
+  `test/webPush.test.ts` reproduces RFC 8291's example message byte for byte
+  and checks the JWT the way Apple's service does. Apple's service is the
+  strict one: `aud` is the endpoint's bare origin, `exp` within a day, `sub`
+  present, and the signature raw `r‖s` rather than DER, each mistake answered
+  with a 403 `BadJwtToken`. The VAPID pair is made once and kept in
+  `settings.json` (`RemoteSettings.vapid`). Every subscription is bound to
+  its public half, so regenerating it would silently break them all.
+- **The Mac decides whether to notify; the service worker always draws.** iOS
+  revokes a subscription whose pushes show nothing, so `public/remote-sw.js`
+  shows every push it gets, and `maybePush` in main sends only what is worth
+  showing. That is the desktop's rule set (`notifyOnStatus`): a turn's `turn`
+  event (body: the opening of its last reply, `lastReplyText`), its `error`
+  event, and a *new* `permission-request` (one re-announced on reload was
+  already pushed). It is skipped for a device that has the chat open on
+  screen. "On screen" is reported by the page (`/api/watch` carries
+  `visible`), with the hidden report sent `keepalive` as the page goes away,
+  because iOS freezes the page before the server notices its stream died. A
+  push's `tag` is the chat id, so a second notice about a chat replaces the
+  first. 404/410 from the push service means the subscription is gone, and it
+  is dropped from the device record.
+- **The bell says why it can't, rather than being absent.** The sidebar's
+  footer carries it. Each state is a sentence (`PUSH_HINT`): on plain HTTP it
+  points at the HTTPS address, and in a Safari tab it says to add the app to
+  the Home Screen. WebKit exposes `PushManager` only to the installed app, so
+  `subscribe` would otherwise throw. Denied points at iOS's Settings. The
+  permission prompt is requested first thing inside the tap, since iOS
+  refuses one that isn't, and `applicationServerKey` is passed as bytes.
+  Tapping a notification focuses the open app and posts it the chat's hash,
+  or opens the app on it.
+- **The page cannot ask on its own, so a card asks once.** iOS shows the
+  permission prompt only in answer to a tap. The home screen therefore offers
+  "Get notified on this phone" while notifications could be turned on and are
+  not. "Turn on" is the tap that brings up the prompt, and "Not now" puts the
+  card away for good (`localStorage`); the bell stays. The card and the bell
+  read one shared state (`usePush`), so turning it on in either updates both.
+
 **Known limits.** The Mac has to be awake: "Keep computer awake" only holds
 while an agent works, and a closed lid still sleeps it. The first launch after
 turning this on may raise macOS's "accept incoming connections?" prompt, and an
@@ -207,7 +286,19 @@ references by local path do not load, and path links read as plain text, since
 the phone cannot read the Mac's disk.
 
 **Verification.** `test/remoteNet.test.ts` pins the address and credential
-logic. The rebuilt client was driven in Carbon's own preview at iPhone 15
+logic, the Tailscale status and certificate parsing, and the notification
+body. `test/webPush.test.ts` pins the encryption to RFC 8291's example
+message and the VAPID header. The notification path was driven end to end
+against an isolated dev instance. A stub `tailscale` (`CARBON_TAILSCALE_PATH`)
+handed out a localhost certificate. Headless Chromium paired over HTTPS, got a
+`Secure` cookie and registered the worker. It turned the bell on through the
+sidebar, with only the browser's `pushManager.subscribe` stood in for, since
+headless Chromium has no push service. A fake push service decrypted every
+message and verified its signature. Real Haiku turns checked: a finished turn
+pushed its reply; the same chat open on screen pushed nothing; the page
+hidden pushed again; a Bash approval pushed its command; and a 410 dropped
+the subscription. Not yet tested: a real `tailscale cert` and an iPhone
+receiving through Apple. The rebuilt client was driven in Carbon's own preview at iPhone 15
 size, in both appearances, against the real app and real Claude turns. That
 run covered: the project-grouped list; a long transcript with grouped tool
 runs; the model sheet and a cross-provider pick with its Undo; the permissions

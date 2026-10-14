@@ -1,13 +1,16 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  certDomainFromStatus,
   hashToken,
   isPrivateLan,
   isTailscale,
+  lastReplyText,
   parseCookies,
   remoteAddressAllowed,
   remoteAddresses,
   safeEqual,
+  splitCertOutput,
   splitDeviceCredential
 } from '../src/main/remoteNet.ts'
 
@@ -71,4 +74,46 @@ test('token hashing and comparison', () => {
   assert.equal(safeEqual('abc', 'abc'), true)
   assert.equal(safeEqual('abc', 'abd'), false)
   assert.equal(safeEqual('abc', 'abcd'), false)
+})
+
+test('a Tailscale certificate needs a running node and a cert domain', () => {
+  const ok = certDomainFromStatus(
+    JSON.stringify({ BackendState: 'Running', CertDomains: ['mac.tail1234.ts.net'] })
+  )
+  assert.deepEqual(ok, { domain: 'mac.tail1234.ts.net' })
+  // HTTPS certificates off for the tailnet: the one step only the user can take.
+  const off = certDomainFromStatus(JSON.stringify({ BackendState: 'Running', CertDomains: null }))
+  assert.ok('reason' in off && /HTTPS Certificates/.test(off.reason))
+  const stopped = certDomainFromStatus(JSON.stringify({ BackendState: 'Stopped' }))
+  assert.ok('reason' in stopped && /not connected/.test(stopped.reason))
+  const login = certDomainFromStatus(JSON.stringify({ BackendState: 'NeedsLogin' }))
+  assert.ok('reason' in login && /signed out/.test(login.reason))
+  assert.ok('reason' in certDomainFromStatus('not json'))
+})
+
+test('cert output splits into chain and key by block type', () => {
+  const c = (n: string): string => `-----BEGIN CERTIFICATE-----\n${n}\n-----END CERTIFICATE-----`
+  const k = '-----BEGIN EC PRIVATE KEY-----\nKEY\n-----END EC PRIVATE KEY-----'
+  assert.deepEqual(splitCertOutput(`${c('LEAF')}\n${c('INTER')}\n${k}\n`), {
+    cert: `${c('LEAF')}\n${c('INTER')}\n`,
+    key: `${k}\n`
+  })
+  assert.equal(splitCertOutput(c('LEAF')), null)
+  assert.equal(splitCertOutput(''), null)
+})
+
+test("a notification's body is the opening of the last reply, as plain text", () => {
+  const ts = 0
+  const reply = (text: string) => ({ id: 'a', role: 'assistant' as const, ts, parts: [{ type: 'text' as const, text }] })
+  assert.equal(
+    lastReplyText([
+      { id: 'u', role: 'user', ts, text: 'go' } as never,
+      reply('## Done\n\n**All 52 tests pass** — see [the diff](x.ts).\n\n```ts\nconst a = 1\n```\n- `npm test` green')
+    ]),
+    'Done All 52 tests pass — see the diff. npm test green'
+  )
+  // The turn's own event after the reply does not hide it.
+  assert.equal(lastReplyText([reply('Fixed it.'), { id: 'e', role: 'event', kind: 'turn', text: '', ts }]), 'Fixed it.')
+  // A turn with no words of its own says nothing, rather than an older turn's reply.
+  assert.equal(lastReplyText([reply('Old.'), { id: 'u', role: 'user', ts, text: 'again' } as never]), null)
 })

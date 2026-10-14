@@ -1,5 +1,6 @@
 import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto'
 import type { NetworkInterfaceInfo } from 'node:os'
+import type { ChatMessage } from '../shared/types.ts'
 
 /**
  * The pure half of remote access (`remoteAccess.ts`): who may connect, which
@@ -149,4 +150,67 @@ export function splitDeviceCredential(value: string | undefined): { id: string; 
   const dot = value.indexOf('.')
   if (dot <= 0 || dot === value.length - 1) return null
   return { id: value.slice(0, dot), token: value.slice(dot + 1) }
+}
+
+/**
+ * What `tailscale status --json` says about getting a certificate: whether the
+ * node is up, and the name a certificate can be issued for. `CertDomains` is
+ * empty until "HTTPS Certificates" is turned on for the tailnet, which is the
+ * one step only the user can take — so each miss is a sentence to show them.
+ */
+export function certDomainFromStatus(statusJson: string): { domain: string } | { reason: string } {
+  let st: { BackendState?: unknown; CertDomains?: unknown }
+  try {
+    st = JSON.parse(statusJson) as typeof st
+  } catch {
+    return { reason: 'Tailscale gave an answer Carbon could not read.' }
+  }
+  if (st.BackendState === 'NeedsLogin') return { reason: 'Tailscale is installed but signed out. Sign in to it on this Mac.' }
+  if (st.BackendState !== 'Running') return { reason: 'Tailscale is not connected. Turn it on in the menu bar.' }
+  const domains = Array.isArray(st.CertDomains) ? st.CertDomains.filter((d): d is string => typeof d === 'string') : []
+  const domain = domains.find((d) => !d.startsWith('*.'))
+  if (!domain) {
+    return {
+      reason:
+        'HTTPS certificates are off for your tailnet. Turn on MagicDNS and HTTPS Certificates in the Tailscale admin console, under DNS.'
+    }
+  }
+  return { domain }
+}
+
+/**
+ * `tailscale cert --cert-file - --key-file -` writes the chain and then the key
+ * to stdout, as PEM. Split them by block type rather than by position.
+ */
+export function splitCertOutput(pem: string): { cert: string; key: string } | null {
+  const blocks = pem.match(/-----BEGIN ([A-Z ]+)-----[\s\S]+?-----END \1-----/g) ?? []
+  const cert = blocks.filter((b) => b.startsWith('-----BEGIN CERTIFICATE-----'))
+  const key = blocks.find((b) => /^-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(b))
+  if (!cert.length || !key) return null
+  return { cert: `${cert.join('\n')}\n`, key: `${key}\n` }
+}
+
+/**
+ * A finished turn's notification body: the opening of its last reply, as
+ * plain text. The opening rather than the end, because a reply leads with
+ * its verdict and ends with detail — and a lock-screen banner shows two lines.
+ */
+export function lastReplyText(messages: readonly ChatMessage[]): string | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]
+    if (m.role === 'user') return null
+    if (m.role !== 'assistant') continue
+    const text = m.parts
+      .map((p) => (p.type === 'text' ? p.text : ''))
+      .join('\n')
+      .replace(/```[\s\S]*?(```|$)/g, ' ')
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+      .replace(/^\s{0,3}(#{1,6}\s+|>\s?|[-*+]\s+|\d+\.\s+)/gm, '')
+      .replace(/(\*\*|__|`)/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+    if (text) return text
+  }
+  return null
 }

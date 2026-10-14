@@ -1476,7 +1476,21 @@ export interface RemoteDevice {
   name: string
   pairedAt: number
   lastSeenAt?: number
+  /** The phone subscribed to push notifications (Web Push, over HTTPS only). */
+  notifications: boolean
 }
+
+/**
+ * The Tailscale certificate that puts the phone client on HTTPS — the secure
+ * context Web Push needs. `off` while remote access is; `unavailable` names
+ * what is missing on this Mac (no Tailscale, not connected, HTTPS certificates
+ * not enabled for the tailnet), in words Settings shows as they are.
+ */
+export type RemoteHttpsState =
+  | { status: 'off' }
+  | { status: 'pending'; name?: string }
+  | { status: 'on'; name: string; expiresAt: number }
+  | { status: 'unavailable'; reason: string }
 
 export interface RemoteAccessState {
   enabled: boolean
@@ -1491,9 +1505,11 @@ export interface RemoteAccessState {
    * Where the phone should go: Tailscale first, then the Mac's Bonjour name
    * (`<name>.local`, which outlives the router handing out a new IP), then the
    * raw LAN addresses. The pairing link uses the first. Empty when nothing
-   * qualifies.
+   * qualifies. Once the Tailscale certificate is live, its `https://` name
+   * leads (`https`), because only that address can deliver notifications.
    */
-  urls: { url: string; kind: 'tailscale' | 'local' | 'lan' }[]
+  urls: { url: string; kind: 'https' | 'tailscale' | 'local' | 'lan' }[]
+  https: RemoteHttpsState
   devices: RemoteDevice[]
   /** A live pairing code, until it is used or expires. */
   pairing?: { code: string; expiresAt: number; links: string[] }
