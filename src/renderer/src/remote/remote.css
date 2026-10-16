@@ -31,6 +31,26 @@ textarea {
   user-select: text;
 }
 
+/* Long-pressing chrome does nothing, as in a native app — no callout to copy
+   a button's label or preview a link. Text meant to be read keeps it. */
+body {
+  -webkit-touch-callout: none;
+}
+.select-text,
+.markdown,
+input,
+textarea {
+  -webkit-touch-callout: default;
+}
+
+/* A tap is a tap: no double-tap-to-zoom wait on anything tappable. */
+button,
+a,
+[role='button'],
+label {
+  touch-action: manipulation;
+}
+
 input[type='search']::-webkit-search-cancel-button {
   -webkit-appearance: none;
 }
@@ -42,8 +62,10 @@ input[type='search']::-webkit-search-cancel-button {
   display: none;
 }
 
-/* The desktop's code blocks are sized for a 13px column; on a phone they
-   scroll sideways rather than wrapping into an unreadable ribbon. */
-.markdown pre {
-  font-size: 12.5px;
+/* Settings → Text size (`remote/prefs.ts`): the reading surfaces scale as a
+   whole, the way ⌘+ scales the desktop's window. The shell around them does
+   not — the drawer's geometry is in screen px, and the composer's 16px is the
+   size below which iOS zooms into a focused field. */
+.reading-zoom {
+  zoom: var(--reading-zoom, 1);
 }

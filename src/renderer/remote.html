@@ -17,26 +17,49 @@
     <meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#171717" media="(prefers-color-scheme: dark)" />
     <!-- Painted before any script or stylesheet arrives: the page's first frame
-         is the app's background in the phone's appearance, never white. The
-         colours are the desktop's --background, light and dark. -->
+         is the app's background in the chosen appearance, never white. The
+         fallbacks are the desktop's --background, light and dark; once a
+         palette has been picked, its colour is remembered and used instead
+         (`remote/prefs.ts`). -->
     <style>
       html,
       body {
         margin: 0;
-        background: #fafafa;
       }
-      @media (prefers-color-scheme: dark) {
-        html,
-        body {
-          background: #171717;
-        }
+      /* Zero specificity, so the app's own stylesheet still outranks these
+         by order, and the dark rule outranks the light one the same way. */
+      :where(html, body) {
+        background: var(--paint, #fafafa);
+      }
+      :where(html.dark, html.dark body) {
+        background: var(--paint, #171717);
       }
     </style>
     <script>
-      document.documentElement.classList.toggle(
-        'dark',
-        matchMedia('(prefers-color-scheme: dark)').matches
-      )
+      ;(() => {
+        let mode = 'system'
+        let saved = {}
+        try {
+          const m = localStorage.getItem('themeMode')
+          if (m === 'light' || m === 'dark') mode = m
+          saved = JSON.parse(localStorage.getItem('carbon.remote.paint') || '{}') || {}
+        } catch {}
+        const dark = mode === 'dark' || (mode === 'system' && matchMedia('(prefers-color-scheme: dark)').matches)
+        const appearance = dark ? 'dark' : 'light'
+        const root = document.documentElement
+        root.classList.toggle('dark', dark)
+        root.dataset.appearance = appearance
+        root.style.colorScheme = appearance
+        const color = saved[appearance]
+        if (typeof color === 'string' && /^#[0-9a-f]{6}$/i.test(color)) {
+          root.style.setProperty('--paint', color)
+          for (const meta of document.querySelectorAll('meta[name="theme-color"]')) meta.content = color
+        } else if (mode !== 'system') {
+          // Forced against the phone's appearance: the metas' media would pick the other one.
+          for (const meta of document.querySelectorAll('meta[name="theme-color"]'))
+            meta.content = dark ? '#171717' : '#fafafa'
+        }
+      })()
     </script>
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="apple-touch-icon" href="/remote-icon.png" />

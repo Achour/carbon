@@ -20,6 +20,7 @@ import type {
   PermissionRequestPayload
 } from '@shared/types'
 import * as api from './api'
+import { usePrefs } from './prefs'
 
 /**
  * The phone's whole state. Deliberately not the desktop store: that one is
@@ -63,6 +64,10 @@ interface RemoteState {
   available: Provider[]
   /** Project marks by root (`/api/icons`); a missing entry draws initials. */
   icons: Record<string, string | null>
+  /** The Mac's home folder (`RemoteSnapshot.home`). */
+  home: string
+  /** Each chat folder's branch, read only while the sidebar is detailed. */
+  branches: Record<string, string | null>
   /** The sidebar drawer. */
   drawer: boolean
   open: OpenChat | null
@@ -84,6 +89,7 @@ interface RemoteState {
   ): Promise<string>
   setError(error: string | null): void
   setDrawer(open: boolean): void
+  refreshBranches(): Promise<void>
 }
 
 let conn: string | null = null
@@ -96,6 +102,7 @@ export const useRemote = create<RemoteState>((set, get) => {
       const snap = await api.snapshot()
       set({
         hostname: snap.hostname,
+        home: snap.home ?? '',
         chats: snap.chats,
         statuses: snap.statuses,
         permissions: snap.permissions,
@@ -111,6 +118,7 @@ export const useRemote = create<RemoteState>((set, get) => {
         .icons()
         .then((icons) => set({ icons }))
         .catch(() => {})
+      void get().refreshBranches()
       // A queue only drains on a live "idle" event, and a phone that was
       // locked when the turn ended never heard one: send what is waiting
       // behind any chat the snapshot says has finished.
@@ -159,7 +167,11 @@ export const useRemote = create<RemoteState>((set, get) => {
       },
       onEvent: (ev) => {
         set((s) => reduce(s, ev))
-        if (ev.type === 'status' && ev.status === 'idle') void drainQueue(ev.chatId)
+        if (ev.type === 'status' && ev.status === 'idle') {
+          void drainQueue(ev.chatId)
+          // A turn can have switched branch; the desktop rereads at the same moment.
+          void get().refreshBranches()
+        }
       },
       onDown: (closed) => {
         conn = null
@@ -203,6 +215,8 @@ export const useRemote = create<RemoteState>((set, get) => {
     codexConfigModel: null,
     available: [],
     icons: {},
+    home: '',
+    branches: {},
     drawer: false,
     open: null,
     queued: {},
@@ -326,8 +340,24 @@ export const useRemote = create<RemoteState>((set, get) => {
 
     setDrawer(drawer) {
       set({ drawer })
+    },
+
+    async refreshBranches() {
+      // Compact rows never show a branch, so the read is pure cost there —
+      // the desktop's guard (`refreshChatBranches`), for the same reason.
+      if (usePrefs.getState().sidebarDensity !== 'detailed' || get().connection !== 'live') return
+      try {
+        set({ branches: await api.branches() })
+      } catch {
+        // A row without a branch falls back to its folder.
+      }
     }
   }
+})
+
+// Switching to detailed rows wants the branches now, not at the next turn's end.
+usePrefs.subscribe((s, prev) => {
+  if (s.sidebarDensity !== prev.sidebarDensity) void useRemote.getState().refreshBranches()
 })
 
 function message(err: unknown): string {

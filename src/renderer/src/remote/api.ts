@@ -63,6 +63,13 @@ export async function icons(): Promise<Record<string, string | null>> {
   return (await res.json()) as Record<string, string | null>
 }
 
+/** Each listed chat folder's checked-out branch, for the detailed sidebar rows. */
+export async function branches(): Promise<Record<string, string | null>> {
+  const res = await fetch('/api/branches', { credentials: 'same-origin' })
+  if (!res.ok) throw new RemoteError(`Carbon answered ${res.status}`, res.status)
+  return (await res.json()) as Record<string, string | null>
+}
+
 /**
  * Which chat this page is reading, and whether it is on screen — the Mac
  * skips the notification for a chat the phone is looking at. `keepalive` so

@@ -11,7 +11,7 @@ import {
 import { createServer as createHttpsServer, type Server as HttpsServer } from 'node:https'
 import { connect, createServer as createNetServer, type Server as NetServer, type Socket } from 'node:net'
 import type { TLSSocket } from 'node:tls'
-import { hostname, networkInterfaces } from 'node:os'
+import { homedir, hostname, networkInterfaces } from 'node:os'
 import type { Duplex } from 'node:stream'
 import { extname, join, normalize, sep } from 'node:path'
 import { gzipSync } from 'node:zlib'
@@ -168,6 +168,8 @@ export interface RemoteHost {
   models(): Promise<Pick<RemoteSnapshot, 'models' | 'codexConfigModel' | 'available'>>
   /** Each project's mark, as the desktop sidebar draws it (`projects:icons`). */
   projectIcons(roots: string[]): Promise<Record<string, string | null>>
+  /** Each folder's checked-out branch, as a detailed desktop row shows it (`git:branches`). */
+  branches(cwds: string[]): Promise<Record<string, string | null>>
   /** The chat's last reply as plain text, for a notification's body. */
   lastReply(chatId: string): string | null
 }
@@ -522,6 +524,7 @@ export class RemoteAccess {
       if (path === '/api/session') return json(res, 200, { ok: true, device: device.name })
       if (path === '/api/snapshot') return json(res, 200, await this.snapshot())
       if (path === '/api/icons') return json(res, 200, await this.icons())
+      if (path === '/api/branches') return json(res, 200, await this.branches())
       if (path === '/api/events') return this.handleEvents(res, device.id)
       if (path === '/api/watch' && req.method === 'POST') {
         const body = (await readJson(req)) as { conn?: string; chatId?: string | null; visible?: boolean }
@@ -648,6 +651,7 @@ export class RemoteAccess {
     const chats = [...this.host.store.listChats(), ...this.host.store.listSideChats()]
     return {
       hostname: hostname().replace(/\.local$/, ''),
+      home: homedir(),
       chats,
       statuses: Object.fromEntries(this.statuses),
       permissions: Object.fromEntries(this.permissions),
@@ -668,6 +672,19 @@ export class RemoteAccess {
       if (!c.archivedAt && !c.ephemeral && c.surface !== 'terminal') roots.add(projectRoot(c))
     }
     return this.host.projectIcons([...roots])
+  }
+
+  /**
+   * The branch each listed chat's folder is on, for the phone's detailed
+   * sidebar rows. Like `icons`, the folders are the server's own (the chats'),
+   * never a list the phone sends: a branch name is a read of the Mac's disk.
+   */
+  private async branches(): Promise<Record<string, string | null>> {
+    const cwds = new Set<string>()
+    for (const c of this.host.store.listChats()) {
+      if (!c.archivedAt && !c.ephemeral && c.surface !== 'terminal') cwds.add(c.cwd)
+    }
+    return this.host.branches([...cwds])
   }
 
   private handleEvents(res: ServerResponse, deviceId: string): void {

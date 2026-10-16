@@ -6,12 +6,12 @@ import { ImageLightbox } from '@/components/ImageView'
 import { App } from './App'
 import { installDesktopBridge } from './desktop'
 import { installPushWorker } from './push'
+import { installPrefs } from './prefs'
 import './remote.css'
 
-// The desktop's tokens key dark mode off `.dark`; a phone follows its own
-// system appearance, live. `remote.html` sets it once before first paint.
-const dark = window.matchMedia('(prefers-color-scheme: dark)')
-dark.addEventListener('change', () => document.documentElement.classList.toggle('dark', dark.matches))
+// The palette, the color mode (System follows the phone, live) and both type
+// sizes. `remote.html` has already painted the first frame in the right one.
+installPrefs()
 
 // A Home Screen app draws under its translucent status bar, yet iOS still
 // reports `100dvh` as the screen minus that bar, which left a strip the bar's

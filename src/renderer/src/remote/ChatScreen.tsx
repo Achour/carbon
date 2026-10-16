@@ -1,8 +1,9 @@
 import * as React from 'react'
-import { Loader2 } from 'lucide-react'
+import { ArrowDown, Loader2 } from 'lucide-react'
 import type { CanvasSummary, ChatMeta, PermissionRequestPayload } from '@shared/types'
 import { PROVIDER_LABELS, modelDisplayName, projectRoot } from '@shared/types'
 import { useApp } from '@/store'
+import { cn } from '@/lib/utils'
 import { useTranscript } from '@/components/Transcript'
 import { Markdown } from '@/components/Markdown'
 import { StreamingIndicator } from '@/components/messages/Parts'
@@ -28,6 +29,7 @@ export function ChatScreen({ chatId }: { chatId: string }): React.JSX.Element {
   const requests = useRemote((s) => s.permissions[chatId])
   const queued = useRemote((s) => s.queued[chatId]?.length ?? 0)
   const loadOlder = useRemote((s) => s.loadOlder)
+  const connection = useRemote((s) => s.connection)
   const setOptions = useRemote((s) => s.setOptions)
   const busy = isBusy(status)
   const expandedTurns = useApp((s) => s.expandedTurns)
@@ -69,10 +71,37 @@ export function ChatScreen({ chatId }: { chatId: string }): React.JSX.Element {
   const scroller = React.useRef<HTMLDivElement>(null)
   // Follow the bottom while the reader is there; leave them be once they scroll up.
   const pinned = React.useRef(true)
+  // Two bits of chrome that answer the scroll position — the header's hairline
+  // and the jump-to-latest button — kept as state that flips only when the
+  // answer does, so scrolling does not render the screen per frame.
+  const [underHeader, setUnderHeader] = React.useState(false)
+  const [awayFromEnd, setAwayFromEnd] = React.useState(false)
+  const header = React.useRef<HTMLElement>(null)
+  const [headerHeight, setHeaderHeight] = React.useState(0)
+  React.useLayoutEffect(() => {
+    const el = header.current
+    if (!el) return
+    const ro = new ResizeObserver(() => setHeaderHeight(el.offsetHeight))
+    ro.observe(el)
+    setHeaderHeight(el.offsetHeight)
+    return () => ro.disconnect()
+  }, [])
+  const toEnd = (): void => {
+    const el = scroller.current
+    if (!el) return
+    pinned.current = true
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+  }
+  const toTop = (): void => scroller.current?.scrollTo({ top: 0, behavior: 'smooth' })
   const onScroll = (): void => {
     const el = scroller.current
     if (!el) return
-    pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+    const fromEnd = el.scrollHeight - el.scrollTop - el.clientHeight
+    pinned.current = fromEnd < 80
+    const away = fromEnd > el.clientHeight * 0.6
+    if (away !== awayFromEnd) setAwayFromEnd(away)
+    const under = el.scrollTop > 2
+    if (under !== underHeader) setUnderHeader(under)
     if (el.scrollTop < 400 && open && open.hiddenBefore > 0 && !open.loading) {
       // Earlier messages, anchored on the distance from the bottom so the
       // prepend does not move what is being read.
@@ -115,21 +144,37 @@ export function ChatScreen({ chatId }: { chatId: string }): React.JSX.Element {
 
   return (
     <div className="flex h-full flex-col">
+      <div className="relative min-h-0 flex-1">
       <Header
+        ref={header}
+        floating
+        scrolled={underHeader}
+        onTitleTap={toTop}
         title={chat ? chatTitle(chat) : 'Chat'}
         subtitle={chat ? `${projectName(chat)}${chat.worktree ? ` · ${chat.worktree.branch}` : ''}` : undefined}
       />
-      <div ref={scroller} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 pt-3 pb-4">
-        <div ref={column}>
+      <div
+        ref={scroller}
+        onScroll={onScroll}
+        // The header floats over the top, measured, so the first line and
+        // the earlier-messages hint start below it rather than under the blur.
+        style={{ paddingTop: headerHeight + 12 }}
+        className="h-full overflow-y-auto overscroll-contain px-6 pb-6"
+      >
+        <div ref={column} className="reading-zoom">
         {open && open.hiddenBefore > 0 && (
           <div className="flex justify-center py-2 text-muted-foreground">
             {open.loading ? <Loader2 className="size-4 animate-spin" /> : <span className="text-[13px]">Scroll up for earlier messages</span>}
           </div>
         )}
-        {!open || (open.loading && open.messages.length === 0) ? (
-          <div className="flex justify-center py-16 text-muted-foreground">
-            <Loader2 className="size-5 animate-spin" />
-          </div>
+        {!open && !chat && connection === 'live' ? (
+          // Deleted on the Mac, or a stale link: nothing is on its way, so a
+          // skeleton would breathe forever.
+          <div className="py-16 text-center text-[15px] text-muted-foreground">This chat no longer exists.</div>
+        ) : !open || (open.loading && open.messages.length === 0) ? (
+          // Still loading, or waiting on a reconnect, which the header's
+          // connection strip names; the resync refetches the open chat.
+          <TranscriptSkeleton />
         ) : open.messages.length === 0 && !busy ? (
           <div className="py-16 text-center text-[15px] text-muted-foreground">No messages yet.</div>
         ) : (
@@ -151,6 +196,25 @@ export function ChatScreen({ chatId }: { chatId: string }): React.JSX.Element {
         )}
         </div>
       </div>
+      {/* The last lines fade into the composer instead of meeting a hard edge.
+          An overlay rather than a mask on the scroller: a masked scroller is
+          composited whole on every frame, and transcripts get long. */}
+      <div aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 h-7 bg-gradient-to-t from-background to-transparent" />
+      <button
+        type="button"
+        aria-label="Jump to latest"
+        tabIndex={awayFromEnd ? 0 : -1}
+        onClick={toEnd}
+        className={cn(
+          'absolute bottom-3 left-1/2 z-10 flex size-10 -translate-x-1/2 items-center justify-center rounded-full border border-border bg-popover/90 text-foreground shadow-lg backdrop-blur-md transition-[opacity,transform] duration-200 active:scale-90',
+          awayFromEnd ? 'opacity-100' : 'pointer-events-none translate-y-2 scale-90 opacity-0'
+        )}
+      >
+        <ArrowDown className="size-[18px]" />
+        {/* The reader is up the page while the agent keeps going. */}
+        {busy && <span className="absolute -top-0.5 -right-0.5 size-2.5 rounded-full bg-primary ring-2 ring-background" />}
+      </button>
+      </div>
       {requests?.length ? (
         <div className="flex max-h-[60dvh] shrink-0 flex-col gap-2 overflow-y-auto px-3 pt-1">
           {requests.map((r) => (
@@ -168,7 +232,9 @@ export function ChatScreen({ chatId }: { chatId: string }): React.JSX.Element {
         />
       )}
       <Sheet open={plan !== null} onClose={() => setPlan(null)} title="Plan">
-        <div className="max-h-[70dvh] overflow-y-auto px-4 pb-6">{plan && <Markdown text={plan} />}</div>
+        <div className="max-h-[70dvh] overflow-y-auto px-4 pb-6">
+          <div className="reading-zoom">{plan && <Markdown text={plan} />}</div>
+        </div>
       </Sheet>
       <Composer
         chatId={chatId}
@@ -274,3 +340,26 @@ function Transcript({
 }
 
 const NO_MESSAGES: never[] = []
+
+/**
+ * What a chat looks like while its messages are on their way: a prompt and a
+ * reply's lines, breathing, in the places they will land — so opening a chat
+ * reads as the chat arriving rather than a spinner in an empty page.
+ */
+function TranscriptSkeleton(): React.JSX.Element {
+  return (
+    <div aria-hidden className="flex animate-in flex-col gap-5 pt-2 duration-300 fade-in">
+      <div className="ml-auto h-16 w-[72%] animate-pulse-soft rounded-[20px] bg-muted" />
+      <div className="flex flex-col gap-2.5">
+        <div className="h-3.5 w-[92%] animate-pulse-soft rounded-full bg-muted" />
+        <div className="h-3.5 w-[84%] animate-pulse-soft rounded-full bg-muted" />
+        <div className="h-3.5 w-[64%] animate-pulse-soft rounded-full bg-muted" />
+      </div>
+      <div className="h-24 w-full animate-pulse-soft rounded-2xl bg-muted/70" />
+      <div className="flex flex-col gap-2.5">
+        <div className="h-3.5 w-[88%] animate-pulse-soft rounded-full bg-muted" />
+        <div className="h-3.5 w-[46%] animate-pulse-soft rounded-full bg-muted" />
+      </div>
+    </div>
+  )
+}

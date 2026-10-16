@@ -215,7 +215,7 @@ export function Composer({
             <button
               type="button"
               aria-label="Stop"
-              className="flex size-8 shrink-0 items-center justify-center rounded-full bg-foreground text-background active:opacity-80"
+              className="flex size-8 shrink-0 animate-in items-center justify-center rounded-full bg-foreground text-background duration-200 zoom-in-75 fade-in active:scale-90"
               onClick={() => void interrupt(chatId)}
             >
               <Square className="size-3 fill-current" />
@@ -226,8 +226,8 @@ export function Composer({
               aria-label="Send"
               disabled={sending || empty}
               className={cn(
-                'flex size-8 shrink-0 items-center justify-center rounded-full transition-colors',
-                empty ? 'bg-muted text-muted-foreground' : 'bg-foreground text-background active:opacity-80'
+                'flex size-8 shrink-0 items-center justify-center rounded-full transition-[background-color,color,transform] duration-200 ease-out',
+                empty ? 'scale-90 bg-muted text-muted-foreground' : 'scale-100 bg-foreground text-background active:scale-90'
               )}
               onClick={() => void submit()}
             >

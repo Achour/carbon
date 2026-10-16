@@ -204,12 +204,41 @@ function Shell({ activeId, children }: { activeId: string | null; children: Reac
   )
 }
 
-/** The bar every screen wears: the sidebar, a title, a new chat. */
-export function Header({ title, subtitle }: { title: React.ReactNode; subtitle?: React.ReactNode }): React.JSX.Element {
+/**
+ * The bar every screen wears: the sidebar, a title, a new chat.
+ *
+ * `floating` lays it over the screen's scroller, translucent, so content
+ * scrolls up under the blur the way it does under an iOS navigation bar; the
+ * hairline appears only once something is under it. Tapping the title is the
+ * status-bar tap iOS gives a page's own scroll and not an inner scroller's.
+ */
+export function Header({
+  title,
+  subtitle,
+  floating,
+  scrolled,
+  onTitleTap,
+  ref
+}: {
+  title: React.ReactNode
+  subtitle?: React.ReactNode
+  floating?: boolean
+  scrolled?: boolean
+  onTitleTap?: () => void
+  ref?: React.Ref<HTMLElement>
+}): React.JSX.Element {
   const setDrawer = useRemote((s) => s.setDrawer)
   const waiting = useRemote((s) => Object.values(s.permissions).some((list) => list.length > 0))
   return (
-    <header className="shrink-0 pt-[env(safe-area-inset-top)]">
+    <header
+      ref={ref}
+      className={cn(
+        'shrink-0 pt-[env(safe-area-inset-top)]',
+        floating &&
+          'absolute inset-x-0 top-0 z-20 border-b bg-background/80 backdrop-blur-xl backdrop-saturate-150 transition-[border-color] duration-200',
+        floating && (scrolled ? 'border-border/70' : 'border-transparent')
+      )}
+    >
       <div className="flex h-[52px] items-center gap-1 px-1.5">
         <button
           type="button"
@@ -221,10 +250,15 @@ export function Header({ title, subtitle }: { title: React.ReactNode; subtitle?:
           {/* Something somewhere is waiting on you — the sidebar says what. */}
           {waiting && <span className="absolute top-2.5 right-2.5 size-2 rounded-full bg-warning ring-2 ring-background" />}
         </button>
-        <div className="min-w-0 flex-1 text-center">
+        <button
+          type="button"
+          tabIndex={onTitleTap ? 0 : -1}
+          onClick={onTitleTap}
+          className="min-w-0 flex-1 text-center"
+        >
           <div className="truncate text-[16px] font-semibold">{title}</div>
           {subtitle && <div className="truncate text-[12.5px] leading-tight text-muted-foreground">{subtitle}</div>}
-        </div>
+        </button>
         <button
           type="button"
           aria-label="New chat"

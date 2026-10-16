@@ -117,7 +117,7 @@ the window open. The phone is one more window onto them.
   only ever grows the shell, so a WebKit that stops doing this leaves the
   variable unset.
 - **Navigation is the desktop's: a sidebar, not a list screen.** `Sidebar.tsx`
-  is the compact sidebar at thumb size. New chat and Search sit on top,
+  is the desktop sidebar at thumb size, compact by default. New chat and Search sit on top,
   followed by pinned chats, then each project with its real mark (`/api/icons`,
   `projects:icons` over roots the *server* chooses, never the phone) and its
   chats hanging under the name. The open chat sits on the accent pill, and
@@ -188,6 +188,77 @@ the window open. The phone is one more window onto them.
   decode, and iOS Safari refuses one the size of a 48 MP photo, which failed
   every pick. A photo that still cannot be decoded is sent untouched when the
   model can read its type and it fits the API's size cap.
+- **The phone has display settings of its own, and the desktop does not.**
+  A gear in the sidebar's footer opens a sheet with text size, code size,
+  color mode and palette (`remote/prefs.ts`, `remote/Settings.tsx`). They are
+  kept in the page's own `localStorage`: per device, never on the Mac, and no
+  new relay channel, because `REMOTE_CHANNELS` leaves settings out and a
+  phone wanting larger type than the desktop is normal, not something to sync.
+  Text size is a `zoom` on the reading surfaces (the transcript column, a
+  sub-agent's transcript, the plan sheet) through `--reading-zoom`, not a
+  font-size variable. The transcript is the desktop's components, sized in px
+  throughout, and the desktop already chose zoom over a text scale
+  (`docs/chat-layout.md`). The phone just has no ⌘+ and no pinch
+  (`maximum-scale=1`), so this setting fills the gap. The shell is left
+  unzoomed: the drawer's geometry is in screen px, and the composer's 16px
+  is the size below which iOS zooms into a focused field. The palettes are the
+  six built-ins from `lib/themes.ts`. Imported themes live in the desktop
+  window's storage and cannot travel. Color mode defaults to System, not the
+  desktop's Dark. `remote.html`'s pre-paint script reads the chosen mode and
+  the palette's remembered background (`carbon.remote.paint`, one per
+  appearance), so the first frame and the status bar are already the right
+  colour. Safari's non-standard `zoom` has historically mispositioned
+  anything placed with `getBoundingClientRect` inside a zoomed element. The
+  preview's Chromium follows the standardized behaviour, so a real iPhone is
+  the only test for menus inside the transcript at a size other than 100%.
+- **The sidebar has the desktop's two shapes, chosen per phone.** Compact
+  groups chats under their projects and folds each after "Chats per
+  project" (default 5, the phone's fold before it was a setting). Detailed is
+  the desktop's flat list in `sortKey` order, three lines a row: project and
+  time, the title, then branch or folder with the backend's mark. It folds by
+  batches of 40, as the desktop's does. A row's branch comes from
+  `/api/branches`, which runs the desktop's `git:branches` over the listed
+  chats' folders. Like `/api/icons`, it reads the folders the *server* picks,
+  never a list the phone sends, because a branch name is a read of the Mac's
+  disk. It is fetched only while the sidebar is detailed, then again on each
+  resync and at each turn's end, as the desktop does. A worktree chat carries
+  its branch on its meta, so that row is labelled before the read lands.
+  Outside a repo the row shows the folder, written with `~` against the
+  snapshot's `home`.
+- **It moves like a native app, and the physics live in `remote/`.** Sheets
+  follow the finger down from their handle, or from their body once it is
+  scrolled to the top. The scrim fades with the drag, and a release settles by
+  distance and speed, the drawer's rule. A long picker opens on the row
+  already chosen, centred below any pinned header (the model sheet pins
+  effort, speed and search). Full-screen viewers (a canvas, a sub-agent) are
+  pushed screens: in from the right, back by the chevron or a swipe from the
+  left edge. The edge strip sits above the content because a canvas iframe
+  keeps every touch that lands on it. The chat's header floats translucent
+  over the transcript, measured so the scroller's top padding follows it when
+  the connection strip appears. Its hairline shows once something is
+  under it, and tapping the title scrolls to the top, the status-bar tap iOS
+  only gives a page's own scroll. A round button jumps back to the latest
+  message once the reader is most of a screen up, with a dot while the agent
+  is still working. Both of these flip state only when their answer changes,
+  never per scroll event. The last lines fade into the composer through an
+  overlay rather than a mask, because a masked scroller is composited whole
+  every frame. Three rules hold throughout:
+  - **Drag transforms are written to the elements.** React registers
+    `touchmove` passively, so a drag that must stop the body scrolling
+    listens natively, with `passive: false`.
+  - **A flung sheet or a swiped viewer finishes on an inline transition.**
+    The class-based exit is skipped there, because tw-animate's keyframes
+    outrank the inline transform and would restart the exit from the edge.
+  - **Sheets and viewers stop touch propagation at their root.** Portals
+    bubble through the React tree, and the shell's drawer gesture listens
+    for left-edge touches.
+
+  Long-pressing chrome shows no callout, and nothing tappable waits for a
+  double tap. A chat opens on a skeleton instead of a spinner. One known
+  gap is the iOS keyboard. A Home Screen app keeps its layout height when the
+  keyboard opens and scrolls the page instead. Fixing that means tracking
+  `visualViewport`, which this preview cannot exercise, and a wrong guess
+  hides the composer, so it waits for a real device.
 - **Only the HTTPS address is a secure context, and the others miss two
   APIs.** At `http://<name>.local:7391` or a raw Tailscale IP the page is
   neither HTTPS nor localhost, so Safari leaves out `crypto.randomUUID` and
@@ -313,7 +384,19 @@ message and verified its signature. Real Haiku turns checked: a finished turn
 pushed its reply; the same chat open on screen pushed nothing; the page
 hidden pushed again; a Bash approval pushed its command; and a 410 dropped
 the subscription. Not yet tested: a real `tailscale cert` and an iPhone
-receiving through Apple. The rebuilt client was driven in Carbon's own preview at iPhone 15
+receiving through Apple. The display settings were driven in the same preview against an isolated dev
+instance with a pre-paired device. That run covered: Ember in Light mode at
+117% text and 13px code, which survived a reload with the right first frame;
+System tracking the emulated scheme live, `theme-color` metas included; and
+the drawer stepping aside under the sheet. It did not cover the 140% / 18px
+extremes, or Safari. The gestures were driven in the same preview with
+synthesized touch events: a sheet dragged 80px with the scrim at 0.89, flung
+shut, and dragged 40px slowly and snapping back; the model sheet opening
+centred on the model in use under its pinned effort and speed; and a canvas
+viewer swiped 155px from the edge and released shut, the drawer behind it
+unmoved. The floating header, its hairline, the jump-to-latest button and
+its jump were checked in both appearances. Real fingers on a real iPhone are
+still the test for all of it. The rebuilt client was driven in Carbon's own preview at iPhone 15
 size, in both appearances, against the real app and real Claude turns. That
 run covered: the project-grouped list; a long transcript with grouped tool
 runs; the model sheet and a cross-provider pick with its Undo; the permissions

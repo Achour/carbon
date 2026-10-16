@@ -2,6 +2,7 @@ import type { Api } from '@shared/types'
 import { useApp } from '@/store'
 import { invoke } from './api'
 import { useRemote } from './state'
+import { usePrefs } from './prefs'
 
 /**
  * What lets the phone draw the desktop's own transcript components.
@@ -52,7 +53,6 @@ export function installDesktopBridge(): void {
     }
   })
 
-  const dark = window.matchMedia('(prefers-color-scheme: dark)')
   const mirror = (): void => {
     const s = useRemote.getState()
     useApp.setState({
@@ -63,7 +63,7 @@ export function installDesktopBridge(): void {
       messages: s.open?.messages ?? [],
       hiddenBefore: s.open?.hiddenBefore ?? 0,
       contextUsage: s.open?.contextUsage ?? null,
-      resolvedAppearance: dark.matches ? 'dark' : 'light'
+      resolvedAppearance: usePrefs.getState().appearance
     })
   }
   mirror()
@@ -77,5 +77,7 @@ export function installDesktopBridge(): void {
       mirror()
     }
   })
-  dark.addEventListener('change', mirror)
+  usePrefs.subscribe((s, prev) => {
+    if (s.appearance !== prev.appearance) mirror()
+  })
 }

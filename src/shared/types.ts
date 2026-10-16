@@ -1529,6 +1529,8 @@ export interface RemoteAccessPatch {
 /** What a phone gets on connect: enough to draw the chat list and any prompt. */
 export interface RemoteSnapshot {
   hostname: string
+  /** The Mac's home folder, so a detailed sidebar row can write a path as `~/…`. */
+  home: string
   chats: ChatMeta[]
   statuses: Record<string, ChatStatus>
   permissions: Record<string, PermissionRequestPayload[]>

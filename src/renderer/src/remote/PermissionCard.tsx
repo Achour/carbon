@@ -143,9 +143,9 @@ function Btn({
       disabled={disabled}
       onClick={onClick}
       className={cn(
-        'h-10 rounded-full px-4 text-[14.5px] font-medium transition-opacity disabled:opacity-40',
-        kind === 'primary' && 'bg-foreground text-background',
-        kind === 'secondary' && 'bg-secondary text-secondary-foreground',
+        'h-10 rounded-full px-4 text-[14.5px] font-medium transition-[opacity,transform] duration-150 active:scale-[0.96] disabled:opacity-40',
+        kind === 'primary' && 'bg-foreground text-background active:opacity-85',
+        kind === 'secondary' && 'bg-secondary text-secondary-foreground active:opacity-80',
         kind === 'ghost' && 'text-muted-foreground active:bg-accent'
       )}
     >
@@ -277,8 +277,8 @@ function QuestionCard({
                   key={o.label}
                   onClick={() => toggle(i, q, o.label)}
                   className={cn(
-                    'rounded-xl border px-3 py-2 text-left transition-colors',
-                    on ? 'border-foreground/60 bg-accent' : 'border-border'
+                    'rounded-xl border px-3 py-2 text-left transition-[background-color,border-color,transform] duration-150 active:scale-[0.98]',
+                    on ? 'border-foreground/60 bg-accent' : 'border-border active:bg-accent/60'
                   )}
                 >
                   <span className="block text-[14.5px]">{o.label}</span>

@@ -138,6 +138,10 @@ function ModelSheet({
 
   return (
     <Sheet open={open} onClose={onClose}>
+      {/* Effort, speed and search stay put while the models scroll under
+          them — the list opens on the model in use, and these are the
+          controls most often reached for alongside it. */}
+      <div className="sticky top-0 z-10 -mx-2 bg-popover px-2 pb-1">
       {!query && p.efforts.length > 1 && (
         <SheetSection label="Effort">
           <Segmented
@@ -169,6 +173,7 @@ function ModelSheet({
           className="h-full min-w-0 flex-1 bg-transparent text-[16px] text-foreground outline-none placeholder:text-muted-foreground"
         />
       </label>
+      </div>
       {groups.map((g) => (
         <SheetSection
           key={g.provider}

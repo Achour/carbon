@@ -1385,6 +1385,7 @@ app.whenReady().then(() => {
       available: PROVIDERS.filter((p) => cliAvailable(p))
     }),
     projectIcons: (roots) => projectOps.projectIcons(roots),
+    branches: (cwds) => gitOps.branchesAt(cwds),
     lastReply: (chatId) => lastReplyText(store.getChat(chatId)?.messages ?? [])
   })
   remote.onChange = () => win?.webContents.send('remote:changed')
