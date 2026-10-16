@@ -6,18 +6,21 @@ import * as api from './api'
 import { ChatScreen } from './ChatScreen'
 import { NewChatScreen } from './NewChat'
 import { PairScreen } from './Pair'
+import { UsageScreen } from './UsageScreen'
 import { newChatHash, Sidebar, useProjectFilter } from './Sidebar'
 
 /**
- * Routes live in the hash — `#/` (a new chat), `#/c/<id>`, `#/new/<project>` —
+ * Routes live in the hash — `#/` (a new chat), `#/c/<id>`, `#/new/<project>`,
+ * `#/usage` —
  * so a reload, or iOS restoring a Home Screen app, lands where the user was.
  * `#pair=<code>` is the QR code's link: it pre-fills the pairing screen and is
  * then dropped. The chat list is not a route: it is the sidebar, as on the Mac.
  */
-type Route = { name: 'chat'; id: string } | { name: 'new'; cwd: string | null }
+type Route = { name: 'chat'; id: string } | { name: 'new'; cwd: string | null } | { name: 'usage' }
 
 function readRoute(): Route {
   const h = location.hash
+  if (h === '#/usage') return { name: 'usage' }
   const chat = /^#\/c\/(.+)$/.exec(h)
   if (chat) return { name: 'chat', id: decodeURIComponent(chat[1]) }
   const fresh = /^#\/new\/(.+)$/.exec(h)
@@ -63,14 +66,20 @@ export function App(): React.JSX.Element {
     return <PairScreen initialCode={pairCode ?? ''} onPaired={() => location.reload()} />
   }
 
-  const key = route.name === 'chat' ? `c:${route.id}` : `n:${route.cwd ?? ''}`
+  const key = route.name === 'chat' ? `c:${route.id}` : route.name === 'usage' ? 'usage' : `n:${route.cwd ?? ''}`
   return (
     <>
       <Shell activeId={openId}>
         {/* Keyed, so each screen arrives with the short fade the desktop's
             panes use rather than swapping in place. */}
         <div key={key} className="h-full animate-in fade-in duration-200">
-          {route.name === 'chat' ? <ChatScreen chatId={route.id} /> : <NewChatScreen initialCwd={route.cwd} />}
+          {route.name === 'chat' ? (
+            <ChatScreen chatId={route.id} />
+          ) : route.name === 'usage' ? (
+            <UsageScreen />
+          ) : (
+            <NewChatScreen initialCwd={route.cwd} />
+          )}
         </div>
       </Shell>
       <ErrorToast />

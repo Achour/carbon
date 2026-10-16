@@ -18,8 +18,10 @@ import type {
   OlderMessages,
   PermissionDecision,
   PermissionRequestPayload,
-  UsageOverview
+  UsageOverview,
+  UsageReport
 } from '@shared/types'
+import { USAGE_DEFAULT_DAYS } from '@shared/types'
 import * as api from './api'
 import { usePrefs } from './prefs'
 
@@ -71,6 +73,10 @@ interface RemoteState {
   branches: Record<string, string | null>
   /** The plan's headroom (`usage:overview`); null until the first read lands. */
   usage: UsageOverview | null
+  /** The Usage screen's history (`usage:report`), for `usageDays`. */
+  usageReport: UsageReport | null
+  usageDays: number
+  usageReportLoading: boolean
   /** The sidebar drawer. */
   drawer: boolean
   open: OpenChat | null
@@ -94,6 +100,7 @@ interface RemoteState {
   setDrawer(open: boolean): void
   refreshBranches(): Promise<void>
   refreshUsage(force?: boolean): Promise<void>
+  loadUsageReport(days?: number, refresh?: boolean): Promise<void>
 }
 
 let conn: string | null = null
@@ -225,6 +232,9 @@ export const useRemote = create<RemoteState>((set, get) => {
     home: '',
     branches: {},
     usage: null,
+    usageReport: null,
+    usageDays: USAGE_DEFAULT_DAYS,
+    usageReportLoading: false,
     drawer: false,
     open: null,
     queued: {},
@@ -367,6 +377,22 @@ export const useRemote = create<RemoteState>((set, get) => {
         set({ usage: await api.invoke<UsageOverview>('usage:overview', force || undefined) })
       } catch {
         // Keep the last good numbers: a stale percentage beats none.
+      }
+    },
+
+    // The desktop's loader (`loadUsageReport` in the desktop store), over the relay.
+    async loadUsageReport(days, refresh = false) {
+      const want = days ?? get().usageDays
+      // The range buttons are the loading surface: commit the choice first.
+      set({ usageDays: want, usageReportLoading: true })
+      try {
+        const report = await api.invoke<UsageReport>('usage:report', want, refresh || undefined)
+        // A range switched mid-scan wins: the report that lands is stale.
+        if (get().usageDays === want) set({ usageReport: report })
+      } catch (err) {
+        set({ error: message(err) })
+      } finally {
+        if (get().usageDays === want) set({ usageReportLoading: false })
       }
     }
   }

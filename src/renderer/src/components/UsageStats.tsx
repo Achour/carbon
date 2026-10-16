@@ -170,6 +170,20 @@ function updatedLabel(scannedAt: number): string {
   return ago === 'now' ? 'Updated just now' : `Updated ${ago} ago`
 }
 
+// ---------- Host ----------
+
+/**
+ * What the page reads from whichever screen hosts it: the desktop store's
+ * project names and marks, or the phone's. Everything else arrives as props,
+ * so the same view draws on both (`UsageReportView`).
+ */
+export interface UsageLookup {
+  names: Record<string, string>
+  icons: Record<string, string | null>
+}
+
+export const UsageLookupContext = React.createContext<UsageLookup>({ names: {}, icons: {} })
+
 // ---------- Series identity ----------
 
 interface SeriesInfo {
@@ -191,7 +205,7 @@ function useSeriesInfo(
   by: UsageGroup,
   ranked: string[]
 ): (key: string, sample?: UsageFact) => SeriesInfo {
-  const names = useApp((s) => s.projectNames)
+  const { names } = React.useContext(UsageLookupContext)
   return React.useMemo(() => {
     const rank = new Map(ranked.map((k, i) => [k, i]))
     // Twelve project hues can collide among six named series; the second of a
@@ -256,15 +270,24 @@ function Segmented<T extends string>({
   value,
   options,
   onChange,
-  ariaLabel
+  ariaLabel,
+  touch,
+  className
 }: {
   value: T
   options: { id: T; label: string }[]
   onChange: (id: T) => void
   ariaLabel: string
+  /** Thumb-sized, the segments sharing the width. */
+  touch?: boolean
+  className?: string
 }): React.JSX.Element {
   return (
-    <div role="group" aria-label={ariaLabel} className="flex rounded-md bg-secondary p-0.5">
+    <div
+      role="group"
+      aria-label={ariaLabel}
+      className={cn('flex bg-secondary', touch ? 'rounded-xl p-1' : 'rounded-md p-0.5', className)}
+    >
       {options.map((o) => (
         <button
           key={o.id}
@@ -272,7 +295,8 @@ function Segmented<T extends string>({
           aria-pressed={value === o.id}
           onClick={() => onChange(o.id)}
           className={cn(
-            'rounded-[5px] px-2.5 py-1 text-[11px] transition-colors',
+            'transition-colors',
+            touch ? 'h-9 flex-1 rounded-lg px-2 text-[13.5px]' : 'rounded-[5px] px-2.5 py-1 text-[11px]',
             value === o.id
               ? 'bg-card font-medium text-foreground shadow-sm'
               : 'text-muted-foreground hover:text-foreground'
@@ -480,7 +504,8 @@ function Columns({
   selectedBucket: day,
   onBucket: onDay,
   keptFrom,
-  prunedLabel
+  prunedLabel,
+  touch
 }: {
   buckets: string[]
   unit: UsageUnit
@@ -493,6 +518,12 @@ function Columns({
   measure: UsageMeasure
   selectedBucket: string | null
   onBucket: (bucket: string | null) => void
+  /**
+   * A tap selects and nothing hovers: a touch screen fires a synthetic
+   * mousemove on every tap, which left a tooltip pinned over the chart. The
+   * selected column already re-cuts the headline to say what it holds.
+   */
+  touch?: boolean
 }): React.JSX.Element {
   const box = React.useRef<HTMLDivElement>(null)
   const pruned = keptFrom ? days.filter((d) => d < keptFrom).length : 0
@@ -536,8 +567,8 @@ function Columns({
         role="img"
         aria-label={`${measure} by ${unit}, ${stack.keys.length} series`}
         className="cursor-pointer"
-        onMouseMove={(e) => setHover(indexAt(e))}
-        onMouseLeave={() => setHover(null)}
+        onMouseMove={touch ? undefined : (e) => setHover(indexAt(e))}
+        onMouseLeave={touch ? undefined : () => setHover(null)}
         onClick={(e) => {
           const i = indexAt(e)
           if (i == null) return
@@ -695,7 +726,7 @@ function Columns({
 // ---------- Table ----------
 
 function RowLabel({ info, size = 'sm' }: { info: SeriesInfo; size?: 'xs' | 'sm' }): React.JSX.Element {
-  const icons = useApp((s) => s.projectIcons)
+  const { icons } = React.useContext(UsageLookupContext)
   return (
     <span className="flex min-w-0 items-center gap-2">
       {info.root !== undefined && info.root ? (
@@ -857,6 +888,7 @@ function daysBetween(a: string, b: string): number {
 
 // ---------- Page ----------
 
+/** The desktop's Usage page: its header, and the shared view under it. */
 export function UsageStats(): React.JSX.Element {
   const report = useApp((s) => s.usageReport)
   const loading = useApp((s) => s.usageReportLoading)
@@ -864,60 +896,13 @@ export function UsageStats(): React.JSX.Element {
   const load = useApp((s) => s.loadUsageReport)
   const closeUsage = useApp((s) => s.closeUsage)
   const loadProjectIcons = useApp((s) => s.loadProjectIcons)
-
-  const [measure, setMeasure] = React.useState<UsageMeasure>('cost')
-  const [by, setBy] = React.useState<UsageGroup>('provider')
-  const [bucket, setBucket] = React.useState<string | null>(null)
-  const [focus, setFocus] = React.useState<string | null>(null)
-
-  // A filter names a column or a row of *this* report; a new window drops both.
-  React.useEffect(() => {
-    setBucket((b) => (b && report?.buckets.includes(b) ? b : null))
-    setFocus(null)
-  }, [report])
+  const names = useApp((s) => s.projectNames)
+  const icons = useApp((s) => s.projectIcons)
+  const lookup = React.useMemo(() => ({ names, icons }), [names, icons])
 
   React.useEffect(() => {
     if (report) void loadProjectIcons(report.projects.filter(Boolean))
   }, [report, loadProjectIcons])
-
-  const filtered = bucket != null || focus != null
-  React.useEffect(() => {
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key !== 'Escape') return
-      // Esc peels a filter before it closes the page.
-      if (filtered) {
-        setBucket(null)
-        setFocus(null)
-      } else closeUsage()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [closeUsage, filtered])
-
-  const facts = report?.facts ?? []
-  // The chart is never cut by its column — it is what you pick the column from.
-  const chartFacts = React.useMemo(
-    () => filterFacts(facts, { focus: focus ? { by, key: focus } : null }),
-    [facts, focus, by]
-  )
-  const pageFacts = React.useMemo(() => filterFacts(chartFacts, { bucket }), [chartFacts, bucket])
-  // The table is never cut by its own focus — it is what you pick the row from.
-  const rows = React.useMemo(
-    () => groupFacts(filterFacts(facts, { bucket }), by, measure),
-    [facts, bucket, by, measure]
-  )
-  const ranked = React.useMemo(
-    () => groupFacts(facts, by, measure).map((r) => r.key),
-    [facts, by, measure]
-  )
-  const info = useSeriesInfo(report ?? EMPTY, by, ranked)
-  const stack = React.useMemo(() => {
-    if (!report) return { keys: [], values: [] }
-    return columnStack(chartFacts, report.buckets, by, measure, SERIES_LIMIT)
-  }, [report, chartFacts, by, measure])
-
-  const focusSample = focus ? facts.find((f) => keyOf(f, by) === focus) : undefined
-  const empty = report && report.facts.length === 0
 
   return (
     <div className="flex min-w-0 flex-1 flex-col bg-background">
@@ -937,146 +922,222 @@ export function UsageStats(): React.JSX.Element {
             Reading session logs…
           </div>
         ) : (
-          <div className="mx-auto max-w-4xl space-y-9 px-6 pt-6 pb-8">
-            {/* What the page is about, and every control that changes it. */}
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex min-w-0 flex-wrap items-center gap-2">
-                <h1 className="text-[15px] font-semibold">
-                  {report.unit === 'hour'
-                    ? 'Last 24 hours'
-                    : `${shortDay(report.from)} – ${shortDay(report.to)}`}
-                </h1>
-                {bucket && <Chip onClear={() => setBucket(null)}>{bucketLabel(bucket, true)}</Chip>}
-                {focus && (
-                  <Chip onClear={() => setFocus(null)}>
-                    <RowLabel info={info(focus, focusSample)} size="xs" />
-                  </Chip>
-                )}
-              </div>
-              <div className="flex items-center gap-1.5">
-                <Segmented
-                  ariaLabel="Measure"
-                  value={measure}
-                  onChange={setMeasure}
-                  options={[
-                    { id: 'cost', label: 'Cost' },
-                    { id: 'tokens', label: 'Tokens' }
-                  ]}
-                />
-                <Segmented
-                  ariaLabel="Window"
-                  value={String(range)}
-                  onChange={(v) => void load(Number(v))}
-                  options={USAGE_RANGES.map((r) => ({ id: String(r.days), label: r.label }))}
-                />
-                <WithTooltip label="Re-read session logs">
-                  <Button
-                    size="icon-sm"
-                    variant="ghost"
-                    aria-label="Refresh usage"
-                    disabled={loading}
-                    onClick={() => void load(range, true)}
-                  >
-                    <RefreshCw className={cn('size-3.5', loading && 'animate-spin')} />
-                  </Button>
-                </WithTooltip>
-              </div>
-            </div>
-
-            <Summary
+          <UsageLookupContext.Provider value={lookup}>
+            <UsageReportView
               report={report}
-              facts={pageFacts}
-              measure={measure}
-              filtered={filtered}
-              bucket={bucket}
+              loading={loading}
+              range={range}
+              onLoad={(days, refresh) => void load(days, refresh)}
+              onEscape={closeUsage}
             />
-
-            <section>
-              <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-                <h2 className="text-[13px] font-semibold">
-                  {measure === 'cost' ? 'Cost' : 'Tokens'} by {report.unit}
-                </h2>
-                <Segmented
-                  ariaLabel="Group by"
-                  value={by}
-                  onChange={(g) => {
-                    setBy(g)
-                    setFocus(null)
-                  }}
-                  options={GROUPS}
-                />
-              </div>
-              <Columns
-                buckets={report.buckets}
-                unit={report.unit}
-                stack={stack}
-                info={info}
-                measure={measure}
-                selectedBucket={bucket}
-                onBucket={setBucket}
-                keptFrom={completeFrom(report)}
-                prunedLabel={`${(Object.keys(report.keptFrom) as UsageProvider[])
-                  .filter((p) => (report.keptFrom[p] ?? '') > report.from)
-                  .map((p) => PROVIDER_LABELS[p])
-                  .join(' and ')} logs deleted`}
-              />
-              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1.5 pl-12">
-                {[...stack.keys].reverse().map((key) => {
-                  const si = info(key)
-                  return (
-                    <span key={key} className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
-                      <Swatch color={si.color} />
-                      <span className={cn('max-w-48 truncate', si.mono && 'font-mono text-[10.5px]')}>
-                        {si.label}
-                      </span>
-                    </span>
-                  )
-                })}
-              </div>
-            </section>
-
-            <Breakdown
-              rows={rows}
-              by={by}
-              measure={measure}
-              info={info}
-              focus={focus}
-              onFocus={setFocus}
-            />
-
-            <Caveats report={report} facts={pageFacts} />
-
-            <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground">
-              <span>
-                Read from Claude Code, Codex and Grok session logs, including sessions run outside Carbon
-              </span>
-              <span>{updatedLabel(report.scannedAt)}</span>
-            </div>
-
-            {empty && (
-              <p className="text-[12px] text-muted-foreground">
-                No usage recorded in this window. Sessions appear here once Claude Code, Codex or Grok
-                has run, from this app or the terminal.
-              </p>
-            )}
-          </div>
+          </UsageLookupContext.Provider>
         )}
       </div>
     </div>
   )
 }
 
-const EMPTY: UsageReport = {
-  unit: 'day',
-  from: '',
-  to: '',
-  buckets: [],
-  facts: [],
-  projects: [],
-  bucketSessions: [],
-  sessions: 0,
-  previous: { costUsd: 0, tokens: 0, from: '' },
-  keptFrom: {},
-  scannedAt: 0,
-  notes: []
+/**
+ * Everything under the page's header, for whichever screen hosts it — the
+ * desktop's page, or the phone's (`remote/UsageScreen.tsx`), which passes
+ * `touch` for thumb-sized controls and a chart that selects on tap rather
+ * than hovering. One view, so the two cannot disagree about a number.
+ */
+export function UsageReportView({
+  report,
+  loading,
+  range,
+  onLoad,
+  onEscape,
+  touch
+}: {
+  report: UsageReport
+  loading: boolean
+  range: number
+  onLoad: (days: number, refresh?: boolean) => void
+  /** Esc with no filter on; Esc peels a filter first. Without it, Esc does nothing. */
+  onEscape?: () => void
+  touch?: boolean
+}): React.JSX.Element {
+  const [measure, setMeasure] = React.useState<UsageMeasure>('cost')
+  const [by, setBy] = React.useState<UsageGroup>('provider')
+  const [bucket, setBucket] = React.useState<string | null>(null)
+  const [focus, setFocus] = React.useState<string | null>(null)
+
+  // A filter names a column or a row of *this* report; a new window drops both.
+  React.useEffect(() => {
+    setBucket((b) => (b && report.buckets.includes(b) ? b : null))
+    setFocus(null)
+  }, [report])
+
+  const filtered = bucket != null || focus != null
+  React.useEffect(() => {
+    if (!onEscape) return
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape') return
+      // Esc peels a filter before it closes the page.
+      if (filtered) {
+        setBucket(null)
+        setFocus(null)
+      } else onEscape()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onEscape, filtered])
+
+  const facts = report.facts
+  // The chart is never cut by its column — it is what you pick the column from.
+  const chartFacts = React.useMemo(
+    () => filterFacts(facts, { focus: focus ? { by, key: focus } : null }),
+    [facts, focus, by]
+  )
+  const pageFacts = React.useMemo(() => filterFacts(chartFacts, { bucket }), [chartFacts, bucket])
+  // The table is never cut by its own focus — it is what you pick the row from.
+  const rows = React.useMemo(
+    () => groupFacts(filterFacts(facts, { bucket }), by, measure),
+    [facts, bucket, by, measure]
+  )
+  const ranked = React.useMemo(
+    () => groupFacts(facts, by, measure).map((r) => r.key),
+    [facts, by, measure]
+  )
+  const info = useSeriesInfo(report, by, ranked)
+  const stack = React.useMemo(
+    () => columnStack(chartFacts, report.buckets, by, measure, SERIES_LIMIT),
+    [report, chartFacts, by, measure]
+  )
+
+  const focusSample = focus ? facts.find((f) => keyOf(f, by) === focus) : undefined
+  const empty = report.facts.length === 0
+
+  const title = (
+    <div className="flex min-w-0 flex-wrap items-center gap-2">
+      <h1 className="text-[15px] font-semibold">
+        {report.unit === 'hour' ? 'Last 24 hours' : `${shortDay(report.from)} – ${shortDay(report.to)}`}
+      </h1>
+      {bucket && <Chip onClear={() => setBucket(null)}>{bucketLabel(bucket, true)}</Chip>}
+      {focus && (
+        <Chip onClear={() => setFocus(null)}>
+          <RowLabel info={info(focus, focusSample)} size="xs" />
+        </Chip>
+      )}
+    </div>
+  )
+  const measures: { id: UsageMeasure; label: string }[] = [
+    { id: 'cost', label: 'Cost' },
+    { id: 'tokens', label: 'Tokens' }
+  ]
+  const ranges = USAGE_RANGES.map((r) => ({ id: String(r.days), label: r.label }))
+  const refresh = (
+    <RefreshCw className={cn(touch ? 'size-4' : 'size-3.5', loading && 'animate-spin')} />
+  )
+
+  return (
+    <div className={cn('mx-auto max-w-4xl', touch ? 'space-y-7 px-4 pt-4 pb-8' : 'space-y-9 px-6 pt-6 pb-8')}>
+      {/* What the page is about, and every control that changes it. */}
+      {touch ? (
+        // A phone stacks them: the window across the full width, then the
+        // measure beside a refresh — four ranges and two measures in one row
+        // would leave no segment a thumb could hit.
+        <div className="space-y-2.5">
+          <Segmented touch ariaLabel="Window" value={String(range)} onChange={(v) => onLoad(Number(v))} options={ranges} />
+          <div className="flex items-center gap-2">
+            <Segmented touch className="flex-1" ariaLabel="Measure" value={measure} onChange={setMeasure} options={measures} />
+            <button
+              type="button"
+              aria-label="Refresh usage"
+              disabled={loading}
+              onClick={() => onLoad(range, true)}
+              className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-secondary text-muted-foreground active:bg-accent disabled:opacity-60"
+            >
+              {refresh}
+            </button>
+          </div>
+          <div className="pt-2">{title}</div>
+        </div>
+      ) : (
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          {title}
+          <div className="flex items-center gap-1.5">
+            <Segmented ariaLabel="Measure" value={measure} onChange={setMeasure} options={measures} />
+            <Segmented ariaLabel="Window" value={String(range)} onChange={(v) => onLoad(Number(v))} options={ranges} />
+            <WithTooltip label="Re-read session logs">
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                aria-label="Refresh usage"
+                disabled={loading}
+                onClick={() => onLoad(range, true)}
+              >
+                {refresh}
+              </Button>
+            </WithTooltip>
+          </div>
+        </div>
+      )}
+
+      <Summary report={report} facts={pageFacts} measure={measure} filtered={filtered} bucket={bucket} />
+
+      <section>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-[13px] font-semibold">
+            {measure === 'cost' ? 'Cost' : 'Tokens'} by {report.unit}
+          </h2>
+          <Segmented
+            touch={touch}
+            className={touch ? 'w-full' : undefined}
+            ariaLabel="Group by"
+            value={by}
+            onChange={(g) => {
+              setBy(g)
+              setFocus(null)
+            }}
+            options={GROUPS}
+          />
+        </div>
+        <Columns
+          buckets={report.buckets}
+          unit={report.unit}
+          stack={stack}
+          info={info}
+          measure={measure}
+          selectedBucket={bucket}
+          onBucket={setBucket}
+          touch={touch}
+          keptFrom={completeFrom(report)}
+          prunedLabel={`${(Object.keys(report.keptFrom) as UsageProvider[])
+            .filter((p) => (report.keptFrom[p] ?? '') > report.from)
+            .map((p) => PROVIDER_LABELS[p])
+            .join(' and ')} logs deleted`}
+        />
+        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1.5 pl-12">
+          {[...stack.keys].reverse().map((key) => {
+            const si = info(key)
+            return (
+              <span key={key} className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+                <Swatch color={si.color} />
+                <span className={cn('max-w-48 truncate', si.mono && 'font-mono text-[10.5px]')}>{si.label}</span>
+              </span>
+            )
+          })}
+        </div>
+      </section>
+
+      <Breakdown rows={rows} by={by} measure={measure} info={info} focus={focus} onFocus={setFocus} />
+
+      <Caveats report={report} facts={pageFacts} />
+
+      <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground">
+        <span>Read from Claude Code, Codex and Grok session logs, including sessions run outside Carbon</span>
+        <span>{updatedLabel(report.scannedAt)}</span>
+      </div>
+
+      {empty && (
+        <p className="text-[12px] text-muted-foreground">
+          No usage recorded in this window. Sessions appear here once Claude Code, Codex or Grok has run,
+          from this app or the terminal.
+        </p>
+      )}
+    </div>
+  )
 }

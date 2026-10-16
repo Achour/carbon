@@ -28,7 +28,9 @@ the window open. The phone is one more window onto them.
   `canvas:list` / `canvas:get` read documents Carbon keeps in its own database,
   not the disk; `usage:overview` is the plan's 5-hour and weekly headroom,
   read-only and cached in main (`usage.ts`'s TTL and in-flight dedup), so a
-  phone reopening its Usage sheet spawns nothing a warm cache can answer. None
+  phone reopening its Usage sheet spawns nothing a warm cache can answer;
+  `usage:report` is the Usage page's history, aggregates per day, model and
+  project rather than any transcript (`docs/usage.md`, "On the phone"). None
   gives the phone more than the agent it steers. A lost
   phone can still steer the agents, which is the feature, but it is not a more
   direct remote shell than that.

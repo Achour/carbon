@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { RefreshCw } from 'lucide-react'
+import { ChartColumn, ChevronRight, RefreshCw } from 'lucide-react'
 import { PROVIDER_SHORT_LABELS, type ProviderUsage, type RateLimitWindow } from '@shared/types'
 import { peakUtilization, usageColor, UsageRing, usageTone } from '@/components/UsageBar'
 import { ProviderMark } from '@/components/ui/provider-mark'
@@ -8,6 +8,7 @@ import { resetsIn } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useRemote } from './state'
 import { Sheet } from './Sheet'
+import { navigate } from './App'
 
 /**
  * The plan's headroom, from the sidebar's footer: the desktop's ring and
@@ -99,6 +100,20 @@ function UsageSheet({ open, onClose }: { open: boolean; onClose: () => void }): 
             </div>
           </>
         )}
+        {/* Headroom is the plan's question; history is the Usage page's. */}
+        <button
+          type="button"
+          onClick={() => {
+            onClose()
+            useRemote.getState().setDrawer(false)
+            navigate('#/usage')
+          }}
+          className="mt-4 flex h-12 w-full items-center gap-3 rounded-xl bg-secondary px-3.5 text-left text-[15px] active:bg-accent"
+        >
+          <ChartColumn className="size-[18px] shrink-0 text-muted-foreground" />
+          <span className="flex-1">Spend history</span>
+          <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+        </button>
       </div>
     </Sheet>
   )

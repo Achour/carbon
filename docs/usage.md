@@ -159,3 +159,29 @@ separate them. The shapes carry the difference — OpenAI's knot against xAI's t
 slashes is a wider gap at 14px than any two hues would be — and a tinted xAI badge
 would be a brand fact we made up, which is exactly the error the blue-Codex note
 above rules out.
+
+### On the phone
+
+The page has two hosts and one view. `UsageReportView` is everything under the
+header — controls, headline, chart, table, caveats — and takes the report,
+the range and a loader as props; the desktop's `UsageStats` feeds it from the
+store, the phone's `remote/UsageScreen.tsx` from the relay (`usage:report`,
+on the allowlist beside `usage:overview`). The project names and marks the
+rows wear come through `UsageLookupContext` rather than the store, which is the
+only thing that tied the view to the desktop. A second page written for the
+phone would have been a second set of folds to keep agreeing with the first;
+this one cannot disagree about a number.
+
+The layout was already most of the way there: below `md` the table keeps only
+the name and the total, and below `sm` the composition is two columns. What
+`touch` changes is what a finger needs. The window and the measure stack into
+full-width segments of 36px instead of one row of 24px ones, and the chart
+**selects on tap and never hovers** — a touch screen fires a synthetic
+`mousemove` before every tap, which pinned the tooltip over the chart; the
+selected column already re-cuts the headline to say what it holds. A 90-day
+report is ~110 KB over the wire, so the phone loads it unforced on every visit
+and leans on main's per-file scan cache.
+
+The way in is the plan-usage sheet's "Spend history" row: the chip in the
+sidebar's footer is where a phone asks about usage at all, and the sheet
+already answers the headroom half of the question.

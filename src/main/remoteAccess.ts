@@ -109,7 +109,11 @@ export const REMOTE_CHANNELS = new Set([
   'canvas:get',
   // The plan's headroom (5-hour, weekly): read-only, account-level, and
   // cached in main — what tells you which agent to start the next task on.
-  'usage:overview'
+  'usage:overview',
+  // The Usage page's history: token counts and list-price cost per day,
+  // model and project, read from the CLIs' own logs. Aggregates, never a
+  // transcript, and a scan main caches per file.
+  'usage:report'
 ])
 
 /** Per-chat events, sent only to a phone looking at that chat. */
