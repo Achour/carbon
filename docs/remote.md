@@ -26,7 +26,10 @@ the window open. The phone is one more window onto them.
   `chat:edit-message` (edit and resend) is a send; `chat:rewind-files` is a
   turn's Undo, which restores only what that turn's own checkpoint recorded;
   `canvas:list` / `canvas:get` read documents Carbon keeps in its own database,
-  not the disk. None gives the phone more than the agent it steers. A lost
+  not the disk; `usage:overview` is the plan's 5-hour and weekly headroom,
+  read-only and cached in main (`usage.ts`'s TTL and in-flight dedup), so a
+  phone reopening its Usage sheet spawns nothing a warm cache can answer. None
+  gives the phone more than the agent it steers. A lost
   phone can still steer the agents, which is the feature, but it is not a more
   direct remote shell than that.
 - **Events are the same `ChatEvent`s, as server-sent events.** `emit` feeds
@@ -225,6 +228,21 @@ the window open. The phone is one more window onto them.
   its branch on its meta, so that row is labelled before the read lands.
   Outside a repo the row shows the folder, written with `~` against the
   snapshot's `home`.
+- **The project filter is the desktop's, per phone.** A third row under New
+  chat and Search opens a sheet of projects, most recently active first, and
+  the pick is kept in `prefs.ts` (`carbon.remote.project`), apart from the
+  Mac's `sidebarProject`. It scopes what the desktop's does: the pins, the
+  list, and where both New chat buttons start a chat. Filtered, compact drops
+  its project rows and lists the chats flush, since the filter already names
+  the project. **"Needs you" ignores it**, a deliberate difference from the
+  desktop, which has no such section: a question waiting in another project is
+  usually why the phone was picked up, and a filter must not hide it. A saved
+  filter naming a project with no chats left reads as no filter
+  (`useProjectFilter`).
+- **The plan's headroom rides the footer.** The desktop's ring and
+  "Claude 39%" chip sit beside the bell, and a tap opens the 5-hour and weekly
+  bars in a sheet (`Usage.tsx`). It reads `usage:overview` on each resync and
+  at each turn's end; main's cache makes both nearly free.
 - **It moves like a native app, and the physics live in `remote/`.** Sheets
   follow the finger down from their handle, or from their body once it is
   scrolled to the top. The scrim fades with the drag, and a release settles by

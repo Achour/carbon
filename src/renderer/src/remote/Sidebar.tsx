@@ -2,6 +2,7 @@ import * as React from 'react'
 import {
   Bell,
   BellOff,
+  ChevronDown,
   ChevronRight,
   Folder,
   GitBranch,
@@ -11,6 +12,7 @@ import {
   Plus,
   Search,
   Settings2,
+  SquareStack,
   X
 } from 'lucide-react'
 import { PROVIDER_LABELS, projectRoot, type ChatMeta } from '@shared/types'
@@ -25,6 +27,8 @@ import { navigate } from './App'
 import { baseName, chatTitle, listedChats } from './format'
 import { PUSH_HINT, usePush } from './push'
 import { SettingsSheet } from './Settings'
+import { Sheet, SheetRow } from './Sheet'
+import { UsageButton } from './Usage'
 import { usePrefs } from './prefs'
 
 /**
@@ -43,7 +47,24 @@ function readCollapsed(): string[] {
 }
 
 /**
- * The desktop sidebar, at thumb size: New chat and Search on top, pinned chats,
+ * The sidebar's project filter, as it applies: a saved filter naming a project
+ * with no chats left reads as no filter rather than an empty sidebar, as on the
+ * desktop.
+ */
+export function useProjectFilter(): string | null {
+  const saved = usePrefs((s) => s.sidebarProject)
+  const known = useRemote((s) => !!saved && listedChats(s.chats).some((c) => projectRoot(c) === saved))
+  return known ? saved : null
+}
+
+/** Where "New chat" goes: under a filter, into that project, as ⌘N does on the desktop. */
+export function newChatHash(project: string | null): string {
+  return project ? `#/new/${encodeURIComponent(project)}` : '#/'
+}
+
+/**
+ * The desktop sidebar, at thumb size: New chat, Search and the project filter
+ * on top, pinned chats,
  * then the chats in one of the desktop's two shapes (Settings → Sidebar,
  * `docs/sidebar.md`). Compact hangs each project's chats under its mark and
  * name; detailed is one flat list in the user's order, each row naming its
@@ -61,6 +82,7 @@ export function Sidebar({ activeId, onNavigate }: { activeId: string | null; onN
   const [searching, setSearching] = React.useState(false)
   const [collapsed, setCollapsed] = React.useState<string[]>(readCollapsed)
   const [settings, setSettings] = React.useState(false)
+  const [picking, setPicking] = React.useState(false)
   const detailed = usePrefs((s) => s.sidebarDensity) === 'detailed'
   const [flatShown, setFlatShown] = React.useState(FLAT_BATCH)
   const searchInput = React.useRef<HTMLInputElement>(null)
@@ -81,17 +103,41 @@ export function Sidebar({ activeId, onNavigate }: { activeId: string | null; onN
       return next
     })
 
+  const filterProject = useProjectFilter()
+  const setSidebarProject = usePrefs((s) => s.setSidebarProject)
+  const pickProject = (root: string | null): void => {
+    setSidebarProject(root)
+    setFlatShown(FLAT_BATCH)
+  }
+
+  // The filter's choices, most recently active first, as the desktop's
+  // new-chat chooser orders them: the project you were last in leads.
+  const projects = React.useMemo(() => {
+    const latest = new Map<string, { latest: number; count: number }>()
+    for (const c of listedChats(chats)) {
+      const root = projectRoot(c)
+      const p = latest.get(root) ?? { latest: 0, count: 0 }
+      p.latest = Math.max(p.latest, c.updatedAt)
+      p.count++
+      latest.set(root, p)
+    }
+    return [...latest.entries()].sort((a, b) => b[1].latest - a[1].latest).map(([root, p]) => ({ root, count: p.count }))
+  }, [chats])
+
   const { waiting, pinned, groups, flat } = React.useMemo(() => {
     const q = query.trim().toLowerCase()
     const all = listedChats(chats).filter(
       (c) => !q || `${c.title} ${baseName(projectRoot(c))}`.toLowerCase().includes(q)
     )
     const asking = (c: ChatMeta): boolean => (permissions[c.id]?.length ?? 0) > 0
+    // "Needs you" ignores the filter: a question waiting in another project
+    // is usually why the phone was picked up, and a filter must not hide it.
     const waiting = all.filter(asking)
-    const pinned = all.filter((c) => !asking(c) && c.pinnedAt).sort((a, b) => a.pinnedAt! - b.pinnedAt!)
-    const flat = all.filter((c) => !asking(c) && !c.pinnedAt)
+    const scoped = filterProject ? all.filter((c) => projectRoot(c) === filterProject) : all
+    const pinned = scoped.filter((c) => !asking(c) && c.pinnedAt).sort((a, b) => a.pinnedAt! - b.pinnedAt!)
+    const flat = scoped.filter((c) => !asking(c) && !c.pinnedAt)
     const byProject = new Map<string, { chats: ChatMeta[]; latest: number }>()
-    for (const c of all) {
+    for (const c of scoped) {
       if (asking(c) || c.pinnedAt) continue
       const root = projectRoot(c)
       const g = byProject.get(root) ?? { chats: [], latest: 0 }
@@ -101,15 +147,23 @@ export function Sidebar({ activeId, onNavigate }: { activeId: string | null; onN
     }
     const groups = [...byProject.entries()].sort((a, b) => b[1].latest - a[1].latest)
     return { waiting, pinned, groups, flat }
-  }, [chats, permissions, query])
+  }, [chats, permissions, query, filterProject])
 
   const searchingNow = searching || !!query
+  // A filtered compact list drops its project row: the filter already names
+  // the project, and the row's fold would only hide what was just picked.
+  const flatList = detailed || !!filterProject
   const empty = waiting.length === 0 && pinned.length === 0 && groups.length === 0
 
   return (
     <aside className="flex h-full flex-col bg-sidebar text-sidebar-foreground">
       <div className="shrink-0 px-2 pt-[calc(env(safe-area-inset-top)+10px)] pb-1">
-        <NavRow icon={<MessageSquarePlus />} label="New chat" onClick={() => go('#/')} />
+        {/* Under a filter, a new chat starts in that project, as on the desktop. */}
+        <NavRow
+          icon={<MessageSquarePlus />}
+          label="New chat"
+          onClick={() => go(newChatHash(filterProject))}
+        />
         {searchingNow ? (
           <div className="flex h-11 items-center gap-3 rounded-lg bg-sidebar-accent px-3">
             <Search className="size-[18px] shrink-0 text-muted-foreground" />
@@ -137,6 +191,9 @@ export function Sidebar({ activeId, onNavigate }: { activeId: string | null; onN
         ) : (
           <NavRow icon={<Search />} label="Search" onClick={() => setSearching(true)} />
         )}
+        {projects.length > 1 && (
+          <ProjectFilter project={filterProject} onClick={() => setPicking(true)} />
+        )}
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pt-2 pb-4">
@@ -162,14 +219,18 @@ export function Sidebar({ activeId, onNavigate }: { activeId: string | null; onN
             )}
           </Section>
         )}
-        {detailed && flat.length > 0 && (
+        {flatList && flat.length > 0 && (
           <Section>
             {/* The open chat always shows, even past the batch. */}
             {flat
               .slice(0, searchingNow ? flat.length : Math.max(flatShown, flat.findIndex((c) => c.id === activeId) + 1))
-              .map((c) => (
-                <DetailedRow key={c.id} chat={c} active={c.id === activeId} onOpen={go} />
-              ))}
+              .map((c) =>
+                detailed ? (
+                  <DetailedRow key={c.id} chat={c} active={c.id === activeId} onOpen={go} />
+                ) : (
+                  <ChatRow key={c.id} chat={c} active={c.id === activeId} onOpen={go} />
+                )
+              )}
             {!searchingNow && flat.length > Math.max(flatShown, flat.findIndex((c) => c.id === activeId) + 1) && (
               <button
                 type="button"
@@ -181,7 +242,7 @@ export function Sidebar({ activeId, onNavigate }: { activeId: string | null; onN
             )}
           </Section>
         )}
-        {!detailed && groups.map(([root, g]) => (
+        {!flatList && groups.map(([root, g]) => (
           <ProjectGroup
             key={root}
             root={root}
@@ -211,6 +272,7 @@ export function Sidebar({ activeId, onNavigate }: { activeId: string | null; onN
           <span className="min-w-0 flex-1 truncate">
             {connection === 'live' ? hostname || 'Connected' : connection === 'down' ? 'Reconnecting…' : 'Connecting…'}
           </span>
+          <UsageButton />
           <NotificationsButton />
           <button
             type="button"
@@ -227,6 +289,32 @@ export function Sidebar({ activeId, onNavigate }: { activeId: string | null; onN
         </div>
       </div>
       <SettingsSheet open={settings} onClose={() => setSettings(false)} />
+      <Sheet open={picking} onClose={() => setPicking(false)} title="Show chats from">
+        <div className="pb-2">
+          <SheetRow
+            selected={!filterProject}
+            icon={<SquareStack className="size-[18px]" />}
+            label="All projects"
+            onClick={() => {
+              pickProject(null)
+              setPicking(false)
+            }}
+          />
+          {projects.map((p) => (
+            <SheetRow
+              key={p.root}
+              selected={p.root === filterProject}
+              icon={<ProjectMark root={p.root} />}
+              label={baseName(p.root)}
+              description={`${p.count} chat${p.count === 1 ? '' : 's'}`}
+              onClick={() => {
+                pickProject(p.root)
+                setPicking(false)
+              }}
+            />
+          ))}
+        </div>
+      </Sheet>
     </aside>
   )
 }
@@ -272,6 +360,31 @@ function NotificationsButton(): React.JSX.Element | null {
       )}
     </>
   )
+}
+
+/**
+ * The third primary row: which project the sidebar shows. "All projects" is a
+ * line icon at the other rows' size; a chosen project brings its own mark into
+ * the same box, so picking one shifts nothing (`docs/sidebar.md`).
+ */
+function ProjectFilter({ project, onClick }: { project: string | null; onClick: () => void }): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      aria-label={project ? `Showing ${baseName(project)}; change project` : 'Showing all projects; change project'}
+      onClick={onClick}
+      className="flex h-11 w-full items-center gap-3 rounded-lg px-3 text-[15.5px] text-sidebar-foreground active:bg-sidebar-accent"
+    >
+      {project ? <ProjectMark root={project} /> : <SquareStack className="size-[18px] shrink-0" />}
+      <span className="min-w-0 truncate">{project ? baseName(project) : 'All projects'}</span>
+      <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
+    </button>
+  )
+}
+
+function ProjectMark({ root }: { root: string }): React.JSX.Element {
+  const icon = useRemote((s) => s.icons[root] ?? null)
+  return <ProjectAvatar root={root} name={baseName(root)} icon={icon} size="sm" className="size-[18px] shrink-0" />
 }
 
 function NavRow({ icon, label, onClick }: { icon: React.ReactElement; label: string; onClick: () => void }): React.JSX.Element {

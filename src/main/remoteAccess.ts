@@ -81,8 +81,8 @@ const PUSH_SUBJECT = 'https://github.com/Achour/carbon'
 
 /**
  * What a phone may call: exactly what the client uses, and that is the
- * conversation and nothing else — no filesystem, no terminal, no git, no
- * settings, no deleting. The chat list rides `/api/snapshot`. A phone
+ * conversation (and the plan headroom it spends) and nothing else — no
+ * filesystem, no terminal, no git, no settings, no deleting. The chat list rides `/api/snapshot`. A phone
  * that is lost while paired can steer the agents — which is what it is for —
  * but cannot be turned into a remote shell more directly than that.
  */
@@ -106,7 +106,10 @@ export const REMOTE_CHANNELS = new Set([
   // Canvases are what an agent wrote for the reader, kept by Carbon rather
   // than read off disk: reading one is reading the conversation.
   'canvas:list',
-  'canvas:get'
+  'canvas:get',
+  // The plan's headroom (5-hour, weekly): read-only, account-level, and
+  // cached in main — what tells you which agent to start the next task on.
+  'usage:overview'
 ])
 
 /** Per-chat events, sent only to a phone looking at that chat. */

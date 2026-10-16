@@ -46,6 +46,7 @@ const TEXT_KEY = 'carbon.remote.textSize'
 const DENSITY_KEY = 'carbon.remote.sidebarDensity'
 const PER_PROJECT_KEY = 'carbon.remote.chatsPerProject'
 const CODE_KEY = 'carbon.remote.codeSize'
+const PROJECT_KEY = 'carbon.remote.project'
 /** Read by `remote.html` before any script loads: the first frame's colour. */
 const PAINT_KEY = 'carbon.remote.paint'
 
@@ -86,12 +87,15 @@ interface Prefs {
   codeSize: number
   sidebarDensity: SidebarDensity
   chatsPerProject: number
+  /** The sidebar's project filter: a project root, or null for all of them. */
+  sidebarProject: string | null
   setTheme(id: string): void
   setThemeMode(mode: ThemeMode): void
   setTextSize(index: number): void
   setCodeSize(px: number): void
   setSidebarDensity(density: SidebarDensity): void
   setChatsPerProject(n: number): void
+  setSidebarProject(root: string | null): void
 }
 
 const systemDark = window.matchMedia('(prefers-color-scheme: dark)')
@@ -138,6 +142,7 @@ export const usePrefs = create<Prefs>((set, get) => ({
   codeSize: readInt(CODE_KEY, CODE_MIN, CODE_MAX, CODE_DEFAULT),
   sidebarDensity: read(DENSITY_KEY) === 'detailed' ? 'detailed' : 'compact',
   chatsPerProject: readInt(PER_PROJECT_KEY, CHATS_PER_PROJECT_MIN, CHATS_PER_PROJECT_MAX, CHATS_PER_PROJECT_DEFAULT),
+  sidebarProject: read(PROJECT_KEY) || null,
   setTheme: (id) => set({ themeId: id, appearance: paint(id, get().themeMode) }),
   setThemeMode: (mode) => set({ themeMode: mode, appearance: paint(get().themeId, mode) }),
   setTextSize: (index) => {
@@ -160,6 +165,15 @@ export const usePrefs = create<Prefs>((set, get) => ({
     const next = Math.max(CHATS_PER_PROJECT_MIN, Math.min(CHATS_PER_PROJECT_MAX, n))
     write(PER_PROJECT_KEY, String(next))
     set({ chatsPerProject: next })
+  },
+  setSidebarProject: (root) => {
+    try {
+      if (root) localStorage.setItem(PROJECT_KEY, root)
+      else localStorage.removeItem(PROJECT_KEY)
+    } catch {
+      /* per-device convenience; the filter still applies for this visit */
+    }
+    set({ sidebarProject: root })
   }
 }))
 

@@ -6,7 +6,7 @@ import * as api from './api'
 import { ChatScreen } from './ChatScreen'
 import { NewChatScreen } from './NewChat'
 import { PairScreen } from './Pair'
-import { Sidebar } from './Sidebar'
+import { newChatHash, Sidebar, useProjectFilter } from './Sidebar'
 
 /**
  * Routes live in the hash — `#/` (a new chat), `#/c/<id>`, `#/new/<project>` —
@@ -229,6 +229,7 @@ export function Header({
 }): React.JSX.Element {
   const setDrawer = useRemote((s) => s.setDrawer)
   const waiting = useRemote((s) => Object.values(s.permissions).some((list) => list.length > 0))
+  const project = useProjectFilter()
   return (
     <header
       ref={ref}
@@ -262,7 +263,7 @@ export function Header({
         <button
           type="button"
           aria-label="New chat"
-          onClick={() => navigate('#/')}
+          onClick={() => navigate(newChatHash(project))}
           className="flex size-11 shrink-0 items-center justify-center rounded-full text-muted-foreground active:bg-accent"
         >
           <SquarePen className="size-[20px]" />

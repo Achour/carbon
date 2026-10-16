@@ -17,7 +17,8 @@ import type {
   ChatView,
   OlderMessages,
   PermissionDecision,
-  PermissionRequestPayload
+  PermissionRequestPayload,
+  UsageOverview
 } from '@shared/types'
 import * as api from './api'
 import { usePrefs } from './prefs'
@@ -68,6 +69,8 @@ interface RemoteState {
   home: string
   /** Each chat folder's branch, read only while the sidebar is detailed. */
   branches: Record<string, string | null>
+  /** The plan's headroom (`usage:overview`); null until the first read lands. */
+  usage: UsageOverview | null
   /** The sidebar drawer. */
   drawer: boolean
   open: OpenChat | null
@@ -90,6 +93,7 @@ interface RemoteState {
   setError(error: string | null): void
   setDrawer(open: boolean): void
   refreshBranches(): Promise<void>
+  refreshUsage(force?: boolean): Promise<void>
 }
 
 let conn: string | null = null
@@ -119,6 +123,7 @@ export const useRemote = create<RemoteState>((set, get) => {
         .then((icons) => set({ icons }))
         .catch(() => {})
       void get().refreshBranches()
+      void get().refreshUsage()
       // A queue only drains on a live "idle" event, and a phone that was
       // locked when the turn ended never heard one: send what is waiting
       // behind any chat the snapshot says has finished.
@@ -171,6 +176,8 @@ export const useRemote = create<RemoteState>((set, get) => {
           void drainQueue(ev.chatId)
           // A turn can have switched branch; the desktop rereads at the same moment.
           void get().refreshBranches()
+          // A turn just drew the plan down; main's cache throttles the read.
+          void get().refreshUsage()
         }
       },
       onDown: (closed) => {
@@ -217,6 +224,7 @@ export const useRemote = create<RemoteState>((set, get) => {
     icons: {},
     home: '',
     branches: {},
+    usage: null,
     drawer: false,
     open: null,
     queued: {},
@@ -350,6 +358,15 @@ export const useRemote = create<RemoteState>((set, get) => {
         set({ branches: await api.branches() })
       } catch {
         // A row without a branch falls back to its folder.
+      }
+    },
+
+    async refreshUsage(force = false) {
+      if (get().connection !== 'live') return
+      try {
+        set({ usage: await api.invoke<UsageOverview>('usage:overview', force || undefined) })
+      } catch {
+        // Keep the last good numbers: a stale percentage beats none.
       }
     }
   }

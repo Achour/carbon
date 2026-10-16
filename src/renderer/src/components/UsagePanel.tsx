@@ -1,11 +1,11 @@
 import * as React from 'react'
 import { DotSpinner } from '@/components/ui/dot-spinner'
 import { RefreshCw } from 'lucide-react'
-import type { ProviderUsage, UsageOverview } from '@shared/types'
+import type { ProviderUsage } from '@shared/types'
 import { PROVIDER_SHORT_LABELS } from '@shared/types'
 import { cn } from '@/lib/utils'
 import { useApp } from '@/store'
-import { UsageBar, USAGE_CRITICAL, USAGE_WARN } from '@/components/UsageBar'
+import { peakUtilization, UsageBar, UsageRing, usageTone } from '@/components/UsageBar'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { WithTooltip } from '@/components/ui/tooltip'
@@ -14,57 +14,6 @@ import { WithTooltip } from '@/components/ui/tooltip'
 // exposes no equivalent endpoint, so `usageInfo()` returns null and no Grok row
 // is ever built. The Usage *page* covers Grok in full — a different question,
 // answered from the session logs on disk.
-
-/** The most-used window across both providers — what the trigger reports. */
-function peakUtilization(
-  overview: UsageOverview | null
-): { pct: number; provider: ProviderUsage['provider'] } | null {
-  if (!overview) return null
-  let peak: { pct: number; provider: ProviderUsage['provider'] } | null = null
-  for (const p of [overview.claude, overview.codex]) {
-    if (!p.available) continue
-    for (const w of p.windows) {
-      if (w.utilization == null) continue
-      if (!peak || w.utilization > peak.pct) peak = { pct: w.utilization, provider: p.provider }
-    }
-  }
-  return peak
-}
-
-function toneFor(pct: number | null): string {
-  if (pct == null) return 'text-muted-foreground'
-  if (pct >= USAGE_CRITICAL) return 'text-destructive'
-  if (pct >= USAGE_WARN) return 'text-amber-500'
-  return 'text-muted-foreground'
-}
-
-/**
- * The trigger's whole point: the number is readable without opening anything.
- * Checking your headroom shouldn't require a click — by the time you'd think to
- * look, you're usually already against the limit.
- */
-function UsageRing({ pct }: { pct: number | null }): React.JSX.Element {
-  const r = 5.5
-  const circumference = 2 * Math.PI * r
-  const filled = ((pct ?? 0) / 100) * circumference
-  return (
-    <svg viewBox="0 0 16 16" className="size-4 shrink-0 -rotate-90" aria-hidden>
-      <circle cx="8" cy="8" r={r} fill="none" stroke="currentColor" strokeWidth="2" opacity={0.2} />
-      {pct != null && (
-        <circle
-          cx="8"
-          cy="8"
-          r={r}
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeDasharray={`${filled} ${circumference}`}
-        />
-      )}
-    </svg>
-  )
-}
 
 function ProviderSection({ usage }: { usage: ProviderUsage }): React.JSX.Element {
   return (
@@ -145,7 +94,7 @@ export function UsagePanel(): React.JSX.Element {
 
   const peak = peakUtilization(overview)
   const pct = peak?.pct ?? null
-  const tone = toneFor(pct)
+  const tone = usageTone(pct)
   const label =
     peak == null
       ? 'Usage'
