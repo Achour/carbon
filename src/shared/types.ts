@@ -1825,6 +1825,11 @@ export interface AppDefaults {
    */
   keepAwake?: boolean
   /**
+   * Settings → Chats → "Desktop buddy": a small bear floating over the desktop
+   * that reacts to your chats (`main/buddy.ts`, `docs/buddy.md`). Off unless set.
+   */
+  buddy?: boolean
+  /**
    * Settings → Chats → "Agents can delegate": whether sessions get the
    * `agents_*` tools (`docs/delegation.md`). On unless explicitly `false`, and
    * read at spawn, so a change lands on each chat's next session.
@@ -1843,7 +1848,36 @@ export interface DefaultsPatch {
   fixed?: boolean
   hiddenModels?: string[]
   keepAwake?: boolean
+  buddy?: boolean
   allowDelegation?: boolean
+}
+
+/**
+ * What the desktop buddy is doing, in order of precedence: a chat waiting on
+ * you, the greeting when the screen unlocks (`back`), the brief cheer for a
+ * chat that just finished (`done`), chats at work, and otherwise `idle` — or
+ * `sleep`, once idle long enough to nap. Computed in main (`main/buddy.ts`) so the buddy's window
+ * never sees the `chat:event` stream.
+ */
+export type BuddyMood = 'idle' | 'sleep' | 'working' | 'needs' | 'done' | 'back'
+
+export interface BuddyState {
+  mood: BuddyMood
+  /** The speech bubble; absent draws none. */
+  text?: string
+  /** Whether a click opens a chat rather than just bringing Carbon forward. */
+  hasChat?: boolean
+}
+
+/** `window.buddy` in the buddy's own window (`preload/buddy.ts`). */
+export interface BuddyBridge {
+  onState(cb: (state: BuddyState) => void): () => void
+  /** Opens the chat the buddy is talking about, else brings Carbon forward. */
+  click(): void
+  /** Moves the window by a pointer delta while dragging; `end` saves where it landed. */
+  drag(dx: number, dy: number, end?: boolean): void
+  /** Lets clicks through to the desktop wherever the bear isn't. */
+  passThrough(on: boolean): void
 }
 
 /** A live change to a chat's inference options. */

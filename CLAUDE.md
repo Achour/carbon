@@ -32,6 +32,9 @@ Dev utilities (env vars for `npm run dev`, used for UI iteration without a human
   main thread for the whole of the script and writes a `.cpuprofile` (open it in
   DevTools → Performance, or reduce it with a script). The Performance API says
   *when* a long task happened; this is how to learn what it was doing.
+- `AIGUI_BUDDY=idle,working:Title,needs,…` — shows the desktop buddy and steps
+  through those moods; `AIGUI_BUDDY_CAPTURE=/tmp/buddy.png` shoots each as
+  `buddy-1.png`, … (see `docs/buddy.md`).
 - `CARBON_CLAUDE_PATH` / `CARBON_CODEX_PATH` / `CARBON_GROK_PATH` /
   `CARBON_ANTIGRAVITY_PATH` — pin a provider's
   CLI to a specific binary, above the Settings → Providers value. Useful for testing
@@ -435,9 +438,13 @@ it guards**, and put new reasoning in that file rather than back in this one.
   authored or review, across repos, with summary, diff, merge and a chat on the
   PR's branch (`main/pulls.ts`, `PullRequests.tsx`, `lib/prDiff.ts`).
 - **`docs/themes.md`** — imported themes: Open VSX search and `.vsix`
-  reading (`main/themeMarket.ts`, `main/zip.ts`), the VS Code / T3 Code →
+  reading (`main/themeMarket.ts`, `main/zip.ts`), the VS Code →
   Carbon mapping (`shared/themeImport.ts`), and why an imported theme pins its
   appearance (`lib/themes.ts`, `ThemeImportDialog`).
+- **`docs/buddy.md`** — the desktop buddy: a bear in a floating panel window
+  that reacts to your chats (`main/buddy.ts`, `preload/buddy.ts`,
+  `buddy.html`, `src/buddy/`), its mood computed in main off `emit`, and
+  `AIGUI_BUDDY` for capturing each mood.
 - **`docs/sounds.md`** — the three generated alert cues (`lib/sounds.ts`).
 - **`docs/remote.md`** — Carbon from a phone: the server in main that relays
   an allowlist of IPC channels and pushes `ChatEvent`s as server-sent events

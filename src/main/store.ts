@@ -121,6 +121,8 @@ interface SettingsFile {
    */
   providers?: Partial<Record<Provider, ProviderCliConfig>>
   windowBounds?: { x?: number; y?: number; width: number; height: number }
+  /** Where the desktop buddy was last dropped (`buddy.ts`), its window's top-left. */
+  buddyPosition?: { x: number; y: number }
   /** Remote access (`remoteAccess.ts`). Absent until the user first opens it. */
   remote?: RemoteSettings
 }
@@ -2316,6 +2318,7 @@ export class Store {
     if (patch.hiddenModels !== undefined)
       defaults.hiddenModels = patch.hiddenModels.length ? patch.hiddenModels : undefined
     if (patch.keepAwake !== undefined) defaults.keepAwake = patch.keepAwake || undefined
+    if (patch.buddy !== undefined) defaults.buddy = patch.buddy || undefined
     // On by default, so only the `false` is worth writing down.
     if (patch.allowDelegation !== undefined)
       defaults.allowDelegation = patch.allowDelegation ? undefined : false
@@ -2391,6 +2394,15 @@ export class Store {
 
   setWindowBounds(bounds: NonNullable<SettingsFile['windowBounds']>): void {
     this.settings.windowBounds = bounds
+    this.writeSettings()
+  }
+
+  getBuddyPosition(): SettingsFile['buddyPosition'] {
+    return this.settings.buddyPosition
+  }
+
+  setBuddyPosition(position: NonNullable<SettingsFile['buddyPosition']>): void {
+    this.settings.buddyPosition = position
     this.writeSettings()
   }
 }

@@ -1490,6 +1490,7 @@ export function Settings(): React.JSX.Element {
   const sidebarDensity = useApp((s) => s.sidebarDensity)
   const setSidebarDensity = useApp((s) => s.setSidebarDensity)
   const keepAwake = useApp((s) => !!s.defaults?.keepAwake)
+  const buddy = useApp((s) => !!s.defaults?.buddy)
   const allowDelegation = useApp((s) => s.defaults?.allowDelegation !== false)
   const setDefaults = useApp((s) => s.setDefaults)
 
@@ -1660,6 +1661,12 @@ export function Settings(): React.JSX.Element {
                     description="Stop the Mac from idle-sleeping while an agent is working. The display can still turn off, and closing the lid still sleeps it."
                     checked={keepAwake}
                     onChange={(on) => void setDefaults({ keepAwake: on })}
+                  />
+                  <Toggle
+                    label="Desktop buddy"
+                    description="A small bear that floats over your desktop and keeps an eye on your chats: it types while an agent works, waves when one needs you, and cheers when one finishes. Click it to open that chat; drag it anywhere."
+                    checked={buddy}
+                    onChange={(on) => void setDefaults({ buddy: on })}
                   />
                   <Toggle
                     label="Agents can delegate"

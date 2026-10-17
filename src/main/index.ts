@@ -12,10 +12,12 @@ import {
 } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { forgetChat, noteJobs, noteStatus, setKeepAwake } from './keepAwake'
+import { Buddy } from './buddy'
 import { existsSync, writeFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type {
+  BuddyMood,
   ChatMeta,
   ScheduledTaskInput,
   DefaultsPatch,
@@ -133,6 +135,7 @@ let chatTerminals: ChatTerminalManager
 let preview: PreviewManager
 let canvas: CanvasManager
 let remote: RemoteAccess
+let buddy: Buddy
 
 // Native macOS vibrancy is created once in a stable active state. The renderer's
 // localStorage preference controls whether the window backing reveals it.
@@ -146,6 +149,7 @@ function emit(ev: ChatEvent): void {
   if (ev.type === 'status') {
     notifyOnStatus(ev.chatId, ev.status)
     noteStatus(ev.chatId, ev.status)
+    buddy?.noteStatus(ev.chatId, ev.status)
   } else if (ev.type === 'background-jobs') noteJobs(ev.chatId, ev.jobs.length)
 }
 
@@ -200,23 +204,34 @@ function notifyOnStatus(chatId: string, status: string): void {
  */
 function showChatNotification(chatId: string, title: string, body: string): void {
   const n = new Notification({ title, body })
-  n.on('click', () => {
-    if (!win) {
-      createWindow()
-      // The renderer opens a chat only once it has loaded its list. (Re-read:
-      // the compiler still has `win` narrowed to null from the check above.)
-      const fresh = win as BrowserWindow | null
-      fresh?.webContents.once('did-finish-load', () => {
-        setTimeout(() => win?.webContents.send('ui:open-chat', chatId), 1200)
-      })
-      return
-    }
-    if (win.isMinimized()) win.restore()
-    win.show()
-    win.focus()
-    win.webContents.send('ui:open-chat', chatId)
-  })
+  n.on('click', () => openChatFromOutside(chatId))
   n.show()
+}
+
+/**
+ * Brings Carbon forward on a chat from outside the window — a notification or
+ * the desktop buddy — creating the window first when it was closed (on macOS
+ * closing it leaves the app running). Without a chat, just brings it forward.
+ */
+function openChatFromOutside(chatId?: string): void {
+  if (!win) {
+    createWindow()
+    if (!chatId) return
+    // The renderer opens a chat only once it has loaded its list. (Re-read:
+    // the compiler still has `win` narrowed to null from the check above.)
+    const fresh = win as BrowserWindow | null
+    fresh?.webContents.once('did-finish-load', () => {
+      setTimeout(() => win?.webContents.send('ui:open-chat', chatId), 1200)
+    })
+    return
+  }
+  if (win.isMinimized()) win.restore()
+  win.show()
+  // `focus()` raises the window but not the app when another one is active,
+  // and the buddy is clicked from inside some other app.
+  app.focus({ steal: true })
+  win.focus()
+  if (chatId) win.webContents.send('ui:open-chat', chatId)
 }
 
 /** A scheduled run ended — said even with no window, unless the user is looking. */
@@ -736,12 +751,14 @@ function registerIpc(): void {
         store.deleteChat(chatId)
         lastStatus.delete(chatId)
         forgetChat(chatId)
+        buddy.forget(chatId)
         remote.forgetChat(chatId)
       }
       for (const sideId of store.sideChatIdsOf(id)) forget(sideId)
       store.deleteChat(id)
       lastStatus.delete(id)
       forgetChat(id)
+      buddy.forget(id)
       remote.forgetChat(id)
       return result
     }
@@ -1074,6 +1091,7 @@ function registerIpc(): void {
   ipcMain.handle('app:set-defaults', (_e, patch: DefaultsPatch) => {
     const defaults = store.setDefaults(patch)
     setKeepAwake(!!defaults.keepAwake)
+    buddy.setEnabled(!!defaults.buddy)
     return defaults
   })
   ipcMain.handle('providers:list', (_e, refresh?: boolean) => providerClis(refresh))
@@ -1406,7 +1424,15 @@ app.whenReady().then(() => {
   // with `electron-vite dev --inspect`, an e2e script drives the agent's
   // preview tools through the main inspector without a provider turn.
   if (!app.isPackaged) (globalThis as Record<string, unknown>).__carbonPreview = preview
-  manager = new ChatManager(store, emit, preview, canvas, forgetChat)
+  buddy = new Buddy({
+    store,
+    openChat: (chatId) => openChatFromOutside(chatId),
+    focusApp: () => openChatFromOutside()
+  })
+  manager = new ChatManager(store, emit, preview, canvas, (chatId) => {
+    forgetChat(chatId)
+    buddy.forget(chatId)
+  })
   preview.setAgentsHost(manager.agentsHost)
   manager.reconcileDelegations()
   preview.setScheduleHost(manager.scheduleHost)
@@ -1436,11 +1462,37 @@ app.whenReady().then(() => {
   setTimeout(() => scheduler.start(), 4000).unref?.()
   // Timers do not advance while the Mac sleeps; waking is when a missed run
   // is noticed, not up to a minute later.
-  powerMonitor.on('resume', () => scheduler.poke())
-  powerMonitor.on('unlock-screen', () => scheduler.poke())
+  powerMonitor.on('resume', () => {
+    scheduler.poke()
+    buddy.noteBack()
+  })
+  powerMonitor.on('unlock-screen', () => {
+    scheduler.poke()
+    buddy.noteBack()
+  })
+  powerMonitor.on('lock-screen', () => buddy.noteLocked())
+  // After the window, so the buddy never paints before the app it belongs to.
+  buddy.setEnabled(!!store.getDefaults().buddy)
+  // Dev utility: AIGUI_BUDDY=done,needs,… shows the buddy and steps through
+  // those moods (a mood may carry its bubble as `needs:Some text`);
+  // AIGUI_BUDDY_CAPTURE=/tmp/buddy.png shoots each as buddy-1.png, buddy-2.png, …
+  const buddyDemo = process.env.AIGUI_BUDDY
+  if (buddyDemo && !app.isPackaged) {
+    buddy.setEnabled(true)
+    const shot = process.env.AIGUI_BUDDY_CAPTURE
+    buddyDemo.split(',').forEach((entry, i) => {
+      const [mood, ...text] = entry.split(':')
+      setTimeout(() => {
+        buddy.pin({ mood: mood as BuddyMood, text: text.join(':') || undefined })
+        if (shot) setTimeout(() => buddy.capture(shot.replace(/\.png$/, `-${i + 1}.png`)), 1600)
+      }, 2500 + i * 2500)
+    })
+  }
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    // Not "no windows at all": the buddy is one, and with it showing a click
+    // on the Dock icon after closing the main window would open nothing.
+    if (!win) createWindow()
   })
 })
 
@@ -1465,6 +1517,7 @@ app.on('before-quit', (event) => {
     return
   }
   scheduler.stop()
+  buddy.dispose()
   manager.disposeAll()
   chatTerminals.disposeAll()
   terminals.disposeAll()

@@ -18,7 +18,17 @@ export default defineConfig({
     }
   },
   preload: {
-    plugins: [externalizeDepsPlugin()]
+    plugins: [externalizeDepsPlugin()],
+    build: {
+      rollupOptions: {
+        // `buddy` is the desktop buddy's own window (`main/buddy.ts`), which
+        // gets four calls rather than the whole `window.api`.
+        input: {
+          index: resolve('src/preload/index.ts'),
+          buddy: resolve('src/preload/buddy.ts')
+        }
+      }
+    }
   },
   renderer: {
     plugins: [react(), tailwindcss()],
@@ -36,7 +46,8 @@ export default defineConfig({
         // and ships inside out/renderer with no extra packaging step.
         input: {
           index: resolve('src/renderer/index.html'),
-          remote: resolve('src/renderer/remote.html')
+          remote: resolve('src/renderer/remote.html'),
+          buddy: resolve('src/renderer/buddy.html')
         }
       }
     }

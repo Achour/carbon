@@ -1,0 +1,495 @@
+/* The desktop buddy's window: transparent, 220×236, the bear at the bottom
+   and its speech bubble above. Moods are `data-mood` on #stage; a pat is the
+   transient `.petting`. See bear.ts for the parts. */
+
+:root {
+  --ink: #4a2620;
+  --fur: #ffffff;
+  --ear: #4a2620;
+  --cheek: #ffb8ba;
+  --bubble-bg: rgba(255, 255, 255, 0.96);
+  --bubble-fg: #1d1d1f;
+  --bubble-edge: rgba(0, 0, 0, 0.08);
+  --accent: #ff8a3d;
+  --heart: #ff6b8b;
+  --spark: #ffc93c;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bubble-bg: rgba(30, 30, 32, 0.94);
+    --bubble-fg: #f5f5f7;
+    --bubble-edge: rgba(255, 255, 255, 0.1);
+  }
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+  font: 500 12.5px/1.35 -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+}
+
+#stage {
+  position: relative;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+/* ── Speech bubble ─────────────────────────────────────────────── */
+
+#bubble {
+  position: absolute;
+  left: 50%;
+  bottom: 156px;
+  max-width: 196px;
+  padding: 7px 11px;
+  border-radius: 12px;
+  background: var(--bubble-bg);
+  color: var(--bubble-fg);
+  box-shadow:
+    0 0 0 1px var(--bubble-edge),
+    0 4px 14px rgba(0, 0, 0, 0.18);
+  transform: translateX(-50%);
+  transform-origin: 50% 100%;
+  animation: bubble-in 0.28s cubic-bezier(0.2, 1.4, 0.4, 1) both;
+  cursor: pointer;
+}
+#bubble[hidden] {
+  display: none;
+}
+#bubble::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -5px;
+  width: 10px;
+  height: 10px;
+  background: var(--bubble-bg);
+  box-shadow: 1px 1px 0 0 var(--bubble-edge);
+  transform: translateX(-50%) rotate(45deg);
+  border-radius: 0 0 2px 0;
+}
+#bubble-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+#stage[data-mood='needs'] #bubble {
+  box-shadow:
+    0 0 0 1.5px var(--accent),
+    0 4px 14px rgba(0, 0, 0, 0.18);
+}
+
+@keyframes bubble-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(6px) scale(0.85);
+  }
+}
+
+/* ── The bear ──────────────────────────────────────────────────── */
+
+#bear-hit {
+  width: 160px;
+  height: 160px;
+  cursor: grab;
+}
+#bear-hit.dragging {
+  cursor: grabbing;
+}
+#bear {
+  display: block;
+  width: 160px;
+  height: 160px;
+  overflow: visible;
+}
+
+#bear * {
+  transform-box: view-box;
+}
+.fur {
+  fill: var(--fur);
+  stroke: var(--ink);
+  stroke-width: 14;
+  stroke-linejoin: round;
+}
+.ear,
+.foot,
+.collar {
+  fill: var(--ear);
+  stroke: var(--ink);
+  stroke-width: 14;
+  stroke-linejoin: round;
+}
+.cheek {
+  fill: var(--cheek);
+}
+.eye {
+  fill: var(--ink);
+}
+.happy-eyes path,
+.sleep-eyes path,
+.mouth-line {
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 12;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.tongue {
+  fill: #f28b8f;
+}
+.shadow {
+  fill: rgba(0, 0, 0, 0.18);
+}
+.laptop-lid {
+  fill: #c9ccd3;
+  stroke: var(--ink);
+  stroke-width: 12;
+  stroke-linejoin: round;
+}
+.laptop-logo {
+  fill: #f2f3f5;
+}
+.laptop-base {
+  fill: #9fa3ab;
+  stroke: var(--ink);
+  stroke-width: 10;
+}
+.zzz text {
+  font: 800 72px/1 -apple-system, system-ui, sans-serif;
+  fill: #8fa8ff;
+  stroke: var(--ink);
+  stroke-width: 3;
+  opacity: 0;
+}
+.sparkles path {
+  fill: var(--spark);
+  stroke: var(--ink);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  opacity: 0;
+}
+.hearts path {
+  fill: var(--heart);
+  stroke: var(--ink);
+  stroke-width: 1.5;
+  opacity: 0;
+}
+.alert {
+  fill: var(--accent);
+  stroke: var(--ink);
+  stroke-width: 9;
+}
+
+/* What each mood shows. The default is idle: open eyes, small mouth. */
+.happy-eyes,
+.sleep-eyes,
+.mouth-open,
+.laptop,
+.zzz,
+.sparkles,
+.hearts,
+.alert,
+.arm-right {
+  display: none;
+}
+
+#stage[data-mood='working'] .laptop {
+  display: inline;
+}
+#stage[data-mood='working'] .arm {
+  display: none;
+}
+
+#stage[data-mood='needs'] .alert,
+#stage[data-mood='needs'] .arm-right,
+#stage[data-mood='back'] .arm-right {
+  display: inline;
+}
+#stage[data-mood='needs'] .arm-right-rest,
+#stage[data-mood='back'] .arm-right-rest {
+  display: none;
+}
+
+#stage[data-mood='done'] .open-eyes,
+#stage[data-mood='back'] .open-eyes,
+#stage.petting .open-eyes,
+#stage[data-mood='done'] .mouth-small,
+#stage[data-mood='back'] .mouth-small {
+  display: none;
+}
+#stage[data-mood='done'] .happy-eyes,
+#stage[data-mood='back'] .happy-eyes,
+#stage.petting .happy-eyes,
+#stage[data-mood='done'] .mouth-open,
+#stage[data-mood='back'] .mouth-open,
+#stage[data-mood='done'] .sparkles,
+#stage[data-mood='back'] .hearts,
+#stage.petting .hearts {
+  display: inline;
+}
+
+#stage[data-mood='sleep'] .open-eyes {
+  display: none;
+}
+#stage[data-mood='sleep'] .sleep-eyes,
+#stage[data-mood='sleep'] .zzz {
+  display: inline;
+}
+
+/* ── Motion ────────────────────────────────────────────────────── */
+
+.bear {
+  transform-origin: 290px 736px;
+  animation: breathe 3.2s ease-in-out infinite;
+}
+.open-eyes .eye {
+  transform-origin: 236px 314px;
+  animation: blink 4.6s infinite;
+}
+.head {
+  transform-origin: 290px 462px;
+}
+#bear-hit:hover .bear {
+  animation-duration: 1.6s;
+}
+#bear-hit:hover .head {
+  transform: rotate(-4deg);
+  transition: transform 0.25s ease;
+}
+
+#stage[data-mood='idle'] .head {
+  animation: peek 11s ease-in-out infinite;
+}
+
+#stage[data-mood='working'] .bear {
+  animation: bob 0.7s ease-in-out infinite;
+}
+#stage[data-mood='working'] .paw {
+  animation: type 0.32s ease-in-out infinite alternate;
+}
+#stage[data-mood='working'] .paw-right {
+  animation-delay: 0.16s;
+}
+
+#stage[data-mood='needs'] .bear {
+  animation: hop 1.1s ease-in-out infinite;
+}
+#stage[data-mood='needs'] .arm-right,
+#stage[data-mood='back'] .arm-right {
+  transform-origin: 462px 500px;
+  animation: wave 0.55s ease-in-out infinite alternate;
+}
+#stage[data-mood='needs'] .alert {
+  transform-origin: 612px 196px;
+  animation: nudge 0.9s ease-in-out infinite;
+}
+
+#stage[data-mood='done'] .bear {
+  animation:
+    jump 0.55s cubic-bezier(0.3, 0, 0.4, 1) 3,
+    breathe 3.2s ease-in-out 1.65s infinite;
+}
+#stage[data-mood='done'] .sparkles path {
+  transform-origin: center;
+  transform-box: fill-box;
+  animation: twinkle 1.1s ease-in-out infinite;
+}
+#stage[data-mood='done'] .sparkles path:nth-child(2) {
+  animation-delay: 0.35s;
+}
+#stage[data-mood='done'] .sparkles path:nth-child(3) {
+  animation-delay: 0.7s;
+}
+
+#stage[data-mood='back'] .hearts path,
+#stage.petting .hearts path {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: float-up 1.4s ease-out infinite;
+}
+#stage[data-mood='back'] .hearts path:nth-child(2),
+#stage.petting .hearts path:nth-child(2) {
+  animation-delay: 0.45s;
+}
+#stage.petting .bear {
+  animation: squish 0.5s ease-out;
+}
+
+#stage[data-mood='sleep'] .bear {
+  animation: breathe 4.8s ease-in-out infinite;
+}
+#stage[data-mood='sleep'] .head {
+  transform: rotate(6deg);
+}
+#stage[data-mood='sleep'] .zzz text {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: float-z 3s ease-out infinite;
+}
+#stage[data-mood='sleep'] .zzz text:nth-child(2) {
+  animation-delay: 1s;
+}
+#stage[data-mood='sleep'] .zzz text:nth-child(3) {
+  animation-delay: 2s;
+}
+
+@keyframes breathe {
+  0%,
+  100% {
+    transform: scale(1, 1);
+  }
+  50% {
+    transform: scale(1.012, 0.985);
+  }
+}
+@keyframes blink {
+  0%,
+  94%,
+  100% {
+    transform: scaleY(1);
+  }
+  96% {
+    transform: scaleY(0.08);
+  }
+}
+@keyframes peek {
+  0%,
+  70%,
+  100% {
+    transform: rotate(0);
+  }
+  76%,
+  86% {
+    transform: rotate(-7deg);
+  }
+}
+@keyframes bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-12px);
+  }
+}
+@keyframes type {
+  to {
+    transform: translateY(-18px);
+  }
+}
+@keyframes hop {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0) scale(1, 1);
+  }
+  70% {
+    transform: translateY(0) scale(1.05, 0.94);
+  }
+  82% {
+    transform: translateY(-48px) scale(0.97, 1.04);
+  }
+}
+@keyframes wave {
+  from {
+    transform: rotate(12deg);
+  }
+  to {
+    transform: rotate(-28deg);
+  }
+}
+@keyframes nudge {
+  0%,
+  100% {
+    transform: rotate(0) scale(1);
+  }
+  50% {
+    transform: rotate(10deg) scale(1.12);
+  }
+}
+@keyframes jump {
+  0%,
+  100% {
+    transform: translateY(0) scale(1, 1);
+  }
+  15% {
+    transform: translateY(0) scale(1.08, 0.9);
+  }
+  50% {
+    transform: translateY(-100px) scale(0.95, 1.06);
+  }
+  85% {
+    transform: translateY(0) scale(1.04, 0.96);
+  }
+}
+@keyframes twinkle {
+  0%,
+  100% {
+    opacity: 0;
+    transform: scale(0.4) rotate(0);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.1) rotate(25deg);
+  }
+}
+@keyframes float-up {
+  0% {
+    opacity: 0;
+    transform: translateY(6px) scale(0.6);
+  }
+  25% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-16px) scale(1);
+  }
+}
+/* float-up for the z's, which sit in the bear's 760-unit box unscaled. */
+@keyframes float-z {
+  0% {
+    opacity: 0;
+    transform: translateY(28px) scale(0.6);
+  }
+  25% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-76px) scale(1);
+  }
+}
+@keyframes squish {
+  30% {
+    transform: scale(1.1, 0.88);
+  }
+  60% {
+    transform: scale(0.96, 1.05);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #bear *,
+  #bubble {
+    animation: none !important;
+  }
+  .sparkles path,
+  .hearts path,
+  .zzz text {
+    opacity: 1;
+  }
+}
