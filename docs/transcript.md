@@ -337,6 +337,14 @@ acting. Inside, there is one outline, and the dock only rounds its own top
 corners and draws the divider: the root cannot `overflow: hidden`, since that
 would clip the slash and @ popovers that hang above it.
 
+**The open list floats; only the row is docked.** Expanding used to grow the
+list inside the composer's box, which raised the composer's top edge by the
+list's height and pushed the transcript up under the reader — then dropped it
+back on close, so peeking at the plan moved the very work being read. The row
+stays in the frame (the one-outline argument above is about the row), and the
+list opens as a popover above it, out of flow, the way the slash picker does:
+Escape or a click outside closes it.
+
 **A finished list is not state any more, so it stops living there.** "All done ·
 6/6" on top of the composer is a permanent row about a turn that ended, sitting
 in the one place on screen reserved for what happens next — and it had no way

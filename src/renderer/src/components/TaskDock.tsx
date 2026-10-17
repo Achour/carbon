@@ -29,16 +29,37 @@ const NO_TASKS: TaskItem[] = []
  *
  * Collapsed by default: what you want at a glance is how far along the plan is
  * and what is happening right now, which is the row itself, and the list is one
- * click away. Opening it is scoped to the current visit — `ChatView` is keyed by
- * chat id, so the dock remounts collapsed when you come back — which is the
- * right default for a box glued to the input: it never quietly eats half the
- * composer's room on a chat you only came back to type in.
+ * click away. **The open list floats above the composer** rather than growing
+ * inside it: grown in place, opening a six-task plan raised the composer's top
+ * edge by the list's height and shoved the transcript up under the reader's
+ * eye, then dropped it back on close. Floating, the row is the only thing the
+ * dock ever adds to the layout. Escape or a click outside closes it, as any
+ * popover does. Opening is scoped to the current visit — `ChatView` is keyed by
+ * chat id, so the dock remounts collapsed when you come back.
  */
 export function TaskDock({ chatId }: { chatId: string }): React.JSX.Element | null {
   // Keyed by chat, so a dock never draws another column's plan — nor the
   // previous chat's, since the entry is removed when its `ChatView` unmounts.
   const tasks = useTaskList((s) => s.byChat[chatId] ?? NO_TASKS)
   const [open, setOpen] = React.useState(false)
+  const rootRef = React.useRef<HTMLDivElement>(null)
+  const shown = open && tasks.length > 0
+
+  React.useEffect(() => {
+    if (!shown) return
+    const onPointerDown = (e: PointerEvent): void => {
+      if (!rootRef.current?.contains(e.target as Node)) setOpen(false)
+    }
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('pointerdown', onPointerDown, true)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown, true)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [shown])
 
   if (tasks.length === 0) return null
 
@@ -46,7 +67,7 @@ export function TaskDock({ chatId }: { chatId: string }): React.JSX.Element | nu
   const active = tasks.find((t) => t.status === 'in_progress')
 
   return (
-    <div data-task-dock className="border-b border-border">
+    <div ref={rootRef} data-task-dock className="relative border-b border-border">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
@@ -68,14 +89,14 @@ export function TaskDock({ chatId }: { chatId: string }): React.JSX.Element | nu
         <ChevronDown
           className={cn(
             'size-3.5 shrink-0 text-muted-foreground/60 transition-transform duration-200',
-            open && 'rotate-180'
+            !open && 'rotate-180'
           )}
         />
       </button>
       {open && (
-        // Capped and scrolled rather than allowed to grow: a twenty-task plan
-        // would otherwise push the input it is attached to off the screen.
-        <div className="max-h-[38vh] space-y-1.5 overflow-y-auto px-3.5 pb-2.5">
+        // Out of flow, so opening it moves nothing beneath it; capped and
+        // scrolled so a twenty-task plan cannot climb off the top of the window.
+        <div className="absolute inset-x-0 bottom-full z-30 mb-2 max-h-[38vh] space-y-1.5 overflow-y-auto rounded-xl border border-border bg-popover px-3.5 py-2.5 shadow-xl">
           {tasks.map((task) => (
             <div key={task.id} className="flex items-start gap-2.5 text-[13px] leading-snug">
               <span className="mt-0.5 shrink-0">
