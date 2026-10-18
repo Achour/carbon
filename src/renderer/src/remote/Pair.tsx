@@ -42,7 +42,7 @@ export function PairScreen({
   }, [initialCode, submit])
 
   return (
-    <div className="flex h-[var(--app-height,100dvh)] flex-col items-center justify-center px-8 pb-[12dvh] text-center">
+    <div className="flex h-[var(--kb-height,var(--app-height,100dvh))] flex-col items-center justify-center px-8 pb-[12dvh] text-center">
       <img src="/remote-icon.png" alt="" className="mb-6 size-16 rounded-[18px] shadow-md" />
       <h1 className="text-[24px] font-semibold tracking-tight">Connect to Carbon</h1>
       <p className="mt-2 max-w-[19rem] text-[15px] leading-snug text-muted-foreground">

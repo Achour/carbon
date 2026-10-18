@@ -39,6 +39,38 @@ function fitStandalone(): void {
 }
 fitStandalone()
 
+// With the keyboard up, the app is the visible area above it (`--kb-height`).
+// Left full height, the page is taller than what shows, and iOS scrolls the
+// whole of it up to reveal the composer, taking the header off the top. Sized
+// to the visual viewport there is nothing for it to scroll, so the header
+// stays and the composer sits on the keys, as in Messages.
+function followKeyboard(): void {
+  const vv = window.visualViewport
+  if (!vv) return
+  const root = document.documentElement.style
+  let full = window.innerHeight
+  const apply = (): void => {
+    if (vv.height > full) full = vv.height
+    const open = full - vv.height > 120
+    if (open) {
+      root.setProperty('--kb-height', `${Math.round(vv.height)}px`)
+      // What iOS already scrolled before the resize landed.
+      if (window.scrollY || vv.offsetTop) window.scrollTo(0, 0)
+    } else root.removeProperty('--kb-height')
+  }
+  vv.addEventListener('resize', apply)
+  vv.addEventListener('scroll', apply)
+  // A rotation changes what "no keyboard" measures.
+  window.addEventListener('orientationchange', () => {
+    full = 0
+    setTimeout(() => {
+      full = window.innerHeight
+      apply()
+    }, 300)
+  })
+}
+followKeyboard()
+
 /** The page reaches up under the status bar: a top safe-area inset is reported. */
 function underStatusBar(): boolean {
   const probe = document.createElement('div')

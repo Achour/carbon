@@ -69,7 +69,7 @@ export function App(): React.JSX.Element {
     if (paired) void useRemote.getState().openChat(openId)
   }, [paired, openId])
 
-  if (paired === null) return <div className="h-[var(--app-height,100dvh)]" />
+  if (paired === null) return <div className="h-[var(--kb-height,var(--app-height,100dvh))]" />
   if (!paired || connection === 'unpaired') {
     return <PairScreen initialCode={pairCode ?? ''} onPaired={() => location.reload()} />
   }
@@ -198,7 +198,7 @@ function Shell({ activeId, children }: { activeId: string | null; children: Reac
     // viewport a status bar shorter than the screen, which cut the composer
     // off at the bottom. The header is what is pinned (`Header`).
     <div
-      className="relative h-[var(--app-height,100dvh)] overflow-hidden"
+      className="relative h-[var(--kb-height,var(--app-height,100dvh))] overflow-hidden"
       onTouchStart={onTouchStart}
       onTouchMove={onTouchMove}
       onTouchEnd={onTouchEnd}

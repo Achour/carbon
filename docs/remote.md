@@ -191,6 +191,14 @@ the window open. The phone is one more window onto them.
   While its box is focused on a touch screen it drops the home-indicator
   padding (`safe-area-inset-bottom`, ~34pt) for a small margin: the keyboard
   covers the indicator, so that padding was only a gap above the keys.
+  **With the keyboard up, the app is the visible area above it**
+  (`followKeyboard`, `--kb-height` from `visualViewport`). Left full height,
+  the page was taller than what showed, and iOS scrolled all of it up to
+  reveal the composer, taking the header off the top. Sized to what is
+  visible there is nothing to scroll, and the transcript's own resize
+  observer keeps its bottom edge where it was (`ChatScreen`), so the last
+  lines stay above the composer. Verified as a Home Screen app in the
+  Simulator, opening, typing and closing the keyboard.
   The context ring reads the same `contextTokens` / `contextWindow` off the
   chat and opens the desktop's `ContextDetail` in a sheet, fed by the
   `context-usage` event the phone now keeps for its open chat. The permission

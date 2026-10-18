@@ -124,10 +124,17 @@ export function ChatScreen({ chatId }: { chatId: string }): React.JSX.Element {
     const el = scroller.current
     const col = column.current
     if (!el || !col) return
+    // The scroller itself resizes too, when the keyboard opens or closes:
+    // the bottom edge holds, so what was just above the composer still is.
+    let height = el.clientHeight
     const ro = new ResizeObserver(() => {
+      const delta = height - el.clientHeight
+      height = el.clientHeight
       if (pinned.current) el.scrollTop = el.scrollHeight
+      else if (delta) el.scrollTop += delta
     })
     ro.observe(col)
+    ro.observe(el)
     return () => ro.disconnect()
   }, [open !== null])
 
