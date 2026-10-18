@@ -1494,6 +1494,7 @@ export function Settings(): React.JSX.Element {
   const keepAwake = useApp((s) => !!s.defaults?.keepAwake)
   const buddy = useApp((s) => !!s.defaults?.buddy)
   const allowDelegation = useApp((s) => s.defaults?.allowDelegation !== false)
+  const resumeAfterRestart = useApp((s) => s.defaults?.resumeAfterRestart !== false)
   const setDefaults = useApp((s) => s.setDefaults)
 
   // Which section is open lives in the store: the sidebar's project menu and
@@ -1669,6 +1670,12 @@ export function Settings(): React.JSX.Element {
                     description="Stop the Mac from idle-sleeping while an agent is working. The display can still turn off, and closing the lid still sleeps it."
                     checked={keepAwake}
                     onChange={(on) => void setDefaults({ keepAwake: on })}
+                  />
+                  <Toggle
+                    label="Resume after restart"
+                    description="When Carbon quits while an agent is working — an update, a crash, ⌘Q — that agent continues where it left off the next time Carbon opens, if that is within an hour. Approvals it was waiting on are asked again."
+                    checked={resumeAfterRestart}
+                    onChange={(on) => void setDefaults({ resumeAfterRestart: on })}
                   />
                   <Toggle
                     label="Desktop buddy"

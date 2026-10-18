@@ -169,7 +169,7 @@ const SCHEMA_VERSION = 2
  * chat again, the cost of stealing too late is a chat that stays read-only for a
  * few seconds after a crash.
  */
-const LOCK_STALE_MS = 30_000
+export const LOCK_STALE_MS = 30_000
 const HEARTBEAT_MS = 10_000
 
 /**
@@ -916,6 +916,24 @@ export class Store {
       console.error('Failed to release chat locks:', err)
     }
     this.held.clear()
+  }
+
+  /**
+   * The record of turns to resume after a restart (`resumeTurns.ts`). Written
+   * without marking a backup due: its heartbeat writes every minute while a
+   * turn runs, and is not history worth a backup refresh.
+   */
+  readResume(key: string): string | null {
+    return this.kvGet(key)
+  }
+
+  writeResume(key: string, value: string): void {
+    if (this.closed) return
+    try {
+      this.db.prepare('INSERT INTO kv (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v').run(key, value)
+    } catch (err) {
+      console.error('Could not record running turns:', err)
+    }
   }
 
   private kvGet(key: string): string | null {
@@ -2325,6 +2343,8 @@ export class Store {
     // On by default, so only the `false` is worth writing down.
     if (patch.allowDelegation !== undefined)
       defaults.allowDelegation = patch.allowDelegation ? undefined : false
+    if (patch.resumeAfterRestart !== undefined)
+      defaults.resumeAfterRestart = patch.resumeAfterRestart ? undefined : false
     this.writeSettings()
     return defaults
   }

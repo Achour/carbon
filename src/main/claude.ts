@@ -3160,6 +3160,16 @@ function scheduledBrief(task: ScheduledTask): string {
   ].join(' ')
 }
 
+/**
+ * What a resumed turn tells the model. It opens with a sentence, as a delivery
+ * does — the label chip reads a leading `/` as a slash command.
+ */
+const RESUME_PROMPT =
+  'Carbon restarted while you were working, and your last turn was cut off mid-step. ' +
+  'Continue where you left off. Anything you had running in the background (a dev ' +
+  'server, a watcher, a long command) stopped with it, so check before relying on it, ' +
+  'and if you were waiting on an approval, ask again.'
+
 export class ChatManager {
   private sessions = new Map<string, AgentSession>()
   private static readonly MAX_IDLE_SESSIONS = 2
@@ -5121,6 +5131,31 @@ export class ChatManager {
    * them at its next settle. They are marked delivered only once a session
    * has taken the send; that is synchronous, so nothing can deliver twice.
    */
+  /**
+   * A turn cut off by the last quit, continued (`resumeTurns.ts`). It goes as a
+   * labelled send, the delivery's own shape: the model gets the instruction,
+   * the transcript a chip saying what happened. Only a chat that is a chat of
+   * the user's own is resumed. A delegate is settled by `reconcileDelegations`
+   * and its parent told, and a scheduled run is marked interrupted by the
+   * scheduler. A plan waiting for review is still waiting. One another
+   * Carbon is writing is that one's to resume. `locked` says only that: the
+   * last run's own lock outlives a crash until it goes stale, so the caller
+   * asks again once it has.
+   */
+  resumeAfterRestart(chatId: string): 'sent' | 'locked' | 'skipped' {
+    if (this.shuttingDown || this.sessions.get(chatId)?.idle === false) return 'skipped'
+    const meta = this.store.getMeta(chatId)
+    if (!meta || meta.archivedAt || (meta.ephemeral && !meta.sideOf) || meta.delegation || meta.scheduled) {
+      return 'skipped'
+    }
+    if (meta.surface === 'terminal') return 'skipped'
+    if (this.store.lockedElsewhere(chatId)) return 'locked'
+    const chat = this.store.getChat(chatId)
+    if (!chat || chat.pendingPlanReview) return 'skipped'
+    this.send(chatId, RESUME_PROMPT, undefined, 'Resumed after Carbon restarted')
+    return 'sent'
+  }
+
   private flushDeliveries(parentId: string): void {
     if (this.shuttingDown || this.deleting.has(parentId) || this.deliveryParked.has(parentId)) return
     if (!this.takesTurn(this.sessions.get(parentId))) return

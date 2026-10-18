@@ -246,6 +246,31 @@ approval does not count. A disposed session emits no final status, so
 without it a hand-off refused mid-turn kept the Mac up until quit. Fed from
 `emit` in `index.ts`, the one chokepoint for `status` and `background-jobs`.
 
+### Resume after restart (`src/main/resumeTurns.ts`)
+
+Settings → Chats → "Resume after restart" (`AppDefaults.resumeAfterRestart`,
+on unless `false`): a turn cut off by a quit, an upgrade or a crash continues
+on the next launch, as a labelled send ("Resumed after Carbon restarted") whose
+prompt tells the model what happened and that its background work stopped with
+it. **The record is written as turns start and end, not at quit**, fed from
+`emit` like keep-awake. A crash or a force-quit never reaches `before-quit`,
+and those are restarts too. A heartbeat stamps it, and a launch more than an
+hour later resumes nothing. Two things would erase or misdirect it:
+- **At quit, `freeze()` runs before `manager.disposeAll()`.** Disposing reports
+  every turn as ended and would wipe the very record the quit is meant to
+  leave.
+- **The key is per build** (`resume:app` / `resume:dev`). Dev and packaged
+  share one database, and a dev launch must never resume what the installed
+  app was running.
+
+`ChatManager.resumeAfterRestart` resumes only the user's own chats. Delegates
+are settled by `reconcileDelegations`, scheduled runs by the scheduler, a plan
+review is still waiting, and terminal chats have no turn. **A crashed run's own
+chat locks look live for `LOCK_STALE_MS`**, so a chat refused only for its lock
+is tried once more after that. Still locked then, it belongs to another running
+Carbon. Verified by killing a dev instance mid-turn and relaunching: the agent
+continued unprompted. Pinned in `test/resumeTurns.test.ts`.
+
 ### Grok Build (`src/main/grokAcp.ts`, `grok.ts`)
 
 The third provider is the one with **no SDK**, so the protocol itself is the

@@ -12,6 +12,7 @@ import {
 } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { forgetChat, noteJobs, noteStatus, setKeepAwake } from './keepAwake'
+import { ResumeTurns } from './resumeTurns'
 import { Buddy } from './buddy'
 import { existsSync, writeFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
@@ -90,7 +91,7 @@ import { scanLocalServers } from './localServers.ts'
 import { resolveFrame } from './previewSource.ts'
 import { configurePreviewSession } from './previewSession.ts'
 import { CanvasManager } from './canvas.ts'
-import { Store } from './store'
+import { LOCK_STALE_MS, Store } from './store'
 import { Scheduler } from './scheduler'
 import { TerminalManager } from './terminal'
 import { checkForUpdate, installedViaHomebrew } from './updates'
@@ -129,6 +130,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 let win: BrowserWindow | null = null
 let store: Store
 let manager: ChatManager
+/** Turns to resume after a restart (`resumeTurns.ts`); fed from `emit`. */
+let resumeTurns: ResumeTurns | null = null
 let scheduler: Scheduler
 let terminals: TerminalManager
 let chatTerminals: ChatTerminalManager
@@ -147,6 +150,7 @@ function emit(ev: ChatEvent): void {
   win?.webContents.send('chat:event', ev)
   remote?.observe(ev)
   if (ev.type === 'status') {
+    resumeTurns?.note(ev.chatId, ev.status)
     notifyOnStatus(ev.chatId, ev.status)
     noteStatus(ev.chatId, ev.status)
     buddy?.noteStatus(ev.chatId, ev.status)
@@ -756,6 +760,7 @@ function registerIpc(): void {
         forgetChat(chatId)
         buddy.forget(chatId)
         remote.forgetChat(chatId)
+        resumeTurns?.forget(chatId)
       }
       for (const sideId of store.sideChatIdsOf(id)) forget(sideId)
       store.deleteChat(id)
@@ -763,6 +768,7 @@ function registerIpc(): void {
       forgetChat(id)
       buddy.forget(id)
       remote.forgetChat(id)
+      resumeTurns?.forget(id)
       return result
     }
   )
@@ -1461,6 +1467,24 @@ app.whenReady().then(() => {
   void remote.restore()
   buildMenu()
   createWindow()
+  // Turns the last run left mid-step, taken before anything this run starts
+  // is recorded. Per build, so a dev launch never resumes what the installed
+  // app (sharing this database) was running. Resumed a few seconds in, after
+  // the window and the delegation reconcile, and only if the setting allows.
+  resumeTurns = new ResumeTurns(
+    { read: (k) => store.readResume(k), write: (k, v) => store.writeResume(k, v) },
+    app.isPackaged ? 'resume:app' : 'resume:dev'
+  )
+  const leftover = resumeTurns.takeLeftover()
+  // A chat refused for its lock is tried once more after locks go stale: a
+  // crashed run's own claims look live for that long, and only a lock still
+  // held then belongs to another running Carbon.
+  const resume = (ids: string[], retry: boolean): void => {
+    if (store.getDefaults().resumeAfterRestart === false) return
+    const locked = ids.filter((id) => manager.resumeAfterRestart(id) === 'locked')
+    if (locked.length && retry) setTimeout(() => resume(locked, false), LOCK_STALE_MS + 5000).unref?.()
+  }
+  if (leftover.length) setTimeout(() => resume(leftover, true), 3000).unref?.()
   // A few seconds in rather than at once: anything overdue fires on this first
   // tick, and a launch that also spawns its catch-up runs should paint first.
   setTimeout(() => scheduler.start(), 4000).unref?.()
@@ -1520,6 +1544,9 @@ app.on('before-quit', (event) => {
     })
     return
   }
+  // Before the sessions go: their teardown reports every turn as ended, which
+  // would erase the record of what to resume.
+  resumeTurns?.freeze()
   scheduler.stop()
   buddy.dispose()
   manager.disposeAll()

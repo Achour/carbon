@@ -1850,6 +1850,12 @@ export interface AppDefaults {
    * read at spawn, so a change lands on each chat's next session.
    */
   allowDelegation?: boolean
+  /**
+   * Settings → Chats → "Resume after restart": turns cut off by a quit, an
+   * upgrade or a crash continue on the next launch (`main/resumeTurns.ts`). On
+   * unless explicitly `false`.
+   */
+  resumeAfterRestart?: boolean
 }
 
 /** What Settings can write into `AppDefaults` directly. */
@@ -1865,6 +1871,7 @@ export interface DefaultsPatch {
   keepAwake?: boolean
   buddy?: boolean
   allowDelegation?: boolean
+  resumeAfterRestart?: boolean
 }
 
 /**
