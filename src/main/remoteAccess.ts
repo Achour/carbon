@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { readFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import {
   createServer,
   request as httpRequest,
@@ -13,7 +13,7 @@ import { connect, createServer as createNetServer, type Server as NetServer, typ
 import type { TLSSocket } from 'node:tls'
 import { homedir, hostname, networkInterfaces } from 'node:os'
 import type { Duplex } from 'node:stream'
-import { extname, join, normalize, sep } from 'node:path'
+import { basename, extname, join, normalize, sep } from 'node:path'
 import { gzipSync } from 'node:zlib'
 import type { IpcMain, IpcMainInvokeEvent } from 'electron'
 import { projectRoot } from '@shared/types'
@@ -73,6 +73,8 @@ const MAX_BODY = 25 * 1024 * 1024
 const MAX_BUFFERED = 8 * 1024 * 1024
 const HEARTBEAT_MS = 20_000
 const SEEN_PERSIST_MS = 5 * 60_000
+/** An uploaded file outlives the turn that read it by this much, then goes. */
+const UPLOAD_TTL_MS = 7 * 24 * 3600_000
 const COOKIE = 'carbon_device'
 /** A live certificate is re-asked for this often; Tailscale renews it well before expiry. */
 const CERT_REFRESH_MS = 12 * 3600_000
@@ -186,6 +188,8 @@ export interface RemoteHost {
   branches(cwds: string[]): Promise<Record<string, string | null>>
   /** The chat's last reply as plain text, for a notification's body. */
   lastReply(chatId: string): string | null
+  /** Where files the phone attaches are written (`userData/remote-uploads`). */
+  uploadDir: string
 }
 
 export class RemoteAccess {
@@ -407,6 +411,7 @@ export class RemoteAccess {
 
   private async start(): Promise<void> {
     if (this.server?.listening) return
+    void this.pruneUploads()
     const port = this.settings().port
     this.plain = this.withRoutes(createServer(this.handle))
     const server = createNetServer((socket) => this.dispatch(socket))
@@ -569,6 +574,7 @@ export class RemoteAccess {
         return json(res, 200, { publicKey: this.vapid().publicKey, subscribed: !!device.push })
       }
       if (path === '/api/invoke' && req.method === 'POST') return this.handleInvoke(req, res)
+      if (path === '/api/upload' && req.method === 'POST') return this.handleUpload(req, res)
       json(res, 404, { error: 'Not found' })
       return
     }
@@ -899,6 +905,41 @@ export class RemoteAccess {
     })
   }
 
+  /**
+   * A file the phone attached, written to the Mac so the agent can read it by
+   * path, the way a file dropped on the desktop composer is attached. The body
+   * is the file's bytes and `x-file-name` its name. Each upload gets a folder
+   * of its own, so two files of one name never collide and the name the agent
+   * sees is the one the user picked.
+   */
+  private async handleUpload(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const raw = decodeURIComponent(String(req.headers['x-file-name'] ?? ''))
+    // Only the last segment, and never a dotfile or `..`: the name picks a file
+    // inside this upload's folder, nothing else.
+    const name = basename(raw).replace(/^\.+/, '').replace(/[\u0000-\u001f]/g, '').slice(0, 120) || 'file'
+    const body = await readBody(req).catch(() => null)
+    if (!body) {
+      json(res, 413, { error: `${name} is over ${MAX_BODY / 1024 / 1024} MB.` })
+      return
+    }
+    const dir = join(this.host.uploadDir, randomUUID())
+    await mkdir(dir, { recursive: true })
+    const path = join(dir, name)
+    await writeFile(path, body)
+    json(res, 200, { path, name })
+  }
+
+  /** Uploads past `UPLOAD_TTL_MS`. Run at start; a missing folder is nothing to prune. */
+  private async pruneUploads(): Promise<void> {
+    const root = this.host.uploadDir
+    const now = Date.now()
+    for (const entry of await readdir(root).catch(() => [] as string[])) {
+      const dir = join(root, entry)
+      const info = await stat(dir).catch(() => null)
+      if (info && now - info.mtimeMs > UPLOAD_TTL_MS) await rm(dir, { recursive: true, force: true }).catch(() => {})
+    }
+  }
+
   private async handleInvoke(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const body = (await readJson(req)) as { channel?: unknown; args?: unknown }
     const channel = typeof body.channel === 'string' ? body.channel : ''
@@ -1071,7 +1112,16 @@ function json(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body))
 }
 
-function readJson(req: IncomingMessage): Promise<unknown> {
+async function readJson(req: IncomingMessage): Promise<unknown> {
+  const body = await readBody(req)
+  try {
+    return body.length ? JSON.parse(body.toString('utf8')) : {}
+  } catch {
+    return {}
+  }
+}
+
+function readBody(req: IncomingMessage): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = []
     let size = 0
@@ -1084,13 +1134,7 @@ function readJson(req: IncomingMessage): Promise<unknown> {
       }
       chunks.push(chunk)
     })
-    req.on('end', () => {
-      try {
-        resolve(chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {})
-      } catch {
-        resolve({})
-      }
-    })
+    req.on('end', () => resolve(Buffer.concat(chunks)))
     req.on('error', reject)
   })
 }

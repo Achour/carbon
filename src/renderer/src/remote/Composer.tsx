@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { ArrowUp, Paperclip, Square, X } from 'lucide-react'
+import { ArrowUp, FileText, Paperclip, Square, X } from 'lucide-react'
 import type { Attachment } from '@shared/types'
 import { PROVIDER_SHORT_LABELS, type Provider } from '@shared/types'
 import { randomId } from '@/lib/insecureContext'
@@ -7,6 +7,7 @@ import { cn } from '@/lib/utils'
 import { ContextDetail } from '@/components/ContextDetail'
 import { useRemote } from './state'
 import { Sheet } from './Sheet'
+import * as api from './api'
 
 /** Longest side of an attached photo. A phone camera's 12 MP is wasted on a model. */
 const MAX_SIDE = 2000
@@ -81,6 +82,26 @@ async function photoAttachment(file: File): Promise<Attachment> {
 }
 
 /**
+ * What a picked, pasted or dropped file becomes. A photo is shrunk and sent
+ * inline (`photoAttachment`); anything else is written to the Mac and attached
+ * by path, which is how the desktop attaches a dropped file — the agent reads
+ * it there.
+ */
+async function fileAttachment(file: File): Promise<Attachment> {
+  if (file.type.startsWith('image/')) return photoAttachment(file)
+  if (file.size > api.MAX_UPLOAD_BYTES) throw new Error(`${file.name || 'That file'} is over 25 MB`)
+  const { path, name } = await api.upload(file)
+  return { id: randomId(), kind: 'file', name, path }
+}
+
+/** Files on a paste or a drop: the list, or the items when only they carry them. */
+function filesOf(data: DataTransfer | null): File[] {
+  if (!data) return []
+  if (data.files.length) return [...data.files]
+  return [...data.items].filter((i) => i.kind === 'file').flatMap((i) => i.getAsFile() ?? [])
+}
+
+/**
  * The phone's composer, shaped like the desktop's: one card holding the text,
  * the photos, and a footer of controls — attach, the option chips (`tools`),
  * send. While a turn runs an empty composer offers Stop; anything typed is
@@ -114,6 +135,8 @@ export function Composer({
   const [text, setText] = React.useState('')
   const [attachments, setAttachments] = React.useState<Attachment[]>([])
   const [sending, setSending] = React.useState(false)
+  const [reading, setReading] = React.useState(0)
+  const [dragging, setDragging] = React.useState(false)
   const area = React.useRef<HTMLTextAreaElement>(null)
   const file = React.useRef<HTMLInputElement>(null)
   const send = useRemote((s) => s.send)
@@ -128,9 +151,23 @@ export function Composer({
     el.style.height = `${Math.min(el.scrollHeight, window.innerHeight / 3)}px`
   }, [text])
 
+  // From the attach button, a paste or a drop: each file lands as it is
+  // read, so one that fails says why without taking the others with it.
+  const addFiles = (files: File[]): void => {
+    for (const f of files) {
+      setReading((n) => n + 1)
+      fileAttachment(f)
+        .then((a) => setAttachments((prev) => [...prev, a]))
+        .catch((err) =>
+          setError(`Couldn't attach ${f.name || 'that file'}${err instanceof Error && err.message ? `: ${err.message}` : '.'}`)
+        )
+        .finally(() => setReading((n) => n - 1))
+    }
+  }
+
   const empty = !text.trim() && attachments.length === 0
   const submit = async (): Promise<void> => {
-    if (empty || sending) return
+    if (empty || sending || reading) return
     setSending(true)
     try {
       if (onSubmit) await onSubmit(text.trim(), attachments)
@@ -153,16 +190,46 @@ export function Composer({
         </div>
       ) : null}
       {above}
-      <div className="rounded-[22px] border border-border bg-card shadow-[0_1px_2px_rgb(0_0_0/0.04),0_4px_16px_rgb(0_0_0/0.06)] dark:shadow-none">
-        {attachments.length > 0 && (
+      <div
+        className={cn(
+          'rounded-[22px] border bg-card shadow-[0_1px_2px_rgb(0_0_0/0.04),0_4px_16px_rgb(0_0_0/0.06)] transition-colors dark:shadow-none',
+          dragging ? 'border-primary' : 'border-border'
+        )}
+        onDragOver={(e) => {
+          if (!e.dataTransfer.types.includes('Files')) return
+          e.preventDefault()
+          e.dataTransfer.dropEffect = 'copy'
+          setDragging(true)
+        }}
+        onDragLeave={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false)
+        }}
+        onDrop={(e) => {
+          const files = filesOf(e.dataTransfer)
+          setDragging(false)
+          if (!files.length) return
+          e.preventDefault()
+          addFiles(files)
+        }}
+      >
+        {(attachments.length > 0 || reading > 0) && (
           <div className="flex gap-2 overflow-x-auto px-3 pt-3">
             {attachments.map((a) => (
               <div key={a.id} className="relative size-16 shrink-0">
-                <img
-                  src={`data:${a.mediaType};base64,${a.data}`}
-                  alt={a.name}
-                  className="size-16 rounded-xl border border-border object-cover"
-                />
+                {a.kind === 'image' ? (
+                  <img
+                    src={`data:${a.mediaType};base64,${a.data}`}
+                    alt={a.name}
+                    className="size-16 rounded-xl border border-border object-cover"
+                  />
+                ) : (
+                  <div className="flex size-16 flex-col items-center justify-center gap-1 rounded-xl border border-border bg-muted px-1.5">
+                    <FileText className="size-5 shrink-0 text-muted-foreground" />
+                    <span className="w-full truncate text-center text-[10.5px] leading-tight text-muted-foreground">
+                      {a.name}
+                    </span>
+                  </div>
+                )}
                 <button
                   type="button"
                   aria-label="Remove"
@@ -173,6 +240,9 @@ export function Composer({
                 </button>
               </div>
             ))}
+            {Array.from({ length: reading }, (_, i) => (
+              <div key={`reading-${i}`} className="size-16 shrink-0 animate-pulse rounded-xl border border-border bg-muted" />
+            ))}
           </div>
         )}
         <textarea
@@ -182,12 +252,19 @@ export function Composer({
           autoFocus={autoFocus}
           placeholder={placeholder ?? (busy ? 'Queue a follow-up…' : 'Message')}
           onChange={(e) => setText(e.target.value)}
+          onPaste={(e) => {
+            // Text pastes as text; only a paste carrying files is taken over.
+            const files = filesOf(e.clipboardData)
+            if (!files.length) return
+            e.preventDefault()
+            addFiles(files)
+          }}
           className="block max-h-[33dvh] w-full resize-none bg-transparent px-4 pt-3 pb-1 text-[16px] leading-[1.45] outline-none placeholder:text-muted-foreground/70"
         />
         <div className="flex items-center gap-1 px-1.5 pb-1.5">
           <button
             type="button"
-            aria-label="Attach photo"
+            aria-label="Attach a photo or file"
             className="flex size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground active:bg-accent"
             onClick={() => file.current?.click()}
           >
@@ -196,17 +273,12 @@ export function Composer({
           <input
             ref={file}
             type="file"
-            accept="image/*"
             multiple
             hidden
             onChange={(e) => {
               const files = [...(e.target.files ?? [])]
               e.target.value = ''
-              void Promise.all(files.map(photoAttachment))
-                .then((list) => setAttachments((prev) => [...prev, ...list]))
-                .catch((err) =>
-                  setError(`Couldn't read that photo${err instanceof Error && err.message ? `: ${err.message}` : '.'}`)
-                )
+              addFiles(files)
             }}
           />
           {tools ?? <div className="flex-1" />}
@@ -224,7 +296,7 @@ export function Composer({
             <button
               type="button"
               aria-label="Send"
-              disabled={sending || empty}
+              disabled={sending || empty || reading > 0}
               className={cn(
                 'flex size-8 shrink-0 items-center justify-center rounded-full transition-[background-color,color,transform] duration-200 ease-out',
                 empty ? 'scale-90 bg-muted text-muted-foreground' : 'scale-100 bg-foreground text-background active:scale-90'

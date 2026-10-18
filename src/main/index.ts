@@ -1388,6 +1388,7 @@ app.whenReady().then(() => {
   remote = new RemoteAccess({
     store,
     rendererDir: join(__dirname, '../renderer'),
+    uploadDir: join(app.getPath('userData'), 'remote-uploads'),
     devServerUrl: process.env.ELECTRON_RENDERER_URL,
     // Only the window: the phone that created it already has the row.
     onChatCreated: (meta) =>

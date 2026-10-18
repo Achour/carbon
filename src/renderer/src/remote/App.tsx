@@ -247,7 +247,7 @@ export function Header({
       className={cn(
         'shrink-0 pt-[env(safe-area-inset-top)]',
         floating &&
-          'absolute inset-x-0 top-0 z-20 border-b bg-background/80 backdrop-blur-xl backdrop-saturate-150 transition-[border-color] duration-200',
+          'absolute inset-x-0 top-0 z-20 border-b bg-background/95 backdrop-blur-2xl backdrop-saturate-150 transition-[border-color] duration-200',
         floating && (scrolled ? 'border-border/70' : 'border-transparent')
       )}
     >

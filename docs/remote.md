@@ -193,6 +193,16 @@ the window open. The phone is one more window onto them.
   decode, and iOS Safari refuses one the size of a 48 MP photo, which failed
   every pick. A photo that still cannot be decoded is sent untouched when the
   model can read its type and it fits the API's size cap.
+- **Any file can be attached, by the button, a paste or a drop.** A photo is
+  shrunk and sent inline as above. Anything else goes to `POST /api/upload`,
+  which writes it to `userData/remote-uploads/<uuid>/<name>` and answers with
+  the path. The phone attaches it as a `file` attachment, the same shape a file
+  dropped on the desktop composer takes, so the agent reads it on the Mac by
+  path. The name is cut to its last segment and loses any leading dots, so a
+  hostile name lands inside its own folder and nowhere else. Uploads are
+  pruned after 7 days, when the server starts. The cap is the server's 25 MB
+  per request, checked on the phone first so the refusal says so. A paste is
+  taken over only when it carries files, so text still pastes as text.
 - **The phone has display settings of its own, and the desktop does not.**
   A gear in the sidebar's footer opens a sheet with text size, code size,
   color mode and palette (`remote/prefs.ts`, `remote/Settings.tsx`). They are
@@ -253,8 +263,9 @@ the window open. The phone is one more window onto them.
   effort, speed and search). Full-screen viewers (a canvas, a sub-agent) are
   pushed screens: in from the right, back by the chevron or a swipe from the
   left edge. The edge strip sits above the content because a canvas iframe
-  keeps every touch that lands on it. The chat's header floats translucent
-  over the transcript, measured so the scroller's top padding follows it when
+  keeps every touch that lands on it. The chat's header floats over the
+  transcript at 95% opacity. At 80%, white transcript text passing under it
+  bled through the blur as a smear around the title, worst in dark mode. It is measured so the scroller's top padding follows it when
   the connection strip appears. Its hairline shows once something is
   under it, and tapping the title scrolls to the top, the status-bar tap iOS
   only gives a page's own scroll. A round button jumps back to the latest

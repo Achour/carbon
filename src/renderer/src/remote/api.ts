@@ -91,6 +91,26 @@ export async function setPushSubscription(subscription: PushSubscriptionJSON | n
   await post('/api/push', { subscription })
 }
 
+/** The Mac's cap on one request, and so on one file sent from the phone. */
+export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+
+/** Write a file to the Mac, for the agent to read by the path this returns. */
+export async function upload(file: File): Promise<{ path: string; name: string }> {
+  const res = await fetch('/api/upload', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: {
+      'content-type': 'application/octet-stream',
+      'x-carbon-remote': '1',
+      'x-file-name': encodeURIComponent(file.name || 'file')
+    },
+    body: file
+  })
+  const data = (await res.json().catch(() => ({}))) as { error?: string; path?: string; name?: string }
+  if (!res.ok || !data.path) throw new RemoteError(data.error ?? `Upload failed (${res.status})`, res.status)
+  return { path: data.path, name: data.name ?? file.name }
+}
+
 /** Take chats off the home screen's Done: the ids given, or all of them. */
 export async function markSeen(chatIds?: string[]): Promise<void> {
   await post('/api/seen', chatIds ? { chatIds } : {})
