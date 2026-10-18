@@ -28,8 +28,15 @@ function readRoute(): Route {
   return { name: 'new', cwd: fresh ? decodeURIComponent(fresh[1]) : null }
 }
 
+/**
+ * Replaced, never pushed: the app keeps no history. iOS reads a swipe from the
+ * left edge as Back whenever there is history behind the page, and takes it
+ * before the drawer's own edge swipe sees a touch, so each chat opened was
+ * one more screen the drawer gesture would go back to instead of opening.
+ * Nothing here uses Back: navigation is the sidebar, as on the Mac.
+ */
 export function navigate(hash: string): void {
-  if (location.hash !== hash) location.hash = hash
+  if (location.hash !== hash) location.replace(hash)
 }
 
 export function App(): React.JSX.Element {

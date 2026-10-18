@@ -131,7 +131,11 @@ the window open. The phone is one more window onto them.
   activity, since the desktop's project order and custom names live in its
   window's `localStorage`, which main cannot read. The drawer follows the
   finger: a swipe from the left edge opens it, a swipe anywhere closes it, and on
-  release it settles by distance and speed. During a drag the transforms are
+  release it settles by distance and speed. Routes are *replaced*, never
+  pushed (`navigate`): iOS reads a left-edge swipe as Back whenever the page
+  has history behind it, and takes the touch before the drawer sees it, so
+  the swipe that should open the sidebar went to the previous chat. With no
+  history there is no Back to take, and the edge belongs to the drawer. During a drag the transforms are
   written straight to the elements, because a React render per touch-move would
   re-render the transcript every frame. `#/` is the desktop's home screen (a
   greeting, "What are we building?", the project chip and the composer).
