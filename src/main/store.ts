@@ -25,6 +25,7 @@ import type {
   PermissionModeId,
   Provider,
   ProviderCliConfig,
+  RemoteUnseen,
   ServiceTier
 } from '@shared/types'
 
@@ -139,6 +140,8 @@ export interface RemoteDeviceRecord {
   lastSeenAt?: number
   /** Its Web Push subscription, once the phone turned notifications on. */
   push?: { endpoint: string; p256dh: string; auth: string }
+  /** Turns that ended while it was not looking (`RemoteUnseen`), by chat. */
+  unseen?: Record<string, RemoteUnseen>
 }
 
 export interface RemoteSettings {

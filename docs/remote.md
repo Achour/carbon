@@ -381,6 +381,61 @@ an approval, the way the desktop does when its window is in the background.
   card away for good (`localStorage`); the bell stays. The card and the bell
   read one shared state (`usePush`), so turning it on in either updates both.
 
+### The home screen's board (`remote/board.ts`, `HomeBoard.tsx`)
+
+The phone is usually picked up to learn one thing: what happened while it was
+in a pocket. So while anything needs you, is working, or finished unseen,
+`#/` swaps the centred "What are we building?" for three sections — **Needs
+you**, **Working**, **Done** — with the greeting above and the composer still
+below. With nothing to show it is the plain screen again, and `#/new/<project>`
+(a new chat asked for by name) always is.
+
+- **A native app was considered and rejected.** On a free Apple account it
+  cannot receive push at all, it stops opening after 7 days, and a widget
+  without push cannot refresh when a turn ends. This web app already has push,
+  so the board went here.
+- **Done is kept by the Mac, per device, not by the page.** A backgrounded
+  phone hears nothing; only main saw the turn end. `maybePush`'s own moments
+  (a `turn` or `error` event) write a mark (`RemoteUnseen`: when, failed, and
+  the line the notification said) onto every paired device that was not
+  looking at the chat. That means every device, notifications on or not.
+  `RemoteDeviceRecord.unseen` persists it, so a Mac restart while you are out
+  keeps the list. It is written with `store.setRemote` rather than `save`,
+  which would redraw Settings at every turn's end. Delivery is the snapshot
+  (now per device) plus a named `unseen` SSE event carrying the whole map to
+  that device's streams.
+- **Reading it is what clears it.** `/api/watch` with the chat on screen
+  clears its mark, and that covers opening a chat, tapping a notification and
+  returning to the app on a chat. Returning to the app now re-sends `visible:
+  true`. Before, a live stream only resynced, so the server went on thinking a
+  phone back on a chat was hidden, and pushed about the chat being read. "Clear"
+  is `/api/seen`. Deleting a chat drops its marks (`forgetChat`).
+- **Each chat sits in one row, the most urgent.** Needs you > Working > Done.
+  A finished chat sent again is Working until it ends again, and keeps its
+  mark meanwhile. Rows are `listedChats`, so side chats, terminal chats and the
+  archive are not on it, and main skips marking what the phone will not list.
+  A Needs you row says what it is asking with the notification's own words
+  (`shared/promptLine.ts`). A Done row carries the reply's opening line. The
+  sidebar marks the same chats with a dot where the time would be.
+- **The icon badge is Needs you plus Done.** The page sets it whenever that
+  count moves (`useAppBadge`). The service worker sets it from each push, and
+  the Mac counts it there (`badgeFor`), because the worker knows no other
+  chat. A chat whose turn has just ended counts as done even if its idle
+  status has not landed yet. iOS only honours the badge for the Home Screen
+  app with notifications allowed.
+- **Known limit: a turn watched on the Mac still lands in Done.** Main knows
+  whether the window is focused, not which chat it shows. This matches push,
+  which also notifies regardless of the desktop. "Clear" is the answer after a
+  day at the desk.
+
+Verified against an isolated dev instance with a pre-paired device and real
+Haiku turns. A turn ending with the phone home was marked, carrying its reply.
+Opening the chat cleared the mark. A turn ending with the chat on screen left
+none. The same chat with the app hidden was marked again, and Clear emptied the
+list. The marks survived in `settings.json`. Headless Chrome drew the board at
+iPhone size, in both schemes, with all three sections. Not tested: the badge
+on a real iPhone.
+
 **Known limits.** The Mac has to be awake: "Keep computer awake" only holds
 while an agent works, and a closed lid still sleeps it. The first launch after
 turning this on may raise macOS's "accept incoming connections?" prompt, and an

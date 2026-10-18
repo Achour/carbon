@@ -1544,6 +1544,21 @@ export interface RemoteSnapshot {
   models: ModelOption[]
   codexConfigModel: string | null
   available: Provider[]
+  /** What finished while this phone was not looking, by chat (`RemoteUnseen`). */
+  unseen: Record<string, RemoteUnseen>
+}
+
+/**
+ * A turn that ended on a chat this phone did not have open on screen: the home
+ * screen's "Done" row, until the phone opens the chat. Kept per device in main,
+ * because a phone in a pocket hears nothing, and only main saw the turn end.
+ */
+export interface RemoteUnseen {
+  at: number
+  /** It ended on an error rather than a reply. */
+  failed?: boolean
+  /** The opening of its last reply, or the error: what the notification said. */
+  text?: string
 }
 
 // ---------- Canvas ----------

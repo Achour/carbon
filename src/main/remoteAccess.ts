@@ -17,6 +17,7 @@ import { extname, join, normalize, sep } from 'node:path'
 import { gzipSync } from 'node:zlib'
 import type { IpcMain, IpcMainInvokeEvent } from 'electron'
 import { projectRoot } from '@shared/types'
+import { promptLine } from '@shared/promptLine'
 import type {
   AppDefaults,
   ChatEvent,
@@ -26,7 +27,8 @@ import type {
   RemoteAccessPatch,
   RemoteAccessState,
   RemoteHttpsState,
-  RemoteSnapshot
+  RemoteSnapshot,
+  RemoteUnseen
 } from '@shared/types'
 import type { RemoteSettings, Store } from './store'
 import { fetchTailscaleCert } from './tailscaleCert'
@@ -161,6 +163,11 @@ interface PushMessage {
   chatId: string
   /** Replaces the chat's previous notification instead of stacking another. */
   tag: string
+  /**
+   * The app icon's count once this lands: what the phone's home screen lists
+   * under Needs you and Done. The worker cannot count it, so the Mac does.
+   */
+  badge: number
 }
 
 export interface RemoteHost {
@@ -256,6 +263,12 @@ export class RemoteAccess {
   forgetChat(chatId: string): void {
     this.statuses.delete(chatId)
     this.permissions.delete(chatId)
+    const s = this.settings()
+    const touched = s.devices.filter((d) => d.unseen && chatId in d.unseen)
+    if (!touched.length) return
+    for (const d of touched) delete d.unseen![chatId]
+    this.host.store.setRemote(s)
+    for (const d of touched) this.sendUnseen(d.id)
   }
 
   // ---------- Settings ----------
@@ -529,7 +542,7 @@ export class RemoteAccess {
         return
       }
       if (path === '/api/session') return json(res, 200, { ok: true, device: device.name })
-      if (path === '/api/snapshot') return json(res, 200, await this.snapshot())
+      if (path === '/api/snapshot') return json(res, 200, await this.snapshot(device))
       if (path === '/api/icons') return json(res, 200, await this.icons())
       if (path === '/api/branches') return json(res, 200, await this.branches())
       if (path === '/api/events') return this.handleEvents(res, device.id)
@@ -539,8 +552,17 @@ export class RemoteAccess {
         if (client && client.deviceId === device.id) {
           client.watch = body.chatId ?? null
           if (typeof body.visible === 'boolean') client.visible = body.visible
+          // Opening a chat, or coming back to the app on it, is what reading it means.
+          if (client.visible && client.watch) this.clearUnseen(device.id, [client.watch])
         }
         return json(res, 200, { ok: !!client })
+      }
+      if (path === '/api/seen' && req.method === 'POST') {
+        // The home screen's "Clear": everything it lists as Done, or the ids given.
+        const body = (await readJson(req)) as { chatIds?: unknown }
+        const ids = Array.isArray(body.chatIds) ? body.chatIds.filter((x): x is string => typeof x === 'string') : null
+        this.clearUnseen(device.id, ids)
+        return json(res, 200, { ok: true })
       }
       if (path === '/api/push') {
         if (req.method === 'POST') return this.handlePushSubscription(req, res, device.id)
@@ -648,7 +670,7 @@ export class RemoteAccess {
     res.end(JSON.stringify({ ok: true }))
   }
 
-  private async snapshot(): Promise<RemoteSnapshot> {
+  private async snapshot(device: RemoteSettings['devices'][number]): Promise<RemoteSnapshot> {
     const defaults: AppDefaults = this.host.store.getDefaults()
     // Side chats too, which `listChats` leaves out for the sidebar's sake: a
     // delegate's live state is read off its own chat (`AgentGroupCard`,
@@ -663,7 +685,8 @@ export class RemoteAccess {
       statuses: Object.fromEntries(this.statuses),
       permissions: Object.fromEntries(this.permissions),
       defaults,
-      ...(await this.host.models())
+      ...(await this.host.models()),
+      unseen: device.unseen ?? {}
     }
   }
 
@@ -757,9 +780,15 @@ export class RemoteAccess {
   private maybePush(ev: ChatEvent): void {
     if (!this.server?.listening) return
     let body: string | null = null
+    let ended: 'done' | 'failed' | null = null
     if (ev.type === 'message' && ev.message.role === 'event') {
-      if (ev.message.kind === 'turn') body = this.host.lastReply(ev.chatId) || 'Finished'
-      else if (ev.message.kind === 'error') body = `Failed: ${ev.message.text}`
+      if (ev.message.kind === 'turn') {
+        body = this.host.lastReply(ev.chatId) || 'Finished'
+        ended = 'done'
+      } else if (ev.message.kind === 'error') {
+        body = `Failed: ${ev.message.text}`
+        ended = 'failed'
+      }
     } else if (ev.type === 'permission-request') {
       body = promptLine(ev.request)
     }
@@ -767,17 +796,22 @@ export class RemoteAccess {
     const meta = this.host.store.getMeta(ev.chatId)
     // Nowhere to land: an ephemeral chat with no thread to open it in.
     if (!meta || (meta.ephemeral && !meta.sideOf)) return
+    if (ended && listed(meta)) {
+      this.markUnseen(ev.chatId, ended === 'failed', clip(body, 160))
+    }
     const s = this.settings()
     const targets = s.devices.filter((d) => d.push && !this.looking(d.id, ev.chatId))
     if (!targets.length) return
-    const message: PushMessage = {
-      title: clip(meta.title?.trim() || meta.scheduled?.taskName || 'Carbon', 80),
-      body: clip(body, 240),
-      chatId: ev.chatId,
-      tag: ev.chatId
-    }
     const keys = this.vapid()
     for (const d of targets) {
+      const message: PushMessage = {
+        title: clip(meta.title?.trim() || meta.scheduled?.taskName || 'Carbon', 80),
+        body: clip(body, 240),
+        chatId: ev.chatId,
+        tag: ev.chatId,
+        // The turn's own status may not have gone idle yet; it is done all the same.
+        badge: this.badgeFor(d, ended ? ev.chatId : null)
+      }
       void sendPush(d.push!, message, keys, { subject: PUSH_SUBJECT })
         .then((r) => {
           if (r.gone) this.dropSubscription(d.id, d.push!.endpoint)
@@ -785,6 +819,63 @@ export class RemoteAccess {
         })
         .catch((err) => console.warn(`[remote] push to ${d.name} failed:`, err))
     }
+  }
+
+  /**
+   * A turn ended on a chat a device was not looking at: it is listed as Done
+   * on that phone's home screen until the phone opens it. Every paired device,
+   * notifications or not — a phone without them still wants to know on opening
+   * the app. Written straight to the store rather than through `save`, which
+   * would redraw Settings at every turn's end.
+   */
+  private markUnseen(chatId: string, failed: boolean, text: string): void {
+    const s = this.settings()
+    const at = Date.now()
+    const touched = s.devices.filter((d) => !this.looking(d.id, chatId))
+    if (!touched.length) return
+    const mark: RemoteUnseen = failed ? { at, failed, text } : { at, text }
+    for (const d of touched) d.unseen = { ...d.unseen, [chatId]: mark }
+    this.host.store.setRemote(s)
+    for (const d of touched) this.sendUnseen(d.id)
+  }
+
+  /** `chatIds` null: all of them (the home screen's Clear). */
+  private clearUnseen(deviceId: string, chatIds: string[] | null): void {
+    const s = this.settings()
+    const d = s.devices.find((x) => x.id === deviceId)
+    if (!d?.unseen) return
+    const drop = chatIds ?? Object.keys(d.unseen)
+    if (!drop.some((id) => id in d.unseen!)) return
+    const next = { ...d.unseen }
+    for (const id of drop) delete next[id]
+    d.unseen = next
+    this.host.store.setRemote(s)
+    this.sendUnseen(deviceId)
+  }
+
+  /** The device's marks, whole, to each of its open streams. */
+  private sendUnseen(deviceId: string): void {
+    let data: string | null = null
+    for (const c of this.clients.values()) {
+      if (c.deviceId !== deviceId) continue
+      data ??= `event: unseen\ndata: ${JSON.stringify(this.settings().devices.find((d) => d.id === deviceId)?.unseen ?? {})}\n\n`
+      c.res.write(data)
+    }
+  }
+
+  /**
+   * The phone's own count, made here: chats waiting on an answer, plus chats
+   * marked unseen that are not working again. `finished` has just ended,
+   * whatever its status says yet.
+   */
+  private badgeFor(device: RemoteSettings['devices'][number], finished: string | null): number {
+    let n = 0
+    for (const c of this.host.store.listChats()) {
+      if (!listed(c)) continue
+      if (this.permissions.get(c.id)?.length) n++
+      else if (device.unseen?.[c.id] && (c.id === finished || (this.statuses.get(c.id) ?? 'idle') === 'idle')) n++
+    }
+    return n
   }
 
   /** The device has that chat open on screen right now. */
@@ -958,21 +1049,9 @@ function cookieFor(credential: string, secure: boolean): string {
   return `${COOKIE}=${encodeURIComponent(credential)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000${secure ? '; Secure' : ''}`
 }
 
-/** What a waiting prompt is asking, in a line. */
-function promptLine(r: PermissionRequestPayload): string {
-  if (r.toolName === 'ExitPlanMode') return 'A plan is ready for your review'
-  if (r.toolName === 'AskUserQuestion') return 'Has a question for you'
-  if (r.title?.trim()) return r.title.trim()
-  // The thing being approved, where the input says it plainly: the command,
-  // or the file. "Bash" alone gives the reader nothing to decide on.
-  const input = (r.input ?? {}) as Record<string, unknown>
-  const detail =
-    typeof input.command === 'string'
-      ? input.command
-      : typeof input.file_path === 'string'
-        ? input.file_path.split('/').pop()
-        : ''
-  return `Approve ${r.displayName || r.toolName}${detail ? `: ${detail}` : ''}`
+/** A row the phone lists — its `listedChats`, so the badge counts what it shows. */
+function listed(c: ChatMeta): boolean {
+  return !c.ephemeral && !c.sideOf && !c.archivedAt && c.surface !== 'terminal'
 }
 
 /** One line of at most `max` characters, cut on a word. */

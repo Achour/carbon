@@ -499,6 +499,7 @@ const ChatRow = React.memo(function ChatRow({
   const status = useRemote((s) => s.statuses[chat.id])
   const requests = useRemote((s) => s.permissions[chat.id])
   const activity = chatActivity(status, undefined, requests)
+  const mark = useRemote((s) => s.unseen[chat.id])
   return (
     <button
       type="button"
@@ -528,6 +529,8 @@ const ChatRow = React.memo(function ChatRow({
           <MessageCircleQuestion className="size-4 text-warning" aria-label={activity.label} />
         ) : activity.kind === 'working' ? (
           <DotSpinner className="text-primary" />
+        ) : mark ? (
+          <UnseenDot failed={mark.failed} />
         ) : (
           relativeTime(chat.updatedAt)
         )}
@@ -562,6 +565,7 @@ const DetailedRow = React.memo(function DetailedRow({
   // before the branch read lands.
   const branch = useRemote((s) => chat.worktree?.branch ?? s.branches[chat.cwd] ?? null)
   const activity = chatActivity(status, undefined, requests)
+  const mark = useRemote((s) => s.unseen[chat.id])
   const name = baseName(root)
   return (
     <button
@@ -581,6 +585,8 @@ const DetailedRow = React.memo(function DetailedRow({
             <MessageCircleQuestion className="size-4 text-warning" aria-label={activity.label} />
           ) : activity.kind === 'working' ? (
             <DotSpinner className="text-primary" />
+          ) : mark ? (
+            <UnseenDot failed={mark.failed} />
           ) : (
             relativeTime(chat.updatedAt)
           )}
@@ -608,3 +614,13 @@ const DetailedRow = React.memo(function DetailedRow({
     </button>
   )
 })
+
+/** Finished while this phone was not looking: the home screen lists it under Done. */
+function UnseenDot({ failed }: { failed?: boolean }): React.JSX.Element {
+  return (
+    <span
+      aria-label={failed ? 'Failed while you were away' : 'Finished while you were away'}
+      className={cn('mx-1 size-2 rounded-full', failed ? 'bg-destructive' : 'bg-primary')}
+    />
+  )
+}

@@ -12,12 +12,19 @@ import { usePush } from './push'
 import { OptionChips } from './OptionChips'
 import { useAllModels, type OptionValues } from './options'
 import { Sheet, SheetRow } from './Sheet'
+import { useBoard } from './board'
+import { HomeBoard } from './HomeBoard'
 
 /**
  * The home screen — the desktop's: a greeting, "What are we building?", the
  * project chip, and the composer with the same pickers the chat has. The
  * projects on offer are the Mac's recent folders, then every project a chat
  * already lives in — a phone has no folder picker that can see the Mac's disk.
+ *
+ * While anything needs you, is working, or finished unseen, the greeting
+ * makes way for the board (`HomeBoard`): on a phone, that is what the app was
+ * opened to find out. `#/new/<project>` is a new chat asked for by name, and
+ * stays the plain screen.
  */
 export function NewChatScreen({ initialCwd }: { initialCwd: string | null }): React.JSX.Element {
   const defaults = useRemote((s) => s.defaults)
@@ -73,20 +80,30 @@ export function NewChatScreen({ initialCwd }: { initialCwd: string | null }): Re
   const [picked, setPicked] = React.useState<Partial<OptionValues>>({})
   const values = seed ? { ...seed, ...picked } : null
   const name = selected ? baseName(selected) : ''
+  const board = useBoard()
+  const showBoard = !initialCwd && board.needs.length + board.working.length + board.done.length > 0
 
   return (
     <div className="flex h-full flex-col">
       <Header title={null} />
-      <div className="flex min-h-0 flex-1 flex-col justify-center px-6 pb-4">
-        <div className="mb-1 text-center text-[15px] font-medium text-muted-foreground">{greeting()}</div>
-        <h1 className="text-center text-[27px] font-semibold tracking-tight">What are we building?</h1>
-        {!selected && (
-          <p className="mt-4 text-center text-[14px] text-muted-foreground">
-            Open a project in Carbon on your Mac first; it will appear here.
-          </p>
-        )}
-        <NotifyCard />
-      </div>
+      {showBoard ? (
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pt-2 pb-4">
+          <h1 className="mb-4 px-1 text-[22px] font-semibold tracking-tight">{greeting()}</h1>
+          <HomeBoard board={board} />
+          <NotifyCard />
+        </div>
+      ) : (
+        <div className="flex min-h-0 flex-1 flex-col justify-center px-6 pb-4">
+          <div className="mb-1 text-center text-[15px] font-medium text-muted-foreground">{greeting()}</div>
+          <h1 className="text-center text-[27px] font-semibold tracking-tight">What are we building?</h1>
+          {!selected && (
+            <p className="mt-4 text-center text-[14px] text-muted-foreground">
+              Open a project in Carbon on your Mac first; it will appear here.
+            </p>
+          )}
+          <NotifyCard />
+        </div>
+      )}
       {selected && values && (
         <Composer
           placeholder={`Start working in ${name}…`}

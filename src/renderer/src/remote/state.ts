@@ -18,6 +18,7 @@ import type {
   OlderMessages,
   PermissionDecision,
   PermissionRequestPayload,
+  RemoteUnseen,
   UsageOverview,
   UsageReport
 } from '@shared/types'
@@ -60,6 +61,8 @@ interface RemoteState {
   chats: ChatMeta[]
   statuses: Record<string, ChatStatus>
   permissions: Record<string, PermissionRequestPayload[]>
+  /** Turns that ended while this phone was not looking — the home screen's Done (`board.ts`). */
+  unseen: Record<string, RemoteUnseen>
   defaults: AppDefaults | null
   /** The model picker's inputs — see `RemoteSnapshot.models`. */
   models: ModelOption[]
@@ -96,6 +99,8 @@ interface RemoteState {
     text: string,
     attachments?: Attachment[]
   ): Promise<string>
+  /** Take everything off the home screen's Done. */
+  clearDone(): Promise<void>
   setError(error: string | null): void
   setDrawer(open: boolean): void
   refreshBranches(): Promise<void>
@@ -117,6 +122,7 @@ export const useRemote = create<RemoteState>((set, get) => {
         chats: snap.chats,
         statuses: snap.statuses,
         permissions: snap.permissions,
+        unseen: snap.unseen ?? {},
         defaults: snap.defaults,
         models: snap.models ?? [],
         codexConfigModel: snap.codexConfigModel ?? null,
@@ -187,6 +193,7 @@ export const useRemote = create<RemoteState>((set, get) => {
           void get().refreshUsage()
         }
       },
+      onUnseen: (unseen) => set({ unseen }),
       onDown: (closed) => {
         conn = null
         // A revoked cookie is final. Anything else is the network: EventSource
@@ -224,6 +231,7 @@ export const useRemote = create<RemoteState>((set, get) => {
     chats: [],
     statuses: {},
     permissions: {},
+    unseen: {},
     defaults: null,
     models: [],
     codexConfigModel: null,
@@ -250,14 +258,23 @@ export const useRemote = create<RemoteState>((set, get) => {
         if (!visible() && conn) void api.watch(conn, get().open?.id ?? null, false).catch(() => {})
         if (document.visibilityState === 'visible' && get().connection !== 'unpaired') {
           if (get().connection !== 'live' || !conn) connect()
-          else void resync()
+          else {
+            // Back on screen: undo the hidden report, or the Mac goes on
+            // notifying about the chat being read, and marking it unseen.
+            void api.watch(conn, get().open?.id ?? null, true).catch(() => {})
+            void resync()
+          }
         }
       })
     },
 
     async openChat(id) {
       if (get().open?.id === id) return
-      set({ open: id ? { id, messages: [], hiddenBefore: 0, loading: true } : null })
+      // Off Done at once; the Mac clears its mark on the watch below and says so.
+      set((s) => ({
+        open: id ? { id, messages: [], hiddenBefore: 0, loading: true } : null,
+        ...(id && id in s.unseen ? { unseen: omit(s.unseen, id) } : {})
+      }))
       if (conn) void api.watch(conn, id, visible()).catch(() => {})
       if (id) {
         try {
@@ -352,6 +369,12 @@ export const useRemote = create<RemoteState>((set, get) => {
       return meta.id
     },
 
+    async clearDone() {
+      const before = get().unseen
+      set({ unseen: {} })
+      await api.markSeen().catch((err) => set({ error: message(err), unseen: before }))
+    },
+
     setError(error) {
       set({ error })
     },
@@ -402,6 +425,11 @@ export const useRemote = create<RemoteState>((set, get) => {
 usePrefs.subscribe((s, prev) => {
   if (s.sidebarDensity !== prev.sidebarDensity) void useRemote.getState().refreshBranches()
 })
+
+function omit<T>(record: Record<string, T>, key: string): Record<string, T> {
+  const { [key]: _drop, ...rest } = record
+  return rest
+}
 
 function message(err: unknown): string {
   return err instanceof Error ? err.message : String(err)

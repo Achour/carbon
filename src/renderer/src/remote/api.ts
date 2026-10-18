@@ -1,4 +1,4 @@
-import type { ChatEvent, RemoteSnapshot } from '@shared/types'
+import type { ChatEvent, RemoteSnapshot, RemoteUnseen } from '@shared/types'
 
 /**
  * The phone's half of the wire (`main/remoteAccess.ts` is the other).
@@ -91,9 +91,16 @@ export async function setPushSubscription(subscription: PushSubscriptionJSON | n
   await post('/api/push', { subscription })
 }
 
+/** Take chats off the home screen's Done: the ids given, or all of them. */
+export async function markSeen(chatIds?: string[]): Promise<void> {
+  await post('/api/seen', chatIds ? { chatIds } : {})
+}
+
 export interface EventHandlers {
   onHello(conn: string): void
   onEvent(ev: ChatEvent): void
+  /** This phone's marks, whole, whenever one is added or cleared. */
+  onUnseen(unseen: Record<string, RemoteUnseen>): void
   /** `closed`: the browser gave up on the stream and will not retry it. */
   onDown(closed: boolean): void
 }
@@ -105,6 +112,7 @@ export function connectEvents(h: EventHandlers): () => void {
     const { conn } = JSON.parse((e as MessageEvent<string>).data) as { conn: string }
     h.onHello(conn)
   })
+  es.addEventListener('unseen', (e) => h.onUnseen(JSON.parse((e as MessageEvent<string>).data) as Record<string, RemoteUnseen>))
   es.onmessage = (e) => h.onEvent(JSON.parse(e.data) as ChatEvent)
   es.onerror = () => h.onDown(es.readyState === EventSource.CLOSED)
   return () => es.close()

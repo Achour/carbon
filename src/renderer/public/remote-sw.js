@@ -17,14 +17,24 @@ self.addEventListener('push', (event) => {
     data = { body: event.data ? event.data.text() : '' }
   }
   event.waitUntil(
-    self.registration.showNotification(data.title || 'Carbon', {
-      body: data.body || '',
-      tag: data.tag,
-      data: { chatId: data.chatId || null },
-      icon: '/remote-icon.png'
-    })
+    Promise.all([
+      self.registration.showNotification(data.title || 'Carbon', {
+        body: data.body || '',
+        tag: data.tag,
+        data: { chatId: data.chatId || null },
+        icon: '/remote-icon.png'
+      }),
+      badge(data.badge)
+    ])
   )
 })
+
+// The icon's count: what the home screen lists under Needs you and Done. The
+// Mac counts it (`badgeFor`), since nothing here knows the other chats.
+function badge(n) {
+  if (typeof n !== 'number' || !self.navigator.setAppBadge) return Promise.resolve()
+  return (n > 0 ? self.navigator.setAppBadge(n) : self.navigator.clearAppBadge()).catch(() => {})
+}
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()

@@ -8,6 +8,7 @@ import { NewChatScreen } from './NewChat'
 import { PairScreen } from './Pair'
 import { UsageScreen } from './UsageScreen'
 import { newChatHash, Sidebar, useProjectFilter } from './Sidebar'
+import { useAppBadge } from './board'
 
 /**
  * Routes live in the hash — `#/` (a new chat), `#/c/<id>`, `#/new/<project>`,
@@ -101,6 +102,7 @@ const EASE = 'cubic-bezier(0.32, 0.72, 0, 1)'
 function Shell({ activeId, children }: { activeId: string | null; children: React.ReactNode }): React.JSX.Element {
   const open = useRemote((s) => s.drawer)
   const setDrawer = useRemote((s) => s.setDrawer)
+  useAppBadge()
   const drawer = React.useRef<HTMLDivElement>(null)
   const main = React.useRef<HTMLDivElement>(null)
   const scrim = React.useRef<HTMLDivElement>(null)
