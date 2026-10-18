@@ -74,6 +74,16 @@ const MAX_BODY = 25 * 1024 * 1024
 const MAX_BUFFERED = 8 * 1024 * 1024
 const HEARTBEAT_MS = 20_000
 const SEEN_PERSIST_MS = 5 * 60_000
+/** The images `/api/image` serves, by extension — what `LocalImage` draws. */
+const IMAGE_TYPES: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.bmp': 'image/bmp'
+}
+const MAX_IMAGE_BYTES = 20 * 1024 * 1024
 /** An uploaded file outlives the turn that read it by this much, then goes. */
 const UPLOAD_TTL_MS = 7 * 24 * 3600_000
 const COOKIE = 'carbon_device'
@@ -588,6 +598,7 @@ export class RemoteAccess {
       if (path === '/api/invoke' && req.method === 'POST') return this.handleInvoke(req, res)
       if (path === '/api/upload' && req.method === 'POST') return this.handleUpload(req, res)
       if (path === '/api/diff') return this.handleDiff(url, res)
+      if (path === '/api/image') return this.handleImage(url, res)
       json(res, 404, { error: 'Not found' })
       return
     }
@@ -968,6 +979,32 @@ export class RemoteAccess {
       if (status.startsWith('??')) diff = await gitDiff(cwd, { path: rel, staged: false, untracked: true })
     }
     json(res, 200, { diff: diff.startsWith('error:') ? '' : diff, path: rel })
+  }
+
+  /**
+   * An image the agent named by a path on the Mac (a screenshot it took, one
+   * it generated), for the phone's transcript to draw where the desktop's
+   * `LocalImage` reads it over IPC. Served only if it is an image, small
+   * enough, and **named in that chat's transcript**: a paired phone can see
+   * what the agent pointed at, never browse the disk by guessing paths. The
+   * transcript is the loaded window, where the image being drawn is.
+   */
+  private async handleImage(url: URL, res: ServerResponse): Promise<void> {
+    const view = this.host.store.viewChat(url.searchParams.get('chat') ?? '')
+    const asked = url.searchParams.get('path') ?? ''
+    if (!view || !asked) return json(res, 404, { error: 'Not found' })
+    const cwd = resolve(view.chat.cwd)
+    const file = resolve(cwd, asked)
+    const type = IMAGE_TYPES[extname(file).toLowerCase()]
+    if (!type) return json(res, 415, { error: 'Not an image' })
+    const text = JSON.stringify(view.chat.messages)
+    const named = [file, relative(cwd, file)].some((p) => p && text.includes(JSON.stringify(p).slice(1, -1)))
+    if (!named) return json(res, 403, { error: 'Not named in this chat' })
+    const info = await stat(file).catch(() => null)
+    if (!info?.isFile()) return json(res, 404, { error: 'Not found' })
+    if (info.size > MAX_IMAGE_BYTES) return json(res, 413, { error: 'Too large' })
+    const data = await readFile(file)
+    json(res, 200, { dataUri: `data:${type};base64,${data.toString('base64')}` })
   }
 
   /** Uploads past `UPLOAD_TTL_MS`. Run at start; a missing folder is nothing to prune. */

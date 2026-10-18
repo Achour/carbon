@@ -34,6 +34,16 @@ const bridge: Partial<Api> = {
   // Looked up to decide whether a path in a reply is a link; null draws it as
   // plain text, which is right on a device that cannot open it.
   statPath: () => Promise.resolve(null),
+  // An image the agent named by a path on the Mac (`LocalImage`, the
+  // lightbox): fetched for the open chat, which the Mac checks names it.
+  readFile: async (path) => {
+    const chat = useRemote.getState().open?.id
+    if (!chat) throw new Error('No chat open.')
+    const res = await fetch(`/api/image?${new URLSearchParams({ chat, path })}`, { credentials: 'same-origin' })
+    const data = (await res.json().catch(() => ({}))) as { dataUri?: string; error?: string }
+    if (!res.ok || !data.dataUri) throw new Error(data.error ?? `Carbon answered ${res.status}`)
+    return { kind: 'image', dataUri: data.dataUri }
+  },
   favicon: () => Promise.resolve(null),
   openExternal: (url: string) => {
     window.open(url, '_blank', 'noopener,noreferrer')

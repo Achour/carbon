@@ -276,6 +276,14 @@ the window open. The phone is one more window onto them.
   one can stop the list scrolling under the row. A hold that turns into a
   drag swallows the click its release would send, and a finger that moves
   before the hold fires is a scroll, not a hold.
+- **An image the agent names by a path on the Mac loads** (`/api/image`,
+  the phone bridge's `readFile`). The desktop's `LocalImage` reads such a
+  path over IPC, and on the phone `readFile` asks the Mac for the open chat.
+  The Mac serves it only if it is an image (by extension, at most 20 MB) and
+  the path, absolute or relative to the chat's folder, appears in that chat's
+  loaded transcript. A paired phone sees what the agent pointed at, and
+  cannot read the disk by guessing paths. The lightbox reads through the
+  same bridge.
 - **A launch draws what the phone last saw (`remote/cache.ts`).** It saves the
   chat list (and the Mac's name, home folder, defaults, models and project
   marks) at each resync and whenever the app goes to the background, and the
@@ -535,9 +543,9 @@ ad-hoc-signed build can raise it again after an update, because the signature
 it is keyed on changes. Two Carbons sharing `userData` (dev and packaged) share
 the setting, and the second to start reports the port as in use. Terminal chats,
 the file editor and the preview are not on the phone, and diffs only as a
-turn's changed files. Images the agent
-references by local path do not load, and path links read as plain text, since
-the phone cannot read the Mac's disk.
+turn's changed files. Path links read as
+plain text, since the phone cannot open the Mac's files. Images are the one
+exception, below.
 
 **Verification.** `test/remoteNet.test.ts` pins the address and credential
 logic, the Tailscale status and certificate parsing, and the notification
