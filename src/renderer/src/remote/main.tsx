@@ -24,18 +24,25 @@ function fitStandalone(): void {
   const standalone =
     (navigator as Navigator & { standalone?: boolean }).standalone === true ||
     window.matchMedia('(display-mode: standalone)').matches
-  if (!standalone || !underStatusBar()) return
+  if (!standalone) return
   const fit = (): void => {
     const landscape = window.matchMedia('(orientation: landscape)').matches
     const long = Math.max(screen.width, screen.height)
     const short = Math.min(screen.width, screen.height)
     const [w, h] = landscape ? [long, short] : [short, long]
     const root = document.documentElement.style
-    if (window.innerWidth === w && h > window.innerHeight) root.setProperty('--app-height', `${h}px`)
-    else root.removeProperty('--app-height')
+    // Asked each time, not once: at the very start iOS can report no inset
+    // yet, which skipped this and left the bar's height empty at the bottom.
+    if (underStatusBar() && window.innerWidth === w && h > window.innerHeight) {
+      root.setProperty('--app-height', `${h}px`)
+    } else root.removeProperty('--app-height')
   }
   fit()
+  requestAnimationFrame(fit)
+  setTimeout(fit, 300)
+  window.addEventListener('load', fit)
   window.addEventListener('resize', fit)
+  window.addEventListener('orientationchange', () => setTimeout(fit, 300))
 }
 fitStandalone()
 
