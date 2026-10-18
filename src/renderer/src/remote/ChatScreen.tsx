@@ -156,7 +156,7 @@ export function ChatScreen({ chatId }: { chatId: string }): React.JSX.Element {
         ref={scroller}
         onScroll={onScroll}
         // The header floats over the top, measured, so the first line and
-        // the earlier-messages hint start below it rather than under it.
+        // the earlier-messages hint start below it rather than under the blur.
         style={{ paddingTop: headerHeight + 12 }}
         className="h-full overflow-y-auto overscroll-contain px-6 pb-6"
       >
@@ -205,7 +205,7 @@ export function ChatScreen({ chatId }: { chatId: string }): React.JSX.Element {
         tabIndex={awayFromEnd ? 0 : -1}
         onClick={toEnd}
         className={cn(
-          'absolute bottom-3 left-1/2 z-10 flex size-10 -translate-x-1/2 items-center justify-center rounded-full border border-border bg-popover text-foreground shadow-lg transition-[opacity,transform] duration-200 active:scale-90',
+          'absolute bottom-3 left-1/2 z-10 flex size-10 -translate-x-1/2 items-center justify-center rounded-full border border-border bg-popover/90 text-foreground shadow-lg backdrop-blur-md transition-[opacity,transform] duration-200 active:scale-90',
           awayFromEnd ? 'opacity-100' : 'pointer-events-none translate-y-2 scale-90 opacity-0'
         )}
       >

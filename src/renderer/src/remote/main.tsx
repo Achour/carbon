@@ -13,16 +13,18 @@ import './remote.css'
 // sizes. `remote.html` has already painted the first frame in the right one.
 installPrefs()
 
-// A Home Screen app draws under its translucent status bar, yet iOS still
-// reports `100dvh` as the screen minus that bar, which left a strip the bar's
-// height empty at the bottom. Running full screen, the app's height is the
-// screen's own, so measure that; anywhere else (a Safari tab, an iPad window
-// that is not full width) `--app-height` stays unset and `100dvh` answers.
+// A Home Screen app added while the page asked for a translucent status bar
+// (`remote.html`, before it asked for the default one) still draws under that
+// bar, yet iOS reports `100dvh` as the screen minus it, which left a strip the
+// bar's height empty at the bottom. There the app's height is the screen's
+// own, so measure that. An icon added since starts below the bar, where
+// `100dvh` is right, and so does everywhere else (a Safari tab, an iPad window
+// that is not full width): `--app-height` stays unset.
 function fitStandalone(): void {
   const standalone =
     (navigator as Navigator & { standalone?: boolean }).standalone === true ||
     window.matchMedia('(display-mode: standalone)').matches
-  if (!standalone) return
+  if (!standalone || !underStatusBar()) return
   const fit = (): void => {
     const landscape = window.matchMedia('(orientation: landscape)').matches
     const long = Math.max(screen.width, screen.height)
@@ -36,6 +38,16 @@ function fitStandalone(): void {
   window.addEventListener('resize', fit)
 }
 fitStandalone()
+
+/** The page reaches up under the status bar: a top safe-area inset is reported. */
+function underStatusBar(): boolean {
+  const probe = document.createElement('div')
+  probe.style.cssText = 'position:fixed;top:0;visibility:hidden;padding-top:env(safe-area-inset-top)'
+  document.body.appendChild(probe)
+  const inset = parseFloat(getComputedStyle(probe).paddingTop) || 0
+  probe.remove()
+  return inset > 0
+}
 
 // Before the first render: the transcript is the desktop's components.
 installDesktopBridge()

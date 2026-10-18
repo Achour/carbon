@@ -228,9 +228,18 @@ function Shell({ activeId, children }: { activeId: string | null; children: Reac
 /**
  * The bar every screen wears: the sidebar, a title, a new chat.
  *
- * `floating` lays it over the screen's scroller, solid: a `backdrop-filter`
- * here made iOS draw the bar's own title and icons soft, not only what was
- * under it. The hairline appears only once something is under it. Tapping the title is the
+ * `floating` lays it over the screen's scroller; the hairline appears only
+ * once something is under it.
+ *
+ * Always `position: fixed` and opaque, for iOS rather than for layout: in
+ * flow, a spacer the bar's measured height holds its place. iOS lays its own
+ * progressive blur over the top of a Home Screen web app, above the page, and
+ * this bar sat in it. Two things turn it off, and both are needed, measured
+ * in the Simulator as a Home Screen app: the default status bar
+ * (`remote.html`), so the page starts below it, and an opaque bar fixed to
+ * the top. `sticky` does not count where nothing scrolls around it, and
+ * translucent with a blur it is sharp but shows a seam against the status
+ * bar. Tapping the title is the
  * status-bar tap iOS gives a page's own scroll and not an inner scroller's.
  */
 export function Header({
@@ -251,21 +260,27 @@ export function Header({
   const setDrawer = useRemote((s) => s.setDrawer)
   const waiting = useRemote((s) => Object.values(s.permissions).some((list) => list.length > 0))
   const project = useProjectFilter()
+  const own = React.useRef<HTMLElement | null>(null)
+  const [height, setHeight] = React.useState(0)
+  React.useLayoutEffect(() => {
+    const el = own.current
+    if (floating || !el) return
+    const ro = new ResizeObserver(() => setHeight(el.offsetHeight))
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [floating])
+  const setRef = (el: HTMLElement | null): void => {
+    own.current = el
+    if (typeof ref === 'function') ref(el)
+    else if (ref) (ref as React.RefObject<HTMLElement | null>).current = el
+  }
   return (
-    // Pinned (`fixed` floating, `sticky` in flow), full width and opaque, for
-    // iOS rather than for layout. iOS lays a progressive blur over the top
-    // ~40pt of a Home Screen web app, above the page, which drew this title
-    // soft, and skips it only when what sits at the top edge is inside a fixed
-    // or sticky box spanning the viewport's width, with a background of its
-    // own, and not much taller than the viewport. The whole shell, fixed, was
-    // too tall to count, so the box is this bar.
+    <>
     <header
-      ref={ref}
+      ref={setRef}
       className={cn(
-        'shrink-0 bg-background pt-[env(safe-area-inset-top)]',
-        floating
-          ? 'fixed inset-x-0 top-0 z-20 border-b transition-[border-color] duration-200'
-          : 'sticky top-0 z-20',
+        'fixed inset-x-0 top-0 z-20 bg-background pt-[env(safe-area-inset-top)]',
+        floating && 'border-b transition-[border-color] duration-200',
         floating && (scrolled ? 'border-border/70' : 'border-transparent')
       )}
     >
@@ -300,6 +315,8 @@ export function Header({
       </div>
       <ConnectionStrip />
     </header>
+    {!floating && <div aria-hidden className="shrink-0" style={{ height }} />}
+    </>
   )
 }
 

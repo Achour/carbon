@@ -286,22 +286,22 @@ the window open. The phone is one more window onto them.
   pushed screens: in from the right, back by the chevron or a swipe from the
   left edge. The edge strip sits above the content because a canvas iframe
   keeps every touch that lands on it. The chat's header floats over the
-  transcript as a solid bar. **The soft title was not the bar's blur.** iOS
-  26 lays its own progressive blur over the top ~40pt of a Home Screen web
-  app, above the page. It never shows in a Safari tab, which is why the
-  Simulator drew the title sharp. Removing the bar's `backdrop-filter` (the
-  jump-to-latest button's too) changed nothing. WebKit skips that edge when
-  what sits there is inside a fixed or sticky box spanning the viewport's
-  width, with a background of its own and not much taller than the viewport
-  (about 105%). Making the whole shell `position: fixed` failed on both
-  counts. It was the screen's height, taller than the viewport iOS reports,
-  so the title stayed soft. And iOS clips fixed content to that shorter
-  viewport, which cut the composer off at the bottom. So the shell is a
-  `relative` box again, and the *header* is the pinned box: `fixed` when it
-  floats over the transcript, `sticky` in flow, `bg-background` either way.
-  This is the shape of a sticky site header, which a Home Screen app on the
-  same phone draws sharp. Unconfirmed on a device when written. The bar was
-  left solid rather than made translucent again. It is measured so the scroller's top padding follows it when
+  transcript, opaque and `position: fixed` (every screen's header is, with a
+  spacer holding its place in flow). **That is for iOS, not for layout.** iOS
+  lays its own progressive blur over the top of a Home Screen web app, above
+  the page, and the title sat in it, soft. It never shows in a Safari tab.
+  Three releases guessed at it (no `backdrop-filter`, a fixed shell, a pinned
+  header) and none held. It was settled in the Simulator, as a Home Screen app
+  driven with `idb`. Two things are needed together. First, the default
+  status bar (`remote.html`), so the page starts below the bar, out of the
+  band. `black-translucent` put the header under it, and nothing on the page
+  turned the blur off there. Second, an opaque bar `fixed` to the top: an
+  absolutely placed header was blurred even with the default bar, and so was
+  a `sticky` one where nothing scrolls around it. A translucent fixed bar is
+  sharp too, but shows a seam against the status bar. iOS reads the status bar
+  style when the icon is added, so an icon added before keeps the old bar and
+  the blur until it is removed and added again. `fitStandalone` keeps such an
+  icon's height right meanwhile (`underStatusBar`). It is measured so the scroller's top padding follows it when
   the connection strip appears. Its hairline shows once something is
   under it, and tapping the title scrolls to the top, the status-bar tap iOS
   only gives a page's own scroll. A round button jumps back to the latest

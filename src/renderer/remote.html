@@ -11,7 +11,13 @@
     />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <!-- `default`, not `black-translucent`: drawing under the status bar puts
+         the page's top in the band where iOS lays its own progressive blur
+         over a Home Screen app, and the chat's title went soft in it. With
+         the default bar the page starts below it, out of that band. iOS
+         reads this when the icon is added, so an older icon keeps its
+         translucent bar until it is added again (`fitStandalone`). -->
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="Carbon" />
     <meta name="color-scheme" content="light dark" />
     <meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)" />
