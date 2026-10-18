@@ -1,11 +1,11 @@
 import * as React from 'react'
-import { ArrowUp, FileText, Paperclip, Square, X } from 'lucide-react'
+import { ArrowUp, Clock, FileText, Paperclip, Square, X } from 'lucide-react'
 import type { Attachment } from '@shared/types'
 import { PROVIDER_SHORT_LABELS, type Provider } from '@shared/types'
 import { randomId } from '@/lib/insecureContext'
 import { cn } from '@/lib/utils'
 import { ContextDetail } from '@/components/ContextDetail'
-import { useRemote } from './state'
+import { useRemote, type QueuedMessage } from './state'
 import { Sheet } from './Sheet'
 import * as api from './api'
 
@@ -101,16 +101,18 @@ function filesOf(data: DataTransfer | null): File[] {
   return [...data.items].filter((i) => i.kind === 'file').flatMap((i) => i.getAsFile() ?? [])
 }
 
+const NO_QUEUE: QueuedMessage[] = []
+
 /**
  * The phone's composer, shaped like the desktop's: one card holding the text,
  * the photos, and a footer of controls — attach, the option chips (`tools`),
  * send. While a turn runs an empty composer offers Stop; anything typed is
- * queued behind the turn instead.
+ * queued behind the turn instead, and listed above the card with Send now,
+ * which interrupts the turn for it, the way the desktop's queue does.
  */
 export function Composer({
   chatId,
   busy,
-  queued,
   placeholder,
   tools,
   above,
@@ -120,7 +122,6 @@ export function Composer({
 }: {
   chatId?: string
   busy?: boolean
-  queued?: number
   placeholder?: string
   /** The option chips, drawn in the footer between attach and send. */
   tools?: React.ReactNode
@@ -142,6 +143,9 @@ export function Composer({
   const send = useRemote((s) => s.send)
   const interrupt = useRemote((s) => s.interrupt)
   const setError = useRemote((s) => s.setError)
+  const queued = useRemote((s) => (chatId ? s.queued[chatId] : undefined)) ?? NO_QUEUE
+  const sendQueuedNow = useRemote((s) => s.sendQueuedNow)
+  const removeQueued = useRemote((s) => s.removeQueued)
 
   // Grow with the text, up to a third of the screen.
   React.useLayoutEffect(() => {
@@ -184,11 +188,36 @@ export function Composer({
 
   return (
     <div className="shrink-0 px-3 pt-1 pb-[max(env(safe-area-inset-bottom),10px)]">
-      {queued ? (
-        <div className="px-2 pb-1.5 text-[13px] text-muted-foreground">
-          {queued === 1 ? '1 message' : `${queued} messages`} queued — sends when this turn ends
+      {chatId && queued.length > 0 && (
+        <div className="mb-1.5 space-y-1.5">
+          {queued.map((q) => (
+            <div
+              key={q.id}
+              className="flex items-center gap-2 rounded-2xl border border-border bg-secondary/40 py-1 pr-1 pl-3 text-[14px] text-muted-foreground"
+            >
+              <Clock className="size-3.5 shrink-0" />
+              <span className="min-w-0 flex-1 truncate">{q.text || q.attachments?.map((a) => a.name).join(', ')}</span>
+              <button
+                type="button"
+                aria-label="Send now"
+                className="flex h-8 shrink-0 items-center gap-1 rounded-full px-2.5 text-[13px] text-foreground active:bg-accent"
+                onClick={() => void sendQueuedNow(chatId, q.id)}
+              >
+                <ArrowUp className="size-3.5" />
+                Send now
+              </button>
+              <button
+                type="button"
+                aria-label="Remove queued message"
+                className="flex size-8 shrink-0 items-center justify-center rounded-full active:bg-accent"
+                onClick={() => removeQueued(chatId, q.id)}
+              >
+                <X className="size-3.5" />
+              </button>
+            </div>
+          ))}
         </div>
-      ) : null}
+      )}
       {above}
       <div
         className={cn(

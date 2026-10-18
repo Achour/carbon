@@ -23,6 +23,7 @@ import type {
   UsageReport
 } from '@shared/types'
 import { USAGE_DEFAULT_DAYS } from '@shared/types'
+import { randomId } from '@/lib/insecureContext'
 import * as api from './api'
 import { usePrefs } from './prefs'
 
@@ -84,7 +85,7 @@ interface RemoteState {
   drawer: boolean
   open: OpenChat | null
   /** Typed while a turn ran; sent, oldest first, as the chat goes idle. */
-  queued: Record<string, { text: string; attachments?: Attachment[] }[]>
+  queued: Record<string, QueuedMessage[]>
   error: string | null
 
   start(): void
@@ -92,6 +93,9 @@ interface RemoteState {
   loadOlder(): Promise<void>
   send(chatId: string, text: string, attachments?: Attachment[]): Promise<void>
   interrupt(chatId: string): Promise<void>
+  /** Force a queued message through now: interrupt the running turn and send it. */
+  sendQueuedNow(chatId: string, id: string): Promise<void>
+  removeQueued(chatId: string, id: string): void
   respond(chatId: string, requestId: string, decision: PermissionDecision): Promise<void>
   setOptions(chatId: string, patch: ChatOptionsPatch): Promise<void>
   createChat(
@@ -106,6 +110,12 @@ interface RemoteState {
   refreshBranches(): Promise<void>
   refreshUsage(force?: boolean): Promise<void>
   loadUsageReport(days?: number, refresh?: boolean): Promise<void>
+}
+
+export interface QueuedMessage {
+  id: string
+  text: string
+  attachments?: Attachment[]
 }
 
 let conn: string | null = null
@@ -312,7 +322,7 @@ export const useRemote = create<RemoteState>((set, get) => {
       const status = get().statuses[chatId] ?? 'idle'
       if (status !== 'idle') {
         set((s) => ({
-          queued: { ...s.queued, [chatId]: [...(s.queued[chatId] ?? []), { text, attachments }] }
+          queued: { ...s.queued, [chatId]: [...(s.queued[chatId] ?? []), { id: randomId(), text, attachments }] }
         }))
         return
       }
@@ -327,6 +337,28 @@ export const useRemote = create<RemoteState>((set, get) => {
       // Stopping also means "don't send what I queued behind it".
       set((s) => ({ queued: { ...s.queued, [chatId]: [] } }))
       await api.invoke('chat:interrupt', chatId).catch((err) => set({ error: message(err) }))
+    },
+
+    async sendQueuedNow(chatId, id) {
+      const item = get().queued[chatId]?.find((q) => q.id === id)
+      if (!item) return
+      const rest = (get().queued[chatId] ?? []).filter((q) => q.id !== id)
+      if ((get().statuses[chatId] ?? 'idle') !== 'idle') {
+        // To the front, so the idle drain sends this one first, then interrupt
+        // so that idle comes now rather than at turn end. Not `interrupt()`:
+        // that one empties the queue.
+        set((s) => ({ queued: { ...s.queued, [chatId]: [item, ...rest] } }))
+        await api.invoke('chat:interrupt', chatId).catch((err) => set({ error: message(err) }))
+        return
+      }
+      set((s) => ({ queued: { ...s.queued, [chatId]: rest } }))
+      await get().send(chatId, item.text, item.attachments)
+    },
+
+    removeQueued(chatId, id) {
+      set((s) => ({
+        queued: { ...s.queued, [chatId]: (s.queued[chatId] ?? []).filter((q) => q.id !== id) }
+      }))
     },
 
     async respond(chatId, requestId, decision) {

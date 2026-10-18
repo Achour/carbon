@@ -27,7 +27,6 @@ export function ChatScreen({ chatId }: { chatId: string }): React.JSX.Element {
   const open = useRemote((s) => (s.open?.id === chatId ? s.open : null))
   const status = useRemote((s) => s.statuses[chatId])
   const requests = useRemote((s) => s.permissions[chatId])
-  const queued = useRemote((s) => s.queued[chatId]?.length ?? 0)
   const loadOlder = useRemote((s) => s.loadOlder)
   const connection = useRemote((s) => s.connection)
   const setOptions = useRemote((s) => s.setOptions)
@@ -249,7 +248,6 @@ export function ChatScreen({ chatId }: { chatId: string }): React.JSX.Element {
             : undefined
         }
         busy={busy}
-        queued={queued}
         above={chat?.pendingModel !== undefined && chat.pendingProvider ? <PendingSwitch chat={chat} /> : null}
         tools={
           values && (
