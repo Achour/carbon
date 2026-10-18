@@ -22,8 +22,11 @@ import { DotSpinner } from '@/components/ui/dot-spinner'
 import { chatActivity } from '@/lib/chatActivity'
 import { relativeTime, shortenPath } from '@/lib/format'
 import { cn } from '@/lib/utils'
+import { keyForDrop } from '@/lib/chatOrder'
 import { useRemote } from './state'
 import { navigate } from './App'
+import * as api from './api'
+import { useTouchSort } from './touchSort'
 import { baseName, chatTitle, listedChats } from './format'
 import { PUSH_HINT, usePush } from './push'
 import { SettingsSheet } from './Settings'
@@ -102,6 +105,43 @@ export function Sidebar({ activeId, onNavigate }: { activeId: string | null; onN
       }
       return next
     })
+
+  // Hold a row to drag it (`touchSort.ts`). The order it writes is the
+  // desktop's (`chats:place`, `chats:set-pinned-order`), so the Mac's sidebar
+  // moves with the phone's; mirrored here first, so the row does not draw back
+  // where it came from for the round trip.
+  const sort = useTouchSort((zone, from, target) => {
+    if (!target) return
+    const all = listedChats(useRemote.getState().chats)
+    if (zone === 'pins') {
+      // Against every pin, not the filtered ones on screen, or a reorder under
+      // a project filter would reshuffle the pins it cannot see.
+      const ids = all
+        .filter((c) => c.pinnedAt !== undefined)
+        .sort((a, b) => a.pinnedAt! - b.pinnedAt!)
+        .map((c) => c.id)
+        .filter((id) => id !== from)
+      const at = ids.indexOf(target.id)
+      ids.splice(at === -1 ? ids.length : target.after ? at + 1 : at, 0, from)
+      const base = Date.now() - ids.length
+      const pinnedAt = new Map(ids.map((id, i) => [id, base + i]))
+      useRemote.setState((st) => ({
+        chats: st.chats.map((c) => (pinnedAt.has(c.id) ? { ...c, pinnedAt: pinnedAt.get(c.id) } : c))
+      }))
+      void api.invoke('chats:set-pinned-order', ids).catch((err) => setError(String(err)))
+      return
+    }
+    const key = keyForDrop(
+      all.filter((c) => c.pinnedAt === undefined),
+      from,
+      target.id,
+      target.after
+    )
+    if (key === null) return
+    useRemote.setState((st) => ({ chats: st.chats.map((c) => (c.id === from ? { ...c, sortKey: key } : c)) }))
+    void api.invoke('chats:place', from, key).catch((err) => setError(String(err)))
+  })
+  const setError = useRemote((s) => s.setError)
 
   const filterProject = useProjectFilter()
   const setSidebarProject = usePrefs((s) => s.setSidebarProject)
@@ -196,7 +236,7 @@ export function Sidebar({ activeId, onNavigate }: { activeId: string | null; onN
         )}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pt-2 pb-4">
+      <div ref={sort.scrollRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pt-2 pb-4">
         {waiting.length > 0 && (
           <Section label="Needs you" warn>
             {waiting.map((c) =>
@@ -210,13 +250,15 @@ export function Sidebar({ activeId, onNavigate }: { activeId: string | null; onN
         )}
         {pinned.length > 0 && (
           <Section>
-            {pinned.map((c) =>
-              detailed ? (
-                <DetailedRow key={c.id} chat={c} active={c.id === activeId} onOpen={go} />
-              ) : (
-                <ChatRow key={c.id} chat={c} active={c.id === activeId} onOpen={go} pinned />
-              )
-            )}
+            {pinned.map((c, i) => (
+              <div key={c.id} {...sort.row('pins', c.id, i)}>
+                {detailed ? (
+                  <DetailedRow chat={c} active={c.id === activeId} onOpen={go} />
+                ) : (
+                  <ChatRow chat={c} active={c.id === activeId} onOpen={go} pinned />
+                )}
+              </div>
+            ))}
           </Section>
         )}
         {flatList && flat.length > 0 && (
@@ -224,13 +266,15 @@ export function Sidebar({ activeId, onNavigate }: { activeId: string | null; onN
             {/* The open chat always shows, even past the batch. */}
             {flat
               .slice(0, searchingNow ? flat.length : Math.max(flatShown, flat.findIndex((c) => c.id === activeId) + 1))
-              .map((c) =>
-                detailed ? (
-                  <DetailedRow key={c.id} chat={c} active={c.id === activeId} onOpen={go} />
-                ) : (
-                  <ChatRow key={c.id} chat={c} active={c.id === activeId} onOpen={go} />
-                )
-              )}
+              .map((c, i) => (
+                <div key={c.id} {...sort.row('flat', c.id, i)}>
+                  {detailed ? (
+                    <DetailedRow chat={c} active={c.id === activeId} onOpen={go} />
+                  ) : (
+                    <ChatRow chat={c} active={c.id === activeId} onOpen={go} />
+                  )}
+                </div>
+              ))}
             {!searchingNow && flat.length > Math.max(flatShown, flat.findIndex((c) => c.id === activeId) + 1) && (
               <button
                 type="button"
@@ -252,6 +296,7 @@ export function Sidebar({ activeId, onNavigate }: { activeId: string | null; onN
             expanded={searchingNow}
             onToggle={() => toggle(root)}
             onOpen={go}
+            sortRow={sort.row}
           />
         ))}
         {empty && (
@@ -420,7 +465,8 @@ function ProjectGroup({
   collapsed,
   expanded,
   onToggle,
-  onOpen
+  onOpen,
+  sortRow
 }: {
   root: string
   chats: ChatMeta[]
@@ -430,6 +476,7 @@ function ProjectGroup({
   expanded: boolean
   onToggle: () => void
   onOpen: (hash: string) => void
+  sortRow: ReturnType<typeof useTouchSort>['row']
 }): React.JSX.Element {
   const icon = useRemote((s) => s.icons[root] ?? null)
   const fold = usePrefs((s) => s.chatsPerProject)
@@ -462,8 +509,10 @@ function ProjectGroup({
       </div>
       {!collapsed && (
         <>
-          {shown.map((c) => (
-            <ChatRow key={c.id} chat={c} active={c.id === activeId} onOpen={onOpen} indent />
+          {shown.map((c, i) => (
+            <div key={c.id} {...sortRow(`group:${root}`, c.id, i)}>
+              <ChatRow chat={c} active={c.id === activeId} onOpen={onOpen} indent />
+            </div>
           ))}
           {shown.length < chats.length && (
             <button

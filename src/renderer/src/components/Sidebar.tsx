@@ -41,6 +41,7 @@ import { ProjectDialogs, type ProjectPrompt } from '@/components/ProjectDialogs'
 import { cn, missingTag, MISSING_TITLE } from '@/lib/utils'
 import { relativeTime, shortenPath } from '@/lib/format'
 import { keyForDrop } from '@/lib/chatOrder'
+import { dropTarget, insertionIndex, rowShift } from '@/lib/sortShift'
 import { REVEAL_LABEL } from '@/lib/platform'
 import { chatActivity, projectActivity, type ChatActivity } from '@/lib/chatActivity'
 import {
@@ -1481,6 +1482,61 @@ export function Sidebar(): React.JSX.Element {
     after: boolean
   } | null>(null)
   const [rowDrag, setRowDrag] = React.useState<string | null>(null)
+  // **A drag opens a gap; it does not draw a line.** Each list (`data-sort-zone`)
+  // is the drop target, not each row: the rows slide apart by transform to open
+  // a space where the chat will land (`lib/sortShift.ts`), so a row moving under
+  // the cursor must not be what is hit-tested. Positions are read once, when the
+  // drag starts, relative to their list — stable however the sidebar scrolls.
+  // `sortGap` is where the gap is: which list, and the slot among its other rows.
+  const [sortGap, setSortGap] = React.useState<{ key: string; zone: 'pins' | 'list'; insertAt: number } | null>(null)
+  // One frame with no transitions as a drop commits: the rows are already drawn
+  // where the new order puts them, so animating the transforms back to zero
+  // while the order changes underneath would jump each one a row and back.
+  const [settling, setSettling] = React.useState<string | null>(null)
+  const asideRef = React.useRef<HTMLElement>(null)
+  const sortSnap = React.useRef<{
+    zones: Map<string, { ids: string[]; mids: number[] }>
+    origin: string | null
+    step: number
+  } | null>(null)
+  React.useLayoutEffect(() => {
+    if (!rowDrag) {
+      sortSnap.current = null
+      setSortGap(null)
+      return
+    }
+    const zones = new Map<string, { ids: string[]; mids: number[] }>()
+    let origin: string | null = null
+    let step = 0
+    for (const zone of asideRef.current?.querySelectorAll<HTMLElement>('[data-sort-zone]') ?? []) {
+      const top = zone.getBoundingClientRect().top
+      const rows = [...zone.querySelectorAll<HTMLElement>(':scope > [data-sort-row]')]
+      const ids: string[] = []
+      const mids: number[] = []
+      rows.forEach((row, i) => {
+        const r = row.getBoundingClientRect()
+        const id = row.dataset.sortRow!
+        ids.push(id)
+        mids.push(r.top - top + r.height / 2)
+        if (id === rowDrag) {
+          origin = zone.dataset.sortZone!
+          const next = rows[i + 1]?.getBoundingClientRect()
+          step = next ? next.top - r.top : r.height + 1
+        }
+      })
+      zones.set(zone.dataset.sortZone!, { ids, mids })
+    }
+    sortSnap.current = { zones, origin, step }
+  }, [rowDrag])
+  React.useEffect(() => {
+    if (!settling) return
+    let b = 0
+    const a = requestAnimationFrame(() => (b = requestAnimationFrame(() => setSettling(null))))
+    return () => {
+      cancelAnimationFrame(a)
+      cancelAnimationFrame(b)
+    }
+  }, [settling])
   React.useEffect(() => {
     const start = (e: DragEvent): void => {
       // A frame late: re-rendering the list inside `dragstart` (the strip
@@ -1555,6 +1611,92 @@ export function Sidebar(): React.JSX.Element {
       setRowDrop(null)
     }
   })
+
+  /** Where the drag would land in one list, from the snapshot; null if it is not accepted there. */
+  const gapAt = (
+    e: React.DragEvent<HTMLElement>,
+    key: string
+  ): { from: string; insertAt: number; others: string[]; origin: number | null } | null => {
+    const from = draggedRow()
+    const snap = sortSnap.current?.zones.get(key)
+    if (!from || !snap || !e.dataTransfer.types.includes(CHAT_ROW_MIME)) return null
+    // Compact draws each project's chats under its own row, so its lists take
+    // only their own project's chats (`acceptsDrop`, by any row of the list).
+    const zone = key === 'pins' ? 'pins' : 'list'
+    const sample = snap.ids.find((id) => id !== from)
+    if (zone === 'list' && sample && !acceptsDrop('list', sample, from)) return null
+    const y = e.clientY - e.currentTarget.getBoundingClientRect().top
+    const at = snap.ids.indexOf(from)
+    const others = snap.ids.filter((id) => id !== from)
+    const mids = snap.mids.filter((_, i) => i !== at)
+    return { from, insertAt: insertionIndex(mids, y), others, origin: at === -1 ? null : at }
+  }
+  const zoneHandlers = (
+    key: string
+  ): Pick<React.HTMLAttributes<HTMLElement>, 'onDragOver' | 'onDragLeave' | 'onDrop'> & {
+    'data-sort-zone': string
+  } => ({
+    'data-sort-zone': key,
+    onDragOver: (e) => {
+      const gap = gapAt(e, key)
+      if (!gap) return
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'move'
+      if (sortGap?.key !== key || sortGap.insertAt !== gap.insertAt) {
+        setSortGap({ key, zone: key === 'pins' ? 'pins' : 'list', insertAt: gap.insertAt })
+      }
+    },
+    onDragLeave: (e) => {
+      if (e.currentTarget.contains(e.relatedTarget as Node | null)) return
+      setSortGap((g) => (g?.key === key ? null : g))
+    },
+    onDrop: (e) => {
+      const gap = gapAt(e, key)
+      if (!gap) return
+      e.preventDefault()
+      const target = dropTarget(gap.others, gap.insertAt, gap.origin)
+      // Committed in the same render that drops the gap, with transitions off
+      // for it (`settling`): the rows are already where the new order puts them.
+      setSettling(gap.from)
+      setSortGap(null)
+      setRowDrag(null)
+      setRowDrop(null)
+      if (!target && gap.others.length) return
+      if (key === 'pins') movePin(gap.from, target?.id ?? null, target?.after ?? false)
+      else if (target) moveInList(gap.from, target.id, target.after)
+    }
+  })
+  /** A row's slide, and how the dragged one is drawn, while a drag is on. */
+  const rowMotion = (key: string, index: number, id: string): { style?: React.CSSProperties; className?: string } => {
+    const snap = sortSnap.current
+    const transition = settling ? 'none' : 'transform 200ms cubic-bezier(0.2, 0.8, 0.2, 1)'
+    if (!rowDrag || !snap) {
+      return settling === id
+        ? { className: 'animate-in fade-in-0 zoom-in-[0.98] duration-200' }
+        : { style: settling ? { transition } : undefined }
+    }
+    // Over no list (on its way to a thread, say): nothing moves; the row it
+    // came from is only dimmed.
+    if (!sortGap) return { className: id === rowDrag ? 'opacity-50' : undefined, style: { transition } }
+    if (id === rowDrag) return { className: 'opacity-0', style: { transition } }
+    const origin = snap.origin === key ? (snap.zones.get(key)?.ids.indexOf(rowDrag) ?? null) : null
+    const insertAt = sortGap.key === key ? sortGap.insertAt : null
+    const y = rowShift(index, origin === -1 ? null : origin, insertAt, snap.step)
+    return { style: { transform: y ? `translateY(${y}px)` : undefined, transition } }
+  }
+  /**
+   * A list's own room for the gap. Within one list the gap moves and the list
+   * keeps its height; a row arriving from another list needs a step of space
+   * at the bottom of this one, and the list it left gives its step back.
+   */
+  const zoneStyle = (key: string): React.CSSProperties | undefined => {
+    const snap = sortSnap.current
+    if (!rowDrag || !snap || !sortGap || sortGap.key === snap.origin) return undefined
+    const transition = 'padding 200ms cubic-bezier(0.2, 0.8, 0.2, 1), margin 200ms cubic-bezier(0.2, 0.8, 0.2, 1)'
+    if (sortGap.key === key) return { paddingBottom: snap.step, transition }
+    if (snap.origin === key) return { marginBottom: -snap.step, transition }
+    return undefined
+  }
 
   // Pinned chats included: `group.chats` is the whole project, which is what
   // leaves the sidebar and so what the three project dialogs have to report.
@@ -1749,28 +1891,20 @@ export function Sidebar(): React.JSX.Element {
   // target wraps the row rather than living in it: `ChatItem`'s memo
   // comparator would have to learn every prop the insertion line needs, or
   // never repaint it.
-  const renderDropRow = (chat: ChatMeta, zone: 'pins' | 'list'): React.JSX.Element => (
-    <div
-      key={chat.id}
-      className={cn('relative', rowDrag === chat.id && 'opacity-50')}
-      {...dropHandlers(zone, chat.id)}
-    >
-      {rowDrop?.zone === zone && rowDrop.id === chat.id && rowDrag && rowDrag !== chat.id && (
-        <div
-          className={cn(
-            'pointer-events-none absolute inset-x-1.5 z-10 h-0.5 rounded-full bg-primary',
-            rowDrop.after ? '-bottom-px' : '-top-px'
-          )}
-        />
-      )}
-      {renderChatItem(chat)}
-    </div>
-  )
+  const renderDropRow = (chat: ChatMeta, key: string, index: number): React.JSX.Element => {
+    const motion = rowMotion(key, index, chat.id)
+    return (
+      <div key={chat.id} data-sort-row={chat.id} className={cn('relative', motion.className)} style={motion.style}>
+        {renderChatItem(chat)}
+      </div>
+    )
+  }
 
   const leaveDrop = useLeaveThreadDrop()
 
   return (
     <aside
+      ref={asideRef}
       data-sidebar
       {...leaveDrop.handlers}
       style={{ width: sidebarOpen ? width : 0 }}
@@ -1999,8 +2133,8 @@ export function Sidebar(): React.JSX.Element {
       {pinnedShown.length > 0 && (
         <div className="flex max-h-[35vh] shrink-0 flex-col">
           <div className="min-h-0 overflow-y-auto px-2 pt-0.5 pb-1">
-            <div className="space-y-px">
-              {pinnedShown.map((chat) => renderDropRow(chat, 'pins'))}
+            <div className="space-y-px" style={zoneStyle('pins')} {...zoneHandlers('pins')}>
+              {pinnedShown.map((chat, i) => renderDropRow(chat, 'pins', i))}
             </div>
           </div>
         </div>
@@ -2008,8 +2142,17 @@ export function Sidebar(): React.JSX.Element {
       {/* With no pins there are no rows to drop between, so a drag offers the
           section it would create — otherwise pinning by drag would only work
           once something had been pinned from the menu. */}
-      {pinnedShown.length === 0 && rowDrag && (
-        <div className="shrink-0 px-2 pt-0.5 pb-1">
+      {/* Always mounted while there are no pins, and opened by height rather
+          than inserted: popping in a row's worth of strip shoved the whole list
+          down the moment a drag began, and back up at the drop. */}
+      {pinnedShown.length === 0 && (
+        <div
+          aria-hidden={!rowDrag}
+          className="grid shrink-0 transition-[grid-template-rows,opacity] duration-200 ease-out"
+          style={{ gridTemplateRows: rowDrag ? '1fr' : '0fr', opacity: rowDrag ? 1 : 0 }}
+        >
+        <div className="min-h-0 overflow-hidden">
+        <div className="px-2 pt-0.5 pb-1">
           <div
             {...dropHandlers('pins', null)}
             className={cn(
@@ -2022,6 +2165,8 @@ export function Sidebar(): React.JSX.Element {
             <Pin className="size-3.5 shrink-0" />
             Drop to pin
           </div>
+        </div>
+        </div>
         </div>
       )}
 
@@ -2037,7 +2182,9 @@ export function Sidebar(): React.JSX.Element {
           )}
           {/* No date headings: the order is the user's, so a row they placed
               by hand would sit under a date that isn't its own. */}
-          <div className="space-y-px">{flatShown.map((chat) => renderDropRow(chat, 'list'))}</div>
+          <div className="space-y-px" style={zoneStyle('list')} {...zoneHandlers('list')}>
+            {flatShown.map((chat, i) => renderDropRow(chat, 'list', i))}
+          </div>
           {flatHidden > 0 && (
             <button
               type="button"
@@ -2231,8 +2378,8 @@ export function Sidebar(): React.JSX.Element {
                 {!isCollapsed && (
                   // The indent is the project row's hanging indent; with no row
                   // above them the chats sit flush, exactly as detailed's do.
-                  <div className={cn('space-y-px pb-1', headed && 'ml-[24px]')}>
-                    {cappedChats.map((chat) => renderDropRow(chat, 'list'))}
+                  <div className={cn('space-y-px pb-1', headed && 'ml-[24px]')} style={zoneStyle(`list:${group.cwd}`)} {...zoneHandlers(`list:${group.cwd}`)}>
+                    {cappedChats.map((chat, i) => renderDropRow(chat, `list:${group.cwd}`, i))}
                     {(hiddenChatCount > 0 || revealedBatches > 0) && (
                       <div className="flex items-center">
                         {hiddenChatCount > 0 && (

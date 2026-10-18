@@ -107,6 +107,11 @@ export const REMOTE_CHANNELS = new Set([
   // A turn's Undo. It restores only the files that turn's own checkpoint
   // recorded, which is less than the agent a phone already steers can do.
   'chat:rewind-files',
+  // The sidebar's hand-made order: a held row dragged to a new place in the
+  // list, or among the pins. The two the desktop's own drag calls, writing
+  // only a position, so the Mac's sidebar moves with the phone's.
+  'chats:place',
+  'chats:set-pinned-order',
   // Canvases are what an agent wrote for the reader, kept by Carbon rather
   // than read off disk: reading one is reading the conversation.
   'canvas:list',

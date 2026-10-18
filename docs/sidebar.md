@@ -150,11 +150,40 @@ was already only a sort key, so a drop rewrites it for the whole section
 (`setPinnedOrder`) with values just below now, and a pin made from the menu
 afterwards still lands at the bottom. The move is computed against *every* pin
 rather than `pinnedShown`, or a reorder under a project filter would reshuffle
-the pins it cannot see. Every drop target — pins and list alike, `renderDropRow` — wraps the row in
-`Sidebar` rather than living in `ChatItem`, whose hand-written memo comparator would otherwise have
-to learn the insertion line's props. Rows carry a `CHAT_ROW_MIME` payload apart
-from the thread one, so a terminal chat, which can never join a thread, can
-still be pinned and moved.
+the pins it cannot see. Every row's wrapper (`renderDropRow`) lives in
+`Sidebar` rather than in `ChatItem`, whose hand-written memo comparator would
+otherwise have to learn the drag's props. Rows carry a `CHAT_ROW_MIME` payload
+apart from the thread one, so a terminal chat, which can never join a thread,
+can still be pinned and moved.
+
+**A drag opens a gap; it does not draw a line.** It used to draw an insertion
+line, then at the drop the row vanished from one place and appeared in the
+other in a single frame. Now the rows slide apart by `transform` to open a
+space where the chat will land, and the space follows the cursor
+(`lib/sortShift.ts`, shared with the phone). The drag is modelled as the row
+leaving its slot and entering another: rows below the slot it left move up a
+step, rows at or after the gap move down one. Its own slot stays in the layout,
+drawn empty, so nothing re-lays out mid-drag. Three things keep it smooth:
+
+- **Each list is the drop target (`data-sort-zone`), not each row.** Positions
+  are read once, when the drag starts, relative to their list. Hit-testing a
+  row that is sliding under the cursor flips the answer back and forth.
+- **The drop commits in one frame with transitions off (`settling`).** The rows
+  are already drawn where the new order puts them, so animating their
+  transforms back to zero while the order changes underneath would jump each
+  one a row and back. The dropped row alone settles in with a short fade.
+- **Across lists the room moves too.** A list receiving a row from another
+  (a pin made by dropping into the pins, a pin dropped back into the list)
+  grows a step at its bottom, and the list it left gives its step back. Over
+  no list at all (on its way to a thread, say) nothing moves, and the row is
+  only dimmed.
+
+The "Drop to pin" strip opens by height (`grid-template-rows`) rather than
+being inserted. Popping it in shoved the whole list down a row the moment a
+drag began, and back up at the drop.
+
+The phone sidebar has the same gap with a long press (`remote/touchSort.ts`,
+see `docs/remote.md`).
 
 **A filtered compact list drops its project row.** The header already names the
 project; a row repeating it 30px lower is the sidebar saying it twice, its

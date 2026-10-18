@@ -244,6 +244,21 @@ the window open. The phone is one more window onto them.
   its branch on its meta, so that row is labelled before the read lands.
   Outside a repo the row shows the folder, written with `~` against the
   snapshot's `home`.
+- **Hold a row to move it (`remote/touchSort.ts`).** After ~350 ms still, the
+  row lifts and follows the finger. The others slide apart to open the gap a
+  drop will fill (`lib/sortShift.ts`, the desktop's own, see
+  `docs/sidebar.md`), the list scrolls near an edge, and on release the row
+  glides into the gap before the order commits. The order written is the
+  desktop's, `chats:place` and `chats:set-pinned-order`, so the Mac's sidebar
+  moves with the phone's. It works within one list: the pins, the flat list,
+  or one project's chats. Pinning by drag stays a desktop gesture. The
+  dragged row's transform is written straight to the element: a React render
+  per touch-move would re-render the sidebar every frame. React renders only
+  when the gap moves to another slot. The scroller's `touchmove` is a native
+  non-passive listener, because React's are passive and only a non-passive
+  one can stop the list scrolling under the row. A hold that turns into a
+  drag swallows the click its release would send, and a finger that moves
+  before the hold fires is a scroll, not a hold.
 - **The project filter is the desktop's, per phone.** A third row under New
   chat and Search opens a sheet of projects, most recently active first, and
   the pick is kept in `prefs.ts` (`carbon.remote.project`), apart from the
