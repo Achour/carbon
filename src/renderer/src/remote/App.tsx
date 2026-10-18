@@ -194,14 +194,11 @@ function Shell({ activeId, children }: { activeId: string | null; children: Reac
   }
 
   return (
-    // Fixed, full width and opaque, and not for layout's sake. iOS 26 lays a
-    // progressive blur over the top ~40pt of a Home Screen web app — the
-    // chat's title went soft under it, solid header or not — and WebKit skips
-    // that edge only when what sits there is inside a fixed or sticky box
-    // spanning the viewport with a background of its own. A Safari tab never
-    // shows it, which is why the Simulator's tab drew the title sharp.
+    // Not `position: fixed`: a Home Screen app clips fixed content to a
+    // viewport a status bar shorter than the screen, which cut the composer
+    // off at the bottom. The header is what is pinned (`Header`).
     <div
-      className="fixed inset-x-0 top-0 h-[var(--app-height,100dvh)] overflow-hidden bg-background"
+      className="relative h-[var(--app-height,100dvh)] overflow-hidden"
       onTouchStart={onTouchStart}
       onTouchMove={onTouchMove}
       onTouchEnd={onTouchEnd}
@@ -255,12 +252,20 @@ export function Header({
   const waiting = useRemote((s) => Object.values(s.permissions).some((list) => list.length > 0))
   const project = useProjectFilter()
   return (
+    // Pinned (`fixed` floating, `sticky` in flow), full width and opaque, for
+    // iOS rather than for layout. iOS lays a progressive blur over the top
+    // ~40pt of a Home Screen web app, above the page, which drew this title
+    // soft, and skips it only when what sits at the top edge is inside a fixed
+    // or sticky box spanning the viewport's width, with a background of its
+    // own, and not much taller than the viewport. The whole shell, fixed, was
+    // too tall to count, so the box is this bar.
     <header
       ref={ref}
       className={cn(
-        'shrink-0 pt-[env(safe-area-inset-top)]',
-        floating &&
-          'absolute inset-x-0 top-0 z-20 border-b bg-background transition-[border-color] duration-200',
+        'shrink-0 bg-background pt-[env(safe-area-inset-top)]',
+        floating
+          ? 'fixed inset-x-0 top-0 z-20 border-b transition-[border-color] duration-200'
+          : 'sticky top-0 z-20',
         floating && (scrolled ? 'border-border/70' : 'border-transparent')
       )}
     >

@@ -288,11 +288,17 @@ the window open. The phone is one more window onto them.
   app, above the page. It never shows in a Safari tab, which is why the
   Simulator drew the title sharp. Removing the bar's `backdrop-filter` (the
   jump-to-latest button's too) changed nothing. WebKit skips that edge when
-  what sits there is inside a fixed or sticky box spanning the viewport with
-  a background of its own. So the shell (`Shell` in `App.tsx`) is
-  `position: fixed` with `bg-background`, where it was a `relative` box. The
-  bar was left solid rather than made translucent again, since the blur's
-  return is a change of its own to check on a device. It is measured so the scroller's top padding follows it when
+  what sits there is inside a fixed or sticky box spanning the viewport's
+  width, with a background of its own and not much taller than the viewport
+  (about 105%). Making the whole shell `position: fixed` failed on both
+  counts. It was the screen's height, taller than the viewport iOS reports,
+  so the title stayed soft. And iOS clips fixed content to that shorter
+  viewport, which cut the composer off at the bottom. So the shell is a
+  `relative` box again, and the *header* is the pinned box: `fixed` when it
+  floats over the transcript, `sticky` in flow, `bg-background` either way.
+  This is the shape of a sticky site header, which a Home Screen app on the
+  same phone draws sharp. Unconfirmed on a device when written. The bar was
+  left solid rather than made translucent again. It is measured so the scroller's top padding follows it when
   the connection strip appears. Its hairline shows once something is
   under it, and tapping the title scrolls to the top, the status-bar tap iOS
   only gives a page's own scroll. A round button jumps back to the latest
