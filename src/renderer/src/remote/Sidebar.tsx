@@ -27,6 +27,7 @@ import { useRemote } from './state'
 import { navigate } from './App'
 import * as api from './api'
 import { useTouchSort } from './touchSort'
+import { setArchived, setPinned } from './chatActions'
 import { baseName, chatTitle, listedChats } from './format'
 import { PUSH_HINT, usePush } from './push'
 import { SettingsSheet } from './Settings'
@@ -140,7 +141,27 @@ export function Sidebar({ activeId, onNavigate }: { activeId: string | null; onN
     if (key === null) return
     useRemote.setState((st) => ({ chats: st.chats.map((c) => (c.id === from ? { ...c, sortKey: key } : c)) }))
     void api.invoke('chats:place', from, key).catch((err) => setError(String(err)))
+  }, {
+    // Swipe a row: right pins (or unpins), left archives, with an Undo below.
+    labels: (id) => ({
+      right: useRemote.getState().chats.find((c) => c.id === id)?.pinnedAt !== undefined ? 'Unpin' : 'Pin',
+      left: 'Archive'
+    }),
+    act: (id, side) => {
+      const chat = useRemote.getState().chats.find((c) => c.id === id)
+      if (!chat) return
+      if (side === 'right') return setPinned(id, chat.pinnedAt === undefined)
+      setArchived(id, true)
+      setUndo({ id, title: chatTitle(chat) })
+      if (id === activeId) go('#/')
+    }
   })
+  const [undo, setUndo] = React.useState<{ id: string; title: string } | null>(null)
+  React.useEffect(() => {
+    if (!undo) return
+    const t = setTimeout(() => setUndo(null), 5000)
+    return () => clearTimeout(t)
+  }, [undo])
   const setError = useRemote((s) => s.setError)
 
   const filterProject = useProjectFilter()
@@ -306,6 +327,21 @@ export function Sidebar({ activeId, onNavigate }: { activeId: string | null; onN
         )}
       </div>
 
+      {undo && (
+        <div className="mx-2 mb-2 flex shrink-0 animate-in items-center gap-2 rounded-xl bg-sidebar-accent py-2 pr-1.5 pl-3.5 text-[13.5px] fade-in slide-in-from-bottom-2">
+          <span className="min-w-0 flex-1 truncate text-sidebar-foreground/80">Archived “{undo.title}”</span>
+          <button
+            type="button"
+            onClick={() => {
+              setArchived(undo.id, false)
+              setUndo(null)
+            }}
+            className="shrink-0 rounded-lg px-2.5 py-1 font-medium text-primary active:bg-sidebar"
+          >
+            Undo
+          </button>
+        </div>
+      )}
       <div className="relative shrink-0 border-t border-sidebar-border pb-[max(env(safe-area-inset-bottom),12px)] text-[13px] text-muted-foreground">
         <div className="flex items-center gap-2.5 pt-1.5 pr-2 pl-5">
           <span

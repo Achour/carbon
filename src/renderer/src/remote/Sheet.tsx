@@ -161,7 +161,12 @@ export function Sheet({
     // A portal still bubbles through the React tree, and the drawer listens
     // for edge swipes on the shell around every screen: a touch in here is
     // the sheet's alone.
-    <div className="fixed inset-0 z-50 flex flex-col justify-end" onTouchStart={(e) => e.stopPropagation()}>
+    // As tall as what shows: with the keyboard up (`--kb-height`), a sheet
+    // anchored to the screen's bottom would sit behind the keys, field and all.
+    <div
+      className="fixed inset-x-0 top-0 z-50 flex h-[var(--kb-height,100%)] flex-col justify-end"
+      onTouchStart={(e) => e.stopPropagation()}
+    >
       <button
         ref={scrim}
         type="button"
@@ -177,7 +182,7 @@ export function Sheet({
         role="dialog"
         className={cn(
           'relative flex max-h-[82dvh] flex-col rounded-t-[22px] border-t border-border bg-popover text-popover-foreground shadow-2xl will-change-transform',
-          'pb-[max(env(safe-area-inset-bottom),12px)]',
+          'pb-[max(env(safe-area-inset-bottom),12px)] [.kb-open_&]:pb-3',
           exit
             ? 'animate-out slide-out-to-bottom fill-mode-forwards duration-[240ms] ease-[cubic-bezier(0.32,0.72,0,1)]'
             : !leaving && 'animate-in slide-in-from-bottom duration-[380ms] ease-[cubic-bezier(0.32,0.72,0,1)]'

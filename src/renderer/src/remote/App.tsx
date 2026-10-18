@@ -248,6 +248,7 @@ export function Header({
   floating,
   scrolled,
   onTitleTap,
+  actions,
   ref
 }: {
   title: React.ReactNode
@@ -255,6 +256,8 @@ export function Header({
   floating?: boolean
   scrolled?: boolean
   onTitleTap?: () => void
+  /** Drawn before New chat: the chat screen's own menu. */
+  actions?: React.ReactNode
   ref?: React.Ref<HTMLElement>
 }): React.JSX.Element {
   const setDrawer = useRemote((s) => s.setDrawer)
@@ -304,6 +307,7 @@ export function Header({
           <div className="truncate text-[16px] font-semibold">{title}</div>
           {subtitle && <div className="truncate text-[12.5px] leading-tight text-muted-foreground">{subtitle}</div>}
         </button>
+        {actions}
         <button
           type="button"
           aria-label="New chat"

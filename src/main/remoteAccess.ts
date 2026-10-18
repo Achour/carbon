@@ -113,6 +113,12 @@ export const REMOTE_CHANNELS = new Set([
   // only a position, so the Mac's sidebar moves with the phone's.
   'chats:place',
   'chats:set-pinned-order',
+  // Pin, archive (and restore) and rename: what the desktop row's menu does
+  // short of deleting. Archiving deletes nothing and is undone from the Mac's
+  // archive; a delete stays a desktop act.
+  'chats:set-pinned',
+  'chats:set-archived',
+  'chats:rename',
   // Canvases are what an agent wrote for the reader, kept by Carbon rather
   // than read off disk: reading one is reading the conversation.
   'canvas:list',

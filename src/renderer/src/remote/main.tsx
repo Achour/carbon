@@ -52,6 +52,7 @@ function followKeyboard(): void {
   const apply = (): void => {
     if (vv.height > full) full = vv.height
     const open = full - vv.height > 120
+    document.documentElement.classList.toggle('kb-open', open)
     if (open) {
       root.setProperty('--kb-height', `${Math.round(vv.height)}px`)
       // What iOS already scrolled before the resize landed.

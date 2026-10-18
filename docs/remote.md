@@ -276,6 +276,19 @@ the window open. The phone is one more window onto them.
   one can stop the list scrolling under the row. A hold that turns into a
   drag swallows the click its release would send, and a finger that moves
   before the hold fires is a scroll, not a hold.
+- **Pin, archive and rename work from the phone** (`chats:set-pinned`,
+  `chats:set-archived`, `chats:rename`, drawn first in `remote/chatActions.ts`).
+  A sidebar row swiped right pins or unpins, and swiped left archives, with
+  an Undo for five seconds. It acts on release once it has travelled `ARM`,
+  like Mail, from the same touch handling as the hold-to-drag
+  (`touchSort.ts`). A finger that moves more across than down before the hold
+  fires is swiping. A touch that starts on a row is the row's from its first
+  move: the drawer's own left swipe, which closes it, decides at the same
+  slop, and would otherwise start closing under the swipe. A swipe anywhere
+  else still closes the drawer. The chat header's "⋯" holds the same three,
+  with Rename, while the title keeps its tap, scrolling to the top. Deleting
+  stays a desktop act. A sheet is as tall as what shows (`--kb-height`), so
+  the rename field sits above the keyboard rather than behind it.
 - **The project filter is the desktop's, per phone.** A third row under New
   chat and Search opens a sheet of projects, most recently active first, and
   the pick is kept in `prefs.ts` (`carbon.remote.project`), apart from the

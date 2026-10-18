@@ -10,6 +10,14 @@ const EDGE = 64
 const MAX_SPEED = 14
 const EASE = 'cubic-bezier(0.2, 0.8, 0.2, 1)'
 const SLIDE_MS = 200
+/** How far a sideways swipe travels before releasing it acts. */
+const ARM = 76
+
+/** The sideways swipe on a row: right and left, each an action with a word for it. */
+export interface RowSwipe {
+  labels: (id: string) => { right: string; left: string }
+  act: (id: string, side: 'right' | 'left') => void
+}
 
 export type SortDrop = (zone: string, from: string, target: { id: string; after: boolean } | null) => void
 
@@ -45,7 +53,10 @@ interface Active {
  * row being dragged. A hold that turns into a drag also swallows the click
  * the release would send, or every drag would open the chat it moved.
  */
-export function useTouchSort(onDrop: SortDrop): {
+export function useTouchSort(
+  onDrop: SortDrop,
+  swipe?: RowSwipe
+): {
   scrollRef: React.RefObject<HTMLDivElement | null>
   row: (zone: string, id: string, index: number) => React.HTMLAttributes<HTMLDivElement> & { 'data-sort-row': string }
 } {
@@ -59,6 +70,15 @@ export function useTouchSort(onDrop: SortDrop): {
   const startHold = React.useRef<(zone: string, id: string, el: HTMLElement, x: number, y: number) => void>(() => {})
   const onDropRef = React.useRef(onDrop)
   onDropRef.current = onDrop
+  const swipeRef = React.useRef(swipe)
+  swipeRef.current = swipe
+  const sliding = React.useRef<{
+    id: string
+    content: HTMLElement
+    under: HTMLElement
+    x: number
+    dx: number
+  } | null>(null)
 
   React.useEffect(() => {
     if (!settling) return
@@ -166,12 +186,90 @@ export function useTouchSort(onDrop: SortDrop): {
       }, SLIDE_MS)
     }
 
+    // **A row swiped sideways reveals an action under it** (Mail's gesture):
+    // right to pin, left to archive, acting on release once it has travelled
+    // `ARM`. It is decided at the same slop as the hold: a finger that moves
+    // more across than down before the hold fires is swiping. Swiping the row
+    // takes the gesture from the drawer, whose own left swipe closes it — a
+    // swipe anywhere but a row still does.
+    const beginSlide = (p: NonNullable<typeof pending.current>): void => {
+      const content = p.el.firstElementChild as HTMLElement | null
+      const s = swipeRef.current
+      if (!content || !s) return
+      const under = document.createElement('div')
+      under.setAttribute('aria-hidden', 'true')
+      under.style.cssText =
+        'position:absolute;inset:0;display:flex;align-items:center;padding:0 20px;border-radius:8px;' +
+        'font-size:14px;font-weight:600;opacity:0;transition:opacity 120ms, background-color 120ms'
+      p.el.insertBefore(under, content)
+      content.style.position = 'relative'
+      content.style.background = 'var(--sidebar)'
+      content.style.transition = 'none'
+      p.el.style.overflow = 'hidden'
+      sliding.current = { id: p.id, content, under, x: p.x, dx: 0 }
+      swallowClick.current = true
+    }
+    const slide = (x: number): void => {
+      const sl = sliding.current
+      const s = swipeRef.current
+      if (!sl || !s) return
+      const raw = x - sl.x
+      // Past the arming point it keeps following, at a third of the finger.
+      const dx = Math.abs(raw) > ARM ? Math.sign(raw) * (ARM + (Math.abs(raw) - ARM) / 3) : raw
+      sl.dx = raw
+      sl.content.style.transform = `translateX(${dx}px)`
+      const side = raw > 0 ? 'right' : 'left'
+      const armed = Math.abs(raw) > ARM
+      const labels = s.labels(sl.id)
+      sl.under.textContent = side === 'right' ? labels.right : labels.left
+      sl.under.style.justifyContent = side === 'right' ? 'flex-start' : 'flex-end'
+      sl.under.style.opacity = raw ? '1' : '0'
+      sl.under.style.background = armed
+        ? side === 'right' ? 'var(--primary)' : 'var(--warning)'
+        : 'var(--sidebar-accent)'
+      sl.under.style.color = armed ? 'var(--primary-foreground)' : 'var(--muted-foreground)'
+    }
+    const endSlide = (): void => {
+      const sl = sliding.current
+      sliding.current = null
+      if (!sl) return
+      const side = sl.dx > 0 ? 'right' : 'left'
+      const act = Math.abs(sl.dx) > ARM
+      const width = sl.content.offsetWidth
+      sl.content.style.transition = `transform ${SLIDE_MS}ms ${EASE}`
+      // Archiving takes the row away, so it leaves sideways; a pin stays and
+      // springs back.
+      sl.content.style.transform = act && side === 'left' ? `translateX(${-width}px)` : 'translateX(0)'
+      setTimeout(() => {
+        sl.under.remove()
+        sl.content.style.transform = ''
+        sl.content.style.transition = ''
+        sl.content.style.position = ''
+        sl.content.style.background = ''
+        const wrap = sl.content.parentElement
+        if (wrap) wrap.style.overflow = ''
+        if (act) swipeRef.current?.act(sl.id, side)
+      }, SLIDE_MS)
+    }
+
     const onMove = (e: TouchEvent): void => {
       const t = e.touches[0]
       const p = pending.current
+      // A touch that began on a row is the row's from its first move: the
+      // drawer decides its own swipe at the same slop, and would otherwise
+      // start closing under a row being swiped. Scrolling is the browser's,
+      // not the drawer's, so this costs a vertical swipe nothing.
+      if (p) e.stopPropagation()
       if (p && Math.hypot(t.clientX - p.x, t.clientY - p.y) > SLOP) {
         clearTimeout(p.timer)
         pending.current = null
+        if (Math.abs(t.clientX - p.x) > Math.abs(t.clientY - p.y)) beginSlide(p)
+      }
+      if (sliding.current) {
+        e.preventDefault()
+        e.stopPropagation()
+        slide(t.clientX)
+        return
       }
       const a = active.current
       if (!a) return
@@ -188,6 +286,7 @@ export function useTouchSort(onDrop: SortDrop): {
         clearTimeout(p.timer)
         pending.current = null
       }
+      endSlide()
       release()
     }
     const onClick = (e: MouseEvent): void => {
@@ -202,7 +301,7 @@ export function useTouchSort(onDrop: SortDrop): {
     scroller.addEventListener('touchcancel', onEnd)
     scroller.addEventListener('click', onClick, true)
     startHold.current = (zone, id, el, x, y) => {
-      if (active.current || landing.current) return
+      if (active.current || landing.current || sliding.current) return
       if (pending.current) clearTimeout(pending.current.timer)
       swallowClick.current = false
       pending.current = { id, zone, el, x, y, timer: setTimeout(lift, HOLD_MS) }

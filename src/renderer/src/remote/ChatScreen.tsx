@@ -13,6 +13,7 @@ import { useRemote } from './state'
 import { Header, navigate } from './App'
 import { invoke } from './api'
 import { AgentView, CanvasView, DiffScreen } from './Viewers'
+import { ChatMenu } from './ChatMenu'
 import { chatTitle, isBusy, projectName } from './format'
 import { Composer } from './Composer'
 import { OptionChips } from './OptionChips'
@@ -157,6 +158,7 @@ export function ChatScreen({ chatId }: { chatId: string }): React.JSX.Element {
         floating
         scrolled={underHeader}
         onTitleTap={toTop}
+        actions={chat ? <ChatMenu chat={chat} /> : undefined}
         title={chat ? chatTitle(chat) : 'Chat'}
         subtitle={chat ? `${projectName(chat)}${chat.worktree ? ` · ${chat.worktree.branch}` : ''}` : undefined}
       />
