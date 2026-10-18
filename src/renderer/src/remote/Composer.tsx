@@ -106,8 +106,8 @@ const NO_QUEUE: QueuedMessage[] = []
 /**
  * Send and Stop never take the focus. Taking it closed the keyboard on the
  * tap itself, the composer dropped with it, and the click landed where the
- * button had been: one tap closed the keyboard, a second one sent. Kept in the
- * box, the keyboard stays up after sending, as in Messages.
+ * button had been: one tap closed the keyboard, a second one sent. The tap
+ * keeps the focus; sending then closes the keyboard itself (`submit`).
  */
 const keepKeyboard = (e: React.MouseEvent): void => e.preventDefault()
 
@@ -186,6 +186,10 @@ export function Composer({
   const submit = async (): Promise<void> => {
     if (empty || sending || reading) return
     setSending(true)
+    // Sent from a phone, the keyboard goes: the reply is what comes next, and
+    // it needs the screen. Dropped on the tap, before the round trip, so it
+    // goes the moment the message does.
+    if (window.matchMedia('(pointer: coarse)').matches) area.current?.blur()
     try {
       if (onSubmit) await onSubmit(text.trim(), attachments)
       else if (chatId) await send(chatId, text.trim(), attachments)
