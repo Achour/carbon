@@ -316,7 +316,8 @@ the window open. The phone is one more window onto them.
   chat and Search opens a sheet of projects, most recently active first, and
   the pick is kept in `prefs.ts` (`carbon.remote.project`), apart from the
   Mac's `sidebarProject`. It scopes what the desktop's does: the pins, the
-  list, and where both New chat buttons start a chat. Filtered, compact drops
+  list, and where the sidebar's New chat starts a chat (the header has none:
+  new chats start from the sidebar, and the header's right is the chat's "⋯"). Filtered, compact drops
   its project rows and lists the chats flush, since the filter already names
   the project. **"Needs you" ignores it**, a deliberate difference from the
   desktop, which has no such section: a question waiting in another project is

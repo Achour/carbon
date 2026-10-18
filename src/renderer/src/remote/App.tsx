@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { PanelLeft, SquarePen, WifiOff } from 'lucide-react'
+import { PanelLeft, WifiOff } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useRemote } from './state'
 import * as api from './api'
@@ -7,7 +7,7 @@ import { ChatScreen } from './ChatScreen'
 import { NewChatScreen } from './NewChat'
 import { PairScreen } from './Pair'
 import { UsageScreen } from './UsageScreen'
-import { newChatHash, Sidebar, useProjectFilter } from './Sidebar'
+import { Sidebar } from './Sidebar'
 import { useAppBadge } from './board'
 import { clearCache, loadSnapshot } from './cache'
 
@@ -235,7 +235,7 @@ function Shell({ activeId, children }: { activeId: string | null; children: Reac
 }
 
 /**
- * The bar every screen wears: the sidebar, a title, a new chat.
+ * The bar every screen wears: the sidebar, a title, and the screen's menu.
  *
  * `floating` lays it over the screen's scroller; the hairline appears only
  * once something is under it.
@@ -265,13 +265,12 @@ export function Header({
   floating?: boolean
   scrolled?: boolean
   onTitleTap?: () => void
-  /** Drawn before New chat: the chat screen's own menu. */
+  /** The right-hand button: the chat screen's own menu. */
   actions?: React.ReactNode
   ref?: React.Ref<HTMLElement>
 }): React.JSX.Element {
   const setDrawer = useRemote((s) => s.setDrawer)
   const waiting = useRemote((s) => Object.values(s.permissions).some((list) => list.length > 0))
-  const project = useProjectFilter()
   const own = React.useRef<HTMLElement | null>(null)
   const [height, setHeight] = React.useState(0)
   React.useLayoutEffect(() => {
@@ -316,15 +315,10 @@ export function Header({
           <div className="truncate text-[16px] font-semibold">{title}</div>
           {subtitle && <div className="truncate text-[12.5px] leading-tight text-muted-foreground">{subtitle}</div>}
         </button>
-        {actions}
-        <button
-          type="button"
-          aria-label="New chat"
-          onClick={() => navigate(newChatHash(project))}
-          className="flex size-11 shrink-0 items-center justify-center rounded-full text-muted-foreground active:bg-accent"
-        >
-          <SquarePen className="size-[20px]" />
-        </button>
+        {/* New chats start from the sidebar; the right is the screen's own
+            menu, or the sidebar button's width of nothing, so the title stays
+            centred. */}
+        {actions ?? <span aria-hidden className="size-11 shrink-0" />}
       </div>
       <ConnectionStrip />
     </header>
