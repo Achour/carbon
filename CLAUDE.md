@@ -268,7 +268,12 @@ agent or shell carries on, and that work dies with the process too
 (`noteJobs`). **A leftover stays on record until it is resumed or ruled out**
 (`settle`), so a quit in the seconds before the resume is sent loses nothing.
 **A chat a turn has started in since launch is overtaken** and left alone:
-the user's own send, or a delivery, got there first. **It is not `send`:** that
+the user's own send, or a delivery, got there first. It leaves the pending set
+the moment that turn starts, not when the startup callback runs, so a quit in
+between cannot resume finished work. A chat forgotten meanwhile (deleted, its
+session disposed) is no longer pending either, and only pending chats are sent.
+The replayed request is the last user message that is not an earlier resume's
+own note, since a labelled one ("Implement the plan") can be the real request. **It is not `send`:** that
 would commit a model picked from the other provider, which waits for the
 user's next message, so the resume goes straight to `sendPrompt` on the
 running backend. Cut off before the provider had a session, the saved request

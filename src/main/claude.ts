@@ -3165,6 +3165,7 @@ function scheduledBrief(task: ScheduledTask): string {
  * What a resumed turn tells the model. It opens with a sentence, as a delivery
  * does — the label chip reads a leading `/` as a slash command.
  */
+const RESUME_LABEL = 'Resumed after Carbon restarted'
 const RESUME_PROMPT =
   'Carbon restarted while you were working, and your last turn was cut off mid-step. ' +
   'Continue where you left off. Anything you had running in the background (a dev ' +
@@ -5154,10 +5155,12 @@ export class ChatManager {
     const chat = this.store.getChat(chatId)
     if (!chat || chat.pendingPlanReview) return 'skipped'
     // Cut off before the provider had a session (a first turn still starting),
-    // the new one starts blank: the request goes with it, attachments too.
+    // the new one starts blank: the request goes with it, attachments too. A
+    // labelled message can be that request ("Implement the plan"); only an
+    // earlier resume's own note is not.
     const asked = chat.sessionId
       ? undefined
-      : [...chat.messages].reverse().find((m): m is UserMessage => m.role === 'user' && !m.label)
+      : [...chat.messages].reverse().find((m): m is UserMessage => m.role === 'user' && m.label !== RESUME_LABEL)
     // Neither a session nor a saved request — a crash in the first second of a
     // first turn, before the message was written — leaves nothing to continue.
     if (!chat.sessionId && !asked) return 'skipped'
@@ -5172,7 +5175,7 @@ export class ChatManager {
     const extra = due.length
       ? pendingDeliveriesContext(due.map((view) => ({ agent: PROVIDER_SHORT_LABELS[view.provider], view })))
       : ''
-    if (!this.sendPrompt(chat, text, asked?.attachments, 'Resumed after Carbon restarted', null, extra)) return 'skipped'
+    if (!this.sendPrompt(chat, text, asked?.attachments, RESUME_LABEL, null, extra)) return 'skipped'
     this.deliveryParked.delete(chat.id)
     if (due.length) this.carry(chat, due)
     return 'sent'

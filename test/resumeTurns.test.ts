@@ -121,3 +121,29 @@ test('a missing or broken record reads as nothing to resume', () => {
   store.data.set('resume:app', '{not json')
   assert.deepEqual(new ResumeTurns(store, 'resume:app').takeLeftover(), [])
 })
+
+test('a turn started over takes the chat off pending at once', () => {
+  const store = memory()
+  const a = new ResumeTurns(store, 'resume:app', () => 1_000)
+  a.note('c1', 'streaming')
+  a.freeze()
+  const b = new ResumeTurns(store, 'resume:app', () => 2_000)
+  b.takeLeftover()
+  b.note('c1', 'starting')
+  b.note('c1', 'idle')
+  assert.equal(b.isPending('c1'), false)
+  // Quit before the startup callback settled it: nothing left to resume.
+  b.freeze()
+  assert.deepEqual(new ResumeTurns(store, 'resume:app', () => 3_000).takeLeftover(), [])
+})
+
+test('a forgotten leftover is no longer pending', () => {
+  const store = memory()
+  const a = new ResumeTurns(store, 'resume:app', () => 1_000)
+  a.note('c1', 'streaming')
+  a.freeze()
+  const b = new ResumeTurns(store, 'resume:app', () => 2_000)
+  b.takeLeftover()
+  b.forget('c1')
+  assert.equal(b.isPending('c1'), false)
+})

@@ -77,7 +77,12 @@ export class ResumeTurns {
   note(chatId: string, status: string): void {
     if (this.frozen) return
     const busy = status !== 'idle'
-    if (busy) this.started.add(chatId)
+    if (busy) {
+      this.started.add(chatId)
+      // A new turn supersedes whatever the last run left: `busy` keeps this
+      // one on record while it runs, and it must not be resumed once it ends.
+      if (this.pending.delete(chatId)) this.persist()
+    }
     if (busy === this.busy.has(chatId)) return
     if (busy) this.busy.add(chatId)
     else this.busy.delete(chatId)
@@ -99,6 +104,11 @@ export class ResumeTurns {
    */
   overtaken(chatId: string): boolean {
     return this.started.has(chatId)
+  }
+
+  /** Still waiting to be resumed: not started over, settled or forgotten since launch. */
+  isPending(chatId: string): boolean {
+    return this.pending.has(chatId)
   }
 
   /** A pending chat resumed, or ruled out: off the record unless it is live again. */

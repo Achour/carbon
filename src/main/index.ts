@@ -1491,7 +1491,10 @@ app.whenReady().then(() => {
     const off = store.getDefaults().resumeAfterRestart === false
     const locked: string[] = []
     for (const id of ids) {
-      const outcome = off || resumeTurns!.overtaken(id) ? 'skipped' : manager.resumeAfterRestart(id)
+      // Pending still: not started over (`overtaken`), forgotten (deleted,
+      // disposed) or settled since launch.
+      const live = resumeTurns!.isPending(id) && !resumeTurns!.overtaken(id)
+      const outcome = off || !live ? 'skipped' : manager.resumeAfterRestart(id)
       if (outcome === 'locked' && retry) locked.push(id)
       else resumeTurns!.settle(id)
     }
