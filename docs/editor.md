@@ -22,8 +22,8 @@ appearance flips.
 `---` that is right in general and catastrophic here: the opening fence is a
 thematic break, the keys under it are a paragraph, and the closing fence turns
 that paragraph into a **setext H2** — so every `.claude/agents/*.md` opened as a
-giant bold heading of run-together YAML. It is drawn as the key/value table Zed
-and GitHub draw. The split is a *display* split rather than a YAML parse: values
+giant bold heading of run-together YAML. It is drawn as a key/value table instead.
+The split is a *display* split rather than a YAML parse: values
 keep their quotes and their colons (`description:` is full of both), indented
 lines continue the key above them (`metadata:` / `  type: user`), and anything
 that isn't a complete, non-empty mapping returns `null` so the `---` renders as
@@ -78,7 +78,7 @@ message in the transcript.
   than `>`: a checkout or a revert moves mtime backwards and is still someone
   else's write.
 - **A dirty preview tab stops being disposable.** Single-clicking another file
-  reuses the preview slot, Cursor-style; doing that to a tab the user has typed
+  reuses the preview slot; doing that to a tab the user has typed
   into would destroy the only copy of those edits, so it gets pinned instead and
   the new file opens beside it. Closing a dirty tab asks (Save / Discard /
   Cancel), and a Save that hits a conflict leaves the tab open — closing it then
@@ -139,9 +139,8 @@ message in the transcript.
   Failures are reported *on* the dialog rather than through `gitError`: the
   question is still up, and a locked file is something the user may be able to
   fix and retry.
-- **Prose soft-wraps, code does not** (`wrapsLines`, `editorLanguage.ts`) — Zed's
-  split, and the reason is that the two file kinds disagree about what a line
-  *is*. A Markdown paragraph is one line to the file, so a horizontal scrollbar
+- **Prose soft-wraps, code does not** (`wrapsLines`, `editorLanguage.ts`), because
+  the two file kinds disagree about what a line *is*. A Markdown paragraph is one line to the file, so a horizontal scrollbar
   is the wrong way to read one; a wrapped line of code breaks mid-token, which
   is the same objection that keeps `diffWrap` off by default in the review. The
   list of prose extensions is explicit rather than "anything with no grammar",

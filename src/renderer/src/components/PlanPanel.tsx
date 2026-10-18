@@ -65,7 +65,7 @@ export function PlanContent({
   const pending = panel.requestId !== null
 
   // Approving can hand implementation to a different model than the one that
-  // wrote the plan — Cursor-style — including one from the other provider:
+  // wrote the plan, including one from the other provider:
   // main tears down the review and hands the plan across the backend boundary
   // (see ChatManager.approvePlanCrossProvider).
   const buildOptions = React.useMemo(

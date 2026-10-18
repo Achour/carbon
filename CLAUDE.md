@@ -369,8 +369,10 @@ it guards**, and put new reasoning in that file rather than back in this one.
   what the renderer still answers (`previewCommands.ts`, `previewRegistry.ts`,
   `BrowserPane.tsx`), dev servers and port scanning (`preview.ts`,
   `devServerPlan.ts`, `localServers.ts`), viewports (`shared/previewDevices.ts`),
-  the React 19 picker (`previewSource.ts`, `sourceMap.ts`) and the preview's
-  permissions (`previewSession.ts`). Each chat drives its own pane on the
+  the React 19 picker (`previewSource.ts`, `sourceMap.ts`), the preview's
+  permissions (`previewSession.ts`), the agent's marks and the pop-up over a
+  closed panel (`PreviewMarks`, `previewActivity`), the strip's one-project
+  rule (`previewShown`) and why the guest is never focused in the background. Each chat drives its own pane on the
   shared dev server (`shared/previewPane.ts`, `PreviewTab.owner`), so agents
   test side by side; only focus and capture are serialized (`withWindow`).
   The agent never opens the panel: a closed panel keeps its previews parked
@@ -656,7 +658,7 @@ Adding the third provider changed **six lines of renderer logic and no architect
 
 A chat can switch provider mid-conversation (the composer's model picker offers all three providers). A cross-provider pick is **deferred**: it only arms `chat.pendingModel` — the composer previews the target (chip, efforts, placeholder) but nothing else happens, so a misclick is undone by picking again and the original session is never touched. The switch applies on the next send (`applyPendingSwitch` → `switchProvider`): the session is disposed and the conversation carries over by **handoff** (`src/main/handoff.ts` + `ChatManager.handoffContext`) — the outgoing model writes a brief from the app's own transcript on a *throwaway* one-shot, falling back to the raw capped transcript on failure or timeout. The brief rides that same turn via `AgentSession.send`'s `hiddenContext` parameter — prepended to the prompt the model sees, never to the displayed/persisted user message — and may be a *promise*: the echo lands instantly and each session's internal `sendChain` holds turns in order until the context resolves. The plan review's "Build with" picker crosses providers too (this one applies at Approve, which is already deliberate): `ChatManager.approvePlanCrossProvider` tears down the review (disposing the plan session resolves it), restores the pre-plan permission mode, runs `switchProvider`, and kicks off implementation with the plan text verbatim — the plan itself is the handoff artifact; the brief only covers the conversation around it.
 
-A plan approval may carry a `model` (`PermissionDecision`) — the plan review's "Build with" picker — so one model can plan and another implement, Cursor-style. Within a provider, each session applies it at approval time: Claude fires the live `setModel` *before* resolving the approval (both ride the CLI's stdin, so ordering guarantees the implementation turn starts on the new model); Codex sets `chat.model` before building the implementation turn, which snapshots it. A model from the *other* provider never reaches the session — the manager intercepts it (see the handoff paragraph above).
+A plan approval may carry a `model` (`PermissionDecision`) — the plan review's "Build with" picker — so one model can plan and another implement. Within a provider, each session applies it at approval time: Claude fires the live `setModel` *before* resolving the approval (both ride the CLI's stdin, so ordering guarantees the implementation turn starts on the new model); Codex sets `chat.model` before building the implementation turn, which snapshots it. A model from the *other* provider never reaches the session — the manager intercepts it (see the handoff paragraph above).
 
 **The model decides the backend, and it is stored twice.** Every place that
 remembers a model remembers a provider beside it (`chat.provider`,

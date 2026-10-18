@@ -19,6 +19,7 @@ import { TurnHeader } from '@/components/messages/TurnHeader'
 import { InlineVisual, isInlineVisual } from '@/components/messages/InlineVisual'
 import { turnPresentations } from '@/lib/turnChanges'
 import { foldTurns, type TurnFold } from '@/lib/turnFold'
+import { useApp } from '@/store'
 
 /**
  * What a chat's transcript draws, as a keyed node array — the desktop's
@@ -665,10 +666,14 @@ export function useTranscript({
   // ask.
   const awaitingAnswer = permissions.length > 0
   const showActivity = busy
+  // "Fold activity while working" makes the foot the turn's *next step*: it
+  // says "Thinking…" the moment a step lands and gives way to the step that
+  // follows, rather than "Working…" after a lull (see `showActivityLabel`).
+  const foldActivity = useApp((s) => s.foldActivity)
   // "Thinking…" until the model has produced something this turn; "Working…" after.
   const activityLabel = awaitingAnswer
     ? 'Waiting for your answer…'
-    : producedSomething
+    : producedSomething && !foldActivity
       ? 'Working…'
       : 'Thinking…'
 
@@ -814,8 +819,18 @@ export function useTranscript({
     const t = setTimeout(() => setQuiet(true), QUIET_MS)
     return () => clearTimeout(t)
   }, [drawn, busy])
+  // Folded, a finished call or a thought opening is a step that has *landed*,
+  // and the model is already on the next one — so the label draws at once,
+  // with no lull to wait out. Only a text tail still waits for `QUIET_MS`:
+  // nothing marks a paragraph finished, and the label must not sit under one
+  // that is still growing.
+  const tailPart = liveAssistant?.parts.findLast((p) => !!p)
+  const tailText = tailPart?.type === 'text' && tailPart.text.length > 0
   const showActivityLabel =
-    showActivity && (awaitingAnswer || !producedSomething || (quiet && !tailMoving))
+    showActivity &&
+    (awaitingAnswer ||
+      !producedSomething ||
+      (!tailMoving && (foldActivity ? !tailText || quiet : quiet)))
   // The most recent switch divider renders live ("writing handoff brief…")
   // exactly while main reports the handoff in flight; the busy gate means a
   // crash or restart can never leave a divider shimmering forever.

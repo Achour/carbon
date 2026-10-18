@@ -1,7 +1,7 @@
 # Imported themes
 
 Settings → Appearance → **Add theme** brings in a theme someone else wrote: a
-VS Code color theme from Open VSX, a `.json` file (VS Code, T3 Code or Carbon's
+VS Code color theme from Open VSX, a `.json` file (VS Code or Carbon's
 own export) dropped or chosen, or JSON pasted into the box. Code:
 `shared/themeImport.ts` (conversion, dependency-free and tested in
 `test/themeImport.test.ts`), `main/themeMarket.ts` + `main/zip.ts` (Open VSX),
@@ -76,10 +76,6 @@ matched to Carbon's eight coarse token groups — see `SYNTAX_SCOPES`; descendan
 selectors are skipped because they need a scope stack) and `--term-*` (its
 ANSI palette, read by `TerminalPanel`'s `themeColors`). Both are optional:
 absent, `index.css` and the terminal's literals apply.
-
-T3 Code's format is detected by any role only T3 has (`canvas`, `text`, …),
-because `accent` means Carbon's *hover* in a Carbon export and Carbon's
-*primary* in a T3 one.
 
 ## Open VSX
 

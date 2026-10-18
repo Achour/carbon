@@ -77,12 +77,16 @@ async function handle(cmd: PreviewCommand): Promise<Omit<PreviewCommandResult, '
   switch (cmd.kind) {
     case 'ensure': {
       const p = await ensure(cmd.cwd, cmd.url, cmd.owner)
-      return 'error' in p ? { ok: false, error: p.error } : { ok: true, paneId: p.id }
+      if ('error' in p) return { ok: false, error: p.error }
+      // Every agent tool reaches its pane through here, reads included.
+      if (cmd.owner) useApp.getState().notePreviewUse(p.id, cmd.owner)
+      return { ok: true, paneId: p.id }
     }
     case 'navigate': {
       if (!cmd.url) return { ok: false, error: 'No URL.' }
       const p = await ensure(cmd.cwd, cmd.url, cmd.owner)
       if ('error' in p) return { ok: false, error: p.error }
+      if (cmd.owner) useApp.getState().notePreviewUse(p.id, cmd.owner)
       // A pane just opened at this URL is already loading it.
       if (!p.opened || p.handle.getURL() !== cmd.url) p.handle.loadURL(cmd.url)
       return { ok: true, paneId: p.id }
@@ -102,8 +106,7 @@ async function handle(cmd: PreviewCommand): Promise<Omit<PreviewCommandResult, '
       pane.conceal()
       return { ok: true }
     case 'focus':
-      await pane.focus()
-      return { ok: true }
+      return { ok: true, focused: await pane.focus() }
     case 'expose':
       await pane.expose()
       return { ok: true }
@@ -112,6 +115,9 @@ async function handle(cmd: PreviewCommand): Promise<Omit<PreviewCommandResult, '
       return { ok: true }
     case 'unfocus':
       pane.unfocus()
+      return { ok: true }
+    case 'mark':
+      if (cmd.mark) pane.mark(cmd.mark)
       return { ok: true }
     case 'viewport': {
       if (!cmd.viewport) return { ok: false, error: 'No viewport.' }

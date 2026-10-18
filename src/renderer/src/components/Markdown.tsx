@@ -114,7 +114,7 @@ function LightboxButton({
   )
 }
 
-/** Full-screen, zoom + pan viewer for a rendered diagram, Cursor-style. */
+/** Full-screen, zoom + pan viewer for a rendered diagram. */
 function DiagramLightbox({ svg, onClose }: { svg: string; onClose: () => void }): React.JSX.Element {
   const [scale, setScale] = React.useState(1)
   const [pos, setPos] = React.useState({ x: 0, y: 0 })

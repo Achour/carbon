@@ -17,7 +17,7 @@ import { basename, dirname, join, resolve, sep } from 'node:path'
  * repository usually no longer exists. Those are placed by path instead, against
  * the roots that *did* resolve: Claude Code nests its own at
  * `<repo>/.claude/worktrees/`, and every other tool (Carbon's
- * `~/.karbun/worktrees/<repo>-<hash>/`, Codex's, T3 Code's) puts the repo's
+ * `~/.karbun/worktrees/<repo>-<hash>/`, Codex's) puts the repo's
  * name in a segment after a `worktrees` directory. Anything that matches
  * nothing stays its own folder rather than being guessed into a project.
  *

@@ -30,6 +30,7 @@ import {
   inActiveThread,
   panelFloats,
   severalChatsShown,
+  shownPreviews,
   THREAD_COLUMN_MIN_PX,
   useApp,
   type OpenTab
@@ -123,7 +124,7 @@ function Tab({
   active: boolean
   attention?: boolean
   preview?: boolean
-  /** Unsaved edits — the close button becomes a dot until hover, like VS Code. */
+  /** Unsaved edits — the close button becomes a dot until hover. */
   dirty?: boolean
   /** Foreground process name; renders the activity dot when set. */
   busy?: string
@@ -244,6 +245,12 @@ const CHAT_RESERVED_PX = 480
  * to see a column's edge and click back into it.
  */
 const FLOAT_EXPOSED_PX = 160
+/** The preview pop-up over a closed panel: its width range, where it sits, its corners. */
+const POPUP_MIN_W = 300
+const POPUP_MAX_W = 460
+const POPUP_TOP = 52
+const POPUP_INSET = 16
+const POPUP_RADIUS = 12
 const PANEL_TRANSITION_MS = 200
 
 // File-tree dock bounds: never below a readable tree, never so wide the
@@ -282,7 +289,7 @@ function PathBar({ entry, cwd }: { entry: OpenTab; cwd: string | null }): React.
 }
 
 /**
- * The "+" button: a Cursor-style quick-open. Type to fuzzy-search files (opens
+ * The "+" button: a quick-open. Type to fuzzy-search files (opens
  * one as a tab), or pick an action — Browser preview, Terminal, Review changes.
  * This is how you open files regardless of which tab is active, so the file tree
  * never needs to sit beside the browser.
@@ -477,7 +484,7 @@ function QuickOpen(): React.JSX.Element {
 /**
  * Horizontally-scrolling tab strip with an overlay scrollbar: the native bar is
  * hidden (so it never steals height and shoves the tabs up), and a thin bar
- * fades in over the tabs' bottom edge while scrolling, Cursor-style.
+ * fades in over the tabs' bottom edge while scrolling.
  */
 function TabScroller({ children }: { children: React.ReactNode }): React.JSX.Element {
   const ref = React.useRef<HTMLDivElement>(null)
@@ -552,8 +559,8 @@ function TabScroller({ children }: { children: React.ReactNode }): React.JSX.Ele
 }
 
 /**
- * Shown in the viewer when the panel is open but nothing is: a Cursor-style
- * launcher grid. "File" opens a blank Untitled tab (a picker until you choose).
+ * Shown in the viewer when the panel is open but nothing is: a launcher
+ * grid. "File" opens a blank Untitled tab (a picker until you choose).
  */
 function EmptyLauncher(): React.JSX.Element {
   const reviewChanges = useApp((s) => s.reviewChanges)
@@ -718,6 +725,15 @@ export function RightPanel(): React.JSX.Element | null {
   const terminalBusy = useApp((s) => s.terminalBusy)
   const closeTerminal = useApp((s) => s.closeTerminal)
   const previews = useApp((s) => s.previews)
+  // The strip lists this thread's project's previews (`shownPreviews`); every
+  // pane stays mounted below, since agents in other chats drive theirs hidden.
+  const sideColumns = useApp((s) => s.sideColumns)
+  const selectedCwd = useApp((s) => s.selectedCwd)
+  const activeChatId = useApp((s) => s.activeId)
+  const shown = React.useMemo(
+    () => shownPreviews({ previews, selectedCwd, activeId: activeChatId, sideColumns }),
+    [previews, selectedCwd, activeChatId, sideColumns]
+  )
   // A delegate's pane is named for the agent driving it, so five agents'
   // tabs are not five indistinguishable "Preview N"s.
   const chats = useApp((s) => s.chats)
@@ -726,7 +742,14 @@ export function RightPanel(): React.JSX.Element | null {
     return name ? `Preview · ${name}` : `Preview ${p.n}`
   }
   const closePreview = useApp((s) => s.closePreview)
-  const selectedCwd = useApp((s) => s.selectedCwd)
+  // The chat whose agent is driving a preview this turn: the tab's activity dot.
+  const previewActivity = useApp((s) => s.previewActivity)
+  const driverOf = (paneId: string): string | undefined => {
+    const a = previewActivity[paneId]
+    if (!a) return undefined
+    const chat = chats.find((c) => c.id === a.chatId)
+    return (chat?.delegation?.name ?? chat?.title) || 'An agent'
+  }
   const diffContents = useApp((s) => s.diffContents)
   const diffWrap = useApp((s) => s.diffWrap)
   const panelMaximized = useApp((s) => s.panelMaximized)
@@ -890,7 +913,7 @@ export function RightPanel(): React.JSX.Element | null {
       ? 'files'
       : terminals.some((t) => t.id === activeTab)
       ? activeTab!
-      : previews.some((p) => p.id === activeTab)
+      : shown.some((p) => p.id === activeTab)
         ? activeTab!
         : activeTab === 'plan' && showPlan
           ? 'plan'
@@ -905,14 +928,14 @@ export function RightPanel(): React.JSX.Element | null {
             : showPlan
               ? 'plan'
               : (openFiles[openFiles.length - 1]?.path ??
-                previews[previews.length - 1]?.id ??
+                shown[shown.length - 1]?.id ??
                 terminals[terminals.length - 1]?.id ??
                 // Browse mode is last, but it is still a tab: with it standing
                 // in the strip and nothing else open, falling through to `null`
                 // would draw the launcher's "nothing is open" under it.
                 (filesTab ? 'files' : null))
   const currentIsTerminal = terminals.some((t) => t.id === current)
-  const currentIsPreview = previews.some((p) => p.id === current)
+  const currentIsPreview = shown.some((p) => p.id === current)
   const currentIsChanges = typeof current === 'string' && current.startsWith('changes:')
   const currentIsPlan = current === 'plan'
   const currentIsAgents = current === 'agents'
@@ -1025,12 +1048,80 @@ export function RightPanel(): React.JSX.Element | null {
     Math.round(Math.min(width || (avail ?? PANEL_MIN_PX) * 0.52, room ?? Infinity))
   )
 
+  // **The pop-up.** While the panel is closed and a chat on screen has its
+  // agent in a preview, that pane is shown small in the corner, until the turn
+  // ends or the user hides it. It is the parked contents themselves, scaled
+  // and cropped to the page — a `<webview>` moved to another parent reloads,
+  // and a child cannot escape the parked layer's `opacity: 0` — so the page
+  // keeps the exact size the agent has been testing at and never reflows.
+  const popupPane = useApp((s) => {
+    for (const [id, a] of Object.entries(s.previewActivity)) {
+      if (!a.hidden && inActiveThread(s, a.chatId) && s.previews.some((p) => p.id === id)) return id
+    }
+    return null
+  })
+  const hidePreviewPopup = useApp((s) => s.hidePreviewPopup)
+  const popup = parked ? popupPane : null
+  const contentsRef = React.useRef<HTMLDivElement>(null)
+  // The parked layer's size and where the pane's page sits in it, in layout px
+  // (transforms aside), so the crop and the scale are exact.
+  const [popGeo, setPopGeo] = React.useState<{ w: number; h: number; top: number; stageH: number } | null>(null)
+  React.useLayoutEffect(() => {
+    if (!popup) {
+      setPopGeo(null)
+      return
+    }
+    const box = contentsRef.current
+    const stage = box?.querySelector<HTMLElement>(`[data-preview-pane="${CSS.escape(popup)}"] [data-preview-stage]`)
+    if (!box || !stage) return
+    const measure = (): void => {
+      let top = 0
+      for (let el: HTMLElement | null = stage; el && el !== box; el = el.offsetParent as HTMLElement | null) {
+        top += el.offsetTop
+      }
+      const next = { w: box.offsetWidth, h: box.offsetHeight, top, stageH: stage.offsetHeight }
+      setPopGeo((g) => (g && g.w === next.w && g.h === next.h && g.top === next.top && g.stageH === next.stageH ? g : next))
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(box)
+    ro.observe(stage)
+    return () => ro.disconnect()
+  }, [popup])
+  const pop =
+    popup && popGeo && popGeo.w > 0 && popGeo.stageH > 0
+      ? (() => {
+          const w = Math.round(Math.max(POPUP_MIN_W, Math.min(POPUP_MAX_W, (avail ?? POPUP_MAX_W) * 0.34)))
+          const scale = w / popGeo.w
+          // The page is scaled to the card's width and cropped, not squeezed,
+          // past a little over half the window's height.
+          const h = Math.round(Math.min(popGeo.stageH * scale, popGeo.h * 0.56))
+          const radius = POPUP_RADIUS / scale
+          // Floating, the shut aside sits one panel width (plus its gap) off
+          // the right edge; the pop-up undoes that, as the parked layer does.
+          const undo = floating ? `translateX(calc(-${popGeo.w}px - 2rem))` : undefined
+          return {
+            card: { top: POPUP_TOP, right: POPUP_INSET, width: w, height: h, transform: undo } satisfies React.CSSProperties,
+            layer: {
+              transform: `${floating ? 'translateX(calc(-100% - 2rem)) ' : ''}translate(-${POPUP_INSET}px, ${POPUP_TOP - popGeo.top * scale}px) scale(${scale})`,
+              transformOrigin: 'top right',
+              clipPath: `inset(${popGeo.top}px 0 ${popGeo.h - popGeo.top - h / scale}px 0 round ${radius}px)`
+            } satisfies React.CSSProperties
+          }
+        })()
+      : null
+  const openPopup = (): void => {
+    if (!popup) return
+    setActiveTab(popup)
+    if (!panelOpen) togglePanel()
+  }
+
   return (
     <aside
       ref={asideRef}
       data-right-panel
       data-floating={floating || undefined}
-      aria-hidden={!panelOpen}
+      aria-hidden={!panelOpen && !pop}
       style={
         panelMaximized
           ? undefined
@@ -1051,7 +1142,9 @@ export function RightPanel(): React.JSX.Element | null {
           (floating
             ? 'transition-[translate,opacity] duration-200 ease-out motion-reduce:transition-none'
             : 'transition-[width,min-width] duration-200 ease-out'),
-        floating && !panelOpen && 'translate-x-[calc(100%+2rem)] opacity-0',
+        floating && !panelOpen && 'translate-x-[calc(100%+2rem)]',
+        floating && !panelOpen && !pop && 'opacity-0',
+        pop && !floating && 'z-40',
         !panelOpen && 'pointer-events-none',
         // Not shrink-0: when space runs out the panel yields before the chat
         // column (which has its own min-width) gets crushed.
@@ -1063,16 +1156,30 @@ export function RightPanel(): React.JSX.Element | null {
           every frame of it. That floor is the *same* floor the aside has —
           spelled as a fixed 28rem it exceeded a panel that had already
           yielded, and the overflow was hidden past the panel's own edge. */}
+      {pop && (
+        // The pop-up is three layers in one rectangle: this card beneath (its
+        // shadow, and a surface while the page paints), the page itself — the
+        // parked layer below, scaled and cropped — and the controls over both.
+        <div
+          aria-hidden
+          style={pop.card}
+          className="absolute rounded-xl bg-card shadow-[0_24px_60px_-16px_rgb(0_0_0/0.55),0_4px_14px_-6px_rgb(0_0_0/0.3)] transition-opacity duration-200 starting:opacity-0"
+        />
+      )}
       {showContents && (
       <div
+        ref={contentsRef}
         style={
           panelMaximized
             ? undefined
             : parked
-              ? floating
-                ? // Undo the aside's own slide; its opacity-0 still applies.
-                  { transform: 'translateX(calc(-100% - 2rem))' }
-                : { position: 'absolute', insetBlock: 0, right: 0, width: `${parkedWidth}px` }
+              ? {
+                  ...(floating
+                    ? // Undo the aside's own slide; its opacity-0 still applies.
+                      { transform: 'translateX(calc(-100% - 2rem))' }
+                    : { position: 'absolute', insetBlock: 0, right: 0, width: `${parkedWidth}px` }),
+                  ...(pop?.layer ?? {})
+                }
               : { minWidth: `${minPx}px` }
         }
         className={cn(
@@ -1080,7 +1187,8 @@ export function RightPanel(): React.JSX.Element | null {
           // `invisible` as well as transparent: opacity leaves the tab strip's
           // no-drag holes punched in the title bar and its buttons in the Tab
           // order. The pane under it still exposes itself (`expose`).
-          parked && 'pointer-events-none invisible opacity-0'
+          parked && 'pointer-events-none',
+          parked && (pop ? 'transition-opacity duration-200' : 'invisible opacity-0')
         )}
       >
       {/* Resize handle — drag to resize, double-click to reset */}
@@ -1210,12 +1318,13 @@ export function RightPanel(): React.JSX.Element | null {
               onClose={() => closeTerminal(t.id)}
             />
           ))}
-          {previews.map((p) => (
+          {shown.map((p) => (
             <Tab
               key={p.id}
               icon={<SiteMark uri={p.favicon} inkDark={p.faviconInkDark} />}
               label={previewLabel(p)}
               active={current === p.id}
+              busy={driverOf(p.id)}
               dragId={p.id}
               onReorder={(from, side) => reorderTab(from, p.id, side)}
               onSelect={() => setActiveTab(p.id)}
@@ -1271,7 +1380,7 @@ export function RightPanel(): React.JSX.Element | null {
           so the panel has one strip across the top rather than one per column. */}
       {currentIsChanges && selectedCwd && <ReviewBar cwd={selectedCwd} />}
 
-      {/* Breadcrumb row with the file-tree toggle at its right, Cursor-style. */}
+      {/* Breadcrumb row with the file-tree toggle at its right. */}
       {showBreadcrumb && (
         <div className="flex h-8 shrink-0 items-center gap-2 border-b border-border/60 pr-1.5 pl-3">
           <div className="min-w-0 flex-1">
@@ -1312,7 +1421,7 @@ export function RightPanel(): React.JSX.Element | null {
         </div>
       )}
 
-      {/* Viewer + file tree / source control docked on the right, Cursor-style */}
+      {/* Viewer + file tree / source control docked on the right */}
       <div className="flex min-h-0 flex-1">
         <div className="relative flex min-w-0 flex-1 flex-col">
           {showViewer && (
@@ -1386,12 +1495,13 @@ export function RightPanel(): React.JSX.Element | null {
           {previews.map((p) => (
             <div
               key={p.id}
+              data-preview-pane={p.id}
               className={cn(
                 'absolute inset-0',
-                (current !== p.id || !showViewer) && 'invisible pointer-events-none'
+                (current !== p.id || !showViewer) && !(pop && popup === p.id) && 'invisible pointer-events-none'
               )}
             >
-              <BrowserPane id={p.id} active={current === p.id} cwd={p.cwd} />
+              <BrowserPane id={p.id} active={current === p.id} cwd={p.cwd} popup={!!pop && popup === p.id} />
             </div>
           ))}
         </div>
@@ -1419,13 +1529,51 @@ export function RightPanel(): React.JSX.Element | null {
             onDoubleClick={resetDockWidth}
             className="no-drag absolute inset-y-0 -left-[3px] z-10 w-1.5 cursor-col-resize transition-colors hover:bg-primary/40 active:bg-primary/60"
           />
-          {/* The dock follows the active tab, Cursor-style: the changes tree
+          {/* The dock follows the active tab: the changes tree
               while reviewing the Working Tree, the project file tree otherwise. */}
           {currentIsChanges ? <GitPanel /> : <FileTree />}
         </div>
         )}
       </div>
       </div>
+      )}
+      {pop && (
+        // Over the page and inert to it: a click into a page the agent is
+        // driving would race the agent's own input, so the card's body opens
+        // the panel instead, and the two controls show on hover.
+        <div
+          style={pop.card}
+          className="group pointer-events-auto absolute rounded-xl ring-1 ring-black/10 ring-inset transition-opacity duration-200 starting:opacity-0 dark:ring-white/12"
+        >
+          <button
+            type="button"
+            aria-label="Open the preview in the panel"
+            className="absolute inset-0 cursor-pointer rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            onClick={openPopup}
+          />
+          <div className="absolute top-2 right-2 flex gap-1 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
+            <WithTooltip label="Open in the panel">
+              <button
+                type="button"
+                aria-label="Open in the panel"
+                onClick={openPopup}
+                className="grid size-6 place-items-center rounded-full bg-black/55 text-white shadow-sm backdrop-blur-md transition-colors hover:bg-black/75 [&_svg]:size-3"
+              >
+                <Maximize2 />
+              </button>
+            </WithTooltip>
+            <WithTooltip label="Hide until this turn ends">
+              <button
+                type="button"
+                aria-label="Hide"
+                onClick={() => hidePreviewPopup(popup!)}
+                className="grid size-6 place-items-center rounded-full bg-black/55 text-white shadow-sm backdrop-blur-md transition-colors hover:bg-black/75 [&_svg]:size-3"
+              >
+                <X />
+              </button>
+            </WithTooltip>
+          </div>
+        </div>
       )}
 
       {/* Unsaved edits live only in the CodeMirror buffer — closing the tab is

@@ -2694,6 +2694,8 @@ export type PreviewEvent = { type: 'state'; state: PreviewState }
  *   A hidden pane is also exposed for the length of it (below).
  * - `expose` / `unexpose`: make a hidden pane visible *beneath* its cover for
  *   input that a hidden guest drops — a wheel scroll. Counted.
+ * - `mark`: draw what the agent just did over the pane (`PreviewMark`). Sent
+ *   without waiting for the answer: it never delays the input it describes.
  */
 export interface PreviewCommand {
   id: string
@@ -2709,6 +2711,7 @@ export interface PreviewCommand {
     | 'unfocus'
     | 'expose'
     | 'unexpose'
+    | 'mark'
   paneId?: string
   /**
    * ensure/navigate: the chat the pane is for. Each chat drives its own pane
@@ -2717,7 +2720,27 @@ export interface PreviewCommand {
   owner?: string
   url?: string
   viewport?: PreviewViewportPatch
+  mark?: PreviewMark
 }
+
+/** A rectangle in the page's viewport, CSS px. */
+export interface PreviewBox {
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+/**
+ * What an agent just did in a preview, for the pane to draw over the page.
+ * Positions are the page's own CSS px in a `vw`×`vh` viewport; the pane scales
+ * them to however large it draws the guest (device presets, zoom).
+ */
+export type PreviewMark =
+  | { kind: 'click'; x: number; y: number; vw: number; vh: number; double?: boolean }
+  | { kind: 'type'; box: PreviewBox; vw: number; vh: number }
+  | { kind: 'press'; key: string; box?: PreviewBox; vw?: number; vh?: number }
+  | { kind: 'scroll'; up: boolean }
 
 export interface PreviewCommandResult {
   id: string
@@ -2728,6 +2751,12 @@ export interface PreviewCommandResult {
   paneId?: string
   /** viewport: the pane's viewport after the change. */
   viewport?: PreviewViewport
+  /**
+   * focus: whether the guest holds the window's keyboard focus. In the
+   * background it is not given — focusing a `<webview>` activates the app —
+   * so this is whether it already has it, from an earlier click.
+   */
+  focused?: boolean
   error?: string
 }
 
@@ -3012,7 +3041,7 @@ export interface Api {
   deletePath(path: string): Promise<FsCreateResult>
   /**
    * Create an empty file or a folder. `name` may contain slashes — typing
-   * `lib/util.ts` makes the intermediate folders, the way VS Code does.
+   * `lib/util.ts` makes the intermediate folders.
    */
   createPath(parent: string, name: string, kind: 'file' | 'dir'): Promise<FsCreateResult>
   /** Start or attach to a language server for a project root and LSP language id. */

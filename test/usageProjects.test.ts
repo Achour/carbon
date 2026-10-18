@@ -16,9 +16,9 @@ test("Carbon's hashed worktree dir names exactly one of two same-named repos", (
 })
 
 test('a bare repo name after `worktrees` matches when it is unambiguous', () => {
-  assert.equal(foldWorktreePath('/Users/me/.t3/worktrees/site/branch', roots), '/Users/me/code/site')
+  assert.equal(foldWorktreePath('/Users/me/.tool/worktrees/site/branch', roots), '/Users/me/code/site')
   // Two repos called `app`: refuse to guess.
-  assert.equal(foldWorktreePath('/Users/me/.t3/worktrees/app/branch', roots), '/Users/me/.t3/worktrees/app/branch')
+  assert.equal(foldWorktreePath('/Users/me/.tool/worktrees/app/branch', roots), '/Users/me/.tool/worktrees/app/branch')
 })
 
 test('anything else stays its own folder', () => {

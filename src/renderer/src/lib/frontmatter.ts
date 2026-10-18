@@ -4,9 +4,8 @@
  * A leading `---` is a thematic break to CommonMark, the key/value lines that
  * follow are a paragraph, and the closing `---` turns that paragraph into a
  * **setext H2** — so an unhandled frontmatter block renders as one giant bold
- * heading, which is exactly what the preview used to show. Every Markdown
- * viewer worth the name (Zed, GitHub, Obsidian) parses it out instead; here it
- * becomes a small key/value table above the document.
+ * heading, which is exactly what the preview used to show. Here it becomes a
+ * small key/value table above the document.
  *
  * This is a *display* split, not a YAML parser: values are kept as written
  * (quotes and all), because guessing at a scalar's real value would be a

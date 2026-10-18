@@ -20,7 +20,7 @@ one).
 
 Google ships the ACP agent separately, as `agy_acp_server`, through the
 [ACP registry](https://github.com/agentclientprotocol/registry/blob/main/antigravity-acp/agent.json).
-That is what Zed and T3 Code run, and it has everything the CLI's stream lacks:
+It has everything the CLI's stream lacks:
 `session/request_permission`, `mcpCapabilities.http`, `session/resume`, live
 modes and models, and image prompts.
 
@@ -28,7 +28,7 @@ modes and models, and image prompts.
 
 Carbon ships no CLI, and this does not change that. Nothing is bundled. The
 server downloads only when the user presses **Install** in Settings → Providers,
-from the registry's own entry (the archive Zed fetches), into
+from the registry's own entry, into
 `userData/providers/antigravity/<version>/`. A registry bump reaches users
 without a Carbon release, which is the point of "use the user's install".
 

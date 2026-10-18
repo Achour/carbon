@@ -32,6 +32,7 @@ import { registerPreview, unregisterPreview, type PreviewHandle } from '@/lib/pr
 import { classifyInk } from '@/lib/faviconInk'
 import { Button } from '@/components/ui/button'
 import { WithTooltip } from '@/components/ui/tooltip'
+import { PreviewMarks, type PreviewMarksHandle } from '@/components/PreviewMarks'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -316,11 +317,14 @@ function attachmentName(p: PickPayload): string {
 export function BrowserPane({
   id,
   active,
-  cwd
+  cwd,
+  popup = false
 }: {
   id: string
   active: boolean
   cwd: string
+  /** Shown in the pop-up over a closed panel (`RightPanel`): on screen, though the panel is shut. */
+  popup?: boolean
 }): React.JSX.Element {
   const initialUrl = React.useRef(
     useApp.getState().previews.find((p) => p.id === id)?.url ?? 'http://localhost:3000'
@@ -332,6 +336,17 @@ export function BrowserPane({
   const viewport = useApp((s) => s.previews.find((p) => p.id === id)?.viewport) ?? FILL_VIEWPORT
 
   const rootRef = React.useRef<HTMLDivElement>(null)
+  const marksRef = React.useRef<PreviewMarksHandle>(null)
+  const popupRef = React.useRef(popup)
+  popupRef.current = popup
+  // The chat whose agent is using this pane this turn, by the name its tab
+  // and sidebar row already wear.
+  const driver = useApp((s) => {
+    const a = s.previewActivity[id]
+    if (!a) return undefined
+    const chat = s.chats.find((c) => c.id === a.chatId)
+    return chat ? (chat.delegation?.name ?? chat.title) || 'Agent' : 'Agent'
+  })
   const stageRef = React.useRef<HTMLDivElement>(null)
   const coverRef = React.useRef<HTMLDivElement>(null)
   const hostRef = React.useRef<HTMLDivElement>(null)
@@ -739,9 +754,11 @@ export function BrowserPane({
         requestAnimationFrame(() => requestAnimationFrame(finish))
         setTimeout(finish, 120)
       })
-    const visibleNow = (): boolean => activeRef.current && useApp.getState().panelOpen
-    // What had keyboard focus before an agent `focus`, to hand it back after.
+    const visibleNow = (): boolean => (activeRef.current && useApp.getState().panelOpen) || popupRef.current
+    // What had keyboard focus before an agent `focus`, to hand it back after —
+    // later, when the window is next focused, if Carbon is in the background.
     let priorFocus: HTMLElement | null = null
+    let pendingHandBack: (() => void) | null = null
     const root = (): HTMLDivElement | null => rootRef.current
     // **A hidden pane is a hidden page.** A guest whose pane is
     // `visibility: hidden` — a tab behind another, or any pane while the panel
@@ -851,24 +868,45 @@ export function BrowserPane({
         if (before && before !== wv) priorFocus = before as HTMLElement
         // A hidden <webview> takes no focus at all, and its guest no keys.
         await expose()
+        // **Focusing a `<webview>` activates the app.** Measured with another
+        // app in front: `wv.focus()` alone brought Carbon over it, every time,
+        // so an agent clicking in a preview pulled the user out of whatever
+        // they were doing. In the background the input goes in without the
+        // guest's focus instead (`insertText` in the page).
+        if (!document.hasFocus()) return document.activeElement === wv
         try {
           wv.focus()
         } catch {
           // not attached yet
         }
+        return true
       },
       unfocus: () => {
         const back = priorFocus
         priorFocus = null
-        if (document.activeElement === wv) {
+        const handBack = (): void => {
+          if (document.activeElement !== wv) return
           if (back && back !== document.body && back.isConnected) back.focus({ preventScroll: true })
           // Nothing focusable had it (or it would not take it back): just let go.
           if (document.activeElement === wv) wv.blur()
+        }
+        // A click takes the guest's focus by itself. Handed back while Carbon
+        // is in the background, it would bring the app to the front (see
+        // `focus`), so it waits for the user to come back to the window.
+        if (document.activeElement === wv) {
+          if (pendingHandBack) window.removeEventListener('focus', pendingHandBack)
+          pendingHandBack = null
+          if (document.hasFocus()) handBack()
+          else {
+            pendingHandBack = handBack
+            window.addEventListener('focus', handBack, { once: true })
+          }
         }
         unexpose()
       },
       expose,
       unexpose,
+      mark: (m) => marksRef.current?.show(m),
       reveal: async () => {
         const el = root()
         if (!el || visibleNow()) return
@@ -895,6 +933,7 @@ export function BrowserPane({
     registerPreview(id, handle)
 
     return () => {
+      if (pendingHandBack) window.removeEventListener('focus', pendingHandBack)
       wv.removeEventListener('dom-ready', onDomReady)
       wv.removeEventListener('did-navigate', onCommit)
       wv.removeEventListener('did-navigate-in-page', onNavigate)
@@ -1284,6 +1323,7 @@ export function BrowserPane({
       {/* Guest surface */}
       <div
         ref={stageRef}
+        data-preview-stage
         className={cn(
           'relative min-h-0 flex-1 overflow-hidden',
           size && 'bg-[radial-gradient(var(--border)_1px,transparent_1px)] [background-size:14px_14px]'
@@ -1315,6 +1355,8 @@ export function BrowserPane({
                 : undefined
             }
           />
+          {/* In the pop-up the chip would be a few px tall; its bar says the same. */}
+          <PreviewMarks ref={marksRef} driver={popup ? undefined : driver} />
         </div>
         {size && (
           <div className="pointer-events-none absolute inset-x-0 bottom-1.5 flex justify-center">

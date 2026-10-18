@@ -64,6 +64,14 @@
   --chart-claude: oklch(0.6 0.139 45.6);
   --chart-codex: oklch(0.54 0.124 256.5);
   /*
+   * The agent's marks in a preview (`PreviewMarks`): its cursor, click ripple
+   * and field outline. Drawn over whatever page is under test rather than over
+   * the app, so it is one vivid hue in both modes instead of the theme's
+   * `--primary`, which several themes make a near-neutral that vanishes on a
+   * light page.
+   */
+  --agent-mark: #2f7bf6;
+  /*
    * The categorical palette for charts an agent draws in the conversation
    * (`chart_render`), assigned to series by position and never cycled — so a
    * ninth series does not exist (`CHART_MAX_SERIES`). The dataviz reference

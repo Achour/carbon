@@ -121,8 +121,7 @@ function baseExtensions(path: string): Extension {
     diagnostics,
     // CodeMirror's default is that ⌘-click (⌃ off macOS) adds a selection range.
     // That is the chord go-to-definition uses, so left alone a jump also leaves
-    // a stray cursor behind. Alt-click takes over multi-cursor, which is what
-    // VS Code and Zed bind it to anyway.
+    // a stray cursor behind. Alt-click takes over multi-cursor.
     EditorView.clickAddsSelectionRange.of((e) => e.altKey),
     // `top: true` puts the search panel where FindBar sits for every other tab,
     // so ⌘F looks like one feature rather than two.

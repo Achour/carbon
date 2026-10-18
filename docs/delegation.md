@@ -10,10 +10,9 @@ An agent in any chat can call `agents_delegate` — "have Codex review this" —
 Carbon starts that task in a **new chat on the requested provider**, beside the
 one that asked, then sends the outcome back to the asking chat when it ends.
 `agents_send` gives an agent already started more work, by name;
-`agents_status` lists a chat's agents; `agents_cancel` stops one. The
-shape is T3 Code's `delegate_task`, built on what Carbon already had: the
-`carbon` MCP server every provider is given, and the four provider sessions
-behind `ChatManager`.
+`agents_status` lists a chat's agents; `agents_cancel` stops one. It is
+built on what Carbon already had: the `carbon` MCP server every provider is
+given, and the provider sessions behind `ChatManager`.
 
 ```mermaid
 flowchart LR

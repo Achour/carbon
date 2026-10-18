@@ -1,7 +1,7 @@
 import type * as React from 'react'
 
 /**
- * Roving keyboard navigation for a tree, VS Code / Cursor-style. Rows opt in with
+ * Roving keyboard navigation for a tree. Rows opt in with
  * `data-tree-row` (plus `data-kind="dir|file"` and `data-expanded` on folders);
  * DOM order is the visual order. Focus lives on the actual row `<button>`, so
  * Enter/Space fall through to the button's own click handler — this only wires up

@@ -106,16 +106,38 @@ used to keep it until the user clicked back. Focus emulation
 without real focus `insertText` still drops the text (re-measured). Measured
 over a type, a click, an Enter and a scroll: 28 ms of focus held in total.
 
-**That focus is the renderer's, never main's.** `<webview>.focus()`, CDP
-input, `capturePage` and navigation all leave a backgrounded app where it is
-(measured on Electron 43 with another app in front); a main-process
-`webContents.focus()` on the guest does not — Electron makes it focus the owner
-window, which *activates the app* over whatever the user is working in. There
-is deliberately no guard in `index.ts` to undo a steal: the one that existed
-`blur()`ed the window when it gained focus shortly after a preview command,
-and on macOS `blur()` is `orderBack:` — it fired mostly when the *user*
-switched back to Carbon while an agent drove the preview, and threw the window
-behind every other app's.
+**In the background, the guest is never given focus — it takes it.** With
+another app in front, two things the focus dance did activated Carbon over it
+(measured per call, Electron 43): `<webview>.focus()`, and handing the focus
+*back* to the composer from a focused guest. CDP input, `capturePage`,
+navigation and `expose` do not. So `focus` gives the guest the keyboard only
+while Carbon is the active app; otherwise it answers whether the guest already
+holds it (`PreviewCommandResult.focused`), and the hand-back waits for the
+window's next `focus` event. Without the keyboard:
+
+- **Typing goes through the page** (`insertText`): `execCommand('insertText')`
+  on the field `prepareType` focused and selected — the same trusted
+  `beforeinput`/`input` a keystroke fires, replacing the selection.
+- **Keys are given the keyboard by a click into their field**
+  (`grantKeyboard`): a CDP click focuses the guest *without* activating the app,
+  and the guest keeps that focus for later calls, so Enter then lands as a real
+  key (measured: trusted, and it submitted the form). The field's selection is
+  put back after the click.
+- **A key with no text field to click into** (Enter on a button, a key with
+  nothing focused) goes as page events (`syntheticKey`) — the page's handlers
+  see it, and Enter/Space activating a button or submitting a form are done by
+  hand — and the result says so.
+
+A main-process `webContents.focus()` on the guest activates the app too —
+Electron makes it focus the owner window. There is deliberately no guard in
+`index.ts` to undo a steal: the one that existed `blur()`ed the window when it
+gained focus shortly after a preview command, and on macOS `blur()` is
+`orderBack:` — it fired mostly when the *user* switched back to Carbon while an
+agent drove the preview, and threw the window behind every other app's.
+
+One activation is still unexplained: in a real agent turn, the first
+`preview_navigate` brought Carbon forward for about a second, and the same
+navigate driven with no provider turn did not.
 
 **The agent never opens the panel.** It used to, three ways: `ensure`
 reopened it to mount a tab, `openPreview` opened it even when asked to open
@@ -197,6 +219,50 @@ on screen, then the one most recently selected, then a tab that exists but is
 unmounted because the panel is closed (the panel opened, the tab not
 duplicated), and only then a new tab — and only when main gave a URL to open it
 at.
+
+**The strip lists one project.** Preview tabs are one list across every chat
+— a pane must stay mounted for an agent to drive it from a chat the user is
+not looking at — so the panel used to show every chat's previews, and a chat
+in one project wore the tabs an agent opened in another. `previewShown`
+(`shared/previewPane.ts`) decides the strip: the project on screen, or a pane a
+chat of the thread drives. Mounting ignores it, and so does nothing else. A
+pane opened *behind* becomes the panel's tab only for the thread it belongs to
+(`openPreview`), or a background agent's tab became this chat's active one.
+
+## What the agent is doing
+
+**Drawn by the app, over the page — never in it.** Main tells the pane what an
+action is about to do (`PreviewDriver.onMark` → a `mark` command, sent without
+waiting) a beat before the input goes out, and `PreviewMarks` draws it: a
+cursor that glides to each click and ripples, an outline on the field being
+typed into, the key pressed, the direction scrolled. Injected into the page,
+the marks would be in the agent's own snapshot and in the app's DOM under
+test. Positions arrive in the page's CSS px with the viewport they were
+measured in, and the layer covers the guest exactly as drawn, so one ratio per
+axis places them at any size — filled, a device preset scaled to fit, or the
+pop-up. Their hue is `--agent-mark`, one vivid blue rather than `--primary`,
+because they sit on whatever page is being tested and several themes make
+`--primary` a near-neutral.
+
+`previewActivity` records which chat used each pane this turn, set on every
+`ensure`/`navigate` (so a snapshot-only turn counts) and cleared when that chat
+goes idle: the tab's activity dot, the chip naming the chat in the pane, and
+the pop-up below all read it.
+
+**The pop-up is the parked layer itself.** While the panel is closed and a
+chat of the thread is using a pane, that pane is shown small in the top-right
+corner until the turn ends or the user hides it (hidden holds for the rest of
+the turn). A `<webview>` moved to another parent reloads, and nothing inside
+the parked layer can escape its `opacity: 0`, so the pop-up is that same layer
+made visible, scaled to the card's width and cropped to the pane's page with
+`clip-path` (taken in layout px, before the transform). The page therefore
+keeps the exact size the agent has been testing at — measured 642×778 with the
+pop-up shown and after it is hidden — and input still lands, being injected
+below the transform. Two plain siblings around it make the card: a surface and
+shadow beneath, and the controls above. The page is inert there: a click opens
+the panel, because one into a page the agent is driving would race its input.
+`BrowserPane`'s `popup` counts as on screen, or `expose` would draw its cover
+over the pop-up for every input.
 
 ## Screenshots
 

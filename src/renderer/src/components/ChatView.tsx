@@ -400,8 +400,7 @@ export const ChatView = React.memo(function ChatView({
   /**
    * Fetch the next older window once the reader comes within a screen of the
    * top — early enough that a steady scroll up never reaches the edge. There is
-   * no control to press: the history simply continues, the way it does in the
-   * Codex app and T3 Code.
+   * no control to press: the history simply continues.
    *
    * Two states load. Scrolled up (unpinned) near the top is the ordinary case.
    * A window too short to scroll is the other: it can never produce the scroll
@@ -636,8 +635,11 @@ export const ChatView = React.memo(function ChatView({
                 the two are separate children and the array is its own implicit
                 fragment, which puts the live node in a different parent again. */}
             {nodes}
+            {/* `-mt-2`: the label is a 28px row of its own, so the column's
+                full gap on top of it set it a paragraph-and-a-half below the
+                step it follows. */}
             {showActivity && (
-              <div className="min-h-7">
+              <div className="-mt-2 min-h-7">
                 <StreamingIndicator label={activityLabel} visible={showActivityLabel} />
               </div>
             )}

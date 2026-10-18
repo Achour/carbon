@@ -1,5 +1,5 @@
 import { nativeImage, webContents, type WebContents } from 'electron'
-import type { PreviewEmulation } from '@shared/types'
+import type { PreviewBox, PreviewEmulation, PreviewMark } from '@shared/types'
 import { formatConsole, formatConsoleArgs, formatNetwork, isProblem, PreviewLog, type ConsoleLevel, type RemoteObjectLike } from './previewLog.ts'
 import { agentCall, isFunctionSource, SERIALIZE_FN } from './previewPage.ts'
 import { parseKeyCombo } from './previewInput.ts'
@@ -122,8 +122,17 @@ function shortSource(url: string | undefined, line: number | undefined): string 
   return `${path}${line !== undefined ? `:${line + 1}` : ''}`
 }
 
+type MarkBox = PreviewBox & { vw: number; vh: number }
+
 export class PreviewDriver {
   private guests = new Map<string, Guest>()
+  /**
+   * Told what each action is about to do, so the pane can draw it — the
+   * manager forwards it to the renderer without waiting. Called just before
+   * the input goes out, never after: a mark that waited on the page would
+   * trail the change it describes.
+   */
+  onMark?: (paneId: string, mark: PreviewMark) => void
   /**
    * The short `eN` refs the model sees, each standing for a page-side
    * `<doc>:eN` key in one pane. Numbered across *all* panes and guests, so an
@@ -424,6 +433,14 @@ export class PreviewDriver {
     return 'error' in p ? p : { ...p, rev }
   }
 
+  private mark(g: Guest, mark: PreviewMark): void {
+    try {
+      this.onMark?.(g.paneId, mark)
+    } catch {
+      // drawing is a courtesy; it never fails the action
+    }
+  }
+
   /** Waits for the page to go quiet after an action: no load, no in-flight fetch, for a beat. */
   async settle(g: Guest, maxMs = 3000): Promise<void> {
     await sleep(120)
@@ -627,12 +644,57 @@ export class PreviewDriver {
       const mark = g.log.mark()
       const before = g.wc.getURL()
       const button = input.button === 'right' || input.button === 'middle' ? input.button : 'left'
+      const vp = size ?? (await this.evaluate<[number, number]>(g, '[innerWidth, innerHeight]').then(([vw, vh]) => ({ vw, vh })).catch(() => null))
+      if (vp) this.mark(g, { kind: 'click', x, y, vw: vp.vw, vh: vp.vh, double: input.double === true })
       const refused = await this.mouse(g, x, y, button, input.double === true, expectDoc, rev, size)
       await release?.()
       if (refused) return refused
       await this.settle(g)
       return this.report(g, `${input.double ? 'Double-clicked' : 'Clicked'} ${desc}.`, mark, before)
     }), expectDoc)
+  }
+
+  /**
+   * Gives the guest the window's keyboard the one way that does not bring
+   * Carbon forward: a click into the text field the keys are for, its
+   * selection put back after. Measured with another app in front: focusing the
+   * `<webview>` activates the app, while a CDP click focuses the guest without
+   * it, and the guest keeps that focus for the calls after. False when the
+   * keys are not for a text field — a click there would act on it.
+   */
+  private async grantKeyboard(g: Guest, ref?: string): Promise<boolean> {
+    const t = await this.evaluate<{ textual: boolean; ref?: string; start?: number | null; end?: number | null }>(
+      g,
+      agentCall('keyTarget', { ref })
+    )
+    if (!t.textual || !t.ref) return false
+    const p = await this.pointFor(g, { ref: t.ref })
+    if ('error' in p || p.obscuredBy) return false
+    await this.send(g, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x: p.x, y: p.y })
+    await this.send(g, 'Input.dispatchMouseEvent', { type: 'mousePressed', x: p.x, y: p.y, button: 'left', buttons: 1, clickCount: 1 })
+    await this.send(g, 'Input.dispatchMouseEvent', { type: 'mouseReleased', x: p.x, y: p.y, button: 'left', buttons: 0, clickCount: 1 })
+    await this.evaluate(g, agentCall('restoreSelection', { ref: t.ref, start: t.start ?? null, end: t.end ?? null }))
+    return true
+  }
+
+  /** A key as page events (see `syntheticKey`), when the guest cannot be given the keyboard. */
+  private async syntheticKey(g: Guest, combo: string, ref?: string): Promise<string | null> {
+    const k = parseKeyCombo(combo)
+    if ('error' in k) return k.error
+    await this.evaluate(
+      g,
+      agentCall('syntheticKey', {
+        ref,
+        key: k.key,
+        code: k.code,
+        keyCode: k.windowsVirtualKeyCode,
+        alt: (k.modifiers & 1) !== 0,
+        ctrl: (k.modifiers & 2) !== 0,
+        meta: (k.modifiers & 4) !== 0,
+        shift: (k.modifiers & 8) !== 0
+      })
+    )
+    return null
   }
 
   private async key(g: Guest, combo: string, expectDoc?: number): Promise<string | null> {
@@ -651,15 +713,26 @@ export class PreviewDriver {
     return null
   }
 
-  async type(g: Guest, input: PreviewToolInput, expectDoc?: number, release?: () => Promise<void>): Promise<string> {
+  async type(
+    g: Guest,
+    input: PreviewToolInput,
+    expectDoc?: number,
+    release?: () => Promise<void>,
+    /** Whether the guest holds the window's keyboard focus (see `preview.ts`). */
+    keyboard = true
+  ): Promise<string> {
     return this.act(g, async () => {
       const t = this.target(g, { ref: input.ref, selector: input.selector })
       if (typeof t === 'string') return t
-      const prep = await this.evaluate<{ desc: string; ref: string; selected?: string } | { error: string }>(
+      const prep = await this.evaluate<{ desc: string; ref: string; selected?: string; box?: MarkBox } | { error: string }>(
         g,
         agentCall('prepareType', { ...t, append: input.append === true, text: input.text ?? '' })
       )
       if ('error' in prep) return prep.error
+      if (prep.box) {
+        const { vw, vh, ...box } = prep.box
+        this.mark(g, { kind: 'type', box, vw, vh })
+      }
       const mark = g.log.mark()
       const before = g.wc.getURL()
       if (prep.selected !== undefined) {
@@ -672,11 +745,26 @@ export class PreviewDriver {
       const text = input.text ?? ''
       const moved = this.moved(g, expectDoc)
       if (moved) return moved
-      if (text) await this.send(g, 'Input.insertText', { text })
+      if (!keyboard) {
+        if (text || input.append !== true) {
+          const done = await this.evaluate<{ ok?: boolean; error?: string }>(
+            g,
+            agentCall('insertText', { ref: prep.ref, text, append: input.append === true })
+          )
+          if (done.error) return done.error
+        }
+      } else if (text) await this.send(g, 'Input.insertText', { text })
       else if (input.append !== true) await this.key(g, 'Backspace', expectDoc)
+      let simulated = false
       if (input.submit) {
-        const refused = await this.key(g, 'Enter', expectDoc)
-        if (refused) return refused
+        this.mark(g, { kind: 'press', key: 'Enter' })
+        if (keyboard || (await this.grantKeyboard(g, prep.ref))) {
+          const refused = await this.key(g, 'Enter', expectDoc)
+          if (refused) return refused
+        } else {
+          await this.syntheticKey(g, 'Enter', prep.ref)
+          simulated = true
+        }
       }
       await release?.()
       await this.settle(g)
@@ -687,30 +775,48 @@ export class PreviewDriver {
           : ''
       return this.report(
         g,
-        `Typed into ${prep.desc} [ref=${this.alias(g, prep.ref)}].${now}${input.submit ? ' Pressed Enter.' : ''}`,
+        `Typed into ${prep.desc} [ref=${this.alias(g, prep.ref)}].${now}${input.submit ? ` Pressed Enter${simulated ? BACKGROUND_KEY : ''}.` : ''}`,
         mark,
         before
       )
     }, expectDoc)
   }
 
-  async press(g: Guest, input: PreviewToolInput, expectDoc?: number, release?: () => Promise<void>): Promise<string> {
+  async press(
+    g: Guest,
+    input: PreviewToolInput,
+    expectDoc?: number,
+    release?: () => Promise<void>,
+    /** Whether the guest holds the window's keyboard focus (see `preview.ts`). */
+    keyboard = true
+  ): Promise<string> {
     return this.act(g, async () => {
       let where = 'the focused element'
+      let at: MarkBox | undefined
+      let targetRef: string | undefined
       if (input.ref || input.selector) {
         const t = this.target(g, { ref: input.ref, selector: input.selector })
         if (typeof t === 'string') return t
-        const f = await this.evaluate<{ desc: string; ref: string } | { error: string }>(g, agentCall('focus', t))
+        const f = await this.evaluate<{ desc: string; ref: string; box?: MarkBox } | { error: string }>(g, agentCall('focus', t))
         if ('error' in f) return f.error
         where = `${f.desc} [ref=${this.alias(g, f.ref)}]`
+        at = f.box
+        targetRef = f.ref
+      }
+      if (input.key) {
+        if (at) {
+          const { vw, vh, ...box } = at
+          this.mark(g, { kind: 'press', key: input.key, box, vw, vh })
+        } else this.mark(g, { kind: 'press', key: input.key })
       }
       const mark = g.log.mark()
       const before = g.wc.getURL()
-      const err = await this.key(g, input.key ?? '', expectDoc)
+      const real = keyboard || (await this.grantKeyboard(g, targetRef))
+      const err = real ? await this.key(g, input.key ?? '', expectDoc) : await this.syntheticKey(g, input.key ?? '', targetRef)
       await release?.()
       if (err) return err
       await this.settle(g)
-      return this.report(g, `Pressed ${input.key} on ${where}.`, mark, before)
+      return this.report(g, `Pressed ${input.key} on ${where}${real ? '' : BACKGROUND_KEY}.`, mark, before)
     }, expectDoc)
   }
 
@@ -721,6 +827,7 @@ export class PreviewDriver {
       return `Scrolled to y=${Math.min(s.y, max)} of ${max}px${s.x ? `, x=${s.x}` : ''}.`
     }
     if (input.to === 'top' || input.to === 'bottom') {
+      this.mark(g, { kind: 'scroll', up: input.to === 'top' })
       return describe(await this.evaluate<State>(g, agentCall('scrollTo', input.to)))
     }
     return this.exclusive(g, () => this.scrollNow(g, input, describe))
@@ -747,6 +854,7 @@ export class PreviewDriver {
     const dy = input.dy ?? 0
     const dx = input.dx ?? 0
     if (dy || dx) {
+      if (dy) this.mark(g, { kind: 'scroll', up: dy < 0 })
       if (x === undefined || y === undefined) {
         const vp = await this.evaluate<{ w: number; h: number }>(g, '({ w: innerWidth, h: innerHeight })')
         x = vp.w / 2
@@ -1034,6 +1142,13 @@ export class PreviewDriver {
     for (const id of [...this.guests.keys()]) this.detach(id)
   }
 }
+
+/**
+ * Said beside a key sent as page events, so the agent knows a browser default
+ * the page relies on (typing a character, moving focus) did not happen.
+ */
+const BACKGROUND_KEY =
+  " (as a page event: Carbon is in the background, and real keys would bring it to the front; click into a text field first for real keys)"
 
 function originOf(url: string): string | undefined {
   try {

@@ -39,7 +39,7 @@ import { WithTooltip } from '@/components/ui/tooltip'
 
 const INDENT = 12
 
-/** Compact per-file line deltas (`+12 −3`), Cursor-style. */
+/** Compact per-file line deltas (`+12 −3`). */
 export function LineDeltas({
   additions,
   deletions,
@@ -250,7 +250,7 @@ function TreeLevel({
   )
 }
 
-/** Renders changed files as a nested, collapsible folder tree, Cursor-style. */
+/** Renders changed files as a nested, collapsible folder tree. */
 function ChangeTree({ changes }: { changes: GitFileChange[] }): React.JSX.Element {
   const tree = React.useMemo(() => compress(buildTree(changes)), [changes])
   const [collapsed, setCollapsed] = React.useState<Record<string, boolean>>({})
@@ -407,7 +407,7 @@ export function GitActionButton(): React.JSX.Element | null {
   )
   if (!primary) return null
 
-  // The dropdown is a default-PICKER (Cursor-style), not an action menu: the
+  // The dropdown is a default-PICKER, not an action menu: the
   // main button runs whichever action is currently selected; picking from the
   // dropdown just swaps which one that is (persisted). The sticky choice applies
   // only while it's still an available action for the current state.

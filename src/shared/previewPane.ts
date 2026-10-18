@@ -58,3 +58,19 @@ export function pickPreviewPane(
   const free = best(mine.filter((p) => !p.owner || !isLive(p.owner)))
   return free ? { id: free.id, claim: true } : null
 }
+
+/**
+ * Whether the panel on screen lists a preview tab: one of the project it is
+ * showing (`cwd`), or one a chat of the thread on screen drives. Every pane
+ * stays mounted either way, since the agent drives it from any chat; what this
+ * decides is only the strip, so a chat in one project never shows the tabs an
+ * agent opened in another.
+ */
+export function previewShown(
+  p: { cwd: string; owner?: string },
+  cwd: string | null,
+  chatIds: readonly string[]
+): boolean {
+  if (p.owner && chatIds.includes(p.owner)) return true
+  return cwd !== null && normalizeCwd(p.cwd) === normalizeCwd(cwd)
+}

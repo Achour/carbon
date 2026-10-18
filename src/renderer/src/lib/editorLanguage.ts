@@ -78,7 +78,7 @@ export async function loadLanguage(
 
 /**
  * Files whose lines are sentences rather than statements, and which therefore
- * soft-wrap in the editor — Zed's rule, and for Zed's reason: a paragraph is
+ * soft-wrap in the editor: a paragraph is
  * one "line" to the file and a horizontal scrollbar is the wrong way to read
  * one, while a wrapped line of code breaks mid-token and turns a column of
  * identifiers into rubble (the same argument that keeps `diffWrap` off by

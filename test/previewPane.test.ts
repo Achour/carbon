@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert'
 import test from 'node:test'
-import { pickPreviewPane, type PaneCandidate } from '../src/shared/previewPane.ts'
+import { pickPreviewPane, previewShown, type PaneCandidate } from '../src/shared/previewPane.ts'
 
 const live = new Set(['parent', 'codex-a', 'codex-b'])
 const isLive = (id: string): boolean => live.has(id)
@@ -42,4 +42,15 @@ test('only panes of the project; among equals the visible one, then the most rec
 test('no owner (a caller with no chat) takes any pane of the project and claims none', () => {
   const panes: PaneCandidate[] = [{ id: 'p1', cwd: '/app', owner: 'codex-a' }]
   assert.deepEqual(pickPreviewPane(panes, '/app', undefined, isLive), { id: 'p1', claim: false })
+})
+
+test("the strip lists only the project on screen and the thread's own panes", () => {
+  const thread = ['parent', 'codex-a']
+  assert.equal(previewShown({ cwd: '/app/' }, '/app', thread), true)
+  assert.equal(previewShown({ cwd: '/other', owner: 'someone' }, '/app', thread), false)
+  // Another chat's pane on the same project still shows: same project, same server.
+  assert.equal(previewShown({ cwd: '/app', owner: 'someone' }, '/app', thread), true)
+  // A thread chat's pane shows even if it was opened in another folder.
+  assert.equal(previewShown({ cwd: '/other', owner: 'codex-a' }, '/app', thread), true)
+  assert.equal(previewShown({ cwd: '/app' }, null, []), false)
 })

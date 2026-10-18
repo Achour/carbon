@@ -60,6 +60,7 @@ import {
 } from '@/lib/drafts'
 import type { ComposerDraft, ProjectDraft, ProjectDraftOptions } from '@/lib/drafts'
 import { moveItem, orderByHint } from '@/lib/tabOrder'
+import { previewShown } from '@shared/previewPane'
 import { projectRoots } from '@/lib/projects'
 // One direction only: the agents store knows nothing of this one, which is
 // what lets the panel's selection be set from every route into it.
@@ -258,7 +259,7 @@ export interface DiffTabMeta {
 }
 
 /**
- * Which changes the source-control panel shows and commits, Codex/Cursor-style:
+ * Which changes the source-control panel shows and commits:
  * - `last-turn`   — only the files the active chat's last turn edited
  * - `uncommitted` — the whole working tree (default)
  * - `branch`      — everything on the branch vs its base (committed + uncommitted)
@@ -404,6 +405,18 @@ export function inActiveThread(s: Pick<AppState, 'activeId' | 'sideColumns'>, id
  */
 export function focusedChatOf(s: Pick<AppState, 'focusedChatId'>): string | null {
   return parseAgentColumn(s.focusedChatId ?? '')?.parentId ?? s.focusedChatId
+}
+
+/**
+ * The preview tabs the panel lists for the thread on screen (`previewShown`).
+ * Every pane stays mounted whatever this says — agents in other chats drive
+ * theirs hidden — so this is for the strip and for picking a tab to show.
+ */
+export function shownPreviews(
+  s: Pick<AppState, 'previews' | 'selectedCwd' | 'activeId' | 'sideColumns'>
+): PreviewTab[] {
+  const ids = s.activeId ? [s.activeId, ...s.sideColumns] : s.sideColumns
+  return s.previews.filter((p) => previewShown(p, s.selectedCwd, ids))
 }
 
 /** The active thread already draws `MAX_THREAD_CHATS`. */
@@ -930,6 +943,16 @@ interface AppState {
   setPreviewFavicon(id: string, uri: string | null, inkDark?: boolean): void
   /** A preview tab's viewport — set from its device menu or by the agent's `preview_resize`. */
   setPreviewViewport(id: string, viewport: PreviewViewport): void
+  /**
+   * Which chat's agent is using each preview pane this turn, by pane id. Set
+   * by every agent command that lands on a pane, cleared when that chat goes
+   * idle. Drives the tab's busy mark, the pane's "agent" chip and the pop-up
+   * over a closed panel; `hidden` is the user dismissing that pop-up, which
+   * holds for the rest of the turn.
+   */
+  previewActivity: Record<string, { chatId: string; hidden?: boolean }>
+  notePreviewUse(paneId: string, chatId: string): void
+  hidePreviewPopup(paneId: string): void
   /** Dev-server state per project folder, keyed by cwd. */
   previewStates: Record<string, PreviewState>
   applyPreviewState(state: PreviewState): void
@@ -1109,6 +1132,13 @@ interface AppState {
   /** How much each sidebar chat row says — see `SidebarDensity`. Persisted. */
   sidebarDensity: SidebarDensity
   setSidebarDensity(density: SidebarDensity): void
+  /**
+   * Settings → Chats → "Fold activity while working": a run of calls is one
+   * summary line from its first call, not only once its turn ends (see
+   * `useRunDisclosure`). On by default. Persisted.
+   */
+  foldActivity: boolean
+  setFoldActivity(on: boolean): void
   /**
    * Project (by cwd) the detailed sidebar's flat list is scoped to; null is all
    * of them. Detailed mode trades project *grouping* for a self-describing row,
@@ -1348,7 +1378,7 @@ interface AppState {
   explorerOpen: boolean
   setExplorerOpen(open: boolean): void
   toggleExplorer(): void
-  /** Reveal the in-app file explorer in a file context (Cursor-style). */
+  /** Reveal the in-app file explorer in a file context. */
   browseFiles(): void
   /** Close browse mode's tab — the ✕ and ⌘W. */
   closeFilesTab(): void
@@ -2454,7 +2484,14 @@ export const useApp = create<AppState>((set, get) => ({
       return {
         previews: [...s.previews, { id, n, url: target, cwd: folder, ...(owner ? { owner } : {}) }],
         previewSeq: n,
-        activeTab: opts?.activate === false && s.activeTab ? s.activeTab : id,
+        // Opened behind, it becomes the tab only of a panel with none — and
+        // only the panel it belongs to: an agent in another chat opening its
+        // pane must not become this chat's active tab.
+        activeTab:
+          opts?.activate === false
+            ? s.activeTab ||
+              (owner ? (inActiveThread(s, owner) ? id : null) : folder === s.selectedCwd ? id : null)
+            : id,
         // Opened behind is opened without the panel too: the agent's pane is
         // driven hidden, and the panel is the user's to open.
         ...(opts?.activate === false ? {} : panelPatch(s, true))
@@ -2468,6 +2505,18 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   previewStates: {},
+  previewActivity: {},
+
+  notePreviewUse(paneId, chatId) {
+    if (get().previewActivity[paneId]?.chatId === chatId) return
+    set((s) => ({ previewActivity: { ...s.previewActivity, [paneId]: { chatId } } }))
+  },
+
+  hidePreviewPopup(paneId) {
+    const a = get().previewActivity[paneId]
+    if (!a || a.hidden) return
+    set((s) => ({ previewActivity: { ...s.previewActivity, [paneId]: { ...a, hidden: true } } }))
+  },
 
   applyPreviewState(state) {
     set((s) => ({ previewStates: { ...s.previewStates, [state.cwd]: state } }))
@@ -2501,13 +2550,15 @@ export const useApp = create<AppState>((set, get) => ({
       const previews = s.previews.filter((p) => p.id !== id)
       let activeTab = s.activeTab
       if (activeTab === id) {
+        const shown = shownPreviews({ ...s, previews })
         activeTab =
-          previews[previews.length - 1]?.id ??
+          shown[shown.length - 1]?.id ??
           s.openFiles[s.openFiles.length - 1]?.path ??
           s.terminals[s.terminals.length - 1]?.id ??
           (s.planPanel ? 'plan' : null)
       }
-      return { previews, activeTab }
+      const { [id]: _gone, ...previewActivity } = s.previewActivity
+      return { previews, activeTab, previewActivity }
     })
   },
 
@@ -2901,6 +2952,13 @@ export const useApp = create<AppState>((set, get) => ({
     // Switching *into* detailed is the one moment the branch labels are asked
     // for and not yet known; the Sidebar's own effect covers a cold start.
     if (density === 'detailed') void get().refreshChatBranches()
+  },
+
+  foldActivity: localStorage.getItem('foldActivity') !== '0',
+
+  setFoldActivity(on) {
+    localStorage.setItem('foldActivity', on ? '1' : '0')
+    set({ foldActivity: on })
   },
 
   sidebarProject: localStorage.getItem('sidebarProject') || null,
@@ -3629,7 +3687,7 @@ export const useApp = create<AppState>((set, get) => ({
       } else if (replace && s.openFiles.some((f) => f.path === replace)) {
         openFiles = s.openFiles.map((f) => (f.path === replace ? { path, name } : f))
       } else if (preview) {
-        // A single-clicked file reuses the current preview slot, like Cursor —
+        // A single-clicked file reuses the current preview slot —
         // but a preview tab the user has typed into is no longer disposable.
         // Pin it instead of replacing it: the alternative is unsaved edits
         // vanishing on a single click somewhere else in the tree.
@@ -4875,7 +4933,7 @@ export const useApp = create<AppState>((set, get) => ({
 
   async sendMessage(id, text, attachments, label) {
     if (!id) return
-    // Mid-turn sends wait in a queue until the chat goes idle, like Cursor.
+    // Mid-turn sends wait in a queue until the chat goes idle.
     if ((get().statuses[id] ?? 'idle') !== 'idle') {
       const item: QueuedMessage = { id: crypto.randomUUID(), text, attachments, label }
       set((s) => ({ queued: { ...s.queued, [id]: [...(s.queued[id] ?? []), item] } }))
@@ -5674,6 +5732,15 @@ export const useApp = create<AppState>((set, get) => ({
         set((st) => ({
           ...(finishedUnseen ? { unreadChats: { ...st.unreadChats, [ev.chatId]: true as const } } : {}),
           statuses: { ...st.statuses, [ev.chatId]: ev.status },
+          // The turn that used a preview is over: its pane stops reading as
+          // driven, and a dismissed pop-up may show again next turn.
+          ...(ev.status === 'idle' && Object.values(st.previewActivity).some((a) => a.chatId === ev.chatId)
+            ? {
+                previewActivity: Object.fromEntries(
+                  Object.entries(st.previewActivity).filter(([, a]) => a.chatId !== ev.chatId)
+                )
+              }
+            : {}),
           // A turn starting stamps the row's time and nothing else — the row
           // stays where the user put it (see `touchChat`).
           chats:

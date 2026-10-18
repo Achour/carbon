@@ -471,6 +471,12 @@ export function carbonAgentRuntime(): unknown {
     return { error: 'Name a target: ref (from preview_snapshot), selector, or text.' }
   }
 
+  /** Where an element sits in the viewport, for the pane to draw the agent's mark on it. */
+  const boxOf = (el: Element): { x: number; y: number; w: number; h: number; vw: number; vh: number } => {
+    const r = el.getBoundingClientRect()
+    return { x: r.left, y: r.top, w: r.width, h: r.height, vw: innerWidth, vh: innerHeight }
+  }
+
   /** Scrolls the target into view and returns the point a real click would land on. */
   const point = (t: Target): unknown => {
     const found = resolve(t)
@@ -536,7 +542,7 @@ export function carbonAgentRuntime(): unknown {
       s.value = opt.value
       s.dispatchEvent(new Event('input', { bubbles: true }))
       s.dispatchEvent(new Event('change', { bubbles: true }))
-      return { selected: norm(opt.text), desc: describe(el) }
+      return { selected: norm(opt.text), desc: describe(el), box: boxOf(el) }
     }
     const editable = tag === 'input' || tag === 'textarea' || (el as HTMLElement).isContentEditable
     if (!editable) return { error: describe(el) + ' is not a text field.' }
@@ -562,7 +568,121 @@ export function carbonAgentRuntime(): unknown {
         if (!t.append) input.select()
       }
     }
-    return { desc: describe(el), ref: refFor(el) }
+    return { desc: describe(el), ref: refFor(el), box: boxOf(el) }
+  }
+
+  /**
+   * Types into the field `prepareType` focused and selected, without the
+   * guest holding the window's keyboard focus: the browser's own editing
+   * command, which fires the same trusted `beforeinput`/`input` a keystroke
+   * does and replaces the selection, so fill semantics hold. Used while Carbon
+   * is in the background, where giving the guest focus would bring the app to
+   * the front (`preview.ts`).
+   */
+  const insertText = (a: { ref: string; text: string; append?: boolean }): unknown => {
+    const el = byRef.get(a.ref)?.deref() as HTMLElement | undefined
+    if (!el || !el.isConnected) return { error: 'The field is gone.' }
+    if (document.activeElement !== el) el.focus()
+    const ok = a.text ? document.execCommand('insertText', false, a.text) : document.execCommand('delete')
+    if (ok) return { ok: true }
+    // A field the command will not edit: set the value the way a framework's
+    // own input handling expects to see it change.
+    if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+      const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype
+      const set = Object.getOwnPropertyDescriptor(proto, 'value')?.set
+      set?.call(el, a.append ? el.value + a.text : a.text)
+      el.dispatchEvent(new Event('input', { bubbles: true }))
+      el.dispatchEvent(new Event('change', { bubbles: true }))
+      return { ok: true }
+    }
+    return { error: 'Could not type into ' + describe(el) + '.' }
+  }
+
+  /**
+   * Where keys aimed at an element (or the focused one) would go, for giving
+   * the guest the keyboard in the background: a text field can be clicked
+   * into, as a person would before pressing a key, and its selection put
+   * back after; anything else cannot be clicked without acting on it.
+   */
+  const keyTarget = (a: { ref?: string }): unknown => {
+    const el = (a.ref ? byRef.get(a.ref)?.deref() : document.activeElement) as HTMLElement | null | undefined
+    if (!el || el === document.body || !el.isConnected) return { textual: false }
+    const tag = el.tagName.toLowerCase()
+    const textual =
+      tag === 'textarea' ||
+      el.isContentEditable ||
+      (tag === 'input' && !/^(button|submit|reset|checkbox|radio|file|image|color|range|hidden)$/i.test((el as HTMLInputElement).type))
+    if (!textual) return { textual: false }
+    const f = el as HTMLInputElement
+    let start: number | null = null
+    let end: number | null = null
+    try {
+      start = f.selectionStart
+      end = f.selectionEnd
+    } catch {
+      // email/number inputs report no selection
+    }
+    return { textual: true, ref: refFor(el), start, end }
+  }
+
+  /** Puts a field's focus and selection back after the click that gave the guest the keyboard. */
+  const restoreSelection = (a: { ref: string; start: number | null; end: number | null }): unknown => {
+    const el = byRef.get(a.ref)?.deref() as HTMLInputElement | undefined
+    if (!el) return false
+    el.focus()
+    if (a.start !== null && a.end !== null) {
+      try {
+        el.setSelectionRange(a.start, a.end)
+      } catch {
+        // no selection API on this type
+      }
+    }
+    return true
+  }
+
+  /**
+   * A key as page events, for the background when there is no field to click
+   * into. Untrusted, so the page's own key handlers see it but the browser
+   * does nothing with it; the two default actions agents rely on — Enter
+   * submitting a form or activating a button, Space activating one — are done
+   * here instead.
+   */
+  const syntheticKey = (a: {
+    ref?: string
+    key: string
+    code: string
+    keyCode: number
+    alt: boolean
+    ctrl: boolean
+    meta: boolean
+    shift: boolean
+  }): unknown => {
+    const el = ((a.ref ? byRef.get(a.ref)?.deref() : document.activeElement) as HTMLElement | null | undefined) ?? document.body
+    const init = {
+      key: a.key,
+      code: a.code,
+      keyCode: a.keyCode,
+      which: a.keyCode,
+      altKey: a.alt,
+      ctrlKey: a.ctrl,
+      metaKey: a.meta,
+      shiftKey: a.shift,
+      bubbles: true,
+      cancelable: true,
+      composed: true
+    }
+    const go = el.dispatchEvent(new KeyboardEvent('keydown', init))
+    if (go && !a.alt && !a.ctrl && !a.meta) {
+      const tag = el.tagName.toLowerCase()
+      const type = (el as HTMLInputElement).type
+      const role = el.getAttribute('role')
+      const activates = tag === 'button' || role === 'button' || ((tag === 'a' || role === 'link') && a.key === 'Enter')
+      if (a.key === 'Enter' && tag === 'input' && (el as HTMLInputElement).form) (el as HTMLInputElement).form!.requestSubmit()
+      else if ((a.key === 'Enter' || a.key === ' ') && activates) el.click()
+      else if (a.key === ' ' && tag === 'input' && (type === 'checkbox' || type === 'radio')) el.click()
+    }
+    el.dispatchEvent(new KeyboardEvent('keyup', init))
+    return { desc: describe(el) }
   }
 
   /** The value a field holds after typing, to confirm what landed. */
@@ -654,10 +774,10 @@ export function carbonAgentRuntime(): unknown {
     // Keys sent after a focus that did not take would go to whatever had
     // focus before — Enter on a disabled button submitting another form.
     if (!hasFocus(el)) return { error: 'Could not focus ' + describe(el) + ' — it is disabled, hidden or not focusable.' }
-    return { desc: describe(el), ref: refFor(el) }
+    return { desc: describe(el), ref: refFor(el), box: boxOf(el) }
   }
 
-  const agent = { snapshot, point, prepareType, valueOf, present, scrollState, scrollTo, serialize, describe, focus }
+  const agent = { snapshot, point, prepareType, insertText, keyTarget, restoreSelection, syntheticKey, valueOf, present, scrollState, scrollTo, serialize, describe, focus }
   Object.defineProperty(w, '__carbonAgent', { value: agent, configurable: true })
   return agent
 }

@@ -331,7 +331,7 @@ function Transcript({
     <div className="flex flex-col gap-4">
       {nodes}
       {showActivity && (
-        <div className="min-h-7">
+        <div className="-mt-2 min-h-7">
           <StreamingIndicator label={activityLabel} visible={showActivityLabel} />
         </div>
       )}

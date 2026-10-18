@@ -4,6 +4,9 @@ import { Collapsible } from '@base-ui/react/collapsible'
 import {
   AlertTriangle,
   ArrowRight,
+  Brain,
+  Hand,
+  Sparkles,
   ArrowRightLeft,
   Check,
   ChevronRight,
@@ -678,6 +681,12 @@ export const EventRow = React.memo(function EventRow({
   }
 })
 
+/** The foot's mark per label (`useTranscript`'s `activityLabel`); "Working…" takes the fallback. */
+const INDICATOR_ICONS: Record<string, typeof Sparkles> = {
+  'Thinking…': Brain,
+  'Waiting for your answer…': Hand
+}
+
 export function StreamingIndicator({
   label = 'Thinking…',
   visible = true
@@ -692,13 +701,22 @@ export function StreamingIndicator({
   // started moving, reads as a blink. `visibility` rides the same transition
   // so a hidden label is out of the accessibility tree once it has faded, and
   // the shimmer is dropped while hidden rather than animated at zero opacity.
+  // The mark sits where an activity row's does, so the foot lines up with the
+  // rows above it.
+  const Icon = INDICATOR_ICONS[label] ?? Sparkles
+  // Folded, the label is the turn's next step and the row that replaces it is
+  // drawn in its place — a fade out from under that row reads as the label
+  // sliding down a line and blinking, so the swap is a cut.
+  const instant = useApp((s) => s.foldActivity)
   return (
     <div
       className={cn(
-        'flex items-center gap-2 py-1 transition-[opacity,visibility] duration-200',
+        'flex items-center gap-1.5 py-1',
+        !instant && 'transition-[opacity,visibility] duration-200',
         visible ? 'opacity-100' : 'invisible opacity-0'
       )}
     >
+      <Icon className="size-3.5 shrink-0 text-muted-foreground/60" />
       <span className={cn('text-[13px] font-medium', visible ? 'shimmer-text' : 'text-muted-foreground')}>
         {label}
       </span>

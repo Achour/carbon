@@ -1,7 +1,7 @@
 /**
  * Turns a theme someone else wrote into Carbon's variable set — a VS Code color
- * theme (pasted, dropped, or pulled out of an Open VSX extension), a T3 Code
- * export, or Carbon's own export. See `docs/themes.md` for why each mapping is
+ * theme (pasted, dropped, or pulled out of an Open VSX extension) or Carbon's
+ * own export. See `docs/themes.md` for why each mapping is
  * the one it is.
  *
  * Dependency-free on purpose: main resolves an extension's `include` chain with
@@ -143,7 +143,7 @@ function oklchToRgb(l: number, c: number, h: number): [number, number, number] {
   ]
 }
 
-/** Hex, `rgb()`/`rgba()` and `oklch()` — what VS Code, T3 Code and Carbon each write. */
+/** Hex, `rgb()`/`rgba()` and `oklch()` — what VS Code and Carbon each write. */
 export function parseColor(input: unknown): Rgba | null {
   if (typeof input !== 'string') return null
   const text = input.trim().toLowerCase()
@@ -624,59 +624,20 @@ function vsCodeTheme(json: Json, options: ImportOptions): ImportedTheme {
   return { name: options.name ?? nameOf(json, 'Imported theme'), appearance, vars }
 }
 
-// ------------------------------------------------------- Carbon / T3 Code ---
-
-/**
- * T3 Code's color roles onto Carbon's. Only the roles with a real counterpart:
- * T3's toolbar and message-surface roles describe chrome Carbon does not have.
- */
-const T3_ROLES: Record<string, string> = {
-  canvas: 'background',
-  text: 'foreground',
-  surface: 'card',
-  surfaceOverlay: 'popover',
-  accent: 'primary',
-  accentForeground: 'primary-foreground',
-  secondary: 'secondary',
-  secondaryForeground: 'secondary-foreground',
-  muted: 'muted',
-  mutedForeground: 'muted-foreground',
-  textMuted: 'muted-foreground',
-  border: 'border',
-  input: 'input',
-  focus: 'ring',
-  error: 'destructive',
-  errorForeground: 'destructive-foreground',
-  warning: 'warning',
-  sidebar: 'sidebar',
-  sidebarForeground: 'sidebar-foreground',
-  sidebarRowSelected: 'sidebar-accent',
-  sidebarBorder: 'sidebar-border',
-  codeBackground: 'code-bg'
-}
+// ------------------------------------------------------------------ Carbon ---
 
 function paletteTheme(colors: Json, name: string, appearance: Appearance | undefined): ImportedTheme {
   const seeds: Seeds = {}
   const extras: Record<string, string> = {}
-  // `accent` and `border` are spelled the same in both vocabularies and mean
-  // different things in one of them: T3's `accent` is Carbon's `primary`. Any
-  // role only T3 has (`canvas`, `text`, …) settles which file this is.
-  const t3 = Object.keys(colors).some((key) => key in T3_ROLES && !ALL_VARS.has(key))
   for (const [rawKey, value] of Object.entries(colors)) {
     if (typeof value !== 'string' || !parseColor(value)) continue
     const key = rawKey.replace(/^--/, '')
-    const carbon = t3 ? T3_ROLES[key] : ALL_VARS.has(key) ? key : undefined
-    if (!carbon) continue
-    if ((THEME_VARS as readonly string[]).includes(carbon)) {
-      // Two T3 roles can land on one of Carbon's (`mutedForeground`,
-      // `textMuted`): the first one written keeps it.
-      if (seeds[carbon] === undefined) seeds[carbon] = value
-    } else {
-      extras[carbon] = value
-    }
+    if (!ALL_VARS.has(key)) continue
+    if ((THEME_VARS as readonly string[]).includes(key)) seeds[key] = value
+    else extras[key] = value
   }
   const bg = parseColor(seeds.background)
-  if (!bg) throw new Error('That theme has no background color ("background" or "canvas").')
+  if (!bg) throw new Error('That theme has no background color ("background").')
   const resolved = appearance ?? (isDark(over(bg, BLACK)) ? 'dark' : 'light')
   const vars = deriveVars(seeds, resolved)
   // A palette that names a role keeps the value exactly as written: these are
@@ -710,26 +671,9 @@ export function importThemeJson(value: unknown, options: ImportOptions = {}): Im
 
   const name = options.name ?? nameOf(value, 'Imported theme')
   const appearance = options.appearance ?? appearanceFromVsCode(value.appearance)
-  // T3 Code exports both halves of a theme under `variants`.
-  if (isRecord(value.variants)) {
-    const out: ImportedTheme[] = []
-    for (const mode of ['dark', 'light'] as const) {
-      const colors = value.variants[mode]
-      if (isRecord(colors)) {
-        out.push(paletteTheme(colors, `${name} ${mode === 'dark' ? 'Dark' : 'Light'}`, mode))
-      }
-    }
-    if (out.length === 1) out[0].name = name
-    if (out.length) return out
-  }
-  // T3's short form: `canvas` and `accent` at the top, overrides in `colors`.
-  const colors: Json = {
-    ...(typeof value.canvas === 'string' ? { canvas: value.canvas } : {}),
-    ...(typeof value.accent === 'string' ? { accent: value.accent } : {}),
-    ...(isRecord(value.colors) ? value.colors : {})
-  }
+  const colors: Json = isRecord(value.colors) ? value.colors : {}
   if (Object.keys(colors).length === 0) {
-    throw new Error('No colors found. Expected a VS Code, T3 Code or Carbon theme.')
+    throw new Error('No colors found. Expected a VS Code or Carbon theme.')
   }
   return [paletteTheme(colors, name, appearance)]
 }

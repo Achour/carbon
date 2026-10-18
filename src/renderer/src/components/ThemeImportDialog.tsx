@@ -543,7 +543,7 @@ function ThemeImportBody({ onDone }: { onDone: () => void }): React.JSX.Element 
                 {dragging ? 'Drop to import' : 'Drop theme files, or click to choose'}
               </span>
               <span className="mt-1 text-xs text-muted-foreground">
-                VS Code, T3 Code or Carbon <code className="text-[11px]">.json</code> — or paste one
+                VS Code or Carbon <code className="text-[11px]">.json</code> — or paste one
                 with <kbd className="font-sans">⌘V</kbd>
               </span>
             </button>

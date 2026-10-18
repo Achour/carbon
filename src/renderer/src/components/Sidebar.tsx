@@ -375,9 +375,9 @@ function ChatItemRow({
   const onArchive = (): void => actions.archive(chat)
   const onNewInWorktree = (): void => actions.newInWorktree(chat)
   const pinned = chat.pinnedAt !== undefined
-  // Cursor-style: inactive chats are muted, the open one is bright — the
-  // brightness gap (plus the filled highlight) marks the active chat.
-  // Bright, NOT bold — Cursor keeps regular weight, which reads cleaner.
+  // Inactive chats are muted, the open one is bright — the brightness gap
+  // (plus the filled highlight) marks the active chat. Bright, NOT bold:
+  // regular weight reads cleaner.
   const titleClass = cn(
     'min-w-0 flex-1 truncate text-[13px] transition-colors',
     active
@@ -1781,7 +1781,7 @@ export function Sidebar(): React.JSX.Element {
       )}
     >
       <div className="flex h-full flex-col" style={{ width }}>
-      {/* Traffic-light strip; window controls live on its right, Cursor-style */}
+      {/* Traffic-light strip; window controls live on its right */}
       <div className="drag flex h-[38px] shrink-0 items-center justify-end gap-0.5 px-2.5">
         <WithTooltip label="Hide sidebar  ⌘B">
           <Button size="icon-sm" variant="ghost" aria-label="Hide sidebar" onClick={toggleSidebar}>
@@ -1790,7 +1790,7 @@ export function Sidebar(): React.JSX.Element {
         </WithTooltip>
       </div>
 
-      {/* Primary actions, Cursor-style rows.
+      {/* Primary actions, one row each.
 
           **This block sets the sidebar's measure, and everything below it
           matches.** Two numbers, once: an 8px gutter on every block, and an
@@ -2166,7 +2166,7 @@ export function Sidebar(): React.JSX.Element {
                         aria-expanded={!isCollapsed}
                       >
                         {/* One icon slot: the project's own mark at rest,
-                            chevron on row hover (Cursor-style). The mark is
+                            chevron on row hover. The mark is
                             strictly better than the folder glyph it replaced —
                             that one was identical on every row, which is the
                             definition of a glyph carrying nothing — and the

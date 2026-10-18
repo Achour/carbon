@@ -72,7 +72,7 @@ function clearHighlights(): void {
   reg?.delete(ACTIVE)
 }
 
-/** A VS Code-style find widget (⌘F), scoped to the file/diff viewer pane. */
+/** A find widget (⌘F), scoped to the file/diff viewer pane. */
 export function FindBar(): React.JSX.Element | null {
   const open = useApp((s) => s.findOpen)
   const setOpen = useApp((s) => s.setFindOpen)

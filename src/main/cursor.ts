@@ -177,7 +177,7 @@ let sandboxPrimed: Promise<void> | null = null
  * sandboxed run is refused. Carbon is one long-lived process mixing both modes,
  * so a sandboxed workspace is warmed (and released) before the first agent of
  * either kind. Best effort: a failure here just leaves the SDK to decide.
- * Found by T3 Code; see `docs/cursor.md`.
+ * See `docs/cursor.md`.
  */
 function primeSandbox(sdk: CursorSdkModule, cwd: string): Promise<void> {
   sandboxPrimed ??= (async () => {
@@ -778,7 +778,7 @@ export class CursorSession implements AgentSession {
   /**
    * `agent.send`, recovering once from a run a crashed process left open: the
    * SDK refuses a send while its store still says "running", so the stale run
-   * is cancelled and the send retried. Found by T3 Code.
+   * is cancelled and the send retried.
    */
   private async sendOnce(
     agent: SDKAgent,
@@ -976,8 +976,7 @@ export class CursorSession implements AgentSession {
   }
 
   /**
-   * Live shell output. No measured run has sent one (T3 Code's fixtures have
-   * none either), so the event's text is read from every field it might use,
+   * Live shell output. No measured run has sent one, so the event's text is read from every field it might use,
    * and it is matched to the newest running shell when no `callId` is given.
    */
   private appendShellOutput(update: { callId?: string; event?: Record<string, unknown> }): void {

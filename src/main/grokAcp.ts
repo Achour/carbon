@@ -352,7 +352,7 @@ export class GrokAcpClient {
       clientInfo: { name: 'carbon', title: 'Carbon', version: '0.1.0' },
       // Both are declared false on purpose. Turning them on makes the *client*
       // responsible for reading files and running commands on the agent's
-      // behalf — Zed wants that so unsaved buffers are visible. Carbon has no
+      // behalf, so an editor's unsaved buffers are visible. Carbon has no
       // unsaved-buffer problem (the agent edits the same disk the tree shows),
       // and a half-implemented terminal capability is worse than none: the CLI
       // routes every command through it and each one fails.

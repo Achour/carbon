@@ -142,35 +142,6 @@ test('include merges colors key by key and appends token rules', () => {
   assert.equal(merged.include, undefined)
 })
 
-test('T3 Code short form: canvas and accent generate the rest', () => {
-  const [theme] = importThemeJson({
-    name: 'Nightfall',
-    appearance: 'dark',
-    canvas: '#1a1b26',
-    accent: '#7aa2f7',
-    colors: { terminalSelection: '#292e42', error: '#f7768e' }
-  })
-  assert.equal(theme.name, 'Nightfall')
-  assert.equal(theme.vars.background, '#1a1b26')
-  assert.equal(theme.vars.primary, '#7aa2f7')
-  assert.equal(theme.vars.destructive, '#f7768e')
-  for (const key of THEME_VARS) assert.ok(parseColor(theme.vars[key]), key)
-})
-
-test('T3 Code variants become one theme per appearance', () => {
-  const themes = importThemeJson({
-    label: 'Grove',
-    variants: { dark: { canvas: '#14201a', text: '#e0eee6' }, light: { canvas: '#f6faf7' } }
-  })
-  assert.deepEqual(
-    themes.map((t) => [t.name, t.appearance]),
-    [
-      ['Grove Dark', 'dark'],
-      ['Grove Light', 'light']
-    ]
-  )
-})
-
 test('Carbon’s own export round-trips, oklch() values kept as written', () => {
   const carbon = THEMES.find((t) => t.id === 'tide')!
   const text = exportTheme({ name: 'Tide copy', appearance: 'dark', vars: carbon.vars })

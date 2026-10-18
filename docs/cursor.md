@@ -1,7 +1,7 @@
 # Cursor (`src/main/cursor.ts`, `cursorSdk.ts`)
 
 The fifth provider, and the first that is **not a CLI Carbon spawns**. It runs
-on Cursor's official TypeScript SDK, `@cursor/sdk`, the way T3 Code does. Read
+on Cursor's official TypeScript SDK, `@cursor/sdk`. Read
 this before changing either file. Every shape below was measured against a real
 Plus account on SDK 1.0.37; the obvious alternatives were tried first.
 
@@ -13,8 +13,7 @@ runtime itself**. It runs inside Carbon's main process. Tools execute there, and
 it spawns its own sandbox helper (`cursorsandbox`), `rg` and tree-sitter from a
 per-platform sibling package, `@cursor/sdk-darwin-<arch>`. There is no
 installed Cursor binary for Carbon to drive instead. The `cursor-agent` CLI
-speaks ACP, but T3 Code moved off it to the SDK, and the request here was the
-SDK.
+speaks ACP, but the request here was the SDK.
 
 - **`providerCli` resolves the package, not a binary.** The source is `bundled`,
   the path is the package folder, and the version comes from its manifest
@@ -109,7 +108,7 @@ it" for that reason.
 
 **The SDK decides once per process whether sandboxing works.** An unsandboxed
 agent opened first records "unsupported", and every sandboxed run after it is
-refused. T3 Code found this. `primeSandbox` warms and releases a sandboxed
+refused. `primeSandbox` warms and releases a sandboxed
 workspace before the first agent of either kind.
 
 ## Carbon's tools are callbacks, not an MCP server
@@ -189,8 +188,7 @@ clarifying question) raises no review.
   An agent the store no longer has falls back to a fresh one, as Antigravity's
   does.
 - **A run left "active" by a crashed process** blocks the next send ("already
-  has active run"). `sendOnce` cancels the stale run and retries once, a
-  recovery T3 Code found.
+  has active run"). `sendOnce` cancels the stale run and retries once.
 
 ## What has and hasn't run
 

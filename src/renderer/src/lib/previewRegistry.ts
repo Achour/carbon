@@ -1,4 +1,5 @@
 import type { PreviewViewport, PreviewViewportPatch } from '@shared/previewDevices'
+import type { PreviewMark } from '@shared/types'
 import { normalizeCwd, pickPreviewPane } from '@shared/previewPane'
 
 export { normalizeCwd }
@@ -30,8 +31,12 @@ export interface PreviewHandle {
   /** Applies a viewport change and resolves with the result once the guest has it. */
   setViewport(patch: PreviewViewportPatch): Promise<PreviewViewport>
   getURL(): string
-  /** Exposes a hidden pane and gives the guest keyboard focus (see `PreviewCommand`'s `focus`)… */
-  focus(): Promise<void>
+  /**
+   * Exposes a hidden pane and gives the guest keyboard focus (see
+   * `PreviewCommand`'s `focus`) — only while Carbon is the active app; resolves
+   * whether it did…
+   */
+  focus(): Promise<boolean>
   /** …and hands it back to whatever had it before. */
   unfocus(): void
   /**
@@ -40,6 +45,8 @@ export interface PreviewHandle {
    */
   expose(): Promise<void>
   unexpose(): void
+  /** Draws what the agent just did over the page (`PreviewMark`). */
+  mark(m: PreviewMark): void
 }
 
 const registry = new Map<string, PreviewHandle>()

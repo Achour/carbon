@@ -76,8 +76,8 @@ export interface CursorTokenUsage {
 
 /**
  * The parameter that carries reasoning effort. Cursor spells it per model —
- * `effort` on Grok 4.6, `reasoning_effort` on Grok 4.7 — and T3 Code reads a
- * bare `reasoning` too.
+ * `effort` on Grok 4.6, `reasoning_effort` on Grok 4.7 — and a bare
+ * `reasoning` is read too.
  */
 const EFFORT_PARAMS = ['effort', 'reasoning_effort', 'reasoning']
 
@@ -495,7 +495,7 @@ export class CursorChildStream {
 
 // ---------- Prompts ----------
 
-/** What the SDK accepts as an image: these four, per T3 Code's adapter. */
+/** What the SDK accepts as an image: these four. */
 const SDK_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
 
 export interface CursorPrompt {
@@ -542,7 +542,7 @@ export function buildCursorPrompt(text: string, attachments: Attachment[] = []):
  * The SDK rejects an internal promise nothing awaits when its shell wrapper
  * cannot spawn (a cwd that vanished): `spawn /bin/zsh ENOENT` with Cursor's
  * sandbox script in `spawnargs`. Recognized so main can log it rather than
- * treat it as a crash. Marker list from T3 Code's guard.
+ * treat it as a crash.
  */
 const SHELL_SPAWN_MARKERS = ['dump_zsh_state', 'dump_bash_state', '__CURSOR_SANDBOX_ENV_RESTORE']
 

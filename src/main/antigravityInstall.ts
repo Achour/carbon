@@ -16,7 +16,7 @@ const execFile = promisify(execFileCb)
  * This is the one provider Carbon installs rather than finds, and it is a
  * narrow exception to "Carbon ships no CLI": nothing is bundled with the app,
  * the download happens only when the user presses Install, and it comes from
- * the ACP registry's own entry — the same archive Zed fetches — so an update is
+ * the ACP registry's own entry, so an update is
  * the registry moving, not a Carbon release. Google publishes no installer or
  * package for it, which is the whole reason the exception exists.
  */

@@ -324,8 +324,8 @@ canvas that failed to load. The agent finds it by title through `canvas list`.
 
 ### Charts and diagrams in the conversation (`chartTool.ts`, `diagramTool.ts`, `shared/chartSpec.ts`, `shared/diagramSpec.ts`, `InlineVisual`, `ChartCard`, `DiagramCard`)
 
-`chart_render` draws a chart **in the conversation**, under the call — the
-in-thread visuals T3 Code shipped, in Carbon's own chart style. The agent sends
+`chart_render` draws a chart **in the conversation**, under the call, in
+Carbon's own chart style. The agent sends
 *data* — a form (bar, line, area, pie), the rows, the column holding each row's
 category, the numeric columns to plot, optional headline stats and a takeaway
 — and Carbon draws it natively with shadcn's chart components on Recharts

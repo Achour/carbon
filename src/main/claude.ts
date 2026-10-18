@@ -3042,7 +3042,7 @@ const CONVERSATION_FORKS: Record<Provider, ConversationFork> = {
   // The server has `session/fork` but no cut point — it copies a conversation
   // whole — so an edit-and-resend replays, as Grok's does.
   antigravity: { needsSession: false, fork: async () => undefined },
-  // The SDK has no fork or rollback (T3 Code reached the same answer), so an
+  // The SDK has no fork or rollback, so an
   // edit-and-resend replays the kept turns into a fresh agent.
   cursor: { needsSession: false, fork: async () => undefined }
 }

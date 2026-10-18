@@ -1489,6 +1489,8 @@ export function Settings(): React.JSX.Element {
   const setChatsPerProject = useApp((s) => s.setChatsPerProject)
   const sidebarDensity = useApp((s) => s.sidebarDensity)
   const setSidebarDensity = useApp((s) => s.setSidebarDensity)
+  const foldActivity = useApp((s) => s.foldActivity)
+  const setFoldActivity = useApp((s) => s.setFoldActivity)
   const keepAwake = useApp((s) => !!s.defaults?.keepAwake)
   const buddy = useApp((s) => !!s.defaults?.buddy)
   const allowDelegation = useApp((s) => s.defaults?.allowDelegation !== false)
@@ -1656,6 +1658,12 @@ export function Settings(): React.JSX.Element {
                     />
                   </Row>
                   <div className="mx-2 my-3 border-t border-border" />
+                  <Toggle
+                    label="Fold activity while working"
+                    description="Show each run of tool calls as one summary line — “Ran 4 commands” — while the agent works, not only once it finishes. The step in progress shimmers instead of a spinner and a “Working…” line. Click a line to open it."
+                    checked={foldActivity}
+                    onChange={setFoldActivity}
+                  />
                   <Toggle
                     label="Keep computer awake"
                     description="Stop the Mac from idle-sleeping while an agent is working. The display can still turn off, and closing the lid still sleeps it."

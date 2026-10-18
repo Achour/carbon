@@ -75,6 +75,19 @@ where the output already lived.
   the chat. A click wins from then on. `AgentCard` is the one activity row with
   no rhythm at all, because it has no body to open: a spawned agent is a nested
   *conversation* and it is read in the panel (see the roster below).
+- **"Fold activity while working" (Settings → Chats, on by default) is the other rhythm,
+  as a choice.** Some readers want the turn as prose punctuated by one line per
+  batch while it runs, not only after. It changes the default `useRunDisclosure`
+  is given: the run is folded from its first render, its collapsed row trails
+  the running call's summary, and a click still wins. Folded, the foot's
+  "Working…" arrived `QUIET_MS` *after* each step and vanished under the next
+  one, which read as blinking. So in this mode the foot is the turn's **next
+  step**: "Thinking…" the moment a call finishes or a thought opens (a text tail
+  still waits `QUIET_MS`, since nothing marks a paragraph finished), and a cut
+  rather than a fade when the next row takes its place. The row in flight —
+  lone or group — shimmers its label in place of the spinner. Without it a
+  3–7 s pause before Opus's closing summary was a screen with nothing moving.
+  A renderer preference in `localStorage`, like the sidebar density.
 - **What opens it is `live`, not "a call is running"** — and the difference is
   the whole feature working or visibly failing. Between any two calls in a run
   there is a moment when the last has returned and the next has not started, so a
@@ -599,8 +612,7 @@ cached input.
   `messages/AgentRows.tsx`). The row answered the 13,816px problem by taking
   the work out of the chat column; a thread column is the better home for it
   than a panel tab, because it is the same shape every other conversation in
-  the thread has, sits beside the chat that spawned it, and is what T3 Code
-  does for every provider's sub-agents. So a transcript row is a **toggle**:
+  the thread has, and sits beside the chat that spawned it. So a transcript row is a **toggle**:
   click opens the agent as a column — `agent:<parentChatId>:<toolUseId>`
   (`agentColumnId`), a column that is not a chat — and click again folds it
   back. The column reads the spawning part live out of its parent's

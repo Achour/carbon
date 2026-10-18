@@ -1198,6 +1198,10 @@ export const ToolCard = React.memo(function ToolCard({
   // of one call's status: a call is in flight for a few hundred milliseconds, so
   // keying on it opens and shuts the row once per call.
   const [open, onOpenChange] = React.useState(false)
+  // With "Fold activity while working" the call in flight says so by its label
+  // shimmering, where the spinner was — the foot's "Working…" is off in that
+  // mode, so this is the one thing moving.
+  const foldActivity = useApp((s) => s.foldActivity)
   const elapsed = useToolElapsed(part)
 
   // A spawned sub-agent is a row whose open form is its own column — see
@@ -1235,6 +1239,8 @@ export const ToolCard = React.memo(function ToolCard({
   }
 
   const failed = part.status === 'error' || !!part.denied
+  const shimmer =
+    foldActivity && !part.denied && (part.status === 'running' || part.status === 'pending')
   return (
     <>
       <Collapsible.Root
@@ -1256,7 +1262,7 @@ export const ToolCard = React.memo(function ToolCard({
             <span
               className={cn(
                 'shrink-0 text-[13px]',
-                failed ? 'text-destructive' : 'text-muted-foreground'
+                failed ? 'text-destructive' : shimmer ? 'shimmer-text' : 'text-muted-foreground'
               )}
             >
               {meta.label}
@@ -1308,7 +1314,7 @@ export const ToolCard = React.memo(function ToolCard({
               {elapsed}
             </span>
           )}
-          <ActivityStatus part={part} />
+          {!shimmer && <ActivityStatus part={part} />}
         </Collapsible.Trigger>
         <Collapsible.Panel className={ACTIVITY_PANEL}>
           <ToolDetails part={part} />
@@ -1527,8 +1533,11 @@ const ActivityGroup = React.memo(function ActivityGroup({
   const GroupIcon = metas.find((m) => m.label === lead)?.icon ?? Wrench
   // Open for as long as this is the live block, folded to one line the moment
   // the turn hands it to history. `running` still counts, so a group holding a
-  // backgrounded agent that outlives its turn does not shut on it.
-  const { open, onOpenChange } = useRunDisclosure(live || running)
+  // backgrounded agent that outlives its turn does not shut on it. With
+  // "Fold activity while working" on it is folded from the start, and the
+  // trailing summary below is what moves instead.
+  const foldActivity = useApp((s) => s.foldActivity)
+  const { open, onOpenChange } = useRunDisclosure(!foldActivity && (live || running))
   // A running group that has been folded shut still shows what its last call
   // is on, for a sense of motion. Only then: while the group is open the call
   // is on screen one row down with its own summary, and the same command
@@ -1562,7 +1571,14 @@ const ActivityGroup = React.memo(function ActivityGroup({
                 one that didn't is already red a row below. The ✕ at the end is
                 what carries it — that one is kept, because it is the only signal
                 left once the group is collapsed over the row that failed. */}
-            <span className="shrink-0 text-[13px] text-muted-foreground">{title}</span>
+            <span
+              className={cn(
+                'shrink-0 text-[13px]',
+                foldActivity && running ? 'shimmer-text' : 'text-muted-foreground'
+              )}
+            >
+              {title}
+            </span>
             {canvas && <CanvasLink canvas={canvas} />}
             {trailing && (
               <span className="min-w-0 truncate font-mono text-xs text-muted-foreground/60">
@@ -1573,7 +1589,7 @@ const ActivityGroup = React.memo(function ActivityGroup({
           <ChevronRight className={ACTIVITY_CHEVRON} />
           <span className="flex-1" />
           {running ? (
-            <DotSpinner className="size-3.5 shrink-0 text-muted-foreground" />
+            !foldActivity && <DotSpinner className="size-3.5 shrink-0 text-muted-foreground" />
           ) : errored ? (
             <X className="size-3.5 shrink-0 text-destructive" />
           ) : null}

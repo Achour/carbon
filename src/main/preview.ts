@@ -135,6 +135,11 @@ export class PreviewManager implements PreviewToolHost {
      */
     canvas?: CanvasToolHost
   ) {
+    // Fire and forget: the pane draws the mark while the input goes out.
+    this.driver.onMark = (paneId, mark) => {
+      const cwd = this.driver.guest(paneId)?.cwd
+      if (cwd) void this.send({ cwd, kind: 'mark', paneId, mark })
+    }
     this.mcp = startCarbonBridge(this, canvas, () => this.agents, () => this.schedule).catch((err) => {
       console.warn('[preview] MCP bridge failed to start:', err)
       return null
@@ -752,7 +757,10 @@ export class PreviewManager implements PreviewToolHost {
         // not after the settle, which held the user's keystrokes for up to 3 s
         // per call. Under `withWindow`, since focus is one per window.
         return this.withWindow(async () => {
-          await this.send({ cwd, kind: 'focus', paneId: t.paneId })
+          const focus = await this.send({ cwd, kind: 'focus', paneId: t.paneId })
+          // In the background the pane is not given the keyboard (doing so
+          // activates the app): typing then goes in through the page.
+          const keyboard = focus.focused !== false
           let held = true
           const release = async (): Promise<void> => {
             if (!held) return
@@ -761,8 +769,8 @@ export class PreviewManager implements PreviewToolHost {
           }
           try {
             if (op === 'click') return await this.driver.click(g, input, doc, release)
-            if (op === 'type') return await this.driver.type(g, input, doc, release)
-            return await this.driver.press(g, input, doc, release)
+            if (op === 'type') return await this.driver.type(g, input, doc, release, keyboard)
+            return await this.driver.press(g, input, doc, release, keyboard)
           } finally {
             await release()
           }
