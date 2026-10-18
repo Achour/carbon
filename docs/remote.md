@@ -211,7 +211,11 @@ the window open. The phone is one more window onto them.
   visible there is nothing to scroll, and the transcript's own resize
   observer keeps its bottom edge where it was (`ChatScreen`), so the last
   lines stay above the composer. Verified as a Home Screen app in the
-  Simulator, opening, typing and closing the keyboard.
+  Simulator, opening, typing and closing the keyboard. Send and Stop never take the focus
+  (`keepKeyboard`): taking it closed the keyboard on the tap itself, the
+  composer dropped with it, and the click landed where the button had been,
+  so one tap closed the keyboard and a second sent. The keyboard now stays up
+  after sending, as in Messages.
   The context ring reads the same `contextTokens` / `contextWindow` off the
   chat and opens the desktop's `ContextDetail` in a sheet, fed by the
   `context-usage` event the phone now keeps for its open chat. The permission

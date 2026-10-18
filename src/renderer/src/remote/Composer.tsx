@@ -104,6 +104,14 @@ function filesOf(data: DataTransfer | null): File[] {
 const NO_QUEUE: QueuedMessage[] = []
 
 /**
+ * Send and Stop never take the focus. Taking it closed the keyboard on the
+ * tap itself, the composer dropped with it, and the click landed where the
+ * button had been: one tap closed the keyboard, a second one sent. Kept in the
+ * box, the keyboard stays up after sending, as in Messages.
+ */
+const keepKeyboard = (e: React.MouseEvent): void => e.preventDefault()
+
+/**
  * The phone's composer, shaped like the desktop's: one card holding the text,
  * the photos, and a footer of controls — attach, the option chips (`tools`),
  * send. While a turn runs an empty composer offers Stop; anything typed is
@@ -323,6 +331,7 @@ export function Composer({
             <button
               type="button"
               aria-label="Stop"
+              onMouseDown={keepKeyboard}
               className="flex size-8 shrink-0 animate-in items-center justify-center rounded-full bg-foreground text-background duration-200 zoom-in-75 fade-in active:scale-90"
               onClick={() => void interrupt(chatId)}
             >
@@ -332,6 +341,7 @@ export function Composer({
             <button
               type="button"
               aria-label="Send"
+              onMouseDown={keepKeyboard}
               disabled={sending || empty || reading > 0}
               className={cn(
                 'flex size-8 shrink-0 items-center justify-center rounded-full transition-[background-color,color,transform] duration-200 ease-out',
