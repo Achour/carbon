@@ -138,6 +138,11 @@ export function Composer({
   const [sending, setSending] = React.useState(false)
   const [reading, setReading] = React.useState(0)
   const [dragging, setDragging] = React.useState(false)
+  // Typing on a phone: the keyboard covers the home indicator, so the strip
+  // kept clear for it (`safe-area-inset-bottom`, ~34pt) is only a gap between
+  // the composer and the keys. A hardware keyboard (an iPad's) leaves the
+  // indicator showing, hence the coarse-pointer test.
+  const [typing, setTyping] = React.useState(false)
   const area = React.useRef<HTMLTextAreaElement>(null)
   const file = React.useRef<HTMLInputElement>(null)
   const send = useRemote((s) => s.send)
@@ -187,7 +192,7 @@ export function Composer({
   const stop = busy && chatId && empty
 
   return (
-    <div className="shrink-0 px-3 pt-1 pb-[max(env(safe-area-inset-bottom),10px)]">
+    <div className={cn('shrink-0 px-3 pt-1', typing ? 'pb-2' : 'pb-[max(env(safe-area-inset-bottom),10px)]')}>
       {chatId && queued.length > 0 && (
         <div className="mb-1.5 space-y-1.5">
           {queued.map((q) => (
@@ -281,6 +286,8 @@ export function Composer({
           autoFocus={autoFocus}
           placeholder={placeholder ?? (busy ? 'Queue a follow-up…' : 'Message')}
           onChange={(e) => setText(e.target.value)}
+          onFocus={() => setTyping(window.matchMedia('(pointer: coarse)').matches)}
+          onBlur={() => setTyping(false)}
           onPaste={(e) => {
             // Text pastes as text; only a paste carrying files is taken over.
             const files = filesOf(e.clipboardData)

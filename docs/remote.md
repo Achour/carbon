@@ -188,6 +188,9 @@ the window open. The phone is one more window onto them.
   `JSON.stringify`, so the phone kept drawing the switch. `wire()` sends those
   as `null`, and the phone's reducer reads them as cleared.
 - **The composer is the phone's own, and carries what the desktop's does.**
+  While its box is focused on a touch screen it drops the home-indicator
+  padding (`safe-area-inset-bottom`, ~34pt) for a small margin: the keyboard
+  covers the indicator, so that padding was only a gap above the keys.
   The context ring reads the same `contextTokens` / `contextWindow` off the
   chat and opens the desktop's `ContextDetail` in a sheet, fed by the
   `context-usage` event the phone now keeps for its open chat. The permission
