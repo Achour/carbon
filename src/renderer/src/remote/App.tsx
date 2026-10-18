@@ -9,6 +9,7 @@ import { PairScreen } from './Pair'
 import { UsageScreen } from './UsageScreen'
 import { newChatHash, Sidebar, useProjectFilter } from './Sidebar'
 import { useAppBadge } from './board'
+import { clearCache, loadSnapshot } from './cache'
 
 /**
  * Routes live in the hash — `#/` (a new chat), `#/c/<id>`, `#/new/<project>`,
@@ -42,7 +43,10 @@ export function navigate(hash: string): void {
 export function App(): React.JSX.Element {
   const [route, setRoute] = React.useState<Route>(readRoute)
   const [pairCode] = React.useState(() => /^#pair=(\d+)/.exec(location.hash)?.[1] ?? null)
-  const [paired, setPaired] = React.useState<boolean | null>(null)
+  // With a cache from an earlier launch the app draws at once, as paired: the
+  // check below still runs, and an answer of "not paired" takes over. Without
+  // one there is nothing to draw until the Mac says.
+  const [paired, setPaired] = React.useState<boolean | null>(() => (loadSnapshot() ? true : null))
   const connection = useRemote((s) => s.connection)
 
   React.useEffect(() => {
@@ -55,8 +59,13 @@ export function App(): React.JSX.Element {
     window.addEventListener('hashchange', onHash)
     void api
       .paired()
-      .then(setPaired)
-      .catch(() => setPaired(false))
+      .then((ok) => {
+        if (!ok) clearCache()
+        setPaired(ok)
+      })
+      // Unreachable is not unpaired: a launch with a cache stays on it and
+      // says it is reconnecting.
+      .catch(() => setPaired((p) => p ?? false))
     return () => window.removeEventListener('hashchange', onHash)
   }, [pairCode])
 

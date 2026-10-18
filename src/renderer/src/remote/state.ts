@@ -26,6 +26,7 @@ import { USAGE_DEFAULT_DAYS } from '@shared/types'
 import { randomId } from '@/lib/insecureContext'
 import * as api from './api'
 import { usePrefs } from './prefs'
+import { clearCache, loadChat, loadSnapshot, saveChat, saveSnapshot } from './cache'
 
 /**
  * The phone's whole state. Deliberately not the desktop store: that one is
@@ -122,7 +123,28 @@ let conn: string | null = null
 const visible = (): boolean => document.visibilityState === 'visible'
 let closeEvents: (() => void) | null = null
 
+/** The last launch's chat list, drawn while this one connects (`cache.ts`). */
+const cached = loadSnapshot()
+
 export const useRemote = create<RemoteState>((set, get) => {
+  // What the next launch draws first: the list as it stands, and the chat on screen.
+  const persist = (): void => {
+    const s = get()
+    if (s.connection !== 'live' || !s.defaults) return
+    saveSnapshot({
+      hostname: s.hostname,
+      home: s.home,
+      chats: s.chats,
+      unseen: s.unseen,
+      defaults: s.defaults,
+      models: s.models,
+      codexConfigModel: s.codexConfigModel,
+      available: s.available,
+      icons: s.icons
+    })
+    if (s.open && !s.open.loading) saveChat(s.open.id, s.open.messages, s.open.hiddenBefore)
+  }
+
   const resync = async (): Promise<void> => {
     try {
       const snap = await api.snapshot()
@@ -139,11 +161,15 @@ export const useRemote = create<RemoteState>((set, get) => {
         available: snap.available ?? [],
         connection: 'live'
       })
+      persist()
       // Marks are a walk of the project folders on the Mac — cached there, but
       // never worth holding the first screen for.
       void api
         .icons()
-        .then((icons) => set({ icons }))
+        .then((icons) => {
+          set({ icons })
+          persist()
+        })
         .catch(() => {})
       void get().refreshBranches()
       void get().refreshUsage()
@@ -158,8 +184,10 @@ export const useRemote = create<RemoteState>((set, get) => {
       const open = get().open
       if (open) await fetchOpen(open.id)
     } catch (err) {
-      if (err instanceof api.RemoteError && err.status === 401) set({ connection: 'unpaired' })
-      else set({ connection: 'down' })
+      if (err instanceof api.RemoteError && err.status === 401) {
+        clearCache()
+        set({ connection: 'unpaired' })
+      } else set({ connection: 'down' })
     }
   }
 
@@ -182,6 +210,7 @@ export const useRemote = create<RemoteState>((set, get) => {
         ? s.chats.map((c) => (c.id === id ? stripMessages(view.chat) : c))
         : [...s.chats, stripMessages(view.chat)]
     }))
+    saveChat(id, view.chat.messages, view.hiddenBefore)
   }
 
   const connect = (): void => {
@@ -237,17 +266,17 @@ export const useRemote = create<RemoteState>((set, get) => {
 
   return {
     connection: 'connecting',
-    hostname: '',
-    chats: [],
+    hostname: cached?.hostname ?? '',
+    chats: cached?.chats ?? [],
     statuses: {},
     permissions: {},
-    unseen: {},
-    defaults: null,
-    models: [],
-    codexConfigModel: null,
-    available: [],
-    icons: {},
-    home: '',
+    unseen: cached?.unseen ?? {},
+    defaults: cached?.defaults ?? null,
+    models: cached?.models ?? [],
+    codexConfigModel: cached?.codexConfigModel ?? null,
+    available: cached?.available ?? [],
+    icons: cached?.icons ?? {},
+    home: cached?.home ?? '',
     branches: {},
     usage: null,
     usageReport: null,
@@ -266,6 +295,8 @@ export const useRemote = create<RemoteState>((set, get) => {
         // Going away: tell the Mac first, so a turn that finishes while the
         // stream is still half-open notifies instead of assuming it was seen.
         if (!visible() && conn) void api.watch(conn, get().open?.id ?? null, false).catch(() => {})
+        // Leaving is the last moment to keep what streamed since the last save.
+        if (!visible()) persist()
         if (document.visibilityState === 'visible' && get().connection !== 'unpaired') {
           if (get().connection !== 'live' || !conn) connect()
           else {
@@ -281,8 +312,11 @@ export const useRemote = create<RemoteState>((set, get) => {
     async openChat(id) {
       if (get().open?.id === id) return
       // Off Done at once; the Mac clears its mark on the watch below and says so.
+      // The transcript as this phone last saw it, at once, while the Mac's
+      // copy is fetched to replace it.
+      const seen = id ? loadChat(id) : null
       set((s) => ({
-        open: id ? { id, messages: [], hiddenBefore: 0, loading: true } : null,
+        open: id ? { id, messages: seen?.messages ?? [], hiddenBefore: seen?.hiddenBefore ?? 0, loading: true } : null,
         ...(id && id in s.unseen ? { unseen: omit(s.unseen, id) } : {})
       }))
       if (conn) void api.watch(conn, id, visible()).catch(() => {})
@@ -290,7 +324,10 @@ export const useRemote = create<RemoteState>((set, get) => {
         try {
           await fetchOpen(id)
         } catch (err) {
-          set({ error: message(err) })
+          // The Mac unreachable is the connection strip's to say, over the
+          // cached transcript; only an answer that is an error is news.
+          if (err instanceof api.RemoteError) set({ error: message(err) })
+          else set((s) => (s.open?.id === id ? { open: { ...s.open, loading: false } } : {}))
         }
       }
     },

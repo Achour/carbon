@@ -276,6 +276,21 @@ the window open. The phone is one more window onto them.
   one can stop the list scrolling under the row. A hold that turns into a
   drag swallows the click its release would send, and a finger that moves
   before the hold fires is a scroll, not a hold.
+- **A launch draws what the phone last saw (`remote/cache.ts`).** It saves the
+  chat list (and the Mac's name, home folder, defaults, models and project
+  marks) at each resync and whenever the app goes to the background, and the
+  last four transcripts opened, each its last 40 messages. A transcript over
+  600 KB of JSON is skipped. A launch with a cache starts as paired, draws
+  that at once under "Connecting…", and lets the Mac's answer replace it. Four
+  round trips (the pairing check, the event stream's hello, the snapshot,
+  `chats:get`) used to stand between the icon and a chat list. Live state
+  (which chats are working, what waits on an answer) is never cached, so a
+  stale spinner or an approval already given cannot be drawn. A Mac that
+  doesn't answer is not "unpaired": a launch with a cache stays on it, and
+  only the connection strip says so, with no error toast per request. A 401
+  clears the cache, since it belongs to that pairing. The page itself still
+  comes from the Mac (the worker caches nothing), so this covers a slow
+  connection, not a Mac that is off.
 - **Pin, archive and rename work from the phone** (`chats:set-pinned`,
   `chats:set-archived`, `chats:rename`, drawn first in `remote/chatActions.ts`).
   A sidebar row swiped right pins or unpins, and swiped left archives, with
