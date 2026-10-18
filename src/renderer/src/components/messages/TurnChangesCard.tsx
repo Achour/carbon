@@ -81,13 +81,15 @@ export const TurnChangesCard = React.memo(function TurnChangesCard({
   const rewindFiles = useApp((state) => state.rewindFiles)
   const openDiff = useApp((state) => state.openDiff)
   const openFile = useApp((state) => state.openFile)
-  const { panels } = useTranscriptSurface()
+  const { panels, openDiff: openOnSurface } = useTranscriptSurface()
   const paths = React.useMemo(() => changedPathsFromParts(message.parts, cwd), [message.parts, cwd])
   const files = React.useMemo(
     () => message.fileChanges ?? summarize(paths, git?.changes ?? []),
     [message.fileChanges, paths, git?.changes]
   )
-  const previewFiles = React.useMemo(() => files.slice(0, MAX_PREVIEW_FILES), [files])
+  // The phone has no review view for "Show N more in diff" to open, so it
+  // lists every file, each opening its own diff.
+  const previewFiles = React.useMemo(() => (panels ? files.slice(0, MAX_PREVIEW_FILES) : files), [files, panels])
   const entries = React.useMemo(() => groupChanges(previewFiles), [previewFiles])
   const [open, setOpen] = React.useState(true)
   const [closedDirs, setClosedDirs] = React.useState<Record<string, boolean>>({})
@@ -221,7 +223,7 @@ export const TurnChangesCard = React.memo(function TurnChangesCard({
                   file={entry.file}
                   dir={cut > 0 ? entry.file.path.slice(0, cut) : undefined}
                   depth={0}
-                  onOpen={panels ? openChange : undefined}
+                  onOpen={panels ? openChange : openOnSurface}
                 />
               )
             }
@@ -251,7 +253,7 @@ export const TurnChangesCard = React.memo(function TurnChangesCard({
                 </button>
                 {dirOpen &&
                   entry.files.map((file) => (
-                    <FileRow key={file.path} file={file} depth={1} onOpen={panels ? openChange : undefined} />
+                    <FileRow key={file.path} file={file} depth={1} onOpen={panels ? openChange : openOnSurface} />
                   ))}
               </div>
             )

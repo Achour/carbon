@@ -162,7 +162,13 @@ the window open. The phone is one more window onto them.
   whose only job is to open the editor, the diff view or the preview (Open
   diff, a file row, a path link), and route the rest through the surface: a
   delegate opens as the chat on screen, a sub-agent's transcript and a canvas
-  open full screen (`remote/Viewers.tsx`). A canvas is framed as `CanvasDoc`
+  open full screen (`remote/Viewers.tsx`), and so does a turn's changed file
+  (`openDiff` → `DiffScreen`). Its diff comes from `/api/diff`, which takes a
+  chat and a path, never a folder, and runs only inside that chat's own
+  folder. A path resolving outside it is refused. It is the file's
+  uncommitted change against HEAD, so a file committed since says so. The
+  phone lists every changed file, since it has no review view for "Show more
+  in diff" to open. A canvas is framed as `CanvasDoc`
   frames it, `allow-scripts` without `allow-same-origin`, which here also keeps
   it away from the pairing cookie. Mermaid and images open in the desktop's own
   lightbox.
@@ -500,7 +506,8 @@ turning this on may raise macOS's "accept incoming connections?" prompt, and an
 ad-hoc-signed build can raise it again after an update, because the signature
 it is keyed on changes. Two Carbons sharing `userData` (dev and packaged) share
 the setting, and the second to start reports the port as in use. Terminal chats,
-the file editor, diffs and the preview are not on the phone. Images the agent
+the file editor and the preview are not on the phone, and diffs only as a
+turn's changed files. Images the agent
 references by local path do not load, and path links read as plain text, since
 the phone cannot read the Mac's disk.
 

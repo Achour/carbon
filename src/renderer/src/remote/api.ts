@@ -91,6 +91,18 @@ export async function setPushSubscription(subscription: PushSubscriptionJSON | n
   await post('/api/push', { subscription })
 }
 
+/**
+ * One changed file's uncommitted diff, from the chat's own folder on the Mac
+ * (`handleDiff`): empty when there is nothing left uncommitted.
+ */
+export async function diff(chatId: string, path: string): Promise<string> {
+  const q = new URLSearchParams({ chat: chatId, path })
+  const res = await fetch(`/api/diff?${q}`, { credentials: 'same-origin' })
+  const data = (await res.json().catch(() => ({}))) as { diff?: string; error?: string }
+  if (!res.ok) throw new RemoteError(data.error ?? `Carbon answered ${res.status}`, res.status)
+  return data.diff ?? ''
+}
+
 /** The Mac's cap on one request, and so on one file sent from the phone. */
 export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 

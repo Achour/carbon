@@ -5,7 +5,9 @@ import type { Canvas } from '@shared/types'
 import { agentRunOf } from '@shared/agentRuns'
 import { useAgentPart } from '@/components/messages/AgentRows'
 import { SubAgentStream } from '@/components/messages/ToolCard'
-import { invoke } from './api'
+import { DiffView } from '@/components/DiffView'
+import { languageForPath } from '@/lib/highlight'
+import { diff as fetchDiff, invoke } from './api'
 
 const EASE = 'cubic-bezier(0.32, 0.72, 0, 1)'
 /** Where a back swipe has to start: the screen's left edge, as on iOS. */
@@ -179,6 +181,50 @@ export function CanvasView({ id, onClose }: { id: string; onClose: () => void })
  * A sub-agent's own transcript — the desktop's agent column, as a layer. Read
  * live out of the parent's transcript, so it keeps streaming while open.
  */
+/**
+ * One changed file's diff, opened from a turn's changed-files row: what the
+ * desktop shows in its diff panel, wrapped to the phone's width. It is the
+ * file's uncommitted change now, not as of that turn, so a file committed
+ * since has nothing left to show, and says so.
+ */
+export function DiffScreen({
+  chatId,
+  path,
+  onClose
+}: {
+  chatId: string
+  path: string
+  onClose: () => void
+}): React.JSX.Element {
+  const [text, setText] = React.useState<string | undefined>(undefined)
+  const [error, setError] = React.useState<string | null>(null)
+  React.useEffect(() => {
+    let alive = true
+    fetchDiff(chatId, path)
+      .then((d) => alive && setText(d))
+      .catch((err) => alive && setError(err instanceof Error ? err.message : String(err)))
+    return () => {
+      alive = false
+    }
+  }, [chatId, path])
+  const name = path.split('/').pop() ?? path
+  return (
+    <FullView title={name} onClose={onClose}>
+      {error ? (
+        <div className="px-6 py-16 text-center text-[14px] text-muted-foreground">{error}</div>
+      ) : text === '' ? (
+        <div className="px-6 py-16 text-center text-[14px] text-muted-foreground">
+          No uncommitted changes to {name} — they have been committed or undone since.
+        </div>
+      ) : (
+        <div className="h-full text-[12px]">
+          <DiffView text={text} language={languageForPath(path)} wrap />
+        </div>
+      )}
+    </FullView>
+  )
+}
+
 export function AgentView({
   parentId,
   toolUseId,

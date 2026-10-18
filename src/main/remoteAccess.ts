@@ -13,10 +13,11 @@ import { connect, createServer as createNetServer, type Server as NetServer, typ
 import type { TLSSocket } from 'node:tls'
 import { homedir, hostname, networkInterfaces } from 'node:os'
 import type { Duplex } from 'node:stream'
-import { basename, extname, join, normalize, sep } from 'node:path'
+import { basename, extname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path'
 import { gzipSync } from 'node:zlib'
 import type { IpcMain, IpcMainInvokeEvent } from 'electron'
 import { projectRoot } from '@shared/types'
+import { git, gitDiff } from './git'
 import { promptLine } from '@shared/promptLine'
 import type {
   AppDefaults,
@@ -580,6 +581,7 @@ export class RemoteAccess {
       }
       if (path === '/api/invoke' && req.method === 'POST') return this.handleInvoke(req, res)
       if (path === '/api/upload' && req.method === 'POST') return this.handleUpload(req, res)
+      if (path === '/api/diff') return this.handleDiff(url, res)
       json(res, 404, { error: 'Not found' })
       return
     }
@@ -932,6 +934,34 @@ export class RemoteAccess {
     const path = join(dir, name)
     await writeFile(path, body)
     json(res, 200, { path, name })
+  }
+
+  /**
+   * One changed file's diff, for a turn's changed-files row on the phone. The
+   * folder is the chat's own, read from the server's record, and the file must
+   * resolve inside it: the phone names a chat and a path, never a folder, and a
+   * diff is a read of the Mac's disk. Uncommitted changes against HEAD, staged
+   * or not; a new file diffs against nothing.
+   */
+  private async handleDiff(url: URL, res: ServerResponse): Promise<void> {
+    const meta = this.host.store.getMeta(url.searchParams.get('chat') ?? '')
+    const asked = url.searchParams.get('path') ?? ''
+    if (!meta || !asked) return json(res, 404, { error: 'Not found' })
+    const cwd = resolve(meta.cwd)
+    const file = resolve(cwd, asked)
+    const rel = relative(cwd, file)
+    if (!rel || rel.startsWith('..') || isAbsolute(rel)) return json(res, 403, { error: 'Outside the chat’s folder' })
+    let diff = ''
+    try {
+      diff = await git(cwd, ['diff', '--no-color', 'HEAD', '--', rel])
+    } catch {
+      // No HEAD yet (an unborn repo), or not a repo: the untracked path below answers.
+    }
+    if (!diff.trim()) {
+      const status = await git(cwd, ['status', '--porcelain', '--', rel]).catch(() => '')
+      if (status.startsWith('??')) diff = await gitDiff(cwd, { path: rel, staged: false, untracked: true })
+    }
+    json(res, 200, { diff: diff.startsWith('error:') ? '' : diff, path: rel })
   }
 
   /** Uploads past `UPLOAD_TTL_MS`. Run at start; a missing folder is nothing to prune. */

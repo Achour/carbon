@@ -12,7 +12,7 @@ import { TranscriptSurfaceContext, type TranscriptSurface } from '@/components/m
 import { useRemote } from './state'
 import { Header, navigate } from './App'
 import { invoke } from './api'
-import { AgentView, CanvasView } from './Viewers'
+import { AgentView, CanvasView, DiffScreen } from './Viewers'
 import { chatTitle, isBusy, projectName } from './format'
 import { Composer } from './Composer'
 import { OptionChips } from './OptionChips'
@@ -40,14 +40,15 @@ export function ChatScreen({ chatId }: { chatId: string }): React.JSX.Element {
     [chat?.id, chat?.provider]
   )
   const [view, setView] = React.useState<
-    { kind: 'canvas'; id: string } | { kind: 'agent'; toolUseId: string } | null
+    { kind: 'canvas'; id: string } | { kind: 'agent'; toolUseId: string } | { kind: 'diff'; path: string } | null
   >(null)
   const surface = React.useMemo<TranscriptSurface>(
     () => ({
       panels: false,
       openChat: (id) => navigate(`#/c/${encodeURIComponent(id)}`),
       openAgent: (_parent, toolUseId) => setView({ kind: 'agent', toolUseId }),
-      openCanvas: (id) => setView({ kind: 'canvas', id })
+      openCanvas: (id) => setView({ kind: 'canvas', id }),
+      openDiff: (path) => setView({ kind: 'diff', path })
     }),
     []
   )
@@ -229,6 +230,7 @@ export function ChatScreen({ chatId }: { chatId: string }): React.JSX.Element {
         </div>
       ) : null}
       {view?.kind === 'canvas' && <CanvasView id={view.id} onClose={() => setView(null)} />}
+      {view?.kind === 'diff' && <DiffScreen chatId={chatId} path={view.path} onClose={() => setView(null)} />}
       {view?.kind === 'agent' && chat && (
         <AgentView
           parentId={chat.id}

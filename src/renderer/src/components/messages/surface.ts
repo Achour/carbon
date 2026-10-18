@@ -15,6 +15,8 @@ export interface TranscriptSurface {
   openAgent?: (parentChatId: string, toolUseId: string) => void
   /** Shows a canvas, in place of the right panel. */
   openCanvas?: (id: string) => void
+  /** Shows one changed file's diff (a path relative to the chat's folder), in place of the diff panel. */
+  openDiff?: (path: string) => void
 }
 
 const DESKTOP: TranscriptSurface = { panels: true }
