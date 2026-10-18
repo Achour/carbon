@@ -194,8 +194,14 @@ function Shell({ activeId, children }: { activeId: string | null; children: Reac
   }
 
   return (
+    // Fixed, full width and opaque, and not for layout's sake. iOS 26 lays a
+    // progressive blur over the top ~40pt of a Home Screen web app — the
+    // chat's title went soft under it, solid header or not — and WebKit skips
+    // that edge only when what sits there is inside a fixed or sticky box
+    // spanning the viewport with a background of its own. A Safari tab never
+    // shows it, which is why the Simulator's tab drew the title sharp.
     <div
-      className="relative h-[var(--app-height,100dvh)] overflow-hidden"
+      className="fixed inset-x-0 top-0 h-[var(--app-height,100dvh)] overflow-hidden bg-background"
       onTouchStart={onTouchStart}
       onTouchMove={onTouchMove}
       onTouchEnd={onTouchEnd}

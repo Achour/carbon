@@ -268,10 +268,16 @@ the window open. The phone is one more window onto them.
   pushed screens: in from the right, back by the chevron or a swipe from the
   left edge. The edge strip sits above the content because a canvas iframe
   keeps every touch that lands on it. The chat's header floats over the
-  transcript as a solid bar. It was a translucent blurred one, but iOS drew
-  the bar's own title and icons soft through its `backdrop-filter`, not only
-  the content under it, and no opacity fixed that, so the filter is gone (the
-  jump-to-latest button's too). It is measured so the scroller's top padding follows it when
+  transcript as a solid bar. **The soft title was not the bar's blur.** iOS
+  26 lays its own progressive blur over the top ~40pt of a Home Screen web
+  app, above the page. It never shows in a Safari tab, which is why the
+  Simulator drew the title sharp. Removing the bar's `backdrop-filter` (the
+  jump-to-latest button's too) changed nothing. WebKit skips that edge when
+  what sits there is inside a fixed or sticky box spanning the viewport with
+  a background of its own. So the shell (`Shell` in `App.tsx`) is
+  `position: fixed` with `bg-background`, where it was a `relative` box. The
+  bar was left solid rather than made translucent again, since the blur's
+  return is a change of its own to check on a device. It is measured so the scroller's top padding follows it when
   the connection strip appears. Its hairline shows once something is
   under it, and tapping the title scrolls to the top, the status-bar tap iOS
   only gives a page's own scroll. A round button jumps back to the latest
