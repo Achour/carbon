@@ -358,8 +358,11 @@ an approval, the way the desktop does when its window is in the background.
   showing. That is the desktop's rule set (`notifyOnStatus`): a turn's `turn`
   event (body: the opening of its last reply, `lastReplyText`), its `error`
   event, and a *new* `permission-request` (one re-announced on reload was
-  already pushed). It is skipped for a device that has the chat open on
-  screen. "On screen" is reported by the page (`/api/watch` carries
+  already pushed). A delegate's turn ending or failing is not pushed, on the
+  phone or the desktop. Its outcome goes back to the agent that started it,
+  and that agent finishing is the notice the user wants. Its approvals still
+  push, because only the user can answer those. It is skipped for a device
+  that has the chat open on screen. "On screen" is reported by the page (`/api/watch` carries
   `visible`), with the hidden report sent `keepalive` as the page goes away,
   because iOS freezes the page before the server notices its stream died. A
   push's `tag` is the chat id, so a second notice about a chat replaces the

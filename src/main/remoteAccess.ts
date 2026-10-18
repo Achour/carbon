@@ -796,6 +796,10 @@ export class RemoteAccess {
     const meta = this.host.store.getMeta(ev.chatId)
     // Nowhere to land: an ephemeral chat with no thread to open it in.
     if (!meta || (meta.ephemeral && !meta.sideOf)) return
+    // A delegate's ending is reported to the agent that started it, which
+    // carries on; the notice worth having is that one finishing. Its approvals
+    // still push: only the user can answer those.
+    if (ended && meta.delegation) return
     if (ended && listed(meta)) {
       this.markUnseen(ev.chatId, ended === 'failed', clip(body, 160))
     }

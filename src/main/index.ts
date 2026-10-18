@@ -178,6 +178,9 @@ function notifyOnStatus(chatId: string, status: string): void {
   // whose only action does nothing is worse than no notification.
   const notifyMeta = store.getMeta(chatId)
   if (notifyMeta?.ephemeral && !notifyMeta.sideOf) return
+  // A delegate finishing is news for the agent that started it, not the user:
+  // its outcome goes back to that chat, whose own ending is the notice.
+  if (notifyMeta?.delegation && status === 'idle') return
   const body =
     prev && prev !== 'idle' && status === 'idle'
       ? 'Finished responding'
