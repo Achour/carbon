@@ -54,7 +54,8 @@ import type {
   SlashCommand,
   ThinkingPart,
   ToolPart,
-  UsageInfo
+  UsageInfo,
+  UserMessage
 } from '@shared/types'
 import {
   ANTIGRAVITY_DEFAULT_MODEL,
@@ -5152,7 +5153,28 @@ export class ChatManager {
     if (this.store.lockedElsewhere(chatId)) return 'locked'
     const chat = this.store.getChat(chatId)
     if (!chat || chat.pendingPlanReview) return 'skipped'
-    this.send(chatId, RESUME_PROMPT, undefined, 'Resumed after Carbon restarted')
+    // Cut off before the provider had a session (a first turn still starting),
+    // the new one starts blank: the request goes with it, attachments too.
+    const asked = chat.sessionId
+      ? undefined
+      : [...chat.messages].reverse().find((m): m is UserMessage => m.role === 'user' && !m.label)
+    // Neither a session nor a saved request — a crash in the first second of a
+    // first turn, before the message was written — leaves nothing to continue.
+    if (!chat.sessionId && !asked) return 'skipped'
+    const text = asked
+      ? `${RESUME_PROMPT}\n\nThe request you were working on:\n\n${asked.text}`
+      : RESUME_PROMPT
+    // Not `send`: that commits a model picked from the other provider, which
+    // waits for the user's next message. This resumes the session that was
+    // running, on its own backend. Outcomes nobody delivered still ride along.
+    this.dropForeignModel(chat)
+    const due = this.undelivered(chat)
+    const extra = due.length
+      ? pendingDeliveriesContext(due.map((view) => ({ agent: PROVIDER_SHORT_LABELS[view.provider], view })))
+      : ''
+    if (!this.sendPrompt(chat, text, asked?.attachments, 'Resumed after Carbon restarted', null, extra)) return 'skipped'
+    this.deliveryParked.delete(chat.id)
+    if (due.length) this.carry(chat, due)
     return 'sent'
   }
 

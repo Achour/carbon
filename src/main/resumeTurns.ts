@@ -28,7 +28,18 @@ interface Record_ {
 }
 
 export class ResumeTurns {
-  private readonly running = new Set<string>()
+  /** Chats whose turn is live: any status but idle. */
+  private readonly busy = new Set<string>()
+  /**
+   * Chats with background work and no turn: Claude reports idle while a
+   * background agent or shell runs, and its notification would have continued
+   * the conversation. A restart kills that work as surely as a turn.
+   */
+  private readonly jobs = new Set<string>()
+  /** Left by the last run and not yet resumed or ruled out: kept on record meanwhile. */
+  private readonly pending = new Set<string>()
+  /** Chats that started a turn in this run, so whatever the last run left is overtaken. */
+  private readonly started = new Set<string>()
   private frozen = false
   private timer: ReturnType<typeof setInterval> | null = null
 
@@ -44,8 +55,9 @@ export class ResumeTurns {
   }
 
   /**
-   * What the last run left running, if it was alive recently enough — and the
-   * record is cleared either way, so a chat is offered once.
+   * What the last run left running, if it was alive recently enough. They stay
+   * on record as pending until each is resumed or ruled out (`settle`), so a
+   * quit during the few seconds before they are sent loses nothing.
    */
   takeLeftover(): string[] {
     let rec: Record_ | null = null
@@ -54,25 +66,54 @@ export class ResumeTurns {
     } catch {
       rec = null
     }
-    this.store.write(this.key, JSON.stringify({ chats: [], alive: this.now() } satisfies Record_))
-    if (!rec || !Array.isArray(rec.chats) || typeof rec.alive !== 'number') return []
-    if (this.now() - rec.alive > RESUME_WINDOW_MS) return []
-    return rec.chats.filter((id) => typeof id === 'string')
+    const fresh = !!rec && Array.isArray(rec.chats) && typeof rec.alive === 'number' && this.now() - rec.alive <= RESUME_WINDOW_MS
+    const left = fresh ? rec!.chats.filter((id): id is string => typeof id === 'string') : []
+    for (const id of left) this.pending.add(id)
+    this.persist()
+    return left
   }
 
   /** A chat's status, from the one place every status passes (`emit`). */
   note(chatId: string, status: string): void {
     if (this.frozen) return
     const busy = status !== 'idle'
-    if (busy === this.running.has(chatId)) return
-    if (busy) this.running.add(chatId)
-    else this.running.delete(chatId)
+    if (busy) this.started.add(chatId)
+    if (busy === this.busy.has(chatId)) return
+    if (busy) this.busy.add(chatId)
+    else this.busy.delete(chatId)
     this.persist()
   }
 
-  forget(chatId: string): void {
-    if (this.frozen || !this.running.delete(chatId)) return
+  /** A chat's background jobs, from `emit`'s `background-jobs`. */
+  noteJobs(chatId: string, count: number): void {
+    if (this.frozen || count > 0 === this.jobs.has(chatId)) return
+    if (count > 0) this.jobs.add(chatId)
+    else this.jobs.delete(chatId)
     this.persist()
+  }
+
+  /**
+   * Whether a chat the last run left is still worth resuming: not if a turn has
+   * started in it since launch, which the user (or a delegation's delivery)
+   * began, and which either is running or has already ended on its own.
+   */
+  overtaken(chatId: string): boolean {
+    return this.started.has(chatId)
+  }
+
+  /** A pending chat resumed, or ruled out: off the record unless it is live again. */
+  settle(chatId: string): void {
+    if (this.frozen || !this.pending.delete(chatId)) return
+    this.persist()
+  }
+
+  /** Deleted, or its session disposed: nothing of it to resume. */
+  forget(chatId: string): void {
+    if (this.frozen) return
+    const had = this.busy.delete(chatId) || this.jobs.delete(chatId) || this.pending.delete(chatId)
+    this.jobs.delete(chatId)
+    this.pending.delete(chatId)
+    if (had) this.persist()
   }
 
   /**
@@ -88,11 +129,12 @@ export class ResumeTurns {
   }
 
   private persist(): void {
-    this.store.write(this.key, JSON.stringify({ chats: [...this.running], alive: this.now() } satisfies Record_))
-    if (this.running.size && !this.timer) {
+    const chats = [...new Set([...this.busy, ...this.jobs, ...this.pending])]
+    this.store.write(this.key, JSON.stringify({ chats, alive: this.now() } satisfies Record_))
+    if (chats.length && !this.timer) {
       this.timer = setInterval(() => this.persist(), HEARTBEAT_MS)
       ;(this.timer as { unref?: () => void }).unref?.()
-    } else if (!this.running.size) this.stopHeartbeat()
+    } else if (!chats.length) this.stopHeartbeat()
   }
 
   private stopHeartbeat(): void {

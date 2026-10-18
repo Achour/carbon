@@ -263,6 +263,19 @@ hour later resumes nothing. Two things would erase or misdirect it:
   share one database, and a dev launch must never resume what the installed
   app was running.
 
+**Background work counts as running.** Claude goes idle while a background
+agent or shell carries on, and that work dies with the process too
+(`noteJobs`). **A leftover stays on record until it is resumed or ruled out**
+(`settle`), so a quit in the seconds before the resume is sent loses nothing.
+**A chat a turn has started in since launch is overtaken** and left alone:
+the user's own send, or a delivery, got there first. **It is not `send`:** that
+would commit a model picked from the other provider, which waits for the
+user's next message, so the resume goes straight to `sendPrompt` on the
+running backend. Cut off before the provider had a session, the saved request
+(and its attachments) rides along. With neither a session nor a saved request,
+as in a crash within the first seconds of a first turn before anything was
+written, it is skipped rather than sent as an empty "continue".
+
 `ChatManager.resumeAfterRestart` resumes only the user's own chats. Delegates
 are settled by `reconcileDelegations`, scheduled runs by the scheduler, a plan
 review is still waiting, and terminal chats have no turn. **A crashed run's own

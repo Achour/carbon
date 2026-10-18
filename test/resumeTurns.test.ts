@@ -19,9 +19,53 @@ test('a quit leaves the running chats for the next launch, once', () => {
   a.freeze()
   now += 5 * 60_000
   const b = new ResumeTurns(store, 'resume:app', () => now)
-  assert.deepEqual(b.takeLeftover().sort(), ['c1', 'c2'])
-  // Offered once: a second launch finds nothing.
+  const left = b.takeLeftover().sort()
+  assert.deepEqual(left, ['c1', 'c2'])
+  // Offered once: resumed (or ruled out) and settled, a later launch finds nothing.
+  for (const id of left) b.settle(id)
   assert.deepEqual(new ResumeTurns(store, 'resume:app', () => now).takeLeftover(), [])
+})
+
+test('a quit before the leftover is resumed keeps it for the launch after', () => {
+  const store = memory()
+  const a = new ResumeTurns(store, 'resume:app', () => 1_000)
+  a.note('c1', 'streaming')
+  a.freeze()
+  const b = new ResumeTurns(store, 'resume:app', () => 2_000)
+  assert.deepEqual(b.takeLeftover(), ['c1'])
+  // Quit again within the few seconds before it was sent.
+  b.freeze()
+  assert.deepEqual(new ResumeTurns(store, 'resume:app', () => 3_000).takeLeftover(), ['c1'])
+})
+
+test('background work with no turn running counts as running', () => {
+  const store = memory()
+  const a = new ResumeTurns(store, 'resume:app', () => 1_000)
+  a.note('c1', 'streaming')
+  a.noteJobs('c1', 2)
+  // Claude reports idle while its background agents carry on.
+  a.note('c1', 'idle')
+  a.freeze()
+  assert.deepEqual(new ResumeTurns(store, 'resume:app', () => 2_000).takeLeftover(), ['c1'])
+  const b = new ResumeTurns(store, 'resume:app', () => 3_000)
+  b.noteJobs('c2', 1)
+  b.noteJobs('c2', 0)
+  b.freeze()
+  assert.ok(!new ResumeTurns(store, 'resume:app', () => 4_000).takeLeftover().includes('c2'))
+})
+
+test('a chat a turn started in since launch is overtaken', () => {
+  const store = memory()
+  const a = new ResumeTurns(store, 'resume:app', () => 1_000)
+  a.note('c1', 'streaming')
+  a.freeze()
+  const b = new ResumeTurns(store, 'resume:app', () => 2_000)
+  b.takeLeftover()
+  assert.equal(b.overtaken('c1'), false)
+  // The user sent, and the turn has already finished.
+  b.note('c1', 'starting')
+  b.note('c1', 'idle')
+  assert.equal(b.overtaken('c1'), true)
 })
 
 test('the teardown after freeze does not erase the record', () => {

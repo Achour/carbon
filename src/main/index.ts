@@ -154,7 +154,10 @@ function emit(ev: ChatEvent): void {
     notifyOnStatus(ev.chatId, ev.status)
     noteStatus(ev.chatId, ev.status)
     buddy?.noteStatus(ev.chatId, ev.status)
-  } else if (ev.type === 'background-jobs') noteJobs(ev.chatId, ev.jobs.length)
+  } else if (ev.type === 'background-jobs') {
+    noteJobs(ev.chatId, ev.jobs.length)
+    resumeTurns?.noteJobs(ev.chatId, ev.jobs.length)
+  }
 }
 
 // Native "turn finished" / "needs approval" notifications, but only while the
@@ -1442,6 +1445,9 @@ app.whenReady().then(() => {
   manager = new ChatManager(store, emit, preview, canvas, (chatId) => {
     forgetChat(chatId)
     buddy.forget(chatId)
+    // A disposed session emits no final status. At quit the record is frozen
+    // first, so this only drops a session closed while the app runs.
+    resumeTurns?.forget(chatId)
   })
   preview.setAgentsHost(manager.agentsHost)
   manager.reconcileDelegations()
@@ -1479,10 +1485,17 @@ app.whenReady().then(() => {
   // A chat refused for its lock is tried once more after locks go stale: a
   // crashed run's own claims look live for that long, and only a lock still
   // held then belongs to another running Carbon.
+  // A chat a turn has started in since launch (the user's send, a delivery)
+  // is overtaken: that turn is running, or has ended on its own.
   const resume = (ids: string[], retry: boolean): void => {
-    if (store.getDefaults().resumeAfterRestart === false) return
-    const locked = ids.filter((id) => manager.resumeAfterRestart(id) === 'locked')
-    if (locked.length && retry) setTimeout(() => resume(locked, false), LOCK_STALE_MS + 5000).unref?.()
+    const off = store.getDefaults().resumeAfterRestart === false
+    const locked: string[] = []
+    for (const id of ids) {
+      const outcome = off || resumeTurns!.overtaken(id) ? 'skipped' : manager.resumeAfterRestart(id)
+      if (outcome === 'locked' && retry) locked.push(id)
+      else resumeTurns!.settle(id)
+    }
+    if (locked.length) setTimeout(() => resume(locked, false), LOCK_STALE_MS + 5000).unref?.()
   }
   if (leftover.length) setTimeout(() => resume(leftover, true), 3000).unref?.()
   // A few seconds in rather than at once: anything overdue fires on this first
