@@ -95,12 +95,29 @@ export async function setPushSubscription(subscription: PushSubscriptionJSON | n
  * One changed file's uncommitted diff, from the chat's own folder on the Mac
  * (`handleDiff`): empty when there is nothing left uncommitted.
  */
-export async function diff(chatId: string, path: string): Promise<string> {
-  const q = new URLSearchParams({ chat: chatId, path })
+export async function diff(chatId: string, path: string, scope?: 'repo'): Promise<string> {
+  const q = new URLSearchParams({ chat: chatId, path, ...(scope ? { scope } : {}) })
   const res = await fetch(`/api/diff?${q}`, { credentials: 'same-origin' })
   const data = (await res.json().catch(() => ({}))) as { diff?: string; error?: string }
   if (!res.ok) throw new RemoteError(data.error ?? `Carbon answered ${res.status}`, res.status)
   return data.diff ?? ''
+}
+
+export interface ChangedFile {
+  /** Relative to the repository's root. */
+  path: string
+  /** M, A, D, R, C, T, U or ? (untracked), as `git status` says it. */
+  status: string
+  additions?: number
+  deletions?: number
+}
+
+/** Everything uncommitted in the chat's repository (`handleChanges`). */
+export async function changes(chatId: string): Promise<{ isRepo: boolean; branch: string; files: ChangedFile[] }> {
+  const res = await fetch(`/api/changes?${new URLSearchParams({ chat: chatId })}`, { credentials: 'same-origin' })
+  const data = (await res.json().catch(() => ({}))) as { isRepo?: boolean; branch?: string; files?: ChangedFile[]; error?: string }
+  if (!res.ok) throw new RemoteError(data.error ?? `Carbon answered ${res.status}`, res.status)
+  return { isRepo: !!data.isRepo, branch: data.branch ?? '', files: data.files ?? [] }
 }
 
 /** The Mac's cap on one request, and so on one file sent from the phone. */

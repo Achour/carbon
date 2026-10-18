@@ -168,7 +168,14 @@ the window open. The phone is one more window onto them.
   folder. A path resolving outside it is refused. It is the file's
   uncommitted change against HEAD, so a file committed since says so. The
   phone lists every changed file, since it has no review view for "Show more
-  in diff" to open. A canvas is framed as `CanvasDoc`
+  in diff" to open. That card appears only when a turn's own edits
+  were tracked, so the chat's "⋯" also has **View changes**: everything
+  uncommitted in the repository the chat's folder is in (`/api/changes`,
+  the desktop's `gitStatus`, staged and unstaged merged per file), each row
+  opening its diff on top. Those paths are relative to the repository's
+  root, so `/api/diff` takes `scope=repo` and bounds them by that root, not
+  the folder. A binary file says it has no lines to compare, in place of
+  git's own line. A canvas is framed as `CanvasDoc`
   frames it, `allow-scripts` without `allow-same-origin`, which here also keeps
   it away from the pairing cookie. Mermaid and images open in the desktop's own
   lightbox.

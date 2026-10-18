@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { Archive, Ellipsis, Pencil, Pin, PinOff } from 'lucide-react'
+import { Archive, Ellipsis, FileDiff, Pencil, Pin, PinOff } from 'lucide-react'
 import type { ChatMeta } from '@shared/types'
 import { navigate } from './App'
 import { chatTitle } from './format'
@@ -7,11 +7,12 @@ import { rename, setArchived, setPinned } from './chatActions'
 import { Sheet, SheetRow } from './Sheet'
 
 /**
- * The chat's own menu, from the header's "⋯": rename, pin and archive — what
- * the desktop's row menu does short of deleting, which stays on the Mac. The
- * title keeps its tap, scrolling to the top.
+ * The chat's own menu, from the header's "⋯": its repository's uncommitted
+ * changes, then rename, pin and archive — what the desktop's row menu does
+ * short of deleting, which stays on the Mac. The title keeps its tap,
+ * scrolling to the top.
  */
-export function ChatMenu({ chat }: { chat: ChatMeta }): React.JSX.Element {
+export function ChatMenu({ chat, onViewChanges }: { chat: ChatMeta; onViewChanges: () => void }): React.JSX.Element {
   const [open, setOpen] = React.useState(false)
   const [renaming, setRenaming] = React.useState(false)
   const [draft, setDraft] = React.useState('')
@@ -67,6 +68,15 @@ export function ChatMenu({ chat }: { chat: ChatMeta }): React.JSX.Element {
           </form>
         ) : (
           <div className="pb-2">
+            <SheetRow
+              icon={<FileDiff className="size-[18px]" />}
+              label="View changes"
+              description="Everything uncommitted in this chat’s repository"
+              onClick={() => {
+                close()
+                onViewChanges()
+              }}
+            />
             <SheetRow
               icon={<Pencil className="size-[18px]" />}
               label="Rename"

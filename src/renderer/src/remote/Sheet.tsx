@@ -191,7 +191,7 @@ export function Sheet({
         <div className="flex shrink-0 justify-center pt-2 pb-1">
           <div className="h-[5px] w-9 rounded-full bg-muted-foreground/30" />
         </div>
-        {title && <div className="shrink-0 px-5 pt-2 pb-1 text-[13px] font-medium text-muted-foreground">{title}</div>}
+        {title && <div className="shrink-0 truncate px-5 pt-2 pb-1 text-[13px] font-medium text-muted-foreground">{title}</div>}
         <div ref={body} className="relative min-h-0 overflow-y-auto overscroll-contain px-2 pb-1">
           {children}
         </div>

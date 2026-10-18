@@ -12,7 +12,7 @@ import { TranscriptSurfaceContext, type TranscriptSurface } from '@/components/m
 import { useRemote } from './state'
 import { Header, navigate } from './App'
 import { invoke } from './api'
-import { AgentView, CanvasView, DiffScreen } from './Viewers'
+import { AgentView, CanvasView, ChangesScreen, DiffScreen } from './Viewers'
 import { ChatMenu } from './ChatMenu'
 import { chatTitle, isBusy, projectName } from './format'
 import { Composer } from './Composer'
@@ -41,7 +41,11 @@ export function ChatScreen({ chatId }: { chatId: string }): React.JSX.Element {
     [chat?.id, chat?.provider]
   )
   const [view, setView] = React.useState<
-    { kind: 'canvas'; id: string } | { kind: 'agent'; toolUseId: string } | { kind: 'diff'; path: string } | null
+    | { kind: 'canvas'; id: string }
+    | { kind: 'agent'; toolUseId: string }
+    | { kind: 'diff'; path: string }
+    | { kind: 'changes' }
+    | null
   >(null)
   const surface = React.useMemo<TranscriptSurface>(
     () => ({
@@ -158,7 +162,7 @@ export function ChatScreen({ chatId }: { chatId: string }): React.JSX.Element {
         floating
         scrolled={underHeader}
         onTitleTap={toTop}
-        actions={chat ? <ChatMenu chat={chat} /> : undefined}
+        actions={chat ? <ChatMenu chat={chat} onViewChanges={() => setView({ kind: 'changes' })} /> : undefined}
         title={chat ? chatTitle(chat) : 'Chat'}
         subtitle={chat ? `${projectName(chat)}${chat.worktree ? ` · ${chat.worktree.branch}` : ''}` : undefined}
       />
@@ -233,6 +237,7 @@ export function ChatScreen({ chatId }: { chatId: string }): React.JSX.Element {
       ) : null}
       {view?.kind === 'canvas' && <CanvasView id={view.id} onClose={() => setView(null)} />}
       {view?.kind === 'diff' && <DiffScreen chatId={chatId} path={view.path} onClose={() => setView(null)} />}
+      {view?.kind === 'changes' && <ChangesScreen chatId={chatId} onClose={() => setView(null)} />}
       {view?.kind === 'agent' && chat && (
         <AgentView
           parentId={chat.id}

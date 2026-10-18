@@ -17,7 +17,7 @@ import { basename, extname, isAbsolute, join, normalize, relative, resolve, sep 
 import { gzipSync } from 'node:zlib'
 import type { IpcMain, IpcMainInvokeEvent } from 'electron'
 import { projectRoot } from '@shared/types'
-import { git, gitDiff } from './git'
+import { git, gitDiff, gitStatus } from './git'
 import { promptLine } from '@shared/promptLine'
 import type {
   AppDefaults,
@@ -598,6 +598,7 @@ export class RemoteAccess {
       if (path === '/api/invoke' && req.method === 'POST') return this.handleInvoke(req, res)
       if (path === '/api/upload' && req.method === 'POST') return this.handleUpload(req, res)
       if (path === '/api/diff') return this.handleDiff(url, res)
+      if (path === '/api/changes') return this.handleChanges(url, res)
       if (path === '/api/image') return this.handleImage(url, res)
       json(res, 404, { error: 'Not found' })
       return
@@ -964,21 +965,49 @@ export class RemoteAccess {
     const meta = this.host.store.getMeta(url.searchParams.get('chat') ?? '')
     const asked = url.searchParams.get('path') ?? ''
     if (!meta || !asked) return json(res, 404, { error: 'Not found' })
-    const cwd = resolve(meta.cwd)
-    const file = resolve(cwd, asked)
-    const rel = relative(cwd, file)
+    // `scope=repo`: the path is relative to the repository the chat's folder is
+    // in (what "View changes" lists, from `git status`), and must stay in it.
+    const folder = resolve(meta.cwd)
+    const base = url.searchParams.get('scope') === 'repo' ? await repoRoot(folder) : folder
+    if (!base) return json(res, 404, { error: 'Not a git repository' })
+    const file = resolve(base, asked)
+    const rel = relative(base, file)
     if (!rel || rel.startsWith('..') || isAbsolute(rel)) return json(res, 403, { error: 'Outside the chat’s folder' })
     let diff = ''
     try {
-      diff = await git(cwd, ['diff', '--no-color', 'HEAD', '--', rel])
+      diff = await git(base, ['diff', '--no-color', 'HEAD', '--', rel])
     } catch {
       // No HEAD yet (an unborn repo), or not a repo: the untracked path below answers.
     }
     if (!diff.trim()) {
-      const status = await git(cwd, ['status', '--porcelain', '--', rel]).catch(() => '')
-      if (status.startsWith('??')) diff = await gitDiff(cwd, { path: rel, staged: false, untracked: true })
+      const status = await git(base, ['status', '--porcelain', '--', rel]).catch(() => '')
+      if (status.startsWith('??')) diff = await gitDiff(base, { path: rel, staged: false, untracked: true })
     }
     json(res, 200, { diff: diff.startsWith('error:') ? '' : diff, path: rel })
+  }
+
+  /**
+   * Everything uncommitted in the repository the chat's folder is in — the
+   * phone's "View changes", which a turn's changed-files card cannot stand in
+   * for (it appears only when that turn's edits were tracked). One row per
+   * file, staged and unstaged merged, as the diff against HEAD shows it.
+   */
+  private async handleChanges(url: URL, res: ServerResponse): Promise<void> {
+    const meta = this.host.store.getMeta(url.searchParams.get('chat') ?? '')
+    if (!meta) return json(res, 404, { error: 'Not found' })
+    const status = await gitStatus(meta.cwd)
+    if (!status.isRepo) return json(res, 200, { isRepo: false, branch: '', files: [] })
+    const files = new Map<string, { path: string; status: string; additions?: number; deletions?: number }>()
+    for (const c of status.changes) {
+      const prior = files.get(c.path)
+      if (!prior) {
+        files.set(c.path, { path: c.path, status: c.status, additions: c.additions, deletions: c.deletions })
+        continue
+      }
+      prior.additions = (prior.additions ?? 0) + (c.additions ?? 0)
+      prior.deletions = (prior.deletions ?? 0) + (c.deletions ?? 0)
+    }
+    json(res, 200, { isRepo: true, branch: status.branch, files: [...files.values()] })
   }
 
   /**
@@ -1170,6 +1199,12 @@ function cookieFor(credential: string, secure: boolean): string {
   // re-pairing a phone is the user's chore and unpairing it is one button in
   // Settings.
   return `${COOKIE}=${encodeURIComponent(credential)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000${secure ? '; Secure' : ''}`
+}
+
+/** The repository a folder is in, or null outside one. */
+async function repoRoot(folder: string): Promise<string | null> {
+  const top = await git(folder, ['rev-parse', '--show-toplevel']).catch(() => '')
+  return top.trim() ? resolve(top.trim()) : null
 }
 
 /** A row the phone lists — its `listedChats`, so the badge counts what it shows. */

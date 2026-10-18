@@ -1,13 +1,16 @@
 import * as React from 'react'
 import { createPortal } from 'react-dom'
-import { ChevronLeft, Loader2 } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Loader2 } from 'lucide-react'
+import { LineDeltas } from '@/components/GitPanel'
+import { FileIcon } from '@/lib/fileIcon'
+import { cn } from '@/lib/utils'
 import type { Canvas } from '@shared/types'
 import { agentRunOf } from '@shared/agentRuns'
 import { useAgentPart } from '@/components/messages/AgentRows'
 import { SubAgentStream } from '@/components/messages/ToolCard'
 import { DiffView } from '@/components/DiffView'
 import { languageForPath } from '@/lib/highlight'
-import { diff as fetchDiff, invoke } from './api'
+import { changes as fetchChanges, diff as fetchDiff, invoke, type ChangedFile } from './api'
 
 const EASE = 'cubic-bezier(0.32, 0.72, 0, 1)'
 /** Where a back swipe has to start: the screen's left edge, as on iOS. */
@@ -190,23 +193,26 @@ export function CanvasView({ id, onClose }: { id: string; onClose: () => void })
 export function DiffScreen({
   chatId,
   path,
+  scope,
   onClose
 }: {
   chatId: string
   path: string
+  /** `repo`: `path` is relative to the repository's root, not the chat's folder. */
+  scope?: 'repo'
   onClose: () => void
 }): React.JSX.Element {
   const [text, setText] = React.useState<string | undefined>(undefined)
   const [error, setError] = React.useState<string | null>(null)
   React.useEffect(() => {
     let alive = true
-    fetchDiff(chatId, path)
+    fetchDiff(chatId, path, scope)
       .then((d) => alive && setText(d))
       .catch((err) => alive && setError(err instanceof Error ? err.message : String(err)))
     return () => {
       alive = false
     }
-  }, [chatId, path])
+  }, [chatId, path, scope])
   const name = path.split('/').pop() ?? path
   return (
     <FullView title={name} onClose={onClose}>
@@ -216,12 +222,107 @@ export function DiffScreen({
         <div className="px-6 py-16 text-center text-[14px] text-muted-foreground">
           No uncommitted changes to {name} — they have been committed or undone since.
         </div>
+      ) : text && !text.includes('@@') && /^Binary files /m.test(text) ? (
+        <div className="px-6 py-16 text-center text-[14px] text-muted-foreground">
+          {name} is a binary file, so there are no lines to compare.
+        </div>
       ) : (
         <div className="h-full text-[12px]">
           <DiffView text={text} language={languageForPath(path)} wrap />
         </div>
       )}
     </FullView>
+  )
+}
+
+const STATUS_WORD: Record<string, string> = {
+  M: 'Modified',
+  A: 'Added',
+  D: 'Deleted',
+  R: 'Renamed',
+  C: 'Copied',
+  T: 'Type changed',
+  U: 'Conflict',
+  '?': 'New'
+}
+
+/**
+ * Everything uncommitted in the chat's repository, from the chat menu's "View
+ * changes": the list a turn's changed-files card cannot stand in for, since
+ * that card appears only when the turn's own edits were tracked. A row opens
+ * its diff on top, and back returns to the list.
+ */
+export function ChangesScreen({ chatId, onClose }: { chatId: string; onClose: () => void }): React.JSX.Element {
+  const [state, setState] = React.useState<{ branch: string; files: ChangedFile[]; isRepo: boolean } | null>(null)
+  const [error, setError] = React.useState<string | null>(null)
+  const [open, setOpen] = React.useState<string | null>(null)
+  React.useEffect(() => {
+    let alive = true
+    fetchChanges(chatId)
+      .then((r) => alive && setState(r))
+      .catch((err) => alive && setError(err instanceof Error ? err.message : String(err)))
+    return () => {
+      alive = false
+    }
+  }, [chatId])
+  const additions = state?.files.reduce((n, f) => n + (f.additions ?? 0), 0) ?? 0
+  const deletions = state?.files.reduce((n, f) => n + (f.deletions ?? 0), 0) ?? 0
+  return (
+    <>
+      <FullView title="Changes" onClose={onClose}>
+        <div className="h-full overflow-y-auto overscroll-contain">
+          {error ? (
+            <div className="px-6 py-16 text-center text-[14px] text-muted-foreground">{error}</div>
+          ) : !state ? (
+            <div className="flex justify-center py-16 text-muted-foreground">
+              <Loader2 className="size-5 animate-spin" />
+            </div>
+          ) : !state.isRepo ? (
+            <div className="px-6 py-16 text-center text-[14px] text-muted-foreground">This chat’s folder isn’t a git repository.</div>
+          ) : state.files.length === 0 ? (
+            <div className="px-6 py-16 text-center text-[14px] text-muted-foreground">
+              No uncommitted changes{state.branch ? ` on ${state.branch}` : ''}.
+            </div>
+          ) : (
+            <div className="px-3 py-3">
+              <div className="flex items-center justify-between px-2 pb-2 text-[13px] text-muted-foreground">
+                <span>
+                  {state.files.length} file{state.files.length === 1 ? '' : 's'}
+                  {state.branch ? ` on ${state.branch}` : ''}
+                </span>
+                <LineDeltas additions={additions} deletions={deletions} className="text-[13px]" />
+              </div>
+              <div className="divide-y divide-border overflow-hidden rounded-2xl border border-border bg-card">
+                {state.files.map((f) => {
+                  const name = f.path.split('/').pop() ?? f.path
+                  const dir = f.path.slice(0, f.path.length - name.length).replace(/\/$/, '')
+                  return (
+                    <button
+                      key={f.path}
+                      type="button"
+                      onClick={() => setOpen(f.path)}
+                      className="flex w-full items-center gap-3 px-3.5 py-3 text-left active:bg-accent"
+                    >
+                      <FileIcon path={name} className="size-[18px] shrink-0" />
+                      <span className="min-w-0 flex-1">
+                        <span className={cn('block truncate text-[15px]', f.status === 'D' && 'line-through opacity-70')}>{name}</span>
+                        <span className="block truncate text-[12.5px] text-muted-foreground">
+                          {STATUS_WORD[f.status] ?? f.status}
+                          {dir ? ` · ${dir}` : ''}
+                        </span>
+                      </span>
+                      <LineDeltas additions={f.additions ?? 0} deletions={f.deletions ?? 0} className="shrink-0 text-[12.5px]" />
+                      <ChevronRight className="size-4 shrink-0 text-muted-foreground/60" />
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      </FullView>
+      {open && <DiffScreen chatId={chatId} path={open} scope="repo" onClose={() => setOpen(null)} />}
+    </>
   )
 }
 
