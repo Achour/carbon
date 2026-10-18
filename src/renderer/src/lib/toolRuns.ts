@@ -30,7 +30,8 @@ export function groupToolRuns(
   {
     isGroupable,
     skip,
-    from = 0
+    from = 0,
+    min = GROUP_MIN
   }: {
     /** Whether this call is a step in a run rather than a block of its own. */
     isGroupable: (part: ToolPart) => boolean
@@ -44,12 +45,17 @@ export function groupToolRuns(
     skip?: (part: AssistantPart) => boolean
     /** Ignore everything before this index — a folded turn's hidden prefix. */
     from?: number
+    /**
+     * Calls a run needs to be a group. 1 under "Fold activity while working",
+     * where a lone call is a step like any other ("Ran 1 command").
+     */
+    min?: number
   }
 ): PartRun[] {
   const items: PartRun[] = []
   let run: { part: ToolPart; index: number }[] = []
   const flush = (): void => {
-    if (run.length >= GROUP_MIN) {
+    if (run.length >= min) {
       items.push({ kind: 'group', parts: run.map((r) => r.part), key: `grp-${run[0].index}` })
     } else {
       for (const r of run) items.push({ kind: 'single', part: r.part, index: r.index })

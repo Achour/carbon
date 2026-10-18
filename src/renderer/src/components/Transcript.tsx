@@ -30,8 +30,12 @@ import { useApp } from '@/store'
  * composer and everything around the transcript stay each surface's own.
  */
 
-/** Coalesce a run of this many consecutive read/search-only messages into one row. */
+/**
+ * Coalesce a run of this many consecutive read/search-only messages into one
+ * row — 1 under "Fold activity while working", where every step is a row.
+ */
 const GROUP_MIN = 2
+const groupMin = (foldActivity: boolean): number => (foldActivity ? 1 : GROUP_MIN)
 
 /**
  * How long the transcript's tail has to be still before the foot says
@@ -138,6 +142,8 @@ interface RenderCtx {
    */
   expandedTurns: ReadonlySet<string>
   onToggleTurn: (userMessageId: string) => void
+  /** Calls a run needs to draw as a group (`groupMin`). */
+  groupMin: number
 }
 
 /**
@@ -336,7 +342,7 @@ function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
       (n, m) => n + m.parts.filter((p) => !!p && p.type === 'tool').length,
       0
     )
-    if (runCalls >= GROUP_MIN) {
+    if (runCalls >= ctx.groupMin) {
       // A run of tool-only messages is work by definition — it can never be the
       // turn's answer — so a folded turn omits the group and the checklist hung
       // off its last message, and keeps the changes card, which is the turn's
@@ -385,7 +391,7 @@ function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
               (part) => !(part.status === 'success' && FILE_MUTATION_TOOLS.has(part.name))
             )
           : parts
-        if (visibleParts.length >= GROUP_MIN) {
+        if (visibleParts.length >= ctx.groupMin) {
           out.push(
             <ToolGroup
               key={groupKey(run[0].id)}
@@ -573,7 +579,8 @@ function sameHistory(
     prev.ctx.switchPendingId !== ctx.switchPendingId ||
     prev.ctx.taskCompletions !== ctx.taskCompletions ||
     prev.ctx.expandedTurns !== ctx.expandedTurns ||
-    prev.ctx.onToggleTurn !== ctx.onToggleTurn
+    prev.ctx.onToggleTurn !== ctx.onToggleTurn ||
+    prev.ctx.groupMin !== ctx.groupMin
   ) {
     return false
   }
@@ -754,13 +761,13 @@ export function useTranscript({
         ? m.parts.filter((p): p is ToolPart => !!p && p.type === 'tool')
         : []
     )
-    if (parts.length < GROUP_MIN) return null
+    if (parts.length < groupMin(foldActivity)) return null
     // Keyed as history will key it — off the run's first message that draws,
     // since `renderMessages` drops the blank ones before it names a run — so
     // the group folds in place when the turn ends instead of being remade.
     const first = members.find((m) => !isBlankMsg(m)) ?? liveAssistant
     return { start, parts, key: groupKey(first.id) }
-  }, [liveAssistant, displayedMessages, historyEnd])
+  }, [liveAssistant, displayedMessages, historyEnd, foldActivity])
   // Where the label draws — see `showActivity` above for the slot.
   // A thought with text is Codex's shape (Claude withholds the text): while it
   // is the message's last part, `ThinkingBlock` shimmers "Thinking…" — through
@@ -768,11 +775,23 @@ export function useTranscript({
   // motion, and "Working…" two lines under it would say the same thing twice.
   const livePart = liveAssistant?.parts[liveAssistant.parts.length - 1]
   const thinkingShown = livePart?.type === 'thinking' && livePart.text.length > 0
-  const tailMoving = liveRun
-    ? groupRunning(liveRun.parts)
-    : !!liveAssistant &&
-      (thinkingShown ||
-        groupRunning(liveAssistant.parts.filter((p): p is ToolPart => !!p && p.type === 'tool')))
+  // Folded, the turn moves in *steps*: a trailing run of calls is one step
+  // from its first call until the model writes text, gaps between its calls
+  // included (`ToolGroup`'s `active`). Keyed on a call running, the step read
+  // "Ran" and "Thinking…" in every gap and flipped back at the next call.
+  // `liveRun` is Claude's shape; Codex accumulates the turn into one message,
+  // so there the step is the message's trailing call.
+  const tailPart = liveAssistant?.parts.findLast(
+    (p) => !!p && (p.type === 'tool' || p.text.length > 0)
+  )
+  const activeTail = !!liveRun || tailPart?.type === 'tool'
+  const tailMoving = foldActivity
+    ? activeTail || thinkingShown
+    : liveRun
+      ? groupRunning(liveRun.parts)
+      : !!liveAssistant &&
+        (thinkingShown ||
+          groupRunning(liveAssistant.parts.filter((p): p is ToolPart => !!p && p.type === 'tool')))
   // The clock is what the tail *draws*, not the last message's identity.
   // Every streamed event replaces the message object, and several of them draw
   // nothing — a withheld thought's once-a-second token ping, a blank thinking
@@ -819,13 +838,11 @@ export function useTranscript({
     const t = setTimeout(() => setQuiet(true), QUIET_MS)
     return () => clearTimeout(t)
   }, [drawn, busy])
-  // Folded, a finished call or a thought opening is a step that has *landed*,
-  // and the model is already on the next one — so the label draws at once,
-  // with no lull to wait out. Only a text tail still waits for `QUIET_MS`:
-  // nothing marks a paragraph finished, and the label must not sit under one
-  // that is still growing.
-  const tailPart = liveAssistant?.parts.findLast((p) => !!p)
-  const tailText = tailPart?.type === 'text' && tailPart.text.length > 0
+  // Folded, the label is the step *after* the prose: hidden while a run of
+  // calls trails (that row is the step), drawn at once when a thought opens
+  // after text, and otherwise `QUIET_MS` after a text tail — nothing marks a
+  // paragraph finished, and the label must not sit under one still growing.
+  const tailText = tailPart?.type === 'text'
   const showActivityLabel =
     showActivity &&
     (awaitingAnswer ||
@@ -851,7 +868,8 @@ export function useTranscript({
       switchPendingId,
       taskCompletions: timeline.completions,
       expandedTurns,
-      onToggleTurn
+      onToggleTurn,
+      groupMin: groupMin(foldActivity)
     }),
     [
       chat.id,
@@ -861,7 +879,8 @@ export function useTranscript({
       switchPendingId,
       timeline.completions,
       expandedTurns,
-      onToggleTurn
+      onToggleTurn,
+      foldActivity
     ]
   )
   const historyNodes = useHistoryNodes(
@@ -875,7 +894,7 @@ export function useTranscript({
   // the same Fragment. Both go into ONE keyed array below, so when the turn
   // moves on React updates the block in place rather than rebuilding it.
   const liveNode = liveRun ? (
-    <ToolGroup key={liveRun.key} parts={liveRun.parts} cwd={chat.cwd} live />
+    <ToolGroup key={liveRun.key} parts={liveRun.parts} cwd={chat.cwd} live active />
   ) : liveAssistant ? (
     <React.Fragment key={liveAssistant.id}>
       {/* The live message of a live turn, so its runs stay open — and it takes

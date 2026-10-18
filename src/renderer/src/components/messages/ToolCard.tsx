@@ -1464,8 +1464,11 @@ export const ToolGroup = React.memo(function ToolGroup(props: {
   parts: ToolPart[]
   cwd: string
   live?: boolean
+  /** See `ActivityGroup`'s `active`; only the last segment can be the step. */
+  active?: boolean
 }): React.JSX.Element {
   const { parts } = props
+  const min = useApp((s) => (s.foldActivity ? 1 : GROUP_MIN))
   if (!parts.some(isAgentish)) return <ActivityGroup {...props} />
   const segments: { agents: boolean; parts: ToolPart[] }[] = []
   for (const part of parts) {
@@ -1476,15 +1479,20 @@ export const ToolGroup = React.memo(function ToolGroup(props: {
   }
   return (
     <>
-      {segments.map((seg) =>
+      {segments.map((seg, i) =>
         seg.agents ? (
           seg.parts.length === 1 ? (
             <ToolCard key={seg.parts[0].toolUseId} part={seg.parts[0]} cwd={props.cwd} />
           ) : (
             <AgentGroupCard key={`agents-${seg.parts[0].toolUseId}`} parts={seg.parts} />
           )
-        ) : seg.parts.length >= GROUP_MIN ? (
-          <ActivityGroup key={`run-${seg.parts[0].toolUseId}`} {...props} parts={seg.parts} />
+        ) : seg.parts.length >= min ? (
+          <ActivityGroup
+            key={`run-${seg.parts[0].toolUseId}`}
+            {...props}
+            parts={seg.parts}
+            active={props.active && i === segments.length - 1}
+          />
         ) : (
           seg.parts.map((p) => <ToolCard key={p.toolUseId} part={p} cwd={props.cwd} />)
         )
@@ -1496,10 +1504,19 @@ export const ToolGroup = React.memo(function ToolGroup(props: {
 const ActivityGroup = React.memo(function ActivityGroup({
   parts,
   cwd,
-  live = false
+  live = false,
+  active = false
 }: {
   parts: ToolPart[]
   cwd: string
+  /**
+   * This run is the live turn's current *step*: the trailing run, with no
+   * prose after it yet. Under "Fold activity while working" it reads in the
+   * present tense and shimmers for that whole span — the gaps between its
+   * calls included, which is the point: keyed on a call running, the row read
+   * "Ran 3 commands" in every gap and "Running 4 commands" at the next call.
+   */
+  active?: boolean
   /**
    * This run belongs to a turn that is still working — which is exactly the
    * span it should stay open for: the gaps between its calls, and the prose
@@ -1517,13 +1534,17 @@ const ActivityGroup = React.memo(function ActivityGroup({
   const metas = parts.map((p) => toolMeta(p, cwd))
   const running = groupRunning(parts)
   const errored = parts.some((p) => p.status === 'error')
+  const foldActivity = useApp((s) => s.foldActivity)
+  // In progress as far as the reader is concerned: a call is running, or —
+  // folded — this is the turn's current step, gaps between calls included.
+  const moving = running || (foldActivity && active)
 
   // A mixed run used to read "Workspace activity · 7 actions" — a count of the
   // one thing the reader can already see, and a name for none of it. Every kind
   // in the run gets a clause and a count instead, which is the same width and
   // actually answers what the turn spent its time on.
   const labels = metas.map((m) => m.label)
-  const title = summarizeActivity(labels, running)
+  const title = summarizeActivity(labels, moving)
   // The mark is the *first clause's*, off the same grouping pass that ordered
   // the words — so "Wrote 1 file, read 9 files" draws the pen, and a run is
   // still skimmable by shape once it is folded to one line. Resolved through
@@ -1536,14 +1557,13 @@ const ActivityGroup = React.memo(function ActivityGroup({
   // backgrounded agent that outlives its turn does not shut on it. With
   // "Fold activity while working" on it is folded from the start, and the
   // trailing summary below is what moves instead.
-  const foldActivity = useApp((s) => s.foldActivity)
   const { open, onOpenChange } = useRunDisclosure(!foldActivity && (live || running))
   // A running group that has been folded shut still shows what its last call
   // is on, for a sense of motion. Only then: while the group is open the call
   // is on screen one row down with its own summary, and the same command
   // trailing the row above it was the summary saying it twice — in mono, at the
   // end of a sentence it was not part of.
-  const trailing = running && !open ? metas[metas.length - 1]?.summary : undefined
+  const trailing = moving && !open ? metas[metas.length - 1]?.summary : undefined
   // A canvas is the one thing a run produces that lives somewhere else, and
   // grouping had put its only link one expand away — a document the turn just
   // wrote, with nothing on screen to open it. So the way in rides the collapsed
@@ -1574,7 +1594,7 @@ const ActivityGroup = React.memo(function ActivityGroup({
             <span
               className={cn(
                 'shrink-0 text-[13px]',
-                foldActivity && running ? 'shimmer-text' : 'text-muted-foreground'
+                foldActivity && moving ? 'shimmer-text' : 'text-muted-foreground'
               )}
             >
               {title}

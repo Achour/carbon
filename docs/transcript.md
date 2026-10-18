@@ -75,18 +75,23 @@ where the output already lived.
   the chat. A click wins from then on. `AgentCard` is the one activity row with
   no rhythm at all, because it has no body to open: a spawned agent is a nested
   *conversation* and it is read in the panel (see the roster below).
-- **"Fold activity while working" (Settings → Chats, on by default) is the other rhythm,
-  as a choice.** Some readers want the turn as prose punctuated by one line per
-  batch while it runs, not only after. It changes the default `useRunDisclosure`
-  is given: the run is folded from its first render, its collapsed row trails
-  the running call's summary, and a click still wins. Folded, the foot's
-  "Working…" arrived `QUIET_MS` *after* each step and vanished under the next
-  one, which read as blinking. So in this mode the foot is the turn's **next
-  step**: "Thinking…" the moment a call finishes or a thought opens (a text tail
-  still waits `QUIET_MS`, since nothing marks a paragraph finished), and a cut
-  rather than a fade when the next row takes its place. The row in flight —
-  lone or group — shimmers its label in place of the spinner. Without it a
-  3–7 s pause before Opus's closing summary was a screen with nothing moving.
+- **"Fold activity while working" (Settings → Chats, on by default) draws the
+  turn as *steps*.** A trailing run of calls is one step from its first call
+  until the model writes text: one row, folded, in the present tense and
+  shimmering ("Running 3 commands · `date`") for that whole span — the gaps
+  between its calls included — then "Ran 3 commands" once prose lands under it.
+  The first version keyed all of that on *a call running*, which is exactly the
+  signal `live` was introduced to replace: every gap read "Ran 3 commands" with
+  "Thinking…" under it, and the next call flipped both back. So the run carries
+  `active` (`liveRun`, or for Codex the live message's trailing group), and the
+  foot is hidden while a step trails; it says "Thinking…" only *between* steps —
+  at once when a thought opens after the prose, `QUIET_MS` after a text tail
+  otherwise — and is cut rather than faded when the next row takes its place.
+  A lone call is a step like any other, so the group threshold is 1 in this
+  mode (`groupMin`, `groupToolRuns`' `min`): "Ran 1 command" in history, and no
+  lone-card→group promotion at the second call. A call that never groups (an
+  edit, an agent) still draws its own row and shimmers while it runs.
+  `useRunDisclosure` still defaults the row shut and a click still wins.
   A renderer preference in `localStorage`, like the sidebar density.
 - **What opens it is `live`, not "a call is running"** — and the difference is
   the whole feature working or visibly failing. Between any two calls in a run
@@ -178,7 +183,9 @@ where the output already lived.
   was the one row that appeared with no motion.
 - **A live group never plays its own entrance, because it never arrives.** A run
   reaches the screen at `GROUP_MIN` calls, so the first render of a live group
-  is always a *promotion*: the group row is new, but the panel it wraps already
+  is always a *promotion* (except in fold mode, where a run is a group from
+  its first call and the summary row's entrance is a real arrival): the group
+  row is new, but the panel it wraps already
   holds a row the reader is looking at, and animating the wrapper slides that
   row in a second time. There is no formulation where a lone call and the first
   row of a group are the same element under the same key — the parents differ —

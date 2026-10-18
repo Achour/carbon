@@ -451,6 +451,7 @@ export const AssistantBlock = React.memo(function AssistantBlock({
 }): React.JSX.Element | null {
   const parts = message.parts
   const lastIndex = parts.length - 1
+  const foldActivity = useApp((s) => s.foldActivity)
 
   // Coalesce inspection/terminal sequences into one activity row. Short progress
   // narration between calls stays available inside the expanded group instead
@@ -486,6 +487,7 @@ export const AssistantBlock = React.memo(function AssistantBlock({
   items.push(
     ...groupToolRuns(parts, {
       from: fromPart,
+      min: foldActivity ? 1 : undefined,
       isGroupable: (part) => isGroupableTool(part.name),
       // Both of these render nothing, and neither may end the run around it.
       // A text/thinking part with no text: skipping it here rather than
@@ -507,9 +509,19 @@ export const AssistantBlock = React.memo(function AssistantBlock({
   if (items.length === 0) return null
   return (
     <div data-message-role="assistant" className="space-y-2.5">
-      {items.map((item) => {
+      {items.map((item, at) => {
         if (item.kind === 'group') {
-          return <ToolGroup key={item.key} parts={item.parts} cwd={cwd} live={turnLive} />
+          return (
+            <ToolGroup
+              key={item.key}
+              parts={item.parts}
+              cwd={cwd}
+              live={turnLive}
+              // The live message's trailing run is the turn's current step —
+              // Codex's whole turn is one message, so this is its `liveRun`.
+              active={streaming && turnLive && at === items.length - 1}
+            />
+          )
         }
         if (item.kind === 'agents') {
           return item.parts.length === 1 ? (
