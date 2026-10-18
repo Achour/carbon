@@ -264,8 +264,10 @@ the window open. The phone is one more window onto them.
   pushed screens: in from the right, back by the chevron or a swipe from the
   left edge. The edge strip sits above the content because a canvas iframe
   keeps every touch that lands on it. The chat's header floats over the
-  transcript at 95% opacity. At 80%, white transcript text passing under it
-  bled through the blur as a smear around the title, worst in dark mode. It is measured so the scroller's top padding follows it when
+  transcript as a solid bar. It was a translucent blurred one, but iOS drew
+  the bar's own title and icons soft through its `backdrop-filter`, not only
+  the content under it, and no opacity fixed that, so the filter is gone (the
+  jump-to-latest button's too). It is measured so the scroller's top padding follows it when
   the connection strip appears. Its hairline shows once something is
   under it, and tapping the title scrolls to the top, the status-bar tap iOS
   only gives a page's own scroll. A round button jumps back to the latest

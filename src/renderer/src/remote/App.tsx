@@ -218,9 +218,9 @@ function Shell({ activeId, children }: { activeId: string | null; children: Reac
 /**
  * The bar every screen wears: the sidebar, a title, a new chat.
  *
- * `floating` lays it over the screen's scroller, translucent, so content
- * scrolls up under the blur the way it does under an iOS navigation bar; the
- * hairline appears only once something is under it. Tapping the title is the
+ * `floating` lays it over the screen's scroller, solid: a `backdrop-filter`
+ * here made iOS draw the bar's own title and icons soft, not only what was
+ * under it. The hairline appears only once something is under it. Tapping the title is the
  * status-bar tap iOS gives a page's own scroll and not an inner scroller's.
  */
 export function Header({
@@ -247,7 +247,7 @@ export function Header({
       className={cn(
         'shrink-0 pt-[env(safe-area-inset-top)]',
         floating &&
-          'absolute inset-x-0 top-0 z-20 border-b bg-background/95 backdrop-blur-2xl backdrop-saturate-150 transition-[border-color] duration-200',
+          'absolute inset-x-0 top-0 z-20 border-b bg-background transition-[border-color] duration-200',
         floating && (scrolled ? 'border-border/70' : 'border-transparent')
       )}
     >
