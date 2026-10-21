@@ -161,7 +161,13 @@ import {
 } from './cursor'
 import { spawnEnv } from './parentEnv.ts'
 import { cliAvailable, cliPath, requireCliPath } from './providerCli.ts'
-import { claudeFeatureEnv, claudeFeatureStates, codexFeatureStates } from './providerFeatures.ts'
+import {
+  claudeFeatureEnv,
+  claudeFeatureStates,
+  claudeSuggestionsEnabled,
+  codexFeatureStates,
+  grokFeatureStates
+} from './providerFeatures.ts'
 import {
   composePrompt,
   withTimeout,
@@ -941,6 +947,10 @@ class ClaudeSession implements AgentSession {
         permissionMode: chat.permissionMode,
         allowDangerouslySkipPermissions: true,
         includePartialMessages: true,
+        // The CLI's guess at the next prompt, sent after each turn's result as
+        // a `prompt_suggestion`. It rides the `initialize` request, not a flag,
+        // so an older CLI ignores it rather than refusing to start.
+        promptSuggestions: claudeSuggestionsEnabled(),
         // Track file changes per user message so the UI can rewind the working
         // tree back to any prompt (see rewindFiles). Checkpoints live in the CLI
         // process, so they only cover messages sent since this session started.
@@ -2026,6 +2036,15 @@ class ClaudeSession implements AgentSession {
         this.store.saveChat(this.chat.id)
         break
       }
+
+      case 'prompt_suggestion':
+        // Arrives seconds after the turn's `result`. A send in between has
+        // opened a new turn, and a guess at the reply to the one before it
+        // would answer a question no longer on screen.
+        if (!this.turnActive && msg.suggestion.trim()) {
+          this.emit({ type: 'suggestion', chatId: this.chat.id, text: msg.suggestion.trim() })
+        }
+        break
 
       default:
         break
@@ -3399,14 +3418,15 @@ export class ChatManager {
    * Claude's are a static catalog, so this is free. Codex's are discovered, so
    * it costs an app-server spawn — the same throwaway-and-dispose shape as
    * `warmCodexModels`, and for the same reason: the answer belongs to the CLI,
-   * not to us. Grok has no equivalent API and answers `[]`, which is also what
-   * a provider whose CLI is missing answers: there is nothing to configure on a
-   * backend that cannot run.
+   * not to us. Grok's one switch is Carbon's (`GROK_SUGGESTIONS_FEATURE`);
+   * Antigravity and Cursor answer `[]`, which is also what a provider whose CLI
+   * is missing answers: there is nothing to configure on a backend that cannot run.
    */
   async providerFeatures(provider: Provider): Promise<ProviderFeatureState[]> {
     if (!cliAvailable(provider)) return []
     if (provider === 'claude') return claudeFeatureStates()
-    if (provider === 'grok' || provider === 'antigravity' || provider === 'cursor') return []
+    if (provider === 'grok') return grokFeatureStates()
+    if (provider === 'antigravity' || provider === 'cursor') return []
     const client = new CodexAppServerClient({})
     try {
       return codexFeatureStates(await fetchCodexFeatures(client))

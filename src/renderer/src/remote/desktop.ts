@@ -30,6 +30,10 @@ const bridge: Partial<Api> = {
   rewindFiles: (chatId, userMessageId, dryRun) =>
     invoke('chat:rewind-files', chatId, userMessageId, dryRun),
   canvasList: (project) => invoke('canvas:list', project),
+  // What the desktop's `CodexReviewMenu` reads to list branches and commits —
+  // bounded on the Mac to folders it already knows (`FOLDER_SCOPED`).
+  gitLocalBranches: (cwd) => invoke('git:local-branches', cwd),
+  gitReviewCommits: (cwd) => invoke('git:review-commits', cwd),
   canvasGet: (id) => invoke('canvas:get', id),
   // Looked up to decide whether a path in a reply is a link; null draws it as
   // plain text, which is right on a device that cannot open it.

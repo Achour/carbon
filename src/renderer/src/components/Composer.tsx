@@ -1107,8 +1107,16 @@ export function Composer({
     mention === null
   const engage = collapsible ? () => setEngaged(true) : undefined
 
+  // The provider's own guess at the next message (Claude's and Grok's), shown
+  // as the empty input's ghost text; Tab takes it into the input to send or
+  // edit. Anything typed, a live turn or a pending switch hides it.
+  const suggestion = useApp((s) => (chatId ? s.suggestions[chatId] : undefined))
+  const ghost =
+    suggestion && !streaming && !locked && !switchingNote && text === '' && attachments.length === 0
+      ? suggestion
+      : undefined
   const inputPlaceholder =
-    switchingNote ?? (streaming ? 'Queue a message for when this turn ends…' : placeholder)
+    switchingNote ?? (streaming ? 'Queue a message for when this turn ends…' : (ghost ?? placeholder))
   const fitInput = React.useCallback(() => {
     const el = ref.current
     if (!el) return
@@ -1486,6 +1494,16 @@ export function Composer({
                 return
               }
             }
+            if (e.key === 'Tab' && !e.shiftKey && ghost) {
+              e.preventDefault()
+              setText(ghost)
+              requestAnimationFrame(() => {
+                const el = ref.current
+                el?.setSelectionRange(ghost.length, ghost.length)
+                fitInput()
+              })
+              return
+            }
             if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault()
               submit()
@@ -1535,6 +1553,11 @@ export function Composer({
             {pickers}
           </div>
           <SessionPanel chatId={chatId ?? null} />
+          {ghost && !collapsed && (
+            <kbd className="shrink-0 rounded border border-border px-1 font-sans text-[10.5px] text-muted-foreground/70">
+              Tab
+            </kbd>
+          )}
           {contextRing}
           {sendButton}
         </div>

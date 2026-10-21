@@ -18,8 +18,9 @@ the window open. The phone is one more window onto them.
   records every listener, and `POST /api/invoke` names a channel and its
   arguments exactly as the preload bridge would. A second implementation for
   the phone would drift the first time a handler changed. Only channels in
-  `REMOTE_CHANNELS` are reachable, and that list is the conversation and nothing
-  else: no `fs:*`, no terminal, no git writes, no settings, no deleting.
+  `REMOTE_CHANNELS` are reachable, and that list is the conversation plus the
+  few reads that starting one needs (below): no file contents, no terminal, no
+  git writes, no settings, no deleting.
   `chat:set-options` is the composer's own pickers. Like on the desktop, a pick
   there also becomes the Mac's New-chat default (`rememberOptions`), unless it
   is an effort or speed that a model pick only replays (`remember: false`).
@@ -30,8 +31,23 @@ the window open. The phone is one more window onto them.
   read-only and cached in main (`usage.ts`'s TTL and in-flight dedup), so a
   phone reopening its Usage sheet spawns nothing a warm cache can answer;
   `usage:report` is the Usage page's history, aggregates per day, model and
-  project rather than any transcript (`docs/usage.md`, "On the phone"). None
-  gives the phone more than the agent it steers. A lost
+  project rather than any transcript (`docs/usage.md`, "On the phone");
+  `chat:review` is Codex's `/review`, a turn of its native reviewer. None
+  gives the phone more than the agent it steers.
+- **Starting a chat reads a little of the project, and only a known one.**
+  `FOLDER_SCOPED` is the New-chat screen's and the composer's reads:
+  `worktree:list` and `git:local-branches` (where a chat runs),
+  `git:review-commits` (the review picker's commits), `commands:get` (the `/`
+  list) and `fs:search` (the `@` list). Names, never contents. Each takes a
+  folder first, and `knownFolder` refuses any folder the Mac has not opened —
+  a recent project, or one a chat runs in or belongs to, compared exactly, not
+  as a prefix. The rule used to be "no git, no filesystem" outright, and it was
+  why a phone could not start a chat in a worktree, though `chats:create`
+  always took a worktree target: the phone could ask for one and had no way to
+  learn which existed. A folder bound keeps the original point — a paired phone
+  cannot list a directory nobody opened — without leaving the New-chat screen a
+  subset of the Mac's. Removing a merged worktree, which the desktop's picker
+  offers, stays off: a delete is a Mac act. A lost
   phone can still steer the agents, which is the feature, but it is not a more
   direct remote shell than that.
 - **Events are the same `ChatEvent`s, as server-sent events.** `emit` feeds
@@ -404,6 +420,33 @@ the window open. The phone is one more window onto them.
   and the message sat there for good. So every resync also sends what is
   waiting behind a chat the snapshot reports idle. Sending straight into a
   live turn means something different on each provider.
+- **The New-chat screen is the desktop's, question for question.** Beside the
+  project chip, a repository gets the Run on chip (`WorktreeChip`): This Mac,
+  each linked worktree, or New worktree, which turns the sheet to the branch —
+  typing filters the branches you have and names the one you don't, the
+  desktop combobox's rule, and a branch already checked out is offered as
+  neither, since git refuses it. The list is read as the sheet opens, and a
+  restored target whose worktree has gone falls back to This Mac. "Creating
+  worktree…" shows while `chats:create` checks it out. A chat running in a
+  worktree has **New chat in this worktree** in its "⋯", which opens the screen
+  as `#/new/<root>?wt=<path>&branch=<name>`, preselected as the desktop
+  sidebar's `pendingTarget` is. The composer opens `/` commands at the start of
+  a message and `@` files after a space, both lists above the card (a tap
+  keeps the keyboard), a command with no arguments running on the tap; a file
+  is attached by path, as the desktop's mention does. Codex's `/review` opens
+  the desktop's own `CodexReviewMenu` in a sheet, in a chat or before one.
+- **A provider's suggested reply is a chip above the card.** Where the desktop
+  draws it as the empty input's ghost text taken with Tab, a phone has no Tab:
+  a tap puts it in the input and sending stays a second tap. `RemoteAccess`
+  keeps each idle chat's current one (`RemoteSnapshot.suggestions`), so a phone
+  that connects after the turn ended still has it; it is live state, so the
+  launch cache leaves it out with the statuses.
+- **Unsent text is kept per chat and per project (`remote/drafts.ts`).** In
+  the page's `localStorage`, a beat behind the keys and once more as the
+  composer goes, since a phone leaves mid-sentence for reasons the desk does
+  not (the drawer, a notification, eviction in the background). A New-chat
+  draft keeps the pickers and the Run on target too, as the desktop's does.
+  Never synced with the Mac's drafts, and photos are not kept: a draft is text.
 - **A new chat is announced to the other screen, in both directions.** One
   made on the phone reaches the window as the `chat-added` event a delegate
   uses; one made on the desktop reaches phones the same way, from

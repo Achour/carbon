@@ -1,12 +1,15 @@
 import * as React from 'react'
-import { ArrowUp, Clock, FileText, Paperclip, Square, X } from 'lucide-react'
-import type { Attachment } from '@shared/types'
+import { ArrowUp, Clock, CornerDownRight, FileText, Paperclip, Square, X } from 'lucide-react'
+import type { Attachment, SlashCommand } from '@shared/types'
 import { PROVIDER_SHORT_LABELS, type Provider } from '@shared/types'
+import { CODEX_SLASH_COMMANDS } from '@shared/codexCommands'
+import { FileIcon } from '@/lib/fileIcon'
 import { randomId } from '@/lib/insecureContext'
 import { cn } from '@/lib/utils'
 import { ContextDetail } from '@/components/ContextDetail'
 import { useRemote, type QueuedMessage } from './state'
 import { Sheet } from './Sheet'
+import { clearDraft, patchDraft, readDraft } from './drafts'
 import * as api from './api'
 
 /** Longest side of an attached photo. A phone camera's 12 MP is wasted on a model. */
@@ -104,6 +107,41 @@ function filesOf(data: DataTransfer | null): File[] {
 const NO_QUEUE: QueuedMessage[] = []
 
 /**
+ * Each project's `/` commands, per provider, for the life of the page: the
+ * Mac reads them off disk (skills, `.claude/commands`), and a list that moves
+ * only when someone adds a skill is not worth a round trip per keystroke.
+ */
+const commandCache = new Map<string, Promise<SlashCommand[]>>()
+function commandsFor(cwd: string, provider: Provider): Promise<SlashCommand[]> {
+  // Codex's are fixed and Carbon's own (`CODEX_SLASH_COMMANDS`), as the
+  // desktop composer uses them rather than a shared cache.
+  if (provider === 'codex') return Promise.resolve(CODEX_SLASH_COMMANDS)
+  const key = `${provider}\0${cwd}`
+  let hit = commandCache.get(key)
+  if (!hit) {
+    hit = api.invoke<SlashCommand[]>('commands:get', cwd, provider).catch(() => {
+      commandCache.delete(key)
+      return []
+    })
+    commandCache.set(key, hit)
+  }
+  return hit
+}
+
+/** The desktop composer's ranking: name or alias contains, prefix first. */
+function rankCommands(list: SlashCommand[], query: string): SlashCommand[] {
+  const q = query.toLowerCase()
+  return list
+    .filter((c) => c.name.toLowerCase().includes(q) || (c.aliases ?? []).some((a) => a.toLowerCase().includes(q)))
+    .sort((a, b) => {
+      const ap = a.name.toLowerCase().startsWith(q) ? 0 : 1
+      const bp = b.name.toLowerCase().startsWith(q) ? 0 : 1
+      return ap - bp || a.name.localeCompare(b.name)
+    })
+    .slice(0, 30)
+}
+
+/**
  * Send and Stop never take the focus. Taking it closed the keyboard on the
  * tap itself, the composer dropped with it, and the click landed where the
  * button had been: one tap closed the keyboard, a second one sent. The tap
@@ -126,6 +164,10 @@ export function Composer({
   above,
   autoFocus,
   context,
+  cwd,
+  provider,
+  draftKey,
+  onCommand,
   onSubmit
 }: {
   chatId?: string
@@ -138,10 +180,21 @@ export function Composer({
   autoFocus?: boolean
   /** The chat's context window, drawn as the desktop composer's ring. */
   context?: { used: number; window: number; provider: Provider; chatId: string }
+  /** The project, for `@` file names and the `/` commands; neither opens without it. */
+  cwd?: string
+  /** Whose `/` commands to offer. */
+  provider?: Provider
+  /** Where the unsent text is kept (`drafts.ts`). */
+  draftKey?: string
+  /**
+   * A whole message that is a command the screen answers itself — Codex's
+   * `/review`, which opens its presets instead of being sent. True takes it.
+   */
+  onCommand?: (text: string) => boolean
   /** Replaces the default send — the new-chat screen creates the chat first. */
   onSubmit?: (text: string, attachments: Attachment[]) => Promise<void>
 }): React.JSX.Element {
-  const [text, setText] = React.useState('')
+  const [text, setText] = React.useState(() => (draftKey ? (readDraft(draftKey)?.text ?? '') : ''))
   const [attachments, setAttachments] = React.useState<Attachment[]>([])
   const [sending, setSending] = React.useState(false)
   const [reading, setReading] = React.useState(0)
@@ -182,19 +235,129 @@ export function Composer({
     }
   }
 
+  // The draft follows the text, a beat behind the keys, and is written once
+  // more as the composer goes — leaving mid-sentence is the case it is for.
+  const latest = React.useRef(text)
+  latest.current = text
+  React.useEffect(() => {
+    if (!draftKey) return undefined
+    const t = setTimeout(() => patchDraft(draftKey, { text }), 300)
+    return () => clearTimeout(t)
+  }, [draftKey, text])
+  React.useEffect(() => {
+    if (!draftKey) return undefined
+    return () => patchDraft(draftKey, { text: latest.current })
+  }, [draftKey])
+
+  // ---- `@` files and `/` commands, as the desktop composer opens them ----
+  // `@` after a space or at the start opens the file list; a `/` that is the
+  // whole message so far opens the commands, and the first space closes it.
+  const [caret, setCaret] = React.useState(0)
+  const before = text.slice(0, caret)
+  const mentionMatch = cwd ? /(^|\s)@([\w./-]*)$/.exec(before) : null
+  const mention = mentionMatch ? { query: mentionMatch[2], at: caret - mentionMatch[2].length } : null
+  const slashMatch = cwd && provider ? /^\/([\w:-]*)$/.exec(before) : null
+  const slashQuery = slashMatch ? slashMatch[1] : null
+  const [dismissed, setDismissed] = React.useState<string | null>(null)
+  const menuKey = mention ? `@${mention.at}` : slashQuery !== null ? '/' : null
+  const menuOpen = menuKey !== null && menuKey !== dismissed
+  // A ✕ closes that one list, not the next: once the text no longer opens
+  // one, the dismissal is spent.
+  React.useEffect(() => {
+    if (menuKey === null) setDismissed(null)
+  }, [menuKey])
+
+  const [files, setFiles] = React.useState<{ rel: string; path: string }[]>([])
+  const mentionQuery = mention?.query ?? null
+  React.useEffect(() => {
+    if (mentionQuery === null || !cwd) {
+      setFiles([])
+      return undefined
+    }
+    let alive = true
+    const t = setTimeout(() => {
+      api
+        .invoke<{ rel: string; path: string }[]>('fs:search', cwd, mentionQuery)
+        .then((res) => alive && setFiles(res))
+        .catch(() => alive && setFiles([]))
+    }, 120)
+    return () => {
+      alive = false
+      clearTimeout(t)
+    }
+  }, [mentionQuery, cwd])
+
+  const [commands, setCommands] = React.useState<SlashCommand[]>([])
+  const wantsCommands = slashQuery !== null
+  React.useEffect(() => {
+    if (!wantsCommands || !cwd || !provider) return undefined
+    let alive = true
+    void commandsFor(cwd, provider).then((list) => alive && setCommands(list))
+    return () => {
+      alive = false
+    }
+  }, [wantsCommands, cwd, provider])
+  const commandRows = slashQuery !== null ? rankCommands(commands, slashQuery) : []
+
+  const putCaret = (pos: number): void => {
+    setCaret(pos)
+    requestAnimationFrame(() => {
+      area.current?.focus()
+      area.current?.setSelectionRange(pos, pos)
+    })
+  }
+  const pickFile = (r: { rel: string; path: string }): void => {
+    if (!mention) return
+    const head = text.slice(0, mention.at)
+    setText(`${head}${r.rel} ${text.slice(caret)}`)
+    // Attached by path, as the desktop's mention does, so the agent is handed
+    // the file and not only its name in the prose.
+    setAttachments((prev) =>
+      prev.some((a) => a.path === r.path)
+        ? prev
+        : [...prev, { id: randomId(), kind: 'file', name: r.rel.split('/').pop() ?? r.rel, path: r.path }]
+    )
+    putCaret(head.length + r.rel.length + 1)
+  }
+  const pickCommand = (c: SlashCommand): void => {
+    const tail = text.slice(caret)
+    const command = `/${c.name}`
+    // A command with no argument shape is complete when picked: it runs on
+    // the tap, as the desktop's does on Enter.
+    if (!c.argumentHint && !tail.trim() && attachments.length === 0) {
+      void submit(command)
+      return
+    }
+    setText(`${command} ${tail.replace(/^\s+/, '')}`)
+    putCaret(command.length + 1)
+  }
+
   const empty = !text.trim() && attachments.length === 0
-  const submit = async (): Promise<void> => {
-    if (empty || sending || reading) return
+  // The provider's own guess at the next message (Claude's and Grok's). A
+  // phone has no Tab, so it is a chip above the card: a tap puts it in the
+  // input, and sending stays a second tap.
+  const suggestion = useRemote((s) => (chatId ? s.suggestions[chatId] : undefined))
+  const offer = suggestion && !busy && !sending && empty ? suggestion : undefined
+  const submit = async (override?: string): Promise<void> => {
+    const message = (override ?? text).trim()
+    if ((!message && attachments.length === 0) || sending || reading) return
+    if (onCommand && attachments.length === 0 && onCommand(message)) {
+      setText('')
+      if (draftKey) clearDraft(draftKey)
+      return
+    }
     setSending(true)
     // Sent from a phone, the keyboard goes: the reply is what comes next, and
     // it needs the screen. Dropped on the tap, before the round trip, so it
     // goes the moment the message does.
     if (window.matchMedia('(pointer: coarse)').matches) area.current?.blur()
     try {
-      if (onSubmit) await onSubmit(text.trim(), attachments)
-      else if (chatId) await send(chatId, text.trim(), attachments)
+      if (onSubmit) await onSubmit(message, attachments)
+      else if (chatId) await send(chatId, message, attachments)
       setText('')
       setAttachments([])
+      latest.current = ''
+      if (draftKey) clearDraft(draftKey)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -236,6 +399,85 @@ export function Composer({
         </div>
       )}
       {above}
+      {offer && (
+        <button
+          type="button"
+          onMouseDown={keepKeyboard}
+          onClick={() => {
+            setText(offer)
+            putCaret(offer.length)
+          }}
+          className="mb-2 flex h-9 max-w-full animate-in items-center gap-2 rounded-xl border border-border bg-card px-3 text-[14px] duration-200 fade-in active:bg-accent"
+        >
+          <CornerDownRight className="size-4 shrink-0 text-muted-foreground" />
+          <span className="min-w-0 truncate">{offer}</span>
+        </button>
+      )}
+      <div className="relative">
+      {menuOpen && (mention ? files.length > 0 : commandRows.length > 0) && (
+        <div
+          role="listbox"
+          aria-label={mention ? 'Files' : 'Commands'}
+          className="absolute inset-x-0 bottom-full z-20 mb-2 max-h-[min(40dvh,320px)] animate-in overflow-y-auto overscroll-contain rounded-2xl border border-border bg-popover p-1 shadow-lg duration-150 fade-in"
+        >
+          <div className="flex items-center justify-between px-3 pt-1.5 pb-1 text-[12px] font-medium tracking-wide text-muted-foreground uppercase">
+            {mention ? 'Files' : 'Commands'}
+            <button
+              type="button"
+              aria-label="Close"
+              onMouseDown={keepKeyboard}
+              onClick={() => setDismissed(menuKey)}
+              className="-mr-1.5 flex size-7 items-center justify-center rounded-full active:bg-accent"
+            >
+              <X className="size-3.5" />
+            </button>
+          </div>
+          {mention
+            ? files.map((r) => {
+                const slash = r.rel.lastIndexOf('/')
+                return (
+                  <button
+                    key={r.path}
+                    type="button"
+                    role="option"
+                    aria-selected={false}
+                    onMouseDown={keepKeyboard}
+                    onClick={() => pickFile(r)}
+                    className="flex w-full min-w-0 items-center gap-2.5 rounded-xl px-3 py-2 text-left active:bg-accent"
+                  >
+                    <span className="flex size-4 shrink-0 items-center justify-center">
+                      <FileIcon path={r.rel} />
+                    </span>
+                    <span className="shrink-0 text-[15px]">{r.rel.slice(slash + 1)}</span>
+                    {slash > 0 && (
+                      <span className="min-w-0 truncate text-[13px] text-muted-foreground">
+                        {r.rel.slice(0, slash)}
+                      </span>
+                    )}
+                  </button>
+                )
+              })
+            : commandRows.map((c) => (
+                <button
+                  key={c.name}
+                  type="button"
+                  role="option"
+                  aria-selected={false}
+                  onMouseDown={keepKeyboard}
+                  onClick={() => pickCommand(c)}
+                  className="flex w-full min-w-0 flex-col rounded-xl px-3 py-2 text-left active:bg-accent"
+                >
+                  <span className="text-[15px]">
+                    /{c.name}
+                    {c.argumentHint && <span className="ml-1.5 text-muted-foreground">{c.argumentHint}</span>}
+                  </span>
+                  {c.description && (
+                    <span className="mt-0.5 line-clamp-2 text-[13px] leading-snug text-muted-foreground">{c.description}</span>
+                  )}
+                </button>
+              ))}
+        </div>
+      )}
       <div
         className={cn(
           'rounded-[22px] border bg-card shadow-[0_1px_2px_rgb(0_0_0/0.04),0_4px_16px_rgb(0_0_0/0.06)] transition-colors dark:shadow-none',
@@ -297,7 +539,11 @@ export function Composer({
           value={text}
           autoFocus={autoFocus}
           placeholder={placeholder ?? (busy ? 'Queue a follow-up…' : 'Message')}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => {
+            setText(e.target.value)
+            setCaret(e.target.selectionStart ?? e.target.value.length)
+          }}
+          onSelect={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
           onFocus={() => setTyping(window.matchMedia('(pointer: coarse)').matches)}
           onBlur={() => setTyping(false)}
           onPaste={(e) => {
@@ -357,6 +603,7 @@ export function Composer({
             </button>
           )}
         </div>
+      </div>
       </div>
     </div>
   )

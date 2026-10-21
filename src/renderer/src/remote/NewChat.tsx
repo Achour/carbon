@@ -1,6 +1,15 @@
 import * as React from 'react'
 import { Bell, ChevronDown, Folder } from 'lucide-react'
-import { projectRoot, providerForRememberedModel, type Attachment } from '@shared/types'
+import {
+  createsWorktree,
+  projectRoot,
+  providerForRememberedModel,
+  type Attachment,
+  type CodexReviewTarget,
+  type WorktreeTarget
+} from '@shared/types'
+import { CodexReviewMenu } from '@/components/CodexReviewDialog'
+import { DotSpinner } from '@/components/ui/dot-spinner'
 import { rememberedEffortForModel, rememberedServiceTierForModel } from '@/lib/models'
 import { greeting } from '@/lib/format'
 import { ProjectAvatar } from '@/components/ui/project-avatar'
@@ -14,6 +23,8 @@ import { useAllModels, type OptionValues } from './options'
 import { Sheet, SheetRow } from './Sheet'
 import { useBoard } from './board'
 import { HomeBoard } from './HomeBoard'
+import { WorktreeChip } from './WorktreeChip'
+import { clearDraft, draftOptions, newChatDraftKey, patchDraft, readDraft } from './drafts'
 
 /**
  * The home screen — the desktop's: a greeting, "What are we building?", the
@@ -24,14 +35,20 @@ import { HomeBoard } from './HomeBoard'
  * While anything needs you, is working, or finished unseen, the greeting
  * makes way for the board (`HomeBoard`): on a phone, that is what the app was
  * opened to find out. `#/new/<project>` is a new chat asked for by name, and
- * stays the plain screen.
+ * stays the plain screen; `initialTarget` is the chat menu's "New chat in this
+ * worktree", preselected the way the desktop sidebar's `pendingTarget` is.
  */
-export function NewChatScreen({ initialCwd }: { initialCwd: string | null }): React.JSX.Element {
+export function NewChatScreen({
+  initialCwd,
+  initialTarget
+}: {
+  initialCwd: string | null
+  initialTarget?: WorktreeTarget
+}): React.JSX.Element {
   const defaults = useRemote((s) => s.defaults)
   const chats = useRemote((s) => s.chats)
   const available = useRemote((s) => s.available)
   const icons = useRemote((s) => s.icons)
-  const createChat = useRemote((s) => s.createChat)
   const all = useAllModels()
 
   const projects = React.useMemo(() => {
@@ -77,8 +94,6 @@ export function NewChatScreen({ initialCwd }: { initialCwd: string | null }): Re
       permissionMode: defaults.permissionMode
     }
   }, [defaults, all, available])
-  const [picked, setPicked] = React.useState<Partial<OptionValues>>({})
-  const values = seed ? { ...seed, ...picked } : null
   const name = selected ? baseName(selected) : ''
   const board = useBoard()
   const showBoard = !initialCwd && board.needs.length + board.working.length + board.done.length > 0
@@ -104,26 +119,16 @@ export function NewChatScreen({ initialCwd }: { initialCwd: string | null }): Re
           <NotifyCard />
         </div>
       )}
-      {selected && values && (
-        <Composer
-          placeholder={`Start working in ${name}…`}
-          above={
-            <button
-              type="button"
-              onClick={() => setPicking(true)}
-              className="mb-2 flex h-9 max-w-full items-center gap-2 rounded-xl border border-border bg-card px-3 text-[14px] text-muted-foreground active:bg-accent"
-            >
-              <Folder className="size-4 shrink-0" />
-              <span className="min-w-0 truncate text-foreground">{name}</span>
-              <ChevronDown className="size-3.5 shrink-0 opacity-60" />
-            </button>
-          }
-          tools={<OptionChips values={values} onChange={(patch) => setPicked((prev) => ({ ...prev, ...patch }))} />}
-          onSubmit={async (text: string, attachments: Attachment[]) => {
-            const id = await createChat({ cwd: selected, ...values }, text, attachments)
-            // Replaced, not pushed: the new chat takes this screen's place.
-            location.replace(`#/c/${encodeURIComponent(id)}`)
-          }}
+      {selected && seed && (
+        // Keyed by project, as the desktop's screen is: each one has its own
+        // draft, target and pickers to restore.
+        <NewChatComposer
+          key={selected}
+          cwd={selected}
+          name={name}
+          seed={seed}
+          initialTarget={selected === initialCwd ? initialTarget : undefined}
+          onPickProject={() => setPicking(true)}
         />
       )}
       <Sheet open={picking} onClose={() => setPicking(false)} title="Project">
@@ -142,6 +147,113 @@ export function NewChatScreen({ initialCwd }: { initialCwd: string | null }): Re
         ))}
       </Sheet>
     </div>
+  )
+}
+
+/**
+ * The composer half of the home screen, for one project: where the chat runs,
+ * the pickers, the text, and Codex's `/review`. Its draft (`drafts.ts`) keeps
+ * all of them, so a message half-typed and left comes back on the same model,
+ * in the same worktree, that the chips said when it was written.
+ */
+function NewChatComposer({
+  cwd,
+  name,
+  seed,
+  initialTarget,
+  onPickProject
+}: {
+  cwd: string
+  name: string
+  seed: OptionValues
+  initialTarget?: WorktreeTarget
+  onPickProject: () => void
+}): React.JSX.Element {
+  const createChat = useRemote((s) => s.createChat)
+  const branch = useRemote((s) => s.branches[cwd] ?? undefined)
+  const key = newChatDraftKey(cwd)
+  const [draft] = React.useState(() => draftOptions(readDraft(key)))
+  const [picked, setPicked] = React.useState<Partial<OptionValues>>(draft?.picked ?? {})
+  const [target, setTarget] = React.useState<WorktreeTarget>(initialTarget ?? draft?.target ?? { kind: 'local' })
+  const [starting, setStarting] = React.useState(false)
+  const [reviewOpen, setReviewOpen] = React.useState(false)
+  const [failures, setFailures] = React.useState(0)
+  const values = { ...seed, ...picked }
+
+  React.useEffect(() => {
+    patchDraft(key, {
+      picked: Object.keys(picked).length ? picked : undefined,
+      target: target.kind === 'local' ? undefined : target
+    })
+  }, [key, picked, target])
+
+  // Creating a worktree is a checkout, seconds on a big repository, and it can
+  // fail; both have to show or the send looks like it did nothing.
+  const start = async (text: string, attachments: Attachment[], review?: CodexReviewTarget): Promise<void> => {
+    setStarting(true)
+    try {
+      const id = await createChat({ cwd, ...values, worktree: target }, text, attachments, review)
+      clearDraft(key)
+      // Replaced, not pushed: the new chat takes this screen's place.
+      location.replace(`#/c/${encodeURIComponent(id)}`)
+    } catch (err) {
+      setFailures((n) => n + 1)
+      throw err
+    } finally {
+      setStarting(false)
+    }
+  }
+
+  return (
+    <>
+      <Composer
+        placeholder={`Start working in ${name}…`}
+        // The project's own folder, as the desktop's screen passes it — and the
+        // one the Mac knows; a worktree no chat runs in yet is not one.
+        cwd={cwd}
+        provider={values.provider}
+        draftKey={key}
+        above={
+          <>
+            <div className="no-scrollbar flex gap-2 overflow-x-auto">
+              <button
+                type="button"
+                disabled={starting}
+                onClick={onPickProject}
+                className="mb-2 flex h-9 max-w-full min-w-0 items-center gap-2 rounded-xl border border-border bg-card px-3 text-[14px] text-muted-foreground active:bg-accent disabled:opacity-50"
+              >
+                <Folder className="size-4 shrink-0" />
+                <span className="min-w-0 truncate text-foreground">{name}</span>
+                <ChevronDown className="size-3.5 shrink-0 opacity-60" />
+              </button>
+              <WorktreeChip cwd={cwd} value={target} onChange={setTarget} disabled={starting} refresh={failures} />
+            </div>
+            {starting && createsWorktree(target) && (
+              <p className="mb-2 flex items-center gap-1.5 px-1 text-[13px] text-muted-foreground">
+                <DotSpinner className="size-3" />
+                Creating worktree…
+              </p>
+            )}
+          </>
+        }
+        tools={<OptionChips values={values} onChange={(patch) => setPicked((prev) => ({ ...prev, ...patch }))} />}
+        onCommand={(text) => {
+          if (values.provider !== 'codex' || text.toLowerCase() !== '/review') return false
+          setReviewOpen(true)
+          return true
+        }}
+        onSubmit={(text, attachments) => start(text, attachments)}
+      />
+      <Sheet open={reviewOpen} onClose={() => setReviewOpen(false)}>
+        <CodexReviewMenu
+          open={reviewOpen}
+          onOpenChange={setReviewOpen}
+          cwd={cwd}
+          currentBranch={target.kind === 'local' ? branch : undefined}
+          onStart={(review) => start('', [], review)}
+        />
+      </Sheet>
+    </>
   )
 }
 

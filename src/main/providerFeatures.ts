@@ -2,7 +2,7 @@
 // `test/providerFeatures.test.ts` runs this file directly under `node --test`,
 // with no bundler to resolve an alias.
 import { providerFeatureConfig } from './providerCli.ts'
-import { CLAUDE_FEATURES } from '../shared/types.ts'
+import { CLAUDE_FEATURES, CLAUDE_SUGGESTIONS_FEATURE, GROK_SUGGESTIONS_FEATURE } from '../shared/types.ts'
 import type { Provider, ProviderFeature, ProviderFeatureState } from '../shared/types.ts'
 
 /**
@@ -41,16 +41,32 @@ export function resolveFeature(
   // *is* a deliberate instruction and is the escape hatch for a UI that is
   // wrong about something.
   const override = envName ? env[envName] : undefined
-  if (override === '0') {
+  // `false` too: it is how the CLIs' own docs spell the suggestion opt-out.
+  if (override === '0' || override === 'false') {
     return { ...feature, enabled: false, overriddenBy: envName }
   }
   const chosen = providerFeatureConfig(provider)?.[feature.id]
   return { ...feature, enabled: chosen ?? feature.defaultEnabled }
 }
 
-/** Claude's three, resolved. Static — the CLI lists no equivalent of its own. */
+/** Claude's switches, resolved. Static — the CLI lists no equivalent of its own. */
 export function claudeFeatureStates(env: NodeJS.ProcessEnv = process.env): ProviderFeatureState[] {
-  return CLAUDE_FEATURES.map((f) => resolveFeature('claude', f, f.env, env))
+  return [...CLAUDE_FEATURES, CLAUDE_SUGGESTIONS_FEATURE].map((f) => resolveFeature('claude', f, f.env, env))
+}
+
+/** Whether a Claude session asks for reply suggestions (the SDK's `promptSuggestions`). */
+export function claudeSuggestionsEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return resolveFeature('claude', CLAUDE_SUGGESTIONS_FEATURE, CLAUDE_SUGGESTIONS_FEATURE.env, env).enabled
+}
+
+/** Grok's one switch, resolved. */
+export function grokFeatureStates(env: NodeJS.ProcessEnv = process.env): ProviderFeatureState[] {
+  return [resolveFeature('grok', GROK_SUGGESTIONS_FEATURE, GROK_SUGGESTIONS_FEATURE.env, env)]
+}
+
+/** The environment a Grok agent spawns with: its suggestion switch, spelled out both ways. */
+export function grokFeatureEnv(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  return { [GROK_SUGGESTIONS_FEATURE.env]: grokFeatureStates(env)[0].enabled ? '1' : '0' }
 }
 
 /**

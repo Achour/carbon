@@ -63,6 +63,7 @@ import {
   type GrokToolCall
 } from './grokAcp.ts'
 import { requireCliPath } from './providerCli.ts'
+import { grokFeatureStates } from './providerFeatures.ts'
 import { deriveTitle } from './titles.ts'
 import { USD_PER_TICK } from './usageScan.ts'
 import { PREVIEW_SESSION_RULES } from './previewTools.ts'
@@ -166,6 +167,8 @@ export class GrokSession implements AgentSession {
   /** The user message the current turn answers — the implementation turn reuses it. */
   private activeUserMessageId: string | null = null
   private running = false
+  /** Counts suggestion requests, so only the latest turn's answer is shown. */
+  private suggestionGeneration = 0
   private interrupted = false
   private disposed = false
   private deadFlag = false
@@ -542,6 +545,22 @@ export class GrokSession implements AgentSession {
     if (result) this.recordTurn(result)
     this.setStatus(this.hasBlockingPrompt() ? 'waiting-permission' : 'idle')
     this.store.saveChat(this.chat.id)
+    if (result && !this.interrupted) void this.offerSuggestion()
+  }
+
+  /**
+   * Ask the agent for its guess at the next prompt, after the turn is already
+   * idle — the answer takes seconds and nothing waits on it. Dropped if a turn
+   * started meanwhile: it would answer a question no longer on screen.
+   */
+  private async offerSuggestion(): Promise<void> {
+    const generation = ++this.suggestionGeneration
+    const client = this.client
+    const sessionId = this.sessionId
+    if (!client || !sessionId || !grokFeatureStates()[0].enabled) return
+    const text = await client.suggestPrompt(sessionId, generation).catch(() => null)
+    if (!text || this.disposed || this.running || generation !== this.suggestionGeneration) return
+    this.emit({ type: 'suggestion', chatId: this.chat.id, text })
   }
 
   private recordTurn(result: GrokPromptResult): void {

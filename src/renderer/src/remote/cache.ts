@@ -19,7 +19,7 @@ const KEEP_MESSAGES = 40
 /** A transcript bigger than this (tool output, images) is not worth the quota. */
 const MAX_CHAT_BYTES = 600_000
 
-export type CachedSnapshot = Omit<RemoteSnapshot, 'statuses' | 'permissions'> & {
+export type CachedSnapshot = Omit<RemoteSnapshot, 'statuses' | 'permissions' | 'suggestions'> & {
   icons?: Record<string, string | null>
 }
 

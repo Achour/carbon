@@ -95,9 +95,27 @@ const CERT_RETRY_MS = 5 * 60_000
 const PUSH_SUBJECT = 'https://github.com/Achour/carbon'
 
 /**
+ * Reads the New-chat screen and the composer make of a project: where a chat
+ * can run (worktrees, branches), the `/` commands and the `@` file names.
+ * Names only, never contents, and each takes a folder as its first argument,
+ * which must be one the Mac already knows (`knownFolder`): a recent project, or
+ * a folder a chat runs in or belongs to — never a folder the phone names that
+ * nobody opened on the Mac.
+ */
+export const FOLDER_SCOPED = new Set([
+  'worktree:list',
+  'git:local-branches',
+  // The Codex review picker's "Review a commit": subjects and short shas.
+  'git:review-commits',
+  'commands:get',
+  'fs:search'
+])
+
+/**
  * What a phone may call: exactly what the client uses, and that is the
- * conversation (and the plan headroom it spends) and nothing else — no
- * filesystem, no terminal, no git, no settings, no deleting. The chat list rides `/api/snapshot`. A phone
+ * conversation (and the plan headroom it spends), plus the few reads starting
+ * a chat needs (`FOLDER_SCOPED`) — no file contents, no terminal, no git
+ * writes, no settings, no deleting. The chat list rides `/api/snapshot`. A phone
  * that is lost while paired can steer the agents — which is what it is for —
  * but cannot be turned into a remote shell more directly than that.
  */
@@ -115,6 +133,8 @@ export const REMOTE_CHANNELS = new Set([
   // "Edit and resend" on a prompt: the transcript is cut back to it and the
   // turn runs again — a send, as far as what a phone may do is concerned.
   'chat:edit-message',
+  // Codex's `/review`: a turn of its native reviewer, which is a send.
+  'chat:review',
   // A turn's Undo. It restores only the files that turn's own checkpoint
   // recorded, which is less than the agent a phone already steers can do.
   'chat:rewind-files',
@@ -139,8 +159,10 @@ export const REMOTE_CHANNELS = new Set([
   // The Usage page's history: token counts and list-price cost per day,
   // model and project, read from the CLIs' own logs. Aggregates, never a
   // transcript, and a scan main caches per file.
-  'usage:report'
+  'usage:report',
+  ...FOLDER_SCOPED
 ])
+
 
 /** Per-chat events, sent only to a phone looking at that chat. */
 const TRANSCRIPT_EVENTS = new Set<ChatEvent['type']>([
@@ -218,6 +240,8 @@ export class RemoteAccess {
   private handlers = new Map<string, Listener>()
   private statuses = new Map<string, ChatStatus>()
   private permissions = new Map<string, PermissionRequestPayload[]>()
+  /** Each idle chat's suggested reply, so a phone that connects later still has it. */
+  private suggestions = new Map<string, string>()
   private clients = new Map<string, EventClient>()
   /**
    * The listening socket. It reads each connection's first byte and hands it
@@ -270,8 +294,14 @@ export class RemoteAccess {
    */
   observe(ev: ChatEvent): void {
     let fresh = true
-    if (ev.type === 'status') this.statuses.set(ev.chatId, ev.status)
-    else if (ev.type === 'permission-request') {
+    if (ev.type === 'status') {
+      this.statuses.set(ev.chatId, ev.status)
+      // A turn starting withdraws the last one's suggested reply (`ChatEvent`).
+      if (ev.status !== 'idle') this.suggestions.delete(ev.chatId)
+    } else if (ev.type === 'suggestion') {
+      if (ev.text) this.suggestions.set(ev.chatId, ev.text)
+      else this.suggestions.delete(ev.chatId)
+    } else if (ev.type === 'permission-request') {
       const prior = this.permissions.get(ev.chatId) ?? []
       fresh = !prior.some((r) => r.id === ev.request.id)
       const list = prior.filter((r) => r.id !== ev.request.id)
@@ -288,6 +318,7 @@ export class RemoteAccess {
 
   forgetChat(chatId: string): void {
     this.statuses.delete(chatId)
+    this.suggestions.delete(chatId)
     this.permissions.delete(chatId)
     const s = this.settings()
     const touched = s.devices.filter((d) => d.unseen && chatId in d.unseen)
@@ -715,10 +746,26 @@ export class RemoteAccess {
       chats,
       statuses: Object.fromEntries(this.statuses),
       permissions: Object.fromEntries(this.permissions),
+      suggestions: Object.fromEntries(this.suggestions),
       defaults,
       ...(await this.host.models()),
       unseen: device.unseen ?? {}
     }
+  }
+
+  /**
+   * A folder the Mac already knows: a recent project, or one a chat runs in or
+   * belongs to (a worktree's repository included). What `FOLDER_SCOPED`
+   * channels are bounded by — exact folders, never anything beneath them.
+   */
+  private knownFolder(dir: unknown): boolean {
+    if (typeof dir !== 'string' || !isAbsolute(dir)) return false
+    const want = resolve(dir)
+    if (this.host.store.getDefaults().recentDirs.some((d) => resolve(d) === want)) return true
+    for (const c of [...this.host.store.listChats(), ...this.host.store.listSideChats()]) {
+      if (resolve(c.cwd) === want || resolve(projectRoot(c)) === want) return true
+    }
+    return false
   }
 
   /**
@@ -1058,6 +1105,10 @@ export class RemoteAccess {
     const listener = REMOTE_CHANNELS.has(channel) ? this.handlers.get(channel) : undefined
     if (!listener) {
       json(res, 404, { error: `Not available remotely: ${channel}` })
+      return
+    }
+    if (FOLDER_SCOPED.has(channel) && !this.knownFolder(args[0])) {
+      json(res, 403, { error: 'Not a project Carbon knows' })
       return
     }
     try {

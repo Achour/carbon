@@ -4,11 +4,13 @@ import { configureProviderClis } from '../src/main/providerCli.ts'
 import {
   claudeFeatureEnv,
   claudeFeatureStates,
+  claudeSuggestionsEnabled,
   codexFeatureArgs,
   codexFeatureStates,
+  grokFeatureEnv,
   resolveFeature
 } from '../src/main/providerFeatures.ts'
-import { CLAUDE_FEATURES } from '../src/shared/types.ts'
+import { CLAUDE_FEATURES, CLAUDE_SUGGESTIONS_FEATURE } from '../src/shared/types.ts'
 
 const browser = CLAUDE_FEATURES.find((f) => f.id === 'browser')!
 const artifacts = CLAUDE_FEATURES.find((f) => f.id === 'artifacts')!
@@ -72,8 +74,27 @@ test('claudeFeatureStates covers the whole catalog', () => {
   configureProviderClis({})
   assert.deepEqual(
     claudeFeatureStates({}).map((f) => f.id),
-    CLAUDE_FEATURES.map((f) => f.id)
+    [...CLAUDE_FEATURES, CLAUDE_SUGGESTIONS_FEATURE].map((f) => f.id)
   )
+})
+
+test('reply suggestions are an SDK option, never a variable Carbon writes', () => {
+  configureProviderClis({ claude: { features: { suggestions: false } } })
+  assert.equal(claudeSuggestionsEnabled({}), false)
+  assert.equal(CLAUDE_SUGGESTIONS_FEATURE.env in claudeFeatureEnv({}), false)
+  configureProviderClis({})
+  assert.equal(claudeSuggestionsEnabled({}), true)
+  // The CLI's documented opt-out spells it `false`, and that is deliberate too.
+  assert.equal(claudeSuggestionsEnabled({ CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: 'false' }), false)
+})
+
+test("Grok's agent gets its suggestion variable spelled out both ways", () => {
+  configureProviderClis({})
+  assert.equal(grokFeatureEnv({}).GROK_PROMPT_SUGGESTIONS, '1')
+  configureProviderClis({ grok: { features: { suggestions: false } } })
+  assert.equal(grokFeatureEnv({}).GROK_PROMPT_SUGGESTIONS, '0')
+  configureProviderClis({ grok: { features: { suggestions: true } } })
+  assert.equal(grokFeatureEnv({ GROK_PROMPT_SUGGESTIONS: '0' }).GROK_PROMPT_SUGGESTIONS, '0')
 })
 
 test('only touched Codex flags become command-line overrides', () => {

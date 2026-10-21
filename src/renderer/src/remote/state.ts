@@ -15,12 +15,14 @@ import type {
   Provider,
   ServiceTier,
   ChatView,
+  CodexReviewTarget,
   OlderMessages,
   PermissionDecision,
   PermissionRequestPayload,
   RemoteUnseen,
   UsageOverview,
-  UsageReport
+  UsageReport,
+  WorktreeTarget
 } from '@shared/types'
 import { USAGE_DEFAULT_DAYS } from '@shared/types'
 import { randomId } from '@/lib/insecureContext'
@@ -44,6 +46,8 @@ export interface NewChatOptions {
   effort: EffortId | ''
   serviceTier: ServiceTier
   permissionMode: PermissionModeId
+  /** Where it runs; the main checkout when absent. */
+  worktree?: WorktreeTarget
 }
 
 export type Connection = 'connecting' | 'live' | 'down' | 'unpaired'
@@ -62,6 +66,8 @@ interface RemoteState {
   hostname: string
   chats: ChatMeta[]
   statuses: Record<string, ChatStatus>
+  /** The provider's guess at each idle chat's next message (`suggestion`). */
+  suggestions: Record<string, string>
   permissions: Record<string, PermissionRequestPayload[]>
   /** Turns that ended while this phone was not looking — the home screen's Done (`board.ts`). */
   unseen: Record<string, RemoteUnseen>
@@ -99,10 +105,12 @@ interface RemoteState {
   removeQueued(chatId: string, id: string): void
   respond(chatId: string, requestId: string, decision: PermissionDecision): Promise<void>
   setOptions(chatId: string, patch: ChatOptionsPatch): Promise<void>
+  /** Starts with `text`, or with Codex's native reviewer when `review` is given. */
   createChat(
     options: NewChatOptions,
     text: string,
-    attachments?: Attachment[]
+    attachments?: Attachment[],
+    review?: CodexReviewTarget
   ): Promise<string>
   /** Take everything off the home screen's Done. */
   clearDone(): Promise<void>
@@ -153,6 +161,7 @@ export const useRemote = create<RemoteState>((set, get) => {
         home: snap.home ?? '',
         chats: snap.chats,
         statuses: snap.statuses,
+        suggestions: snap.suggestions ?? {},
         permissions: snap.permissions,
         unseen: snap.unseen ?? {},
         defaults: snap.defaults,
@@ -269,6 +278,7 @@ export const useRemote = create<RemoteState>((set, get) => {
     hostname: cached?.hostname ?? '',
     chats: cached?.chats ?? [],
     statuses: {},
+    suggestions: {},
     permissions: {},
     unseen: cached?.unseen ?? {},
     defaults: cached?.defaults ?? null,
@@ -421,20 +431,25 @@ export const useRemote = create<RemoteState>((set, get) => {
       await api.invoke('chat:set-options', chatId, patch).catch((err) => set({ error: message(err) }))
     },
 
-    async createChat(options, text, attachments) {
+    async createChat(options, text, attachments, review) {
+      const target = options.worktree?.kind === 'local' ? undefined : options.worktree
       // Everything explicit, as the desktop's New-chat screen sends it:
       // `chats:create` remembers what it is given as the next chat's defaults.
+      // An existing worktree is created against its repository, so recents and
+      // the sidebar's grouping follow the project, not the worktree.
       const meta = await api.invoke<ChatMeta>('chats:create', {
-        cwd: options.cwd,
+        cwd: target?.kind === 'existing' ? target.repoRoot : options.cwd,
         provider: options.provider,
         model: options.model,
         effort: options.effort || undefined,
         serviceTier: options.serviceTier,
-        permissionMode: options.permissionMode
+        permissionMode: options.permissionMode,
+        worktree: target
       })
       set((s) => ({ chats: s.chats.some((c) => c.id === meta.id) ? s.chats : [...s.chats, meta] }))
       await get().openChat(meta.id)
-      await get().send(meta.id, text, attachments)
+      if (review) await api.invoke('chat:review', meta.id, review)
+      else await get().send(meta.id, text, attachments)
       return meta.id
     },
 
@@ -587,8 +602,18 @@ export function reduce(s: RemoteState, ev: ChatEvent): Partial<RemoteState> {
       ) as typeof ev.patch
       return { chats: s.chats.map((c) => (c.id === ev.chatId ? { ...c, ...patch } : c)) }
     }
-    case 'status':
-      return { statuses: { ...s.statuses, [ev.chatId]: ev.status } }
+    case 'status': {
+      // A turn starting withdraws the last one's suggested reply.
+      if (ev.status === 'idle' || !s.suggestions[ev.chatId]) {
+        return { statuses: { ...s.statuses, [ev.chatId]: ev.status } }
+      }
+      const { [ev.chatId]: _gone, ...suggestions } = s.suggestions
+      return { statuses: { ...s.statuses, [ev.chatId]: ev.status }, suggestions }
+    }
+    case 'suggestion': {
+      const { [ev.chatId]: _prior, ...rest } = s.suggestions
+      return { suggestions: ev.text ? { ...rest, [ev.chatId]: ev.text } : rest }
+    }
     case 'permission-request':
       return {
         permissions: {

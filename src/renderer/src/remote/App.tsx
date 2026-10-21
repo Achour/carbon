@@ -18,15 +18,32 @@ import { clearCache, loadSnapshot } from './cache'
  * `#pair=<code>` is the QR code's link: it pre-fills the pairing screen and is
  * then dropped. The chat list is not a route: it is the sidebar, as on the Mac.
  */
-type Route = { name: 'chat'; id: string } | { name: 'new'; cwd: string | null } | { name: 'usage' }
+type Route =
+  | { name: 'chat'; id: string }
+  | { name: 'new'; cwd: string | null; worktree?: { path: string; branch: string } }
+  | { name: 'usage' }
 
 function readRoute(): Route {
   const h = location.hash
   if (h === '#/usage') return { name: 'usage' }
   const chat = /^#\/c\/(.+)$/.exec(h)
   if (chat) return { name: 'chat', id: decodeURIComponent(chat[1]) }
-  const fresh = /^#\/new\/(.+)$/.exec(h)
-  return { name: 'new', cwd: fresh ? decodeURIComponent(fresh[1]) : null }
+  // `#/new/<project>?wt=<path>&branch=<name>`: "New chat in this worktree".
+  const fresh = /^#\/new\/([^?]+)(?:\?(.*))?$/.exec(h)
+  if (!fresh) return { name: 'new', cwd: null }
+  const q = new URLSearchParams(fresh[2] ?? '')
+  const path = q.get('wt')
+  const branch = q.get('branch')
+  return {
+    name: 'new',
+    cwd: decodeURIComponent(fresh[1]),
+    worktree: path && branch ? { path, branch } : undefined
+  }
+}
+
+/** The New-chat screen for `root`, run in that worktree of it. */
+export function newChatInWorktreeHash(root: string, path: string, branch: string): string {
+  return `#/new/${encodeURIComponent(root)}?${new URLSearchParams({ wt: path, branch })}`
 }
 
 /**
@@ -83,7 +100,12 @@ export function App(): React.JSX.Element {
     return <PairScreen initialCode={pairCode ?? ''} onPaired={() => location.reload()} />
   }
 
-  const key = route.name === 'chat' ? `c:${route.id}` : route.name === 'usage' ? 'usage' : `n:${route.cwd ?? ''}`
+  const key =
+    route.name === 'chat'
+      ? `c:${route.id}`
+      : route.name === 'usage'
+        ? 'usage'
+        : `n:${route.cwd ?? ''}:${route.worktree?.path ?? ''}`
   return (
     <>
       <Shell activeId={openId}>
@@ -95,7 +117,14 @@ export function App(): React.JSX.Element {
           ) : route.name === 'usage' ? (
             <UsageScreen />
           ) : (
-            <NewChatScreen initialCwd={route.cwd} />
+            <NewChatScreen
+              initialCwd={route.cwd}
+              initialTarget={
+                route.worktree && route.cwd
+                  ? { kind: 'existing', path: route.worktree.path, branch: route.worktree.branch, repoRoot: route.cwd }
+                  : undefined
+              }
+            />
           )}
         </div>
       </Shell>

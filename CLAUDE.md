@@ -654,8 +654,36 @@ what lets one row render either.
   effort change does, and deliberately leaves a running turn alone — a settings
   toggle is not a reason to kill work the user is watching, and the row says so.
 
-Grok has no equivalent API and contributes no switches, which is the same
-answer a provider whose CLI is missing gives.
+**Reply suggestions are the one feature two providers share, and only those
+two.** Claude's CLI and Grok's agent each guess the user's next message when a
+turn ends; Carbon carries that guess as a `suggestion` `ChatEvent` and draws it
+as the idle composer's ghost text (Tab takes it; on the phone, a chip above the
+card). Codex, Antigravity and Cursor make none, and Carbon invents none for
+them. Both arrive *after* the turn is idle and are dropped if a turn started
+meanwhile; any non-idle status withdraws one, in both reducers and in
+`RemoteAccess`, which keeps the current one per chat for a phone that connects
+later. Neither is persisted.
+- **Claude's is an SDK option, not a gate.** `promptSuggestions` rides the
+  `initialize` request (so an older CLI ignores it rather than refusing to
+  spawn), and the answer is a `prompt_suggestion` message ~5 s *after*
+  `result`. In single-prompt mode the CLI exits at `result` and never sends
+  one, which is why a one-shot probe sees nothing. The switch is
+  `CLAUDE_SUGGESTIONS_FEATURE`, outside `CLAUDE_FEATURES` because it writes no
+  variable: the CLI's own opt-outs (`CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false`,
+  `promptSuggestionEnabled: false`) keep working beneath it.
+- **Grok's is a request the client makes**, `_x.ai/suggestPrompt` with
+  `{sessionId, generation}` — the leading underscore is ACP's extension prefix,
+  and without it the method is "not found". `generation` is a client counter
+  echoed back. The agent answers `suggestion: null` unless spawned with
+  `GROK_PROMPT_SUGGESTIONS=1`, so `grokFeatureEnv` writes it both ways. That
+  switch is the only one Grok's row carries; Antigravity and Cursor carry none,
+  the same answer a provider whose CLI is missing gives. Expect `null` on most
+  turns: Grok's generator is told "a wrong line is worse than NONE", and
+  `RUST_LOG=debug` on the agent shows `prompt suggest: response
+  raw_preview=NONE accepted=false` when that is its answer. Claude's
+  suppresses too (early in a conversation, a turn that wrote the prompt cache,
+  a run of ignored suggestions), so a resumed chat's first turn gets none.
+  Read off 1.0.62 and 2.1.306.
 
 Settings → Providers renders `ProviderCli[]` and re-probes on open, since the
 usual reason to be there is having just installed something in the terminal

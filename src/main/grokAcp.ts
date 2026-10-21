@@ -7,6 +7,7 @@ import { pathToFileURL } from 'node:url'
 import { createInterface } from 'node:readline'
 import type { Attachment, ElementRef, ToolPart, UserQuestion } from '@shared/types'
 import { spawnEnv } from './parentEnv.ts'
+import { grokFeatureEnv } from './providerFeatures.ts'
 import { cliAvailable, providerCli } from './providerCli.ts'
 import { describeCanvas, describeElement, describeQuote, describeSelection } from './attachmentText.ts'
 import {
@@ -317,6 +318,7 @@ export class GrokAcpClient {
       env: {
         // `spawnEnv` rather than `process.env`: see `parentEnv.ts`.
         ...(this.options.env ?? spawnEnv()),
+        ...grokFeatureEnv(),
         GROK_OAUTH2_REFERRER: GROK_OAUTH_REFERRER,
         // A background update swapping the binary mid-session would kill the
         // conversation; Carbon reports updates itself.
@@ -421,6 +423,23 @@ export class GrokAcpClient {
     } catch {
       // A dead process is already as cancelled as it can be.
     }
+  }
+
+  /**
+   * Grok's guess at the user's next prompt, for the turn that just ended. An
+   * extension method, so on the wire it carries ACP's leading underscore —
+   * without it the CLI answers "Method not found". `generation` is the client's
+   * own counter, echoed back so a late answer can be matched to its turn.
+   * Measured on 1.0.62: about 5 s, and `suggestion: null` unless the agent was
+   * spawned with `GROK_PROMPT_SUGGESTIONS` on (`grokFeatureEnv`).
+   */
+  async suggestPrompt(sessionId: string, generation: number): Promise<string | null> {
+    const result = (await this.request('_x.ai/suggestPrompt', { sessionId, generation })) as {
+      suggestion?: string | null
+      generation?: number
+    } | null
+    if (result?.generation !== undefined && result.generation !== generation) return null
+    return result?.suggestion?.trim() || null
   }
 
   async setModel(sessionId: string, modelId: string): Promise<void> {

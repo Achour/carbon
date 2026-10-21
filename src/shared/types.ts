@@ -1429,6 +1429,11 @@ export type ChatEvent =
   // folded into `meta` because ChatMeta is persisted wholesale and this is not.
   | { type: 'context-usage'; chatId: string; usage: ContextUsage }
   | { type: 'status'; chatId: string; status: ChatStatus }
+  // The provider's own guess at the user's next message, offered when a turn
+  // ends (Claude's `prompt_suggestion`, Grok's `suggestPrompt`). Only the
+  // providers that make one send it; `text: null` withdraws it. It belongs to
+  // the idle composer and is gone the moment the next turn starts.
+  | { type: 'suggestion'; chatId: string; text: string | null }
   // Another Carbon instance holds this chat's write lock (userData is shared
   // between the dev and packaged builds), so edits here will not be saved.
   | { type: 'chat-locked'; chatId: string }
@@ -1534,6 +1539,8 @@ export interface RemoteSnapshot {
   chats: ChatMeta[]
   statuses: Record<string, ChatStatus>
   permissions: Record<string, PermissionRequestPayload[]>
+  /** Each idle chat's suggested reply (`ChatEvent` `suggestion`). */
+  suggestions: Record<string, string>
   defaults: AppDefaults
   /**
    * The model picker's inputs, exactly as the desktop composer gets them: the
@@ -1697,6 +1704,38 @@ export const CLAUDE_FEATURES: (ProviderFeature & { env: string })[] = [
     defaultEnabled: true
   }
 ]
+
+/**
+ * Reply suggestions — the provider's predicted next message, offered as ghost
+ * text in the idle composer. Not one of `CLAUDE_FEATURES`, which are all
+ * environment gates: Claude's is an SDK option (`promptSuggestions`), so the
+ * switch decides the option and writes no variable. The CLI still honours its
+ * own off switches beneath it (`CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false`,
+ * `promptSuggestionEnabled: false` in its settings), and the variable is
+ * named here so the row can say when it is the one deciding.
+ */
+export const CLAUDE_SUGGESTIONS_FEATURE: ProviderFeature & { env: string } = {
+  id: 'suggestions',
+  env: 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION',
+  label: 'Reply suggestions',
+  description:
+    'When a turn ends, Claude guesses your next message and the empty composer shows it. Tab takes it.',
+  defaultEnabled: true
+}
+
+/**
+ * Grok's one switch, the same feature. Its agent mode leaves suggestions off
+ * unless `GROK_PROMPT_SUGGESTIONS` is set, so Carbon writes the variable both
+ * ways, as `claudeFeatureEnv` does for Claude's gates.
+ */
+export const GROK_SUGGESTIONS_FEATURE: ProviderFeature & { env: string } = {
+  id: 'suggestions',
+  env: 'GROK_PROMPT_SUGGESTIONS',
+  label: 'Reply suggestions',
+  description:
+    'When a turn ends, Grok guesses your next message and the empty composer shows it. Tab takes it.',
+  defaultEnabled: true
+}
 
 /**
  * The Codex feature flags Carbon puts on the row.

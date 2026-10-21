@@ -1,15 +1,16 @@
 import * as React from 'react'
-import { Archive, Ellipsis, FileDiff, Pencil, Pin, PinOff } from 'lucide-react'
+import { Archive, Ellipsis, FileDiff, GitBranch, Pencil, Pin, PinOff } from 'lucide-react'
 import type { ChatMeta } from '@shared/types'
-import { navigate } from './App'
+import { navigate, newChatInWorktreeHash } from './App'
 import { chatTitle } from './format'
 import { rename, setArchived, setPinned } from './chatActions'
 import { Sheet, SheetRow } from './Sheet'
 
 /**
  * The chat's own menu, from the header's "⋯": its repository's uncommitted
- * changes, then rename, pin and archive — what the desktop's row menu does
- * short of deleting, which stays on the Mac. The title keeps its tap,
+ * changes, a new chat in its worktree when it runs in one, then rename, pin
+ * and archive — what the desktop's row menu does short of deleting, which
+ * stays on the Mac. The title keeps its tap,
  * scrolling to the top.
  */
 export function ChatMenu({ chat, onViewChanges }: { chat: ChatMeta; onViewChanges: () => void }): React.JSX.Element {
@@ -77,6 +78,17 @@ export function ChatMenu({ chat, onViewChanges }: { chat: ChatMeta; onViewChange
                 onViewChanges()
               }}
             />
+            {chat.worktree && (
+              <SheetRow
+                icon={<GitBranch className="size-[18px]" />}
+                label="New chat in this worktree"
+                description={chat.worktree.branch}
+                onClick={() => {
+                  close()
+                  navigate(newChatInWorktreeHash(chat.worktree!.repoRoot, chat.cwd, chat.worktree!.branch))
+                }}
+              />
+            )}
             <SheetRow
               icon={<Pencil className="size-[18px]" />}
               label="Rename"

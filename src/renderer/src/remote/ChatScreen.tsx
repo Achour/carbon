@@ -20,6 +20,8 @@ import { OptionChips } from './OptionChips'
 import { useAllModels, type OptionValues } from './options'
 import { PermissionCard } from './PermissionCard'
 import { Sheet } from './Sheet'
+import { chatDraftKey } from './drafts'
+import { CodexReviewMenu } from '@/components/CodexReviewDialog'
 
 const NO_REQUESTS: PermissionRequestPayload[] = []
 
@@ -144,6 +146,8 @@ export function ChatScreen({ chatId }: { chatId: string }): React.JSX.Element {
     return () => ro.disconnect()
   }, [open !== null])
 
+  const [reviewOpen, setReviewOpen] = React.useState(false)
+  const branch = useRemote((s) => (chat ? (s.branches[chat.cwd] ?? undefined) : undefined))
   const values: OptionValues | null = chat
     ? {
         provider: chat.pendingProvider ?? chat.provider,
@@ -253,6 +257,15 @@ export function ChatScreen({ chatId }: { chatId: string }): React.JSX.Element {
       </Sheet>
       <Composer
         chatId={chatId}
+        cwd={chat?.cwd}
+        provider={values?.provider}
+        draftKey={chatDraftKey(chatId)}
+        onCommand={(text) => {
+          // Codex's `/review` opens its presets, as the desktop's composer does.
+          if (values?.provider !== 'codex' || text.toLowerCase() !== '/review') return false
+          setReviewOpen(true)
+          return true
+        }}
         context={
           chat?.contextTokens
             ? {
@@ -282,6 +295,17 @@ export function ChatScreen({ chatId }: { chatId: string }): React.JSX.Element {
           )
         }
       />
+      {chat && (
+        <Sheet open={reviewOpen} onClose={() => setReviewOpen(false)}>
+          <CodexReviewMenu
+            open={reviewOpen}
+            onOpenChange={setReviewOpen}
+            cwd={chat.cwd}
+            currentBranch={chat.worktree?.branch ?? branch}
+            onStart={(target) => invoke('chat:review', chatId, target)}
+          />
+        </Sheet>
+      )}
     </div>
   )
 }

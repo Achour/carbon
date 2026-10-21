@@ -590,6 +590,11 @@ interface AppState {
   /** A loadOlderMessages round-trip is in flight. */
   loadingOlder: boolean
   statuses: Record<string, ChatStatus>
+  /**
+   * The provider's own guess at each idle chat's next message (`suggestion`
+   * events), drawn as ghost text in an empty composer. Gone when a turn starts.
+   */
+  suggestions: Record<string, string>
   /** Chats another Carbon instance owns; edits here are not being saved. */
   lockedChats: Record<string, true>
   /** Chats whose AI title is being generated right now (sidebar shimmers them). */
@@ -1842,6 +1847,7 @@ function forgetChat(
     AppState,
     | 'queued'
     | 'statuses'
+    | 'suggestions'
     | 'titling'
     | 'permissions'
     | 'backgroundJobs'
@@ -1858,6 +1864,7 @@ function forgetChat(
     unreadChats: omit(s.unreadChats, ids),
     queued: omit(s.queued, ids),
     statuses: omit(s.statuses, ids),
+    suggestions: omit(s.suggestions, ids),
     titling: omit(s.titling, ids),
     permissions: omit(s.permissions, ids),
     backgroundJobs: omit(s.backgroundJobs, ids),
@@ -2330,6 +2337,7 @@ export const useApp = create<AppState>((set, get) => ({
   hiddenBefore: 0,
   loadingOlder: false,
   statuses: {},
+  suggestions: {},
   lockedChats: {},
   titling: {},
   backgroundJobs: {},
@@ -5697,6 +5705,13 @@ export const useApp = create<AppState>((set, get) => ({
         break
       }
 
+      case 'suggestion': {
+        set((st) => ({
+          suggestions: ev.text ? { ...st.suggestions, [ev.chatId]: ev.text } : omit(st.suggestions, [ev.chatId])
+        }))
+        break
+      }
+
       // An edit-and-resend rewound the conversation. `keep` counts the whole
       // chat, so it has to come back through `hiddenBefore` to address the
       // window this store actually holds — main truncates to a loaded message,
@@ -5736,6 +5751,10 @@ export const useApp = create<AppState>((set, get) => ({
         set((st) => ({
           ...(finishedUnseen ? { unreadChats: { ...st.unreadChats, [ev.chatId]: true as const } } : {}),
           statuses: { ...st.statuses, [ev.chatId]: ev.status },
+          // A turn starting withdraws the last one's suggested reply.
+          ...(ev.status !== 'idle' && st.suggestions[ev.chatId]
+            ? { suggestions: omit(st.suggestions, [ev.chatId]) }
+            : {}),
           // The turn that used a preview is over: its pane stops reading as
           // driven, and a dismissed pop-up may show again next turn.
           ...(ev.status === 'idle' && Object.values(st.previewActivity).some((a) => a.chatId === ev.chatId)
