@@ -49,6 +49,12 @@ whose licensing is someone else's to grant.
 - **A stopped turn stays silent.** The failure cue rides the existing `error`
   event, and all three adapters already suppress that event on an intentional
   interrupt (`interruptedTurn` / `interrupted`) — so cancelling never dings.
+- **A delegate's ending is silent, done or failed.** Its outcome is delivered
+  to the chat that started it, and that chat's own ending is the cue — a chime
+  per delegate read as the work being finished while the parent was still
+  going. `notifyTurnDone` returns on `chat.delegation`, as main's
+  `notifyOnStatus` already did for the notification. A delegate waiting on an
+  approval still notifies: nothing moves until it is answered.
 
 **A rewrite matched to measured spectra was tried and was much worse, and that
 is the most useful thing in this section.** Decoding Cursor's, VS Code's and

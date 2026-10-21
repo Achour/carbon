@@ -1604,11 +1604,15 @@ function notifyTurnDone(
   }
   const prefs = s.notifyPrefs
   const failed = ev.message.kind === 'error'
+  const chat = s.chats.find((c) => c.id === ev.chatId)
+  // A delegate ending — done or failed — is news for the agent that started
+  // it, not the user: its outcome goes back to that chat, whose own ending is
+  // the cue.
+  if (chat?.delegation) return
   // A turn the user stopped never reaches here as an error — every adapter
   // suppresses the event on an intentional interrupt — so the failure cue only
   // ever fires on a failure the user didn't ask for.
   if (prefs.sound) playCue(failed ? 'error' : 'complete', prefs.pack)
-  const chat = s.chats.find((c) => c.id === ev.chatId)
   // A thread's side chat notifies like any chat: `openChat` on one opens its
   // thread with that column in front. A chat that is ephemeral *without* a
   // thread to open has nowhere to land, and a notification whose click does
