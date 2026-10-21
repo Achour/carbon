@@ -1706,8 +1706,8 @@ export const CLAUDE_FEATURES: (ProviderFeature & { env: string })[] = [
 ]
 
 /**
- * Reply suggestions — the provider's predicted next message, offered as ghost
- * text in the idle composer. Not one of `CLAUDE_FEATURES`, which are all
+ * Reply suggestions — the provider's predicted next message, offered as a chip
+ * in the idle composer. Not one of `CLAUDE_FEATURES`, which are all
  * environment gates: Claude's is an SDK option (`promptSuggestions`), so the
  * switch decides the option and writes no variable. The CLI still honours its
  * own off switches beneath it (`CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false`,
@@ -1719,7 +1719,7 @@ export const CLAUDE_SUGGESTIONS_FEATURE: ProviderFeature & { env: string } = {
   env: 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION',
   label: 'Reply suggestions',
   description:
-    'When a turn ends, Claude guesses your next message and the empty composer shows it. Tab takes it.',
+    'When a turn ends, Claude guesses your next message and the composer offers it. Tab takes it.',
   defaultEnabled: true
 }
 
@@ -1733,7 +1733,7 @@ export const GROK_SUGGESTIONS_FEATURE: ProviderFeature & { env: string } = {
   env: 'GROK_PROMPT_SUGGESTIONS',
   label: 'Reply suggestions',
   description:
-    'When a turn ends, Grok guesses your next message and the empty composer shows it. Tab takes it.',
+    'When a turn ends, Grok guesses your next message and the composer offers it. Tab takes it.',
   defaultEnabled: true
 }
 

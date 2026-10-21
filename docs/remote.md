@@ -436,7 +436,7 @@ the window open. The phone is one more window onto them.
   is attached by path, as the desktop's mention does. Codex's `/review` opens
   the desktop's own `CodexReviewMenu` in a sheet, in a chat or before one.
 - **A provider's suggested reply is a chip above the card.** Where the desktop
-  draws it as the empty input's ghost text taken with Tab, a phone has no Tab:
+  draws it as a chip in the composer that Tab takes, a phone has no Tab:
   a tap puts it in the input and sending stays a second tap. `RemoteAccess`
   keeps each idle chat's current one (`RemoteSnapshot.suggestions`), so a phone
   that connects after the turn ended still has it; it is live state, so the

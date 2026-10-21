@@ -657,8 +657,10 @@ what lets one row render either.
 **Reply suggestions are the one feature two providers share, and only those
 two.** Claude's CLI and Grok's agent each guess the user's next message when a
 turn ends; Carbon carries that guess as a `suggestion` `ChatEvent` and draws it
-as the idle composer's ghost text (Tab takes it; on the phone, a chip above the
-card). Codex, Antigravity and Cursor make none, and Carbon invents none for
+as a chip at the head of the idle composer (Tab or a click takes it into the
+input; on the phone, a chip above the card). It was the empty input's
+placeholder first, and nobody saw it: grey text in an empty box reads as every
+placeholder does. Codex, Antigravity and Cursor make none, and Carbon invents none for
 them. Both arrive *after* the turn is idle and are dropped if a turn started
 meanwhile; any non-idle status withdraws one, in both reducers and in
 `RemoteAccess`, which keeps the current one per chat for a phone that connects

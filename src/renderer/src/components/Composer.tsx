@@ -5,6 +5,7 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  CornerDownRight,
   MessageSquareQuote,
   MousePointerClick,
   Paperclip,
@@ -1107,16 +1108,30 @@ export function Composer({
     mention === null
   const engage = collapsible ? () => setEngaged(true) : undefined
 
-  // The provider's own guess at the next message (Claude's and Grok's), shown
-  // as the empty input's ghost text; Tab takes it into the input to send or
-  // edit. Anything typed, a live turn or a pending switch hides it.
+  // The provider's own guess at the next message (Claude's and Grok's): a chip
+  // at the head of the empty composer, taken by Tab or a click into the input
+  // to send or edit. It was the input's placeholder first, and read as one —
+  // grey text in an empty box is what every placeholder is, so nobody saw it.
+  // Folded, there is no room for a row, and the placeholder is all there is.
+  // Anything typed, a live turn or a pending switch hides it.
   const suggestion = useApp((s) => (chatId ? s.suggestions[chatId] : undefined))
   const ghost =
     suggestion && !streaming && !locked && !switchingNote && text === '' && attachments.length === 0
       ? suggestion
       : undefined
+  const takeSuggestion = (): void => {
+    if (!ghost) return
+    setText(ghost)
+    requestAnimationFrame(() => {
+      const el = ref.current
+      el?.focus()
+      el?.setSelectionRange(ghost.length, ghost.length)
+      fitInput()
+    })
+  }
   const inputPlaceholder =
-    switchingNote ?? (streaming ? 'Queue a message for when this turn ends…' : (ghost ?? placeholder))
+    switchingNote ??
+    (streaming ? 'Queue a message for when this turn ends…' : ((collapsed ? ghost : undefined) ?? placeholder))
   const fitInput = React.useCallback(() => {
     const el = ref.current
     if (!el) return
@@ -1424,6 +1439,24 @@ export function Composer({
         {attachError && (
           <div className={cn('basis-full pt-2 text-[11px] text-warning', CHAT_BLEED_PAD)}>{attachError}</div>
         )}
+        {ghost && !collapsed && (
+          <div className={cn('basis-full pt-3', CHAT_BLEED_PAD)}>
+            <button
+              type="button"
+              data-suggestion
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={takeSuggestion}
+              title="Suggested reply — Tab to use it"
+              className="inline-flex max-w-full animate-enter items-center gap-2 rounded-lg border border-border bg-secondary/60 py-1 pr-1.5 pl-2.5 text-[13px] text-foreground transition-colors hover:bg-accent"
+            >
+              <CornerDownRight className="size-3.5 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 truncate">{ghost}</span>
+              <kbd className="shrink-0 rounded border border-border bg-background px-1 font-sans text-[10.5px] text-muted-foreground">
+                Tab
+              </kbd>
+            </button>
+          </div>
+        )}
         <textarea
           ref={ref}
           onFocus={engage}
@@ -1496,12 +1529,7 @@ export function Composer({
             }
             if (e.key === 'Tab' && !e.shiftKey && ghost) {
               e.preventDefault()
-              setText(ghost)
-              requestAnimationFrame(() => {
-                const el = ref.current
-                el?.setSelectionRange(ghost.length, ghost.length)
-                fitInput()
-              })
+              takeSuggestion()
               return
             }
             if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -1553,11 +1581,6 @@ export function Composer({
             {pickers}
           </div>
           <SessionPanel chatId={chatId ?? null} />
-          {ghost && !collapsed && (
-            <kbd className="shrink-0 rounded border border-border px-1 font-sans text-[10.5px] text-muted-foreground/70">
-              Tab
-            </kbd>
-          )}
           {contextRing}
           {sendButton}
         </div>

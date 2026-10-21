@@ -592,7 +592,7 @@ interface AppState {
   statuses: Record<string, ChatStatus>
   /**
    * The provider's own guess at each idle chat's next message (`suggestion`
-   * events), drawn as ghost text in an empty composer. Gone when a turn starts.
+   * events), offered as a chip in an empty composer. Gone when a turn starts.
    */
   suggestions: Record<string, string>
   /** Chats another Carbon instance owns; edits here are not being saved. */
