@@ -1064,38 +1064,72 @@ export function RightPanel(): React.JSX.Element | null {
   const popup = parked ? popupPane : null
   const contentsRef = React.useRef<HTMLDivElement>(null)
   // The parked layer's size and where the pane's page sits in it, in layout px
-  // (transforms aside), so the crop and the scale are exact.
-  const [popGeo, setPopGeo] = React.useState<{ w: number; h: number; top: number; stageH: number } | null>(null)
+  // (transforms aside), so the crop and the scale are exact. The page is the
+  // pane's frame: the whole stage when it fills, the device when a preset is
+  // set — cropping to the stage put a small device in a field of backdrop.
+  const [popGeo, setPopGeo] = React.useState<{
+    w: number
+    h: number
+    left: number
+    top: number
+    frameW: number
+    frameH: number
+    device: boolean
+  } | null>(null)
   React.useLayoutEffect(() => {
     if (!popup) {
       setPopGeo(null)
       return
     }
     const box = contentsRef.current
-    const stage = box?.querySelector<HTMLElement>(`[data-preview-pane="${CSS.escape(popup)}"] [data-preview-stage]`)
-    if (!box || !stage) return
+    const frame = box?.querySelector<HTMLElement>(`[data-preview-pane="${CSS.escape(popup)}"] [data-preview-frame]`)
+    if (!box || !frame) return
     const measure = (): void => {
+      let left = 0
       let top = 0
-      for (let el: HTMLElement | null = stage; el && el !== box; el = el.offsetParent as HTMLElement | null) {
+      for (let el: HTMLElement | null = frame; el && el !== box; el = el.offsetParent as HTMLElement | null) {
+        left += el.offsetLeft
         top += el.offsetTop
       }
-      const next = { w: box.offsetWidth, h: box.offsetHeight, top, stageH: stage.offsetHeight }
-      setPopGeo((g) => (g && g.w === next.w && g.h === next.h && g.top === next.top && g.stageH === next.stageH ? g : next))
+      const next = {
+        w: box.offsetWidth,
+        h: box.offsetHeight,
+        left,
+        top,
+        frameW: frame.offsetWidth,
+        frameH: frame.offsetHeight,
+        device: frame.dataset.previewFrame === 'device'
+      }
+      setPopGeo((g) =>
+        g && (Object.keys(next) as (keyof typeof next)[]).every((k) => g[k] === next[k]) ? g : next
+      )
     }
     measure()
     const ro = new ResizeObserver(measure)
     ro.observe(box)
-    ro.observe(stage)
-    return () => ro.disconnect()
+    ro.observe(frame)
+    const mo = new MutationObserver(measure)
+    mo.observe(frame, { attributes: true, attributeFilter: ['data-preview-frame', 'style'] })
+    return () => {
+      ro.disconnect()
+      mo.disconnect()
+    }
   }, [popup])
   const pop =
-    popup && popGeo && popGeo.w > 0 && popGeo.stageH > 0
+    popup && popGeo && popGeo.frameW > 0 && popGeo.frameH > 0
       ? (() => {
-          const w = Math.round(Math.max(POPUP_MIN_W, Math.min(POPUP_MAX_W, (avail ?? POPUP_MAX_W) * 0.34)))
-          const scale = w / popGeo.w
-          // The page is scaled to the card's width and cropped, not squeezed,
-          // past a little over half the window's height.
-          const h = Math.round(Math.min(popGeo.stageH * scale, popGeo.h * 0.56))
+          const maxW = Math.round(Math.max(POPUP_MIN_W, Math.min(POPUP_MAX_W, (avail ?? POPUP_MAX_W) * 0.34)))
+          const maxH = popGeo.h * 0.56
+          // A filled page is scaled to the card's width and cropped, not
+          // squeezed, past a little over half the window's height. A device is
+          // shown whole — its outline is the point of picking one — so a
+          // phone makes a narrow card rather than a cropped one.
+          const scale = popGeo.device
+            ? Math.min(maxW / popGeo.frameW, maxH / popGeo.frameH)
+            : maxW / popGeo.frameW
+          const w = Math.round(popGeo.frameW * scale)
+          const h = Math.round(Math.min(popGeo.frameH * scale, maxH))
+          const right = popGeo.w - popGeo.left - popGeo.frameW
           const radius = POPUP_RADIUS / scale
           // Floating, the shut aside sits one panel width (plus its gap) off
           // the right edge; the pop-up undoes that, as the parked layer does.
@@ -1103,9 +1137,9 @@ export function RightPanel(): React.JSX.Element | null {
           return {
             card: { top: POPUP_TOP, right: POPUP_INSET, width: w, height: h, transform: undo } satisfies React.CSSProperties,
             layer: {
-              transform: `${floating ? 'translateX(calc(-100% - 2rem)) ' : ''}translate(-${POPUP_INSET}px, ${POPUP_TOP - popGeo.top * scale}px) scale(${scale})`,
+              transform: `${floating ? 'translateX(calc(-100% - 2rem)) ' : ''}translate(${right * scale - POPUP_INSET}px, ${POPUP_TOP - popGeo.top * scale}px) scale(${scale})`,
               transformOrigin: 'top right',
-              clipPath: `inset(${popGeo.top}px 0 ${popGeo.h - popGeo.top - h / scale}px 0 round ${radius}px)`
+              clipPath: `inset(${popGeo.top}px ${right}px ${popGeo.h - popGeo.top - h / scale}px ${popGeo.left}px round ${radius}px)`
             } satisfies React.CSSProperties
           }
         })()

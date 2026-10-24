@@ -254,8 +254,15 @@ chat of the thread is using a pane, that pane is shown small in the top-right
 corner until the turn ends or the user hides it (hidden holds for the rest of
 the turn). A `<webview>` moved to another parent reloads, and nothing inside
 the parked layer can escape its `opacity: 0`, so the pop-up is that same layer
-made visible, scaled to the card's width and cropped to the pane's page with
-`clip-path` (taken in layout px, before the transform). The page therefore
+made visible, scaled and cropped to the pane's page with `clip-path` (taken
+in layout px, before the transform). The page is the pane's frame
+(`data-preview-frame`): the whole stage when it fills — scaled to the card's
+width, cropped below — and the device alone when a preset is set, fitted whole,
+so a laptop makes a wide card and a phone a narrow one. Cropping to the stage
+put a small device in a field of dotted backdrop. The stage's own size, which
+fits a device to the pane, is read as `offsetWidth`/`offsetHeight` for the same
+reason the crop is: a bounding rect taken under the pop-up's transform refit the
+device to a fraction of its real size. The page therefore
 keeps the exact size the agent has been testing at — measured 642×778 with the
 pop-up shown and after it is hidden — and input still lands, being injected
 below the transform. Two plain siblings around it make the card: a surface and

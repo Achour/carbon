@@ -995,16 +995,19 @@ export function BrowserPane({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewportKey])
 
-  // The stage's size, for fitting a device viewport larger than the pane.
+  // The stage's size, for fitting a device viewport larger than the pane. In
+  // layout px, not the bounding rect: the pop-up scales this whole layer down,
+  // and a rect read under that transform refit the device to a fraction of
+  // its real size.
   React.useEffect(() => {
     const el = stageRef.current
     if (!el) return
     const ro = new ResizeObserver(() => {
-      const r = el.getBoundingClientRect()
+      const r = { width: el.offsetWidth, height: el.offsetHeight }
       setStage((prev) =>
         Math.round(prev.width) === Math.round(r.width) && Math.round(prev.height) === Math.round(r.height)
           ? prev
-          : { width: r.width, height: r.height }
+          : r
       )
     })
     ro.observe(el)
@@ -1330,6 +1333,7 @@ export function BrowserPane({
         )}
       >
         <div
+          data-preview-frame={size ? 'device' : 'fill'}
           className={cn(!size && 'absolute inset-0')}
           style={
             size
