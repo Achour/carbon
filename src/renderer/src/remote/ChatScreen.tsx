@@ -157,6 +157,8 @@ export function ChatScreen({ chatId }: { chatId: string }): React.JSX.Element {
   // Inside the iOS app the header and the composer are the app's; it asks
   // for what their taps did here, and steps aside for what opens over the page.
   useNativeCommand('scrollTop', toTop)
+  // The app's Agents sheet opens a sub-agent's transcript, which is drawn here.
+  useNativeCommand('openAgent', (toolUseId) => setView({ kind: 'agent', toolUseId }))
   // The app's composer moved (the keyboard): the transcript's padding under
   // it changed by `delta`, so hold the bottom edge where the reader had it.
   React.useEffect(() => {

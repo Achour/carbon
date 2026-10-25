@@ -18,7 +18,7 @@ import { useApp } from '@/store'
 import { useRemote } from './state'
 import { CHATS_PER_PROJECT_MAX, CHATS_PER_PROJECT_MIN, CODE_MAX, CODE_MIN, TEXT_SIZES, usePrefs } from './prefs'
 import { THEMES } from '@/lib/themes'
-import { baseName, chatTitle, listedChats, sidebarSections } from './format'
+import { baseName, chatTitle, isBusy, listedChats, sidebarSections } from './format'
 import { groupByProvider, type OptionValues, type Pickers } from './options'
 import { placeChat, rename, setArchived, setPinned } from './chatActions'
 import { changes, diff, invoke, markSeen } from './api'
@@ -26,7 +26,17 @@ import { deriveBoard } from './board'
 import { greeting } from '@/lib/format'
 import { promptLine } from '@shared/promptLine'
 import { nativeRequest, questionDecision } from './PermissionCard'
-import type { BranchRef, Canvas, PermissionDecision, WorktreeRef, WorktreeTarget } from '@shared/types'
+import type {
+  BranchRef,
+  Canvas,
+  ChatMessage,
+  ChatMeta,
+  ChatStatus,
+  PermissionDecision,
+  WorktreeRef,
+  WorktreeTarget
+} from '@shared/types'
+import { foldAgentRuns } from '@shared/agentRuns'
 
 /**
  * The Carbon iOS app's half of the page (`docs/remote.md`, "Inside the iOS
@@ -265,13 +275,14 @@ export function useNativeOverlay(open: boolean): void {
 }
 
 /** A command the app sends to whatever screen is up (`scrollTop`, `viewChanges`). */
-export function useNativeCommand(name: string, run: () => void): void {
+export function useNativeCommand(name: string, run: (...args: string[]) => void): void {
   const latest = React.useRef(run)
   latest.current = run
   React.useEffect(() => {
     if (!isNative) return undefined
     const on = (e: Event): void => {
-      if ((e as CustomEvent<string>).detail === name) latest.current()
+      const { detail } = e as CustomEvent<{ name: string; args: string[] }>
+      if (detail.name === name) latest.current(...detail.args)
     }
     window.addEventListener('carbon-native', on)
     return () => window.removeEventListener('carbon-native', on)
@@ -284,6 +295,50 @@ const SHORT_MODE: Partial<Record<PermissionModeId, string>> = {
   plan: 'Plan',
   auto: 'Auto',
   bypassPermissions: 'Full'
+}
+
+/** A row's title; a delegate, listed only while it asks or works, says whose it is. */
+function listTitle(c: ChatMeta): string {
+  return c.delegation ? `${c.delegation.name} · ${chatTitle(c)}` : chatTitle(c)
+}
+
+/** The open chat's sub-agents, folded once per change of its messages. */
+let agentFold: { messages: unknown; rows: unknown[] } | null = null
+function agentRows(messages: ChatMessage[]): unknown[] {
+  if (agentFold?.messages === messages) return agentFold.rows
+  const rows = foldAgentRuns(messages).map((a) => ({
+    id: a.id,
+    description: a.description,
+    type: a.type ?? null,
+    status: a.status,
+    startedAt: a.startedAt ?? null,
+    endedAt: a.endedAt ?? null,
+    tools: a.tools,
+    current: a.current ?? null,
+    tokens: a.tokens ?? null,
+    depth: a.depth
+  }))
+  agentFold = { messages, rows }
+  return rows
+}
+
+function delegateRow(c: ChatMeta, status: ChatStatus | undefined): unknown {
+  const d = c.delegation!
+  return {
+    id: c.id,
+    name: d.name,
+    task: d.followUp ?? d.task,
+    role: d.role ?? null,
+    provider: c.provider,
+    providerLabel: PROVIDER_SHORT_LABELS[c.provider],
+    // The record says how a round ended; the live status says it is running now.
+    status: isBusy(status) ? 'running' : d.status,
+    result: d.result ?? null,
+    error: d.error ?? null,
+    dismissed: d.dismissedAt !== undefined,
+    startedAt: d.startedAt ?? d.createdAt,
+    finishedAt: d.finishedAt ?? null
+  }
 }
 
 function pickerState(pickers: NonNullable<NativeUi['pickers']>): unknown {
@@ -501,7 +556,7 @@ function snapshot(): Record<string, unknown> {
     const mark = r.unseen[c.id]
     return {
       id: c.id,
-      title: chatTitle(c),
+      title: listTitle(c),
       project: baseName(projectRoot(c)),
       root: projectRoot(c),
       // On the detailed row's context line, by the desktop's rule
@@ -587,7 +642,23 @@ function snapshot(): Record<string, unknown> {
                   ),
                   provider: PROVIDER_LABELS[chat.pendingProvider]
                 }
-              : null
+              : null,
+          // The sub-agents this chat spawned (as far back as the phone has
+          // loaded) and the chats its agent delegated to. Neither is in the
+          // list: a delegate is a side chat, a sub-agent a tool call.
+          agents: r.open?.id === chat.id ? agentRows(r.open.messages) : [],
+          delegates: r.chats
+            .filter((c) => c.delegation?.parentId === chat.id)
+            .sort((a, b) => a.delegation!.createdAt - b.delegation!.createdAt)
+            .map((c) => delegateRow(c, r.statuses[c.id])),
+          // A delegate's own screen says whose it is, and leads back there.
+          delegation: chat.delegation
+            ? {
+                parentId: chat.delegation.parentId,
+                parentTitle: chatTitle(r.chats.find((c) => c.id === chat.delegation!.parentId) ?? { title: '' }),
+                name: chat.delegation.name
+              }
+            : null
         }
       : null,
     // This phone's display settings, which the app's Settings sheet sets.
@@ -612,7 +683,7 @@ function snapshot(): Record<string, unknown> {
     // (`board.ts`, the board the web app's home screen draws).
     board: (() => {
       const b = deriveBoard(r.chats, r.statuses, r.permissions, r.unseen)
-      const base = (c: (typeof r.chats)[number]) => ({ chatId: c.id, title: chatTitle(c), project: baseName(projectRoot(c)) })
+      const base = (c: (typeof r.chats)[number]) => ({ chatId: c.id, title: listTitle(c), project: baseName(projectRoot(c)) })
       return {
         greeting: greeting(),
         needs: b.needs.map((c) => {
@@ -704,7 +775,8 @@ const commands: Record<string, (...args: never[]) => unknown> = {
     window.dispatchEvent(new CustomEvent('carbon-native-insets', { detail: delta }))
   },
   /** Sent to the screen that is up: `scrollTop`, `viewChanges`. */
-  screen: (name: string) => window.dispatchEvent(new CustomEvent('carbon-native', { detail: name })),
+  screen: (name: string, ...args: string[]) =>
+    window.dispatchEvent(new CustomEvent('carbon-native', { detail: { name, args } })),
   setText: (text: string, caret: number) => useNative.getState().composerActions?.setText(text, caret),
   submit: () => useNative.getState().composerActions?.submit(),
   stop: () => useNative.getState().composerActions?.stop(),

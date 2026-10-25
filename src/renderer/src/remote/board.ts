@@ -2,7 +2,7 @@ import * as React from 'react'
 import type { ChatMeta, ChatStatus, PermissionRequestPayload, RemoteUnseen } from '@shared/types'
 import { chatActivityKind } from '@/lib/chatActivity'
 import { useRemote } from './state'
-import { listedChats } from './format'
+import { isLiveDelegate, listedChats } from './format'
 
 /**
  * The home screen's board: what needs you, what is working, and what finished
@@ -29,6 +29,13 @@ export function deriveBoard(
     if (kind === 'needs-input') board.needs.push(chat)
     else if (kind === 'working') board.working.push(chat)
     else if (unseen[chat.id]) board.done.push({ chat, mark: unseen[chat.id] })
+  }
+  // A delegate asking or working is on the board; its outcome is the
+  // parent's to report, so a finished one is not.
+  for (const chat of chats.filter(isLiveDelegate)) {
+    const kind = chatActivityKind(statuses[chat.id], undefined, permissions[chat.id])
+    if (kind === 'needs-input') board.needs.push(chat)
+    else if (kind === 'working') board.working.push(chat)
   }
   board.needs.sort((a, b) => b.updatedAt - a.updatedAt)
   board.working.sort((a, b) => b.updatedAt - a.updatedAt)

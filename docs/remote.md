@@ -495,6 +495,16 @@ desktop's, which is the reason this is a shell and not a rewrite.
   expects. `WorktreeChip` and the New-chat screen publish where the next chat
   runs and in which project (`useNativePlace`, `useNativeNewChat`), and draw
   nothing.
+- **Agents and delegates come with the open chat.** Neither is in the list
+  (a delegate is a side chat, a sub-agent a tool call), so the chat slice
+  carries both: `agents` folded from the loaded messages (`foldAgentRuns`,
+  once per messages array, so only as far back as the phone has scrolled) and
+  `delegates` from `ChatMeta.delegation`. The app draws a pill while any is
+  working and a sheet listing them; a delegate opens as a chat whose header
+  leads back to its parent (`delegation` on the slice), and a sub-agent opens
+  its transcript through the `openAgent` command. A delegate that is asking
+  or working is also on the board and in "Needs you" (`isLiveDelegate`): its
+  permission prompt would otherwise reach the phone nowhere.
 - **The changes list, a diff, a canvas and a plan are the app's own
   screens.** They are pushed on its navigation stack (or shown as a sheet)
   from `notifyApp('open', …)`, so Back is the system's swipe. Their data comes

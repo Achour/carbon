@@ -24,6 +24,15 @@ export function listedChats(chats: ChatMeta[]): ChatMeta[] {
 }
 
 /**
+ * A chat another chat's agent delegated to, still in play. The list leaves
+ * delegates out (they are side chats, reached from their parent), but one
+ * waiting on an approval, or still working, has to be seen somewhere.
+ */
+export function isLiveDelegate(chat: ChatMeta): boolean {
+  return !!chat.delegation && !chat.delegation.dismissedAt && !chat.archivedAt && !!chat.sideOf
+}
+
+/**
  * The sidebar's sections, shared by the page's sidebar and the iOS app's
  * (`native.ts`): "Needs you" first, then pins, then the rest — flat in the
  * user's order, and grouped by project with the most recently active first.
@@ -44,7 +53,8 @@ export function sidebarSections(
   const asking = (c: ChatMeta): boolean => (permissions[c.id]?.length ?? 0) > 0
   // "Needs you" ignores the filter: a question waiting in another project
   // is usually why the phone was picked up, and a filter must not hide it.
-  const waiting = all.filter(asking)
+  // A delegate's question counts too, though the delegate itself is not listed.
+  const waiting = [...all, ...chats.filter(isLiveDelegate)].filter(asking)
   const scoped = filterProject ? all.filter((c) => projectRoot(c) === filterProject) : all
   const pinned = scoped.filter((c) => !asking(c) && c.pinnedAt).sort((a, b) => a.pinnedAt! - b.pinnedAt!)
   const flat = scoped.filter((c) => !asking(c) && !c.pinnedAt)
