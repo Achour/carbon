@@ -79,6 +79,7 @@ import * as gitOps from './git'
 import * as githubOps from './github'
 import * as pullOps from './pulls'
 import * as projectOps from './projects'
+import { createProjectFolder } from './newProject'
 import { setProjectIcon } from './projectIconPicker'
 import {
   clearProjectIcon,
@@ -1331,6 +1332,15 @@ function registerIpc(): void {
     projectOps.projectsOverview(roots, refresh)
   )
   ipcMain.handle('projects:icons', (_e, roots: string[]) => projectOps.projectIcons(roots))
+  ipcMain.handle('projects:create', async (_e, parent: string, name: string, git: boolean) => {
+    const made = await createProjectFolder(parent, name)
+    if (!made.ok) return made
+    // A repository from the start, as most projects become one; `gitInit`
+    // never reports the root commit, so this cannot fail the project.
+    if (git) await gitOps.gitInit(made.path)
+    store.rememberDir(made.path)
+    return made
+  })
   ipcMain.handle('projects:detail', (_e, root: string) => projectOps.projectDetail(root))
   ipcMain.handle('projects:set-icon', (e, root: string, source?: string) =>
     setProjectIcon(BrowserWindow.fromWebContents(e.sender), root, source)

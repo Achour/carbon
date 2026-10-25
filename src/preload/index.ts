@@ -175,6 +175,7 @@ const api: Api = {
   projectsOverview: (roots: string[], refresh?: boolean) =>
     invoke('projects:overview', roots, refresh),
   projectIcons: (roots: string[]) => invoke('projects:icons', roots),
+  createProject: (parent: string, name: string, git: boolean) => invoke('projects:create', parent, name, git),
   projectDetail: (root: string) => invoke('projects:detail', root),
   setProjectIcon: (root: string, source?: string) => invoke('projects:set-icon', root, source),
   clearProjectIcon: (root: string, mode: 'initials' | 'auto') =>

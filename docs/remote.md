@@ -510,6 +510,14 @@ desktop's, which is the reason this is a shell and not a rewrite.
   to its parent (`delegation` on the slice). A delegate that is asking or
   working is also on the board and in "Needs you" (`isLiveDelegate`): its
   permission prompt would otherwise reach the phone nowhere.
+- **A new project starts from the phone too.** A phone has no folder
+  picker that can see the Mac's disk, so the project menu's "New Project…"
+  names a folder and puts it beside the Mac's other projects:
+  `projects:create` (`main/newProject.ts`) makes one plain-named folder one
+  level down, never over an existing one, runs `git init` when asked, and adds
+  it to the recent projects. The relay lets it write only into a folder that
+  already holds a project Carbon knows (`knownParent`); those folders ride the
+  snapshot as `projectParents`, busiest first, and are the sheet's Location.
 - **A sub-agent's transcript is the app's own screen.** The app says which
   agents it has on screen (`watchAgent`), and the slice carries each one's
   rows in `agentDetails`: its words and its tool calls (`toolLine`), plus the

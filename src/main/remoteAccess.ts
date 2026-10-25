@@ -13,7 +13,7 @@ import { connect, createServer as createNetServer, type Server as NetServer, typ
 import type { TLSSocket } from 'node:tls'
 import { homedir, hostname, networkInterfaces } from 'node:os'
 import type { Duplex } from 'node:stream'
-import { basename, extname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path'
+import { basename, dirname, extname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path'
 import { gzipSync } from 'node:zlib'
 import type { IpcMain, IpcMainInvokeEvent } from 'electron'
 import { projectRoot } from '@shared/types'
@@ -130,6 +130,9 @@ export const REMOTE_CHANNELS = new Set([
   // Stopping a dev server or shell the agent left running: the same kind of
   // act as stopping the turn, and the only way to from the phone.
   'chat:stop-background-job',
+  // A new, empty project folder: a plain name, beside projects the Mac
+  // already has (`knownParent`), never anywhere the phone names.
+  'projects:create',
   // Model, effort, speed and permission mode — the composer's own pickers. A
   // cross-provider model only arms the switch, as on the desktop; it applies
   // at the next send (`applyPendingSwitch`).
@@ -758,6 +761,7 @@ export class RemoteAccess {
       permissions: Object.fromEntries(this.permissions),
       suggestions: Object.fromEntries(this.suggestions),
       jobs: Object.fromEntries(this.jobs),
+      projectParents: this.projectParents(),
       defaults,
       ...(await this.host.models()),
       unseen: device.unseen ?? {}
@@ -777,6 +781,31 @@ export class RemoteAccess {
       if (resolve(c.cwd) === want || resolve(projectRoot(c)) === want) return true
     }
     return false
+  }
+
+  /**
+   * A folder that already holds a project the Mac knows: where the phone may
+   * make a new one. The phone picks among these, so a new project lands
+   * beside its others, and no folder the phone names that nobody opened on
+   * the Mac is ever written to.
+   */
+  private knownParent(dir: unknown): boolean {
+    if (typeof dir !== 'string' || !isAbsolute(dir)) return false
+    const want = resolve(dir)
+    return this.projectParents().includes(want)
+  }
+
+  /** The folders that hold the Mac's projects, the busiest first. */
+  projectParents(): string[] {
+    const count = new Map<string, number>()
+    const roots = new Set(this.host.store.getDefaults().recentDirs.map((d) => resolve(d)))
+    for (const c of this.host.store.listChats()) roots.add(resolve(projectRoot(c)))
+    for (const root of roots) {
+      const parent = dirname(root)
+      // Never the disk's root: a project folder there is a mistake, not a home.
+      if (parent !== '/' && parent !== root) count.set(parent, (count.get(parent) ?? 0) + 1)
+    }
+    return [...count.entries()].sort((a, b) => b[1] - a[1]).map(([p]) => p)
   }
 
   /**
@@ -1120,6 +1149,10 @@ export class RemoteAccess {
     }
     if (FOLDER_SCOPED.has(channel) && !this.knownFolder(args[0])) {
       json(res, 403, { error: 'Not a project Carbon knows' })
+      return
+    }
+    if (channel === 'projects:create' && !this.knownParent(args[0])) {
+      json(res, 403, { error: 'Not a folder that holds a project Carbon knows' })
       return
     }
     try {

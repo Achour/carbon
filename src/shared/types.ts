@@ -1565,6 +1565,11 @@ export interface RemoteSnapshot {
    * Mac older than the field.
    */
   jobs?: Record<string, BackgroundJob[]>
+  /**
+   * The folders that hold the Mac's projects, busiest first: where the phone
+   * may start a new one (`projects:create`). Optional for an older Mac.
+   */
+  projectParents?: string[]
   defaults: AppDefaults
   /**
    * The model picker's inputs, exactly as the desktop composer gets them: the
@@ -3203,6 +3208,16 @@ export interface Api {
    * No git, so this one can be asked at launch; see `main/projects.ts`.
    */
   projectIcons(roots: string[]): Promise<Record<string, string | null>>
+  /**
+   * Make a new, empty project folder `parent/name` (optionally a git
+   * repository) and add it to the recent projects. The phone's way to start
+   * a project: it has no folder picker (`main/newProject.ts`).
+   */
+  createProject(
+    parent: string,
+    name: string,
+    git: boolean
+  ): Promise<{ ok: true; path: string } | { ok: false; error: string }>
   /**
    * Give a project a mark of the user's choosing.
    *

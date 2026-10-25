@@ -786,7 +786,12 @@ function snapshot(): Record<string, unknown> {
       ? {
           cwd: n.newChat.cwd,
           name: baseName(n.newChat.cwd),
-          projects: n.newChat.projects.map((root) => ({ root, name: baseName(root) }))
+          projects: n.newChat.projects.map((root) => ({ root, name: baseName(root) })),
+          // Where a new project may go: beside the Mac's others.
+          parents: r.projectParents.map((path) => ({
+            path,
+            label: r.home && path.startsWith(r.home) ? `~${path.slice(r.home.length)}` : path
+          }))
         }
       : null,
     place: n.place ? placeState(n.place, r.home) : null,
@@ -913,6 +918,12 @@ const commands: Record<string, (...args: never[]) => unknown> = {
       watchedAgents: on ? [...s.watchedAgents.filter((a) => a !== id), id] : s.watchedAgents.filter((a) => a !== id)
     })),
   stopJob: (chatId: string, id: string) => invoke('chat:stop-background-job', chatId, id),
+  /** Make a project folder on the Mac and start the new chat in it; answers the outcome. */
+  createProject: async (parent: string, name: string, git: boolean) => {
+    const made = await useRemote.getState().createProject(parent, name, git)
+    if (made.ok) useNative.getState().newChat?.pick(made.path)
+    return made
+  },
   diff: (chatId: string, path: string, scope?: 'repo') => diff(chatId, path, scope),
   canvas: (id: string) => invoke<Canvas | null>('canvas:get', id),
   // Coming back from the background needs nothing here: WebKit reports the

@@ -72,6 +72,8 @@ interface RemoteState {
   permissions: Record<string, PermissionRequestPayload[]>
   /** What each chat left running in the background: a dev server, a shell. */
   jobs: Record<string, BackgroundJob[]>
+  /** The folders that hold the Mac's projects: where a new one may go. */
+  projectParents: string[]
   /** Turns that ended while this phone was not looking — the home screen's Done (`board.ts`). */
   unseen: Record<string, RemoteUnseen>
   defaults: AppDefaults | null
@@ -103,6 +105,11 @@ interface RemoteState {
   loadOlder(): Promise<void>
   send(chatId: string, text: string, attachments?: Attachment[]): Promise<void>
   interrupt(chatId: string): Promise<void>
+  /**
+   * A new, empty project folder on the Mac (`projects:create`), listed among
+   * the recent projects at once so the New-chat screen can pick it.
+   */
+  createProject(parent: string, name: string, git: boolean): Promise<{ ok: true; path: string } | { ok: false; error: string }>
   /** Force a queued message through now: interrupt the running turn and send it. */
   sendQueuedNow(chatId: string, id: string): Promise<void>
   removeQueued(chatId: string, id: string): void
@@ -162,6 +169,7 @@ export const useRemote = create<RemoteState>((set, get) => {
       set({
         hostname: snap.hostname,
         home: snap.home ?? '',
+        projectParents: snap.projectParents ?? [],
         chats: snap.chats,
         statuses: snap.statuses,
         suggestions: snap.suggestions ?? {},
@@ -285,6 +293,7 @@ export const useRemote = create<RemoteState>((set, get) => {
     suggestions: {},
     permissions: {},
     jobs: {},
+    projectParents: [],
     unseen: cached?.unseen ?? {},
     defaults: cached?.defaults ?? null,
     models: cached?.models ?? [],
@@ -382,6 +391,29 @@ export const useRemote = create<RemoteState>((set, get) => {
         await api.invoke('chat:send', chatId, text, attachments?.length ? attachments : undefined)
       } catch (err) {
         set({ error: message(err) })
+      }
+    },
+
+    async createProject(parent, name, git) {
+      try {
+        const made = await api.invoke<{ ok: true; path: string } | { ok: false; error: string }>(
+          'projects:create',
+          parent,
+          name,
+          git
+        )
+        if (made.ok) {
+          // The Mac put it first among its recent folders; so does this copy,
+          // until the next snapshot says the same.
+          set((s) => ({
+            defaults: s.defaults
+              ? { ...s.defaults, recentDirs: [made.path, ...s.defaults.recentDirs.filter((d) => d !== made.path)] }
+              : s.defaults
+          }))
+        }
+        return made
+      } catch (err) {
+        return { ok: false, error: message(err) }
       }
     },
 
