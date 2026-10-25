@@ -887,6 +887,17 @@ function registerIpc(): void {
     emit({ type: 'meta', chatId: id, patch: { pinnedAt: chat.pinnedAt } })
   })
 
+  ipcMain.handle('chats:set-bookmark', (_e, id: string, messageId: string, text: string | null) => {
+    const chat = store.getChat(id)
+    if (!chat) return
+    const rest = (chat.bookmarks ?? []).filter((b) => b.id !== messageId)
+    const next = text === null ? rest : [...rest, { id: messageId, text }]
+    if (next.length) chat.bookmarks = next
+    else delete chat.bookmarks
+    store.saveChat(id)
+    emit({ type: 'meta', chatId: id, patch: { bookmarks: chat.bookmarks } })
+  })
+
   // A drag in the Pinned section. The values sit just *below* now, so a pin
   // made from the menu afterwards (`Date.now()`) still lands at the bottom.
   ipcMain.handle('chats:set-pinned-order', (_e, ids: string[]) => {

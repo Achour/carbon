@@ -86,6 +86,8 @@ const api: Api = {
   renameChat: (id: string, title: string) => invoke('chats:rename', id, title),
   undismissChat: (id: string) => invoke('chats:undismiss', id),
   setChatPinned: (id: string, pinned: boolean) => invoke('chats:set-pinned', id, pinned),
+  setChatBookmark: (id: string, messageId: string, text: string | null) =>
+    invoke('chats:set-bookmark', id, messageId, text),
   setPinnedOrder: (ids: string[]) => invoke('chats:set-pinned-order', ids),
   placeChat: (id: string, sortKey: number) => invoke('chats:place', id, sortKey),
   setChatArchived: (id: string, archived: boolean) =>

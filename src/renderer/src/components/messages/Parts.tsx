@@ -8,6 +8,7 @@ import {
   Hand,
   Sparkles,
   ArrowRightLeft,
+  Bookmark,
   Check,
   ChevronRight,
   Code2,
@@ -30,6 +31,7 @@ import { Button } from '@/components/ui/button'
 import { WithTooltip } from '@/components/ui/tooltip'
 import { useApp } from '@/store'
 import { useTranscriptSurface } from './surface'
+import { TurnBookmarks } from './TurnBookmarks'
 import {
   FILE_MUTATION_TOOLS,
   isGroupableTool,
@@ -46,6 +48,11 @@ import { isAgentish } from '@shared/agentRuns'
  * drift apart in size, spacing or hit area — they sit side by side under the
  * box and any mismatch reads as a mistake at this scale.
  */
+/** A marked turn's button: the same glyph, filled, in the bookmark colour. */
+function BookmarkFilled(): React.JSX.Element {
+  return <Bookmark className="fill-current text-warning" />
+}
+
 function MessageAction({
   label,
   icon: Icon,
@@ -285,6 +292,8 @@ export const UserBubble = React.memo(function UserBubble({
 }): React.JSX.Element {
   const [editing, setEditing] = React.useState(false)
   const [copied, setCopied] = React.useState(false)
+  const bookmarks = React.useContext(TurnBookmarks)
+  const bookmarked = !!bookmarks?.marked.has(message.id)
   // App-initiated actions — a "Commit" from the source-control button, a
   // `/review` from the Codex review dialog — draw as the same box a typed
   // prompt gets, tinted with the primary colour and holding only the command,
@@ -301,6 +310,7 @@ export const UserBubble = React.memo(function UserBubble({
     const command = message.text.startsWith('/') ? message.text.split(/\s+/, 1)[0] : null
     return (
       <div
+        data-turn-id={message.id}
         className={cn(
           PROMPT_BOX,
           'flex animate-enter items-center gap-2 border-primary/30 bg-primary/10 py-2.5 text-primary'
@@ -325,7 +335,13 @@ export const UserBubble = React.memo(function UserBubble({
     // `data-message-role` is what the quote bar reads to say *whose* words a
     // selected passage is; a drag that crosses the boundary between two of
     // these leaves the prompt naming the transcript instead.
-    <div data-message-role="user" className="group relative flex animate-enter flex-col">
+    // `data-turn-id` is what the turn rail scrolls to and reads the turn
+    // being read off.
+    <div
+      data-message-role="user"
+      data-turn-id={message.id}
+      className="group relative flex animate-enter flex-col"
+    >
       {editing ? (
         <MessageEditor message={message} chatId={chatId} onClose={() => setEditing(false)} />
       ) : (
@@ -334,7 +350,10 @@ export const UserBubble = React.memo(function UserBubble({
             <div
               className={cn(
                 PROMPT_BOX,
-                'flex select-text flex-col gap-2 py-2.5 break-words'
+                'flex select-text flex-col gap-2 py-2.5 break-words',
+                // A marked turn says so where it is read, not only on the
+                // rail: the frame takes the bookmark colour.
+                bookmarked && 'border-warning/50'
               )}
             >
               <PromptAttachments message={message} />
@@ -361,6 +380,13 @@ export const UserBubble = React.memo(function UserBubble({
                 own surface: a chip in the same fill as the box under it is a
                 floating rectangle of nothing. */}
             <div className="absolute top-1.5 right-0 flex items-center gap-0.5 rounded-lg border border-border bg-secondary p-0.5 opacity-0 shadow-sm transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+              {bookmarks && (
+                <MessageAction
+                  label={bookmarked ? 'Remove bookmark' : 'Bookmark this turn'}
+                  icon={bookmarked ? BookmarkFilled : Bookmark}
+                  onClick={() => bookmarks.toggle(message.id, message.text || 'Attachment')}
+                />
+              )}
               <MessageAction label="Edit and resend" icon={Pencil} onClick={() => setEditing(true)} />
               <MessageAction
                 label={copied ? 'Copied' : 'Copy prompt'}

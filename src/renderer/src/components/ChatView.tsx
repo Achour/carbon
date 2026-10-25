@@ -31,6 +31,10 @@ import { PromptDock } from '@/components/PromptDock'
 import { QuoteBar } from '@/components/QuoteBar'
 import { TranscriptChat } from '@/components/messages/AgentRows'
 import { useTranscript } from '@/components/Transcript'
+import { TurnRail } from '@/components/TurnRail'
+import { TurnBookmarks, type TurnBookmarksValue } from '@/components/messages/TurnBookmarks'
+import { foldTurns } from '@/lib/turnFold'
+import { bookmarkText, earlierBookmarks, railTurns, reconcileTurns, type RailTurn } from '@/lib/turnRail'
 
 const NO_PERMISSIONS: never[] = []
 const NO_QUEUED: never[] = []
@@ -518,8 +522,104 @@ export const ChatView = React.memo(function ChatView({
   }, [chat.id, tasks, setTasks])
   React.useEffect(() => () => clearTasks(chat.id), [chat.id, clearTasks])
 
+  // The turn rail's index of the loaded window. Rebuilt per delta like
+  // everything fed from `messages`, and reconciled so only the live turn's
+  // tick sees a new object.
+  const railRef = React.useRef<RailTurn[]>([])
+  const turns = React.useMemo(() => {
+    const next = reconcileTurns(railRef.current, railTurns(messages, foldTurns(messages), busy))
+    railRef.current = next
+    return next
+  }, [messages, busy])
+  const setChatBookmark = useApp((s) => s.setChatBookmark)
+  const marked = React.useMemo(
+    () => new Set((chat.bookmarks ?? []).map((b) => b.id)),
+    [chat.bookmarks]
+  )
+  const earlier = React.useMemo(
+    () => earlierBookmarks(chat.bookmarks, turns, hiddenBefore),
+    [chat.bookmarks, turns, hiddenBefore]
+  )
+  const toggleBookmark = React.useCallback(
+    (messageId: string, prompt: string | null) =>
+      void setChatBookmark(chat.id, messageId, prompt === null ? null : bookmarkText(prompt)),
+    [setChatBookmark, chat.id]
+  )
+  const bookmarks = React.useMemo<TurnBookmarksValue>(
+    () => ({
+      marked,
+      toggle: (messageId, prompt) =>
+        toggleBookmark(messageId, marked.has(messageId) ? null : prompt)
+    }),
+    [marked, toggleBookmark]
+  )
+
+  /**
+   * Go to a turn from the rail: its prompt at the top of the view, with room
+   * above it. Unpinned first — a glide toward the bottom still running would
+   * otherwise pull the reader straight back down. False when the prompt is not
+   * on the page (not loaded yet).
+   */
+  const navigateToTurn = React.useCallback(
+    (id: string): boolean => {
+      const el = scrollRef.current
+      const target = el?.querySelector<HTMLElement>(`[data-turn-id="${CSS.escape(id)}"]`)
+      if (!el || !target) return false
+      setPinned(false)
+      cancelAnimationFrame(followFrame.current)
+      followFrame.current = 0
+      const top =
+        target.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop - 16
+      const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      el.scrollTo({ top: Math.max(0, top), behavior: reduced ? 'auto' : 'smooth' })
+      return true
+    },
+    [setPinned]
+  )
+
+  /**
+   * Load older history from the rail: one window for the "earlier" mark, or
+   * window after window until a bookmarked turn is on the page. Each load goes
+   * through the same anchor the scroll-triggered one sets, so the reader's
+   * place holds while history is prepended above it, and the loop ends the
+   * moment a load moves nothing (the start of the chat, or a view that left).
+   */
+  const revealEarlier = React.useCallback(
+    async (id: string | null): Promise<void> => {
+      const surface = (): { hidden: number; loading: boolean } => {
+        const s = useApp.getState()
+        return chat.id === s.activeId
+          ? { hidden: s.hiddenBefore, loading: s.loadingOlder }
+          : {
+              hidden: s.sideChats[chat.id]?.hiddenBefore ?? 0,
+              loading: !!s.sideChats[chat.id]?.loadingOlder
+            }
+      }
+      const frame = (): Promise<void> => new Promise((r) => requestAnimationFrame(() => r()))
+      for (let i = 0; i < 500; i++) {
+        if (id && navigateToTurn(id)) return
+        const { hidden, loading } = surface()
+        if (hidden <= 0) return
+        if (loading) {
+          await frame()
+          continue
+        }
+        const el = scrollRef.current
+        if (!el) return
+        setPinned(false)
+        bottomAnchor.current = el.scrollHeight - el.scrollTop
+        await loadOlderMessages(chat.id)
+        await frame()
+        await frame()
+        if (surface().hidden === hidden || !id) return
+      }
+    },
+    [chat.id, loadOlderMessages, navigateToTurn, setPinned]
+  )
+
   return (
     <TranscriptChat.Provider value={transcriptChat}>
+    <TurnBookmarks.Provider value={bookmarks}>
     <div
       // `data-chat-surface` is the "which chat is this" marker: it is how a
       // permission keypress finds the transcript it happened in (see
@@ -651,6 +751,20 @@ export const ChatView = React.memo(function ChatView({
             scroller's frame rather than in the scroller, so it can be placed
             against the passage without scrolling away from it. */}
         <QuoteBar chatId={chat.id} scrollRef={scrollRef} containerRef={viewRef} />
+
+        {/* The conversation's outline, in the view's left gutter. In the view
+            rather than the scroller, like the quote bar, so it stays put while
+            the transcript moves under it. */}
+        <TurnRail
+          turns={turns}
+          marked={marked}
+          earlier={earlier}
+          hiddenBefore={hiddenBefore}
+          scrollRef={scrollRef}
+          onNavigate={navigateToTurn}
+          onRevealEarlier={(id) => void revealEarlier(id)}
+          onToggleBookmark={toggleBookmark}
+        />
 
         {/* Jump to bottom */}
         {showJump && (
@@ -832,6 +946,7 @@ export const ChatView = React.memo(function ChatView({
       )}
 
     </div>
+    </TurnBookmarks.Provider>
     </TranscriptChat.Provider>
   )
 })

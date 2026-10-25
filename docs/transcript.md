@@ -948,6 +948,65 @@ one turn that now folds at each `status: idle`; its DOM-identity readings
 measure omission rather than a remount until each shape gets a prompt of its
 own. `foot-probe.js` is unaffected — it only reads the foot label.
 
+### The turn rail and bookmarks (`TurnRail`, `lib/turnRail.ts`)
+
+Down the transcript's left edge, one tick per turn. The turn being read is the
+longest and brightest, a bookmarked one is in the warning colour, and a turn
+still running pulses. Hovering a tick shows a card with the turn's header facts
+("Turn 5 of 12 · Worked for 53s · 2 steps", on `TurnHeader`'s clock), the
+prompt in a box and the opening of the answer (`foldTurns`' answer, markdown
+stripped). Clicking a tick scrolls its prompt to the top.
+
+- **Evenly spaced, not placed by height.** Placing marks where their content
+  sits would bunch every short exchange into a smudge beside one long turn, and
+  heights are not knowable anyway: settled turns fold and older history is not
+  loaded. The rail is an index, so every turn gets the same room and what a turn
+  *did* is the tick's length, four log-scale steps of answer length plus tool
+  calls (`weightOf`). Ticks closer than `MIN_PITCH` stop being separate marks,
+  so a chat with more turns than fit shows a window around the one being read,
+  faded at the cut ends.
+- **It reaches as far as the loaded window.** A long chat holds older messages
+  in the database until the reader scrolls to them, and the rail does not reach
+  past that. Above the first loaded turn, a three-dot mark loads the next window.
+  A bookmark further back still gets its tick, because `TurnBookmark` keeps the
+  prompt's opening words: clicking it loads window after window
+  (`revealEarlier`, through the same `bottomAnchor` the scroll-triggered load
+  sets) until the prompt is on the page, then goes there. An id that is not
+  found with nothing left to load was rewound away by an edit-and-resend and is
+  not drawn.
+- **Bookmarks are chat metadata** (`ChatMeta.bookmarks`, `chats:set-bookmark`),
+  so they persist with the chat's meta JSON and need no message rewrite. Two
+  places set them: the card's button, and the prompt bubble's hover actions.
+  The bubble reads them through the `TurnBookmarks` context rather than a store
+  selector each, because the store changes on every streamed delta. The phone
+  renders the same bubbles without the provider and so offers no button.
+- **The turn being read** is the last prompt above the top third of the
+  scroller, or the last turn at the bottom. It is measured at most once a
+  frame from scroll and resize, over prompt elements collected when the turn
+  list changes (`data-turn-id` on the bubble), not per scroll event.
+- **Navigating unpins first.** A glide toward the bottom still running would
+  otherwise pull the reader straight back down. The clicked turn then stays the
+  lit one until the reader scrolls, presses a key or clicks in the transcript:
+  one of the last turns cannot scroll to the top, so its jump ends at the
+  bottom, where the "at the bottom, the last turn" rule lit the wrong tick.
+- **A bookmarked prompt's frame is amber** in the transcript too, so a jump to
+  a marked turn lands on something that says so. The card's prompt is a button
+  with the tick's action, a far bigger target than a 2px line.
+- **Two sizes.** A prompt box hangs 14px into the gutter (`CHAT_BLEED`), so in
+  a column narrower than the reading measure plus 40px the full-size rail
+  would sit on its border; there the ticks shrink to the strip the box leaves
+  (`WIDE` / `NARROW`).
+- **The rail's container stays mounted when there is nothing to draw.** The
+  view's size is measured through it, and a rail that mounted empty (a chat
+  still loading) never learned its height, so it fitted exactly one tick.
+- **Cost per streamed delta**: `railTurns` plus `foldTurns` over the loaded
+  window, then `reconcileTurns`, which keeps every unchanged turn at its
+  identity. Each tick is a `React.memo` over primitives (`Tick`), so while a
+  turn streams only the live turn's tick re-renders.
+
+No keyboard shortcut: the obvious pair, ⌥↑/⌥↓, already moves the caret by
+paragraph in the composer.
+
 ### Quoting a passage (`QuoteBar`, `lib/quoteSelection.ts`)
 
 Select text in a reply and a small bar offers **Add to chat** (⌘L) and **Ask in

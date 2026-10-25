@@ -1542,6 +1542,8 @@ interface AppState {
   renameChat(id: string, title: string): Promise<void>
   /** Pin/unpin a chat; pinned chats leave their project group for the Pinned section. */
   setChatPinned(id: string, pinned: boolean): Promise<void>
+  /** Mark or unmark a turn (`ChatMeta.bookmarks`); null text unmarks. */
+  setChatBookmark(chatId: string, messageId: string, text: string | null): Promise<void>
   setPinnedOrder(ids: string[]): Promise<void>
   placeChat(id: string, sortKey: number): Promise<void>
   /**
@@ -5282,6 +5284,20 @@ export const useApp = create<AppState>((set, get) => ({
     const at = pinned ? Date.now() : undefined
     set((s) => ({ chats: s.chats.map((c) => (c.id === id ? { ...c, pinnedAt: at } : c)) }))
     await window.api.setChatPinned(id, pinned)
+  },
+
+  async setChatBookmark(chatId, messageId, text) {
+    // Local first, like a pin: the tick and the button answer the click, and
+    // main's `meta` patch then lands the same list.
+    set((s) => ({
+      chats: s.chats.map((c) => {
+        if (c.id !== chatId) return c
+        const rest = (c.bookmarks ?? []).filter((b) => b.id !== messageId)
+        const next = text === null ? rest : [...rest, { id: messageId, text }]
+        return { ...c, bookmarks: next.length ? next : undefined }
+      })
+    }))
+    await window.api.setChatBookmark(chatId, messageId, text)
   },
 
   async setPinnedOrder(ids) {

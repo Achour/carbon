@@ -380,6 +380,15 @@ export interface ChatMeta {
    */
   pinnedAt?: number
   /**
+   * Turns the user marked to find again, in the order they were marked. Each
+   * carries the prompt's opening words as well as its id, because the rail
+   * that lists them draws only the loaded window of a long chat: a bookmark
+   * further back still has to say what it points at before its turn is
+   * fetched. An id whose message is gone (an edit-and-resend rewound past it)
+   * is simply never found and is not drawn.
+   */
+  bookmarks?: TurnBookmark[]
+  /**
    * Where the chat sits in the sidebar's lists, higher first. Set once when the
    * chat is made and moved only by dragging its row — never by a turn — so the
    * list is the order the user left it in. Databases from before it existed are
@@ -901,6 +910,14 @@ export interface Attachment {
    * and a passage has no file to name.
    */
   quote?: QuoteRef
+}
+
+/** A marked turn — see `ChatMeta.bookmarks`. */
+export interface TurnBookmark {
+  /** The user message that opened the turn. */
+  id: string
+  /** The prompt's opening words, flattened to one line. */
+  text: string
 }
 
 export interface UserMessage {
@@ -3004,6 +3021,8 @@ export interface Api {
   undismissChat(id: string): Promise<void>
   /** Pin/unpin a chat to the sidebar's Pinned section. */
   setChatPinned(id: string, pinned: boolean): Promise<void>
+  /** Mark or unmark one turn of a chat — see `ChatMeta.bookmarks`. Null text unmarks. */
+  setChatBookmark(id: string, messageId: string, text: string | null): Promise<void>
   /**
    * The Pinned section's order, top first: each id's `pinnedAt` is rewritten
    * to that position, pinning any id that was not — dropping an unpinned row
