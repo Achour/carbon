@@ -1,6 +1,7 @@
 import * as React from 'react'
 import { create } from 'zustand'
 import {
+  DEFAULT_BRANCHES,
   PROVIDER_LABELS,
   PROVIDER_SHORT_LABELS,
   PROVIDERS,
@@ -11,7 +12,6 @@ import {
 } from '@shared/types'
 import { PATHS, PROVIDER_COLOR } from '@/components/ui/provider-mark'
 import { USAGE_CRITICAL, USAGE_WARN, peakUtilization } from '@/components/UsageBar'
-import { shortenPath } from '@/lib/format'
 import { chatActivityKind } from '@/lib/chatActivity'
 import { assembleModelOptions, modelKey } from '@/lib/models'
 import { useApp } from '@/store'
@@ -385,6 +385,11 @@ function providerMarks(): Record<string, string | null> {
   return out
 }
 
+function detailBranch(branch: string | null | undefined, worktree: boolean): string | null {
+  if (!branch) return null
+  return worktree || !(DEFAULT_BRANCHES as readonly string[]).includes(branch) ? branch : null
+}
+
 const tone = (pct: number | null | undefined): 'normal' | 'warn' | 'critical' =>
   pct == null ? 'normal' : pct >= USAGE_CRITICAL ? 'critical' : pct >= USAGE_WARN ? 'warn' : 'normal'
 
@@ -499,9 +504,12 @@ function snapshot(): Record<string, unknown> {
       title: chatTitle(c),
       project: baseName(projectRoot(c)),
       root: projectRoot(c),
-      // The detailed row's third line: where the work happens.
-      branch: c.worktree?.branch ?? r.branches[c.cwd] ?? null,
-      folder: shortenPath(c.cwd, r.home || undefined),
+      // On the detailed row's context line, by the desktop's rule
+      // (`chatDetail`): only off the mainline, except a worktree's, which is
+      // the point of that chat.
+      branch: detailBranch(c.worktree?.branch ?? r.branches[c.cwd], !!c.worktree),
+      worktree: !!c.worktree,
+      scheduled: !!c.scheduled,
       provider: c.provider,
       activity: kind,
       unseen: mark ? (mark.failed ? 'failed' : 'done') : null,

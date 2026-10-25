@@ -4,7 +4,6 @@ import {
   BellOff,
   ChevronDown,
   ChevronRight,
-  Folder,
   GitBranch,
   MessageCircleQuestion,
   MessageSquarePlus,
@@ -15,12 +14,12 @@ import {
   SquareStack,
   X
 } from 'lucide-react'
-import { PROVIDER_LABELS, projectRoot, type ChatMeta } from '@shared/types'
+import { DEFAULT_BRANCHES, PROVIDER_LABELS, projectRoot, type ChatMeta } from '@shared/types'
 import { ProjectAvatar } from '@/components/ui/project-avatar'
 import { ProviderMark, PROVIDER_COLOR } from '@/components/ui/provider-mark'
 import { DotSpinner } from '@/components/ui/dot-spinner'
 import { chatActivity } from '@/lib/chatActivity'
-import { relativeTime, shortenPath } from '@/lib/format'
+import { relativeTime } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useRemote } from './state'
 import { navigate } from './App'
@@ -574,12 +573,11 @@ const ChatRow = React.memo(function ChatRow({
 })
 
 /**
- * A detailed row: the desktop's three lines at thumb size. Context first,
- * small and muted (the project and when), then the title on a line of its
- * own as the row's headline, then where the work happens (the branch, or the
- * folder outside a repo) with the backend's mark at the right edge. Grouping
- * by project would repeat the same folder down the list, so each row names
- * its own.
+ * A detailed row: the desktop's two lines at thumb size (`docs/sidebar.md`).
+ * Context first, small and muted: the project, its branch when that is not
+ * the mainline (a worktree's always), and when. Then the title as the row's
+ * headline, with the backend's mark at its end. A third line used to close
+ * the row with the branch, and on most rows it said "main".
  */
 const DetailedRow = React.memo(function DetailedRow({
   chat,
@@ -594,10 +592,12 @@ const DetailedRow = React.memo(function DetailedRow({
   const requests = useRemote((s) => s.permissions[chat.id])
   const root = projectRoot(chat)
   const icon = useRemote((s) => s.icons[root] ?? null)
-  const home = useRemote((s) => s.home)
   // A worktree carries its branch on the chat itself, so its row is labelled
-  // before the branch read lands.
-  const branch = useRemote((s) => chat.worktree?.branch ?? s.branches[chat.cwd] ?? null)
+  // before the branch read lands; the mainline is not worth a word.
+  const branch = useRemote((s) => {
+    const b = chat.worktree?.branch ?? s.branches[chat.cwd] ?? null
+    return b && (chat.worktree || !(DEFAULT_BRANCHES as readonly string[]).includes(b)) ? b : null
+  })
   const activity = chatActivity(status, undefined, requests)
   const mark = useRemote((s) => s.unseen[chat.id])
   const name = baseName(root)
@@ -610,9 +610,15 @@ const DetailedRow = React.memo(function DetailedRow({
         active ? 'bg-sidebar-accent' : 'active:bg-sidebar-accent/60'
       )}
     >
-      <span className="flex min-w-0 items-center gap-2 text-[12.5px] leading-tight text-muted-foreground">
+      <span className="flex min-w-0 items-center gap-1.5 text-[12.5px] leading-tight text-muted-foreground">
         <ProjectAvatar root={root} name={name} icon={icon} size="sm" className="size-[18px] rounded-[6px]" />
-        <span className="min-w-0 truncate">{name}</span>
+        <span className="max-w-[55%] min-w-0 shrink-0 truncate">{name}</span>
+        {branch && (
+          <span className="flex min-w-0 items-center gap-1 text-muted-foreground/70">
+            <GitBranch className="size-3 shrink-0" />
+            <span className="min-w-0 truncate">{branch}</span>
+          </span>
+        )}
         {chat.pinnedAt && <Pin className="size-3 shrink-0" />}
         <span className="ml-auto flex shrink-0 items-center pl-2 text-muted-foreground/80 tabular-nums">
           {activity.kind === 'needs-input' ? (
@@ -626,19 +632,17 @@ const DetailedRow = React.memo(function DetailedRow({
           )}
         </span>
       </span>
-      <span
-        className={cn(
-          'min-w-0 truncate text-[15.5px] leading-snug',
-          active ? 'text-sidebar-foreground' : 'text-sidebar-foreground/85'
-        )}
-      >
-        {chatTitle(chat)}
-      </span>
-      <span className="flex min-w-0 items-center gap-1.5 text-[12.5px] leading-tight text-muted-foreground/70">
-        {branch ? <GitBranch className="size-3.5 shrink-0" /> : <Folder className="size-3.5 shrink-0" />}
-        <span className="min-w-0 truncate">{branch ?? shortenPath(chat.cwd, home || undefined)}</span>
+      <span className="flex min-w-0 items-center gap-2">
         <span
-          className="ml-auto flex shrink-0 items-center pl-2"
+          className={cn(
+            'min-w-0 flex-1 truncate text-[15.5px] leading-snug',
+            active ? 'text-sidebar-foreground' : 'text-sidebar-foreground/85'
+          )}
+        >
+          {chatTitle(chat)}
+        </span>
+        <span
+          className="flex shrink-0 items-center"
           style={{ color: PROVIDER_COLOR[chat.provider] }}
           aria-label={PROVIDER_LABELS[chat.provider]}
         >

@@ -527,7 +527,8 @@ desktop's, which is the reason this is a shell and not a rewrite.
   only as the Mac's origin afterwards, since its code is spent.
 - **The sidebar's sections are one function.** `sidebarSections` (`format.ts`)
   is what both this client's sidebar and the app's list are built from, and
-  `placeChat` (`chatActions.ts`) is how either reorders. The app's sidebar
+  `placeChat` (`chatActions.ts`) is how either reorders. Both draw a detailed row as the desktop does, in two lines with the branch
+  only off the mainline (`detailBranch`, the desktop's `chatDetail` rule). The app's sidebar
   keeps everything this one has except the notifications bell (the app has no
   push): both row shapes (`prefs.sidebarDensity`), the project filter, the
   per-project fold, pin and archive with Undo. Plan usage lives in the app's
