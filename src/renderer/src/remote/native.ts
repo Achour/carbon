@@ -28,6 +28,7 @@ import { promptLine } from '@shared/promptLine'
 import { describeSchedule } from '@shared/schedule'
 import { nativeRequest, questionDecision } from './PermissionCard'
 import type {
+  AssistantPart,
   BranchRef,
   Canvas,
   ChatSearchResult,
@@ -326,6 +327,53 @@ function listTitle(c: ChatMeta): string {
   return c.delegation ? `${c.delegation.name} · ${chatTitle(c)}` : chatTitle(c)
 }
 
+/** How many of a chat's latest screenshots the app is told about. */
+const SHOTS = 12
+
+/**
+ * The open chat's latest screenshots — the preview's, the browser's, any
+ * tool's that returned an image, sub-agents' included — newest first, with
+ * where they were taken. Only a reference travels: the app asks for an
+ * image's bytes (`shot`) when it draws it, so a turn's streamed tokens never
+ * carry a megabyte of base64 through every publish.
+ */
+let shotFold: { messages: unknown; rows: unknown[] } | null = null
+function shotRows(messages: ChatMessage[], cwd: string): unknown[] {
+  if (shotFold?.messages === messages) return shotFold.rows
+  const rows: { id: string; index: number; at: number | null; label: string; place: string | null; live: boolean }[] = []
+  let place: string | null = null
+  let lastUser = -1
+  messages.forEach((m, i) => {
+    if (m.role === 'user') lastUser = i
+  })
+  const walk = (parts: readonly (AssistantPart | null | undefined)[], i: number): void => {
+    for (const part of parts) {
+      if (!part || part.type !== 'tool') continue
+      const input = (part.input ?? {}) as Record<string, unknown>
+      // Where the browser is: the last address a call went to before the shot.
+      if (/preview|chrome|browser/i.test(part.name) && typeof input.url === 'string' && input.url) place = input.url.replace(/^https?:\/\//, '')
+      part.outputImages?.forEach((_, index) =>
+        rows.push({
+          id: part.toolUseId,
+          index,
+          at: part.startedAt ?? null,
+          label: toolLine(part, cwd).label,
+          place,
+          // Taken in the turn that is still going (or the last one).
+          live: i > lastUser
+        })
+      )
+      if (part.children) walk(part.children, i)
+    }
+  }
+  messages.forEach((m, i) => {
+    if (m.role === 'assistant') walk(m.parts, i)
+  })
+  const out = rows.slice(-SHOTS).reverse()
+  shotFold = { messages, rows: out }
+  return out
+}
+
 /** The open chat's sub-agents, folded once per change of its messages. */
 let agentFold: { messages: unknown; rows: unknown[] } | null = null
 function agentRows(messages: ChatMessage[]): unknown[] {
@@ -398,6 +446,25 @@ function agentDetail(messages: ChatMessage[], id: string, cwd: string): unknown 
   }
   detailCache.set(id, { part, detail })
   return detail
+}
+
+/** A tool call anywhere in the messages, sub-agents' included. */
+function findToolPart(messages: ChatMessage[], id: string): ToolPart | undefined {
+  const walk = (parts: readonly (AssistantPart | null | undefined)[]): ToolPart | undefined => {
+    for (const part of parts) {
+      if (!part || part.type !== 'tool') continue
+      if (part.toolUseId === id) return part
+      const hit = part.children ? walk(part.children) : undefined
+      if (hit) return hit
+    }
+    return undefined
+  }
+  for (const m of messages) {
+    if (m.role !== 'assistant') continue
+    const hit = walk(m.parts)
+    if (hit) return hit
+  }
+  return undefined
 }
 
 function delegateRow(c: ChatMeta, status: ChatStatus | undefined): unknown {
@@ -725,6 +792,7 @@ function snapshot(): Record<string, unknown> {
           // loaded) and the chats its agent delegated to. Neither is in the
           // list: a delegate is a side chat, a sub-agent a tool call.
           agents: r.open?.id === chat.id ? agentRows(r.open.messages) : [],
+          shots: r.open?.id === chat.id ? shotRows(r.open.messages, chat.cwd) : [],
           // The agent's live checklist (`foldTaskTimeline`, published by the
           // transcript); a finished one is a card in the transcript instead.
           tasks: (useTaskList.getState().byChat[chat.id] ?? []).map((t) => ({
@@ -933,6 +1001,13 @@ const commands: Record<string, (...args: never[]) => unknown> = {
       watchedAgents: on ? [...s.watchedAgents.filter((a) => a !== id), id] : s.watchedAgents.filter((a) => a !== id)
     })),
   stopJob: (chatId: string, id: string) => invoke('chat:stop-background-job', chatId, id),
+  /** One screenshot's bytes (`shots`), base64, from the open chat. */
+  shot: (toolUseId: string, index: number) => {
+    const r = useRemote.getState()
+    const part = r.open ? findToolPart(r.open.messages, toolUseId) : undefined
+    const image = part?.outputImages?.[index]
+    return image ? { mediaType: image.mediaType, data: image.data } : null
+  },
   /** The Mac's scheduled tasks, each with how its last run went (that run is a chat). */
   schedules: async () => {
     const tasks = await invoke<ScheduledTask[]>('scheduled:list')

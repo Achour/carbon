@@ -521,6 +521,11 @@ desktop's, which is the reason this is a shell and not a rewrite.
   `knownFolder` and `pulls:projects` reads only those, and a chat about a PR
   is a draft on the New-chat screen (`chatOnPull`, `#/new/<root>?pr=`).
   Sidebar search asks `chats:search` for what was said as well as titles.
+- **Screenshots travel as references.** The slice's `shots` lists the open
+  chat's latest images (any tool's `outputImages`, sub-agents' included, with
+  the browser's last address), and the app fetches each image's bytes once
+  through `shot` when it draws it. Inlined, a turn's every streamed token
+  would have re-serialized megabytes of base64 through the publish.
 - **A new project starts from the phone too.** A phone has no folder
   picker that can see the Mac's disk, so the project menu's "New Project…"
   names a folder and puts it beside the Mac's other projects:
