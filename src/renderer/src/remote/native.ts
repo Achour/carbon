@@ -25,20 +25,27 @@ import { changes, diff, invoke, markSeen } from './api'
 import { deriveBoard } from './board'
 import { greeting } from '@/lib/format'
 import { promptLine } from '@shared/promptLine'
+import { describeSchedule } from '@shared/schedule'
 import { nativeRequest, questionDecision } from './PermissionCard'
 import type {
   BranchRef,
   Canvas,
+  ChatSearchResult,
   ChatMessage,
   ChatMeta,
   ChatStatus,
   PermissionDecision,
+  PullCheckoutResult,
+  PullMergeMethod,
+  PullState,
+  ScheduledTask,
   ToolPart,
   WorktreeRef,
   WorktreeTarget
 } from '@shared/types'
 import { agentRunOf, findAgentPart, foldAgentRuns, isAgentPart } from '@shared/agentRuns'
 import { useTaskList } from '@/taskListStore'
+import { newChatDraftKey, patchDraft } from './drafts'
 import { isAgentJob, jobLabel } from '@/components/BackgroundJobs'
 
 /**
@@ -304,6 +311,14 @@ const SHORT_MODE: Partial<Record<PermissionModeId, string>> = {
   plan: 'Plan',
   auto: 'Auto',
   bypassPermissions: 'Full'
+}
+
+/** Every project folder the Mac knows: its recent folders and the chats' projects. */
+function knownRoots(): string[] {
+  const r = useRemote.getState()
+  const roots = new Set(r.defaults?.recentDirs ?? [])
+  for (const c of r.chats) if (!c.ephemeral && c.surface !== 'terminal') roots.add(projectRoot(c))
+  return [...roots]
 }
 
 /** A row's title; a delegate, listed only while it asks or works, says whose it is. */
@@ -918,6 +933,73 @@ const commands: Record<string, (...args: never[]) => unknown> = {
       watchedAgents: on ? [...s.watchedAgents.filter((a) => a !== id), id] : s.watchedAgents.filter((a) => a !== id)
     })),
   stopJob: (chatId: string, id: string) => invoke('chat:stop-background-job', chatId, id),
+  /** The Mac's scheduled tasks, each with how its last run went (that run is a chat). */
+  schedules: async () => {
+    const tasks = await invoke<ScheduledTask[]>('scheduled:list')
+    const r = useRemote.getState()
+    return tasks.map((t) => {
+      const last = t.lastChatId ? r.chats.find((c) => c.id === t.lastChatId) : undefined
+      return {
+        id: t.id,
+        name: t.name,
+        prompt: t.prompt,
+        project: baseName(t.cwd),
+        when: describeSchedule(t.schedule),
+        enabled: t.enabled,
+        nextRunAt: t.nextRunAt,
+        lastRunAt: t.lastRunAt ?? null,
+        // A run deleted since is no chat to open.
+        lastChatId: last ? last.id : null,
+        lastStatus: last?.scheduled?.status ?? null,
+        provider: t.provider,
+        providerLabel: PROVIDER_SHORT_LABELS[t.provider],
+        permissionMode: t.permissionMode
+      }
+    })
+  },
+  runSchedule: (id: string) => invoke('scheduled:run', id),
+  setScheduleEnabled: async (id: string, enabled: boolean) => {
+    await invoke('scheduled:set-enabled', id, enabled)
+    return true
+  },
+  /** Chats by what was said in them (`chats:search`), as rows the sidebar draws. */
+  searchChats: async (query: string) => {
+    const { hits } = await invoke<ChatSearchResult>('chats:search', query, 30)
+    const r = useRemote.getState()
+    const byId = new Map(r.chats.map((c) => [c.id, c]))
+    return hits.flatMap((h) => {
+      const chat = byId.get(h.chatId)
+      // Only what the phone can open: no archived chats, no terminal chats.
+      if (!chat || chat.archivedAt || chat.surface === 'terminal') return []
+      return [{ chatId: h.chatId, title: listTitle(chat), project: baseName(projectRoot(chat)), role: h.role, snippet: h.snippet }]
+    })
+  },
+  /** Pull requests you wrote or review, across repos (`gh`). */
+  pulls: (state: PullState) => invoke('pulls:list', state),
+  pull: (repo: string, n: number) => invoke('pulls:detail', repo, n),
+  pullDiff: async (repo: string, n: number) => {
+    const res = await invoke<{ ok: boolean; output?: string; error?: string }>('pulls:diff', repo, n)
+    return res.ok ? { ok: true, text: res.output ?? '' } : { ok: false, error: res.error ?? 'GitHub did not send the diff.' }
+  },
+  mergePull: (repo: string, n: number, method: PullMergeMethod) => invoke('pulls:merge', repo, n, method),
+  /** Which projects on the Mac hold which repos (`owner/repo`, lowercase → root). */
+  pullProjects: () => invoke('pulls:projects', knownRoots()),
+  /**
+   * A chat about a pull request, as the desktop's: its branch fetched into the
+   * project (a worktree of its own unless it is already checked out), and the
+   * New-chat screen opened there with the PR named in the draft.
+   */
+  chatOnPull: async (root: string, repo: string, n: number, headRef: string, intro: string) => {
+    const res = await invoke<PullCheckoutResult>('pulls:checkout', root, repo, n, headRef)
+    if (!res.ok) return res
+    patchDraft(newChatDraftKey(res.root), {
+      text: intro,
+      target: res.target.kind === 'local' ? undefined : res.target
+    })
+    const hash = `#/new/${encodeURIComponent(res.root)}?${new URLSearchParams({ pr: `${repo}#${n}` })}`
+    if (location.hash !== hash) location.replace(hash)
+    return { ok: true }
+  },
   /** Make a project folder on the Mac and start the new chat in it; answers the outcome. */
   createProject: async (parent: string, name: string, git: boolean) => {
     const made = await useRemote.getState().createProject(parent, name, git)

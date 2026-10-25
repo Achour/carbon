@@ -5494,6 +5494,30 @@ export class ChatManager {
     return saved
   }
 
+  /**
+   * Pause or resume a task and nothing else. The phone's switch: it may not
+   * save a whole task, whose folder and permission mode are its to name.
+   */
+  setScheduledTaskEnabled(id: string, enabled: boolean): ScheduledTask {
+    const task = this.store.schedules.list().find((t) => t.id === id)
+    if (!task) throw new Error('That scheduled task no longer exists.')
+    const { name, prompt, cwd, provider, schedule, permissionMode, model, effort, serviceTier, worktree } = task
+    return this.saveScheduledTask({
+      id,
+      name,
+      prompt,
+      cwd,
+      provider,
+      schedule,
+      permissionMode,
+      model,
+      effort,
+      serviceTier,
+      worktree,
+      enabled
+    })
+  }
+
   deleteScheduledTask(id: string): void {
     this.store.schedules.delete(id)
     this.onScheduleChanged()

@@ -364,6 +364,15 @@ The last explicitly chosen model/effort/permission-mode become the defaults for 
 
 **Writes are incremental.** `saveChatSoon` (1.5s trailing debounce, 5s cap) re-serializes only the rows that can have changed — appended-since-last-write, the tail, anything holding a live tool, and anything flagged via `markMessageDirty`. `saveChat` (turn boundaries) and a 30s floor run a reconcile against what the database actually holds; that pass never DELETEs rows it lacks in memory. The reconcile is **bounded** — it verifies the tail plus a rotating window (`RECONCILE_VERIFY_BYTES`) rather than re-serializing the whole chat, so a big chat cannot stall the main thread at every turn; the cursor covers everything over successive passes, and quit runs one thorough pass over `dirty` ∪ `unverified` — a chat leaves `dirty` after a bounded pass that may have skipped the very mutation the thorough pass exists to catch, so tracking it separately is what stops that mutation reverting on the next launch. Eviction writes a **thorough** pass for the same reason: it is the last moment the object is guaranteed reachable, and a chat that is only WeakRef-held can be collected before quit ever sees it. `flushAll` on quit writes only chats that were actually mutated.
 
+**Search reads a derived index, never `chats.db` itself.** A `LIKE` over the
+2.8 GB of message bodies took ~5 s on the main thread, nearly all of it tool
+output. `chatIndex.ts` keeps an FTS5 index of the conversation alone (prompts
+and text replies) in its own `search.db`, built and refreshed by
+`searchWorker.ts` on its own thread, which only reads `chats.db` (WAL). The
+first build is ~16 s off-thread for that corpus and ~45 MB; a query is ~1 ms.
+It is disposable: delete `search.db` and it is rebuilt. `chats:search` is the
+one entry (`ChatSearch`); tests in `test/chatIndex.test.ts`.
+
 Two safeguards for the shared-userData design: a per-chat advisory `locks` row (heartbeat, 30s staleness) so two instances never write one chat at once, and a `chats.rev` counter asserted inside the write transaction so an instance holding a view from before another's changes cannot overwrite them. A rolling `chats.db.bak` (`node:sqlite` `backup()`, refreshed when dirty and on quit) is the real backup; recovery goes damaged DB → backup → archive.
 
 The legacy `chats/<id>.json` files are imported once and then **never written, moved, or deleted** — so `rm chats.db` rolls back to the pre-migration corpus. They are an *archive, not a live backup*: they stop tracking reality the moment the migration lands. See `store.ts` for the corruption path (salvage the readable rows first, fall back to the archive only if nothing survives).

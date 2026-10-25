@@ -21,7 +21,7 @@ import { isNative, useNative } from './native'
  */
 type Route =
   | { name: 'chat'; id: string }
-  | { name: 'new'; cwd: string | null; worktree?: { path: string; branch: string } }
+  | { name: 'new'; cwd: string | null; worktree?: { path: string; branch: string }; pull?: string }
   | { name: 'usage' }
 
 function readRoute(): Route {
@@ -38,7 +38,10 @@ function readRoute(): Route {
   return {
     name: 'new',
     cwd: decodeURIComponent(fresh[1]),
-    worktree: path && branch ? { path, branch } : undefined
+    worktree: path && branch ? { path, branch } : undefined,
+    // A chat about a pull request (`chatOnPull`): its own screen, even over
+    // the same project's, so the draft it wrote is the one read.
+    pull: q.get('pr') ?? undefined
   }
 }
 
@@ -111,7 +114,7 @@ export function App(): React.JSX.Element {
       ? `c:${route.id}`
       : route.name === 'usage'
         ? 'usage'
-        : `n:${route.cwd ?? ''}:${route.worktree?.path ?? ''}`
+        : `n:${route.cwd ?? ''}:${route.worktree?.path ?? ''}:${route.pull ?? ''}`
   // Inside the iOS app the drawer, the header and the composer are native
   // (`native.ts`): the page is the screen alone, under them.
   if (isNative) {

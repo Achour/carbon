@@ -12,7 +12,9 @@ export default defineConfig({
     build: {
       rollupOptions: {
         input: {
-          index: resolve('src/main/index.ts')
+          index: resolve('src/main/index.ts'),
+          // The search index's thread (`chatSearch.ts`), loaded by path.
+          searchWorker: resolve('src/main/searchWorker.ts')
         }
       }
     }

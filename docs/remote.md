@@ -510,6 +510,17 @@ desktop's, which is the reason this is a shell and not a rewrite.
   to its parent (`delegation` on the slice). A delegate that is asking or
   working is also on the board and in "Needs you" (`isLiveDelegate`): its
   permission prompt would otherwise reach the phone nowhere.
+- **More of the Mac, each behind the narrowest channel that does it.**
+  Home's Needs you cards answer questions and plans in place (the app reuses
+  its in-chat `QuestionBody` / `PlanBody`; `respond` and `answerQuestions`
+  already take the chat's id). Scheduled tasks are listed, run now and
+  paused — `scheduled:set-enabled` exists so the phone never relays
+  `scheduled:save`, whose folder and permission mode are the Mac's to name;
+  save and delete stay off the allowlist. Pull requests come through the
+  desktop's own `pulls:*` channels; `pulls:checkout` writes only into a
+  `knownFolder` and `pulls:projects` reads only those, and a chat about a PR
+  is a draft on the New-chat screen (`chatOnPull`, `#/new/<root>?pr=`).
+  Sidebar search asks `chats:search` for what was said as well as titles.
 - **A new project starts from the phone too.** A phone has no folder
   picker that can see the Mac's disk, so the project menu's "New Project…"
   names a folder and puts it beside the Mac's other projects:

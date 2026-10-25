@@ -133,6 +133,25 @@ export const REMOTE_CHANNELS = new Set([
   // A new, empty project folder: a plain name, beside projects the Mac
   // already has (`knownParent`), never anywhere the phone names.
   'projects:create',
+  // Scheduled tasks: the list, a run now, and the pause switch. Not save or
+  // delete: a task names its own folder and permission mode, which are the
+  // Mac's to set.
+  'scheduled:list',
+  'scheduled:run',
+  'scheduled:set-enabled',
+  // Pull requests: the ones you wrote or review, their summary and diff, a
+  // merge, and the branch fetched for a chat. GitHub's own permissions stand
+  // behind each; the checkout writes only into a project the Mac knows, and
+  // the repo lookup reads only those (both checked below).
+  'pulls:list',
+  'pulls:detail',
+  'pulls:diff',
+  'pulls:merge',
+  'pulls:projects',
+  'pulls:checkout',
+  // Search: chat ids and a passage of what was said, from chats the phone
+  // already lists — the same conversation it can open.
+  'chats:search',
   // Model, effort, speed and permission mode — the composer's own pickers. A
   // cross-provider model only arms the switch, as on the desktop; it applies
   // at the next send (`applyPendingSwitch`).
@@ -1148,6 +1167,17 @@ export class RemoteAccess {
       return
     }
     if (FOLDER_SCOPED.has(channel) && !this.knownFolder(args[0])) {
+      json(res, 403, { error: 'Not a project Carbon knows' })
+      return
+    }
+    if (channel === 'pulls:checkout' && !this.knownFolder(args[0])) {
+      json(res, 403, { error: 'Not a project Carbon knows' })
+      return
+    }
+    if (
+      channel === 'pulls:projects' &&
+      !(Array.isArray(args[0]) && args[0].every((root) => this.knownFolder(root)))
+    ) {
       json(res, 403, { error: 'Not a project Carbon knows' })
       return
     }

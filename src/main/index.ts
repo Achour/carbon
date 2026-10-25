@@ -80,6 +80,7 @@ import * as githubOps from './github'
 import * as pullOps from './pulls'
 import * as projectOps from './projects'
 import { createProjectFolder } from './newProject'
+import { ChatSearch } from './chatSearch'
 import { setProjectIcon } from './projectIconPicker'
 import {
   clearProjectIcon,
@@ -134,6 +135,8 @@ let manager: ChatManager
 /** Turns to resume after a restart (`resumeTurns.ts`); fed from `emit`. */
 let resumeTurns: ResumeTurns | null = null
 let scheduler: Scheduler
+/** Full-text search over what was said in every chat (`chatIndex.ts`). */
+let chatSearch: ChatSearch | null = null
 let terminals: TerminalManager
 let chatTerminals: ChatTerminalManager
 let preview: PreviewManager
@@ -932,6 +935,9 @@ function registerIpc(): void {
   ipcMain.handle('scheduled:save', (_e, input: ScheduledTaskInput) => manager.saveScheduledTask(input))
   ipcMain.handle('scheduled:delete', (_e, id: string) => manager.deleteScheduledTask(id))
   ipcMain.handle('scheduled:run', (_e, id: string) => manager.runScheduledNow(id))
+  ipcMain.handle('scheduled:set-enabled', (_e, id: string, enabled: boolean) =>
+    manager.setScheduledTaskEnabled(id, enabled)
+  )
 
   ipcMain.handle('chats:set-archived', (_e, id: string, archived: boolean) => {
     const chat = store.getChat(id)
@@ -1332,6 +1338,9 @@ function registerIpc(): void {
     projectOps.projectsOverview(roots, refresh)
   )
   ipcMain.handle('projects:icons', (_e, roots: string[]) => projectOps.projectIcons(roots))
+  ipcMain.handle('chats:search', (_e, query: string, limit?: number) =>
+    chatSearch ? chatSearch.search(query, limit) : { hits: [], complete: false }
+  )
   ipcMain.handle('projects:create', async (_e, parent: string, name: string, git: boolean) => {
     const made = await createProjectFolder(parent, name)
     if (!made.ok) return made
@@ -1413,6 +1422,14 @@ app.whenReady().then(() => {
     // instance owns the chat.
     onLockDenied: (chatId) => emit({ type: 'chat-locked', chatId })
   })
+  // Its own thread and its own file; the worker waits for launch to settle
+  // before its first build.
+  chatSearch = new ChatSearch(
+    join(__dirname, 'searchWorker.js'),
+    join(app.getPath('userData'), 'chats.db'),
+    join(app.getPath('userData'), 'search.db')
+  )
+  chatSearch.start()
   // Right after the store and before any manager, because `emit` feeds it:
   // it keeps the statuses and open prompts a phone needs on connect.
   remote = new RemoteAccess({

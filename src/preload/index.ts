@@ -176,6 +176,7 @@ const api: Api = {
     invoke('projects:overview', roots, refresh),
   projectIcons: (roots: string[]) => invoke('projects:icons', roots),
   createProject: (parent: string, name: string, git: boolean) => invoke('projects:create', parent, name, git),
+  searchChats: (query: string, limit?: number) => invoke('chats:search', query, limit),
   projectDetail: (root: string) => invoke('projects:detail', root),
   setProjectIcon: (root: string, source?: string) => invoke('projects:set-icon', root, source),
   clearProjectIcon: (root: string, mode: 'initials' | 'auto') =>
@@ -230,6 +231,7 @@ const api: Api = {
   saveScheduledTask: (input: ScheduledTaskInput) => invoke('scheduled:save', input),
   deleteScheduledTask: (id: string) => invoke('scheduled:delete', id),
   runScheduledTask: (id: string) => invoke('scheduled:run', id),
+  setScheduledTaskEnabled: (id: string, enabled: boolean) => invoke('scheduled:set-enabled', id, enabled),
   onScheduledTasksChanged: (cb: (tasks: ScheduledTask[]) => void) => {
     const listener = (_e: Electron.IpcRendererEvent, tasks: ScheduledTask[]): void => cb(tasks)
     ipcRenderer.on('scheduled:changed', listener)

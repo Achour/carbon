@@ -1549,6 +1549,20 @@ export interface RemoteAccessPatch {
 }
 
 /** What a phone gets on connect: enough to draw the chat list and any prompt. */
+/** One chat's best match for a search (`main/chatIndex.ts`). */
+export interface ChatSearchHit {
+  chatId: string
+  seq: number
+  role: 'user' | 'assistant'
+  /** The passage, each match wrapped in U+0002 … U+0003. */
+  snippet: string
+}
+
+export interface ChatSearchResult {
+  hits: ChatSearchHit[]
+  complete: boolean
+}
+
 export interface RemoteSnapshot {
   hostname: string
   /** The Mac's home folder, so a detailed sidebar row can write a path as `~/…`. */
@@ -3213,6 +3227,12 @@ export interface Api {
    * repository) and add it to the recent projects. The phone's way to start
    * a project: it has no folder picker (`main/newProject.ts`).
    */
+  /**
+   * Chats whose conversation (prompts and replies, not tool output) matches
+   * every word, best first, one passage each (`main/chatIndex.ts`).
+   * `complete` is false while the index is still being built.
+   */
+  searchChats(query: string, limit?: number): Promise<ChatSearchResult>
   createProject(
     parent: string,
     name: string,
@@ -3331,6 +3351,8 @@ export interface Api {
   deleteScheduledTask(id: string): Promise<void>
   /** Run it now, off schedule. The next scheduled run is unaffected. */
   runScheduledTask(id: string): Promise<{ ok: true; chatId: string } | { ok: false; error: string }>
+  /** Pause or resume a task, changing nothing else about it. */
+  setScheduledTaskEnabled(id: string, enabled: boolean): Promise<ScheduledTask>
   /** The task list moved — a run fired, or an agent created or changed one. */
   onScheduledTasksChanged(cb: (tasks: ScheduledTask[]) => void): () => void
   /** The running build's version, for the settings/about line. */
