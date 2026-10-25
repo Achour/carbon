@@ -46,6 +46,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { DotSpinner } from '@/components/ui/dot-spinner'
 import { WithTooltip } from '@/components/ui/tooltip'
+import { PageHeader } from '@/components/PageHeader'
 import { CompactSelect } from '@/components/ui/select'
 import { SwitchPill } from '@/components/ui/switch-pill'
 import { ProjectAvatar } from '@/components/ui/project-avatar'
@@ -173,9 +174,7 @@ export function Scheduled(): React.JSX.Element {
 
   return (
     <div className="flex min-w-0 flex-1 flex-col bg-background">
-      <header className="drag flex h-[38px] shrink-0 items-center justify-between gap-3 border-b border-border px-4">
-        <span className="text-sm font-semibold">Scheduled</span>
-        <div className="flex items-center gap-1">
+      <PageHeader title="Scheduled">
           <Button
             size="sm"
             variant="ghost"
@@ -190,8 +189,7 @@ export function Scheduled(): React.JSX.Element {
               <X />
             </Button>
           </WithTooltip>
-        </div>
-      </header>
+      </PageHeader>
 
       {tasks.length === 0 && mode.kind === 'view' ? (
         <EmptyState onNew={() => setMode({ kind: 'new' })} />

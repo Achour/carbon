@@ -135,6 +135,23 @@ What remains is the part that was never about scaling:
   same 13px as a row in either tree, so the same file is the same size wherever
   it is named.
 
+### The window's left edge, and Settings as a dialog (`PageHeader`, `Settings`)
+
+With the sidebar collapsed, the content pane's left edge is the window's, where
+macOS draws the traffic lights. A chat's header and the new-chat screen always
+stepped in past them (`pl-[84px]`) and offered the sidebar back; the full-window
+pages drew their own bars with a plain `px-4`, so Usage, Pull requests and
+Scheduled all put their title under the window's buttons. They now share
+`PageHeader`, which does what the chat header does.
+
+Settings went further and stopped being a page. It is a dialog over whatever
+the window shows: somewhere you go for a moment and come back from, with the
+chat still behind it, and with no edge of its own to collide with the window's
+chrome. So opening it no longer closes the page underneath (`openSettings`), and
+Escape belongs to the dialog rather than a window listener, which closes only
+the topmost layer: a confirm opened from a section is dismissed without taking
+Settings with it.
+
 ### File icons (`lib/fileIcon.tsx`)
 
 One filename → icon map behind every place the app names a file: the tree,

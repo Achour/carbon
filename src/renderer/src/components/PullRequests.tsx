@@ -45,6 +45,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { DotSpinner } from '@/components/ui/dot-spinner'
 import { WithTooltip } from '@/components/ui/tooltip'
+import { PageHeader } from '@/components/PageHeader'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
   DropdownMenu,
@@ -1256,9 +1257,7 @@ export function PullRequests(): React.JSX.Element {
 
   return (
     <div className="flex min-w-0 flex-1 flex-col bg-background">
-      <header className="drag flex h-[38px] shrink-0 items-center justify-between gap-3 border-b border-border px-4">
-        <span className="text-sm font-semibold">Pull requests</span>
-        <div className="flex items-center gap-1">
+      <PageHeader title="Pull requests">
           <WithTooltip label="Refresh">
             <Button
               size="icon-sm"
@@ -1282,8 +1281,7 @@ export function PullRequests(): React.JSX.Element {
               <X />
             </Button>
           </WithTooltip>
-        </div>
-      </header>
+      </PageHeader>
 
       {!list ? (
         <div className="flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">

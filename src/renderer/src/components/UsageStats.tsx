@@ -25,6 +25,7 @@ import {
 import { useApp } from '@/store'
 import { Button } from '@/components/ui/button'
 import { WithTooltip } from '@/components/ui/tooltip'
+import { PageHeader } from '@/components/PageHeader'
 import { ProjectAvatar } from '@/components/ui/project-avatar'
 
 /**
@@ -959,14 +960,13 @@ export function UsageStats(): React.JSX.Element {
 
   return (
     <div className="flex min-w-0 flex-1 flex-col bg-background">
-      <header className="drag flex h-[38px] shrink-0 items-center justify-between gap-3 border-b border-border px-4">
-        <span className="text-sm font-semibold">Usage</span>
+      <PageHeader title="Usage">
         <WithTooltip label="Close usage  esc">
           <Button size="icon-sm" variant="ghost" className="no-drag" aria-label="Close usage" onClick={closeUsage}>
             <X />
           </Button>
         </WithTooltip>
-      </header>
+      </PageHeader>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         {!report ? (

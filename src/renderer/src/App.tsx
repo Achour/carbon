@@ -146,14 +146,13 @@ export default function App(): React.JSX.Element {
   // mount. Also what makes the outgoing folder's draft flush before the next
   // one is read.
   const homeCwd = useApp((s) => s.selectedCwd)
-  const settingsOpen = useApp((s) => s.settingsOpen)
   const usageOpen = useApp((s) => s.usageOpen)
   const pullsOpen = useApp((s) => s.pullsOpen)
   const scheduledOpen = useApp((s) => s.scheduledOpen)
   const panelFullscreen = useApp((s) => s.panelOpen && s.panelMaximized)
   // Both are full-window pages that stand in for the chat, and both hide the
   // right panel — a diff or file tab belongs to a chat, and neither page has one.
-  const pageOpen = settingsOpen || usageOpen || pullsOpen || scheduledOpen
+  const pageOpen = usageOpen || pullsOpen || scheduledOpen
 
   return (
     <TooltipProvider delay={500}>
@@ -168,9 +167,7 @@ export default function App(): React.JSX.Element {
           {/* `relative` and clipped: a floating panel is positioned against this
               pane and slides out past its right edge when it closes. */}
           <div data-content className="relative flex min-w-0 flex-1 overflow-hidden bg-background">
-            {settingsOpen ? (
-              <Settings />
-            ) : usageOpen ? (
+            {usageOpen ? (
               <UsageStats />
             ) : pullsOpen ? (
               <PullRequests />
@@ -190,6 +187,7 @@ export default function App(): React.JSX.Element {
         </ErrorBoundary>
       </div>
       <FileSearchDialog />
+      <Settings />
       {/* Global rather than inside GitPanel: the publish rung is reachable from
           the review dock, which can be closed by the time the dialog opens. */}
       <PublishDialog />

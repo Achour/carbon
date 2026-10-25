@@ -77,6 +77,7 @@ import {
   type ServiceTier
 } from '@shared/types'
 import { CompactSelect } from '@/components/ui/select'
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { availableProviders } from '@/lib/modelCatalog'
 import {
   assembleModelOptions,
@@ -1472,7 +1473,33 @@ function SoundPicker({
   )
 }
 
+/**
+ * Settings, as a dialog over whatever the window is showing.
+ *
+ * It was a full-window page in the content pane first, and that put its title
+ * bar where the traffic lights are the moment the sidebar was collapsed, the
+ * pane's left edge then being the window's. A dialog has no such edge, and it
+ * fits what Settings is: somewhere you go for a moment and come back from, with
+ * the chat you were in still behind it. Opening it therefore no longer closes
+ * the Usage, Pull requests or Scheduled page underneath (`openSettings`).
+ *
+ * Escape is the dialog's, not a window listener: Base UI closes only the
+ * topmost layer, so a confirm opened from a section (a theme import, a project
+ * removal) is dismissed without taking Settings with it.
+ */
 export function Settings(): React.JSX.Element {
+  const open = useApp((s) => s.settingsOpen)
+  const closeSettings = useApp((s) => s.closeSettings)
+  return (
+    <Dialog open={open} onOpenChange={(next) => !next && closeSettings()}>
+      <DialogContent className="flex h-[min(800px,calc(100vh-80px))] w-[min(1120px,calc(100vw-80px))] max-w-none flex-col overflow-hidden rounded-2xl bg-background p-0">
+        <SettingsBody />
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function SettingsBody(): React.JSX.Element {
   const theme = useApp((s) => s.theme)
   const setTheme = useApp((s) => s.setTheme)
   const themeMode = useApp((s) => s.themeMode)
@@ -1505,23 +1532,14 @@ export function Settings(): React.JSX.Element {
   const setSection = useApp((s) => s.setSettingsSection)
   const section = settingsSection ?? 'appearance'
 
-  React.useEffect(() => {
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') closeSettings()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [closeSettings])
-
   return (
-    <div className="flex min-w-0 flex-1 flex-col bg-background">
-      <header className="drag flex h-[38px] shrink-0 items-center justify-between border-b border-border px-4">
-        <span className="text-sm font-semibold">Settings</span>
+    <>
+      <header className="flex h-12 shrink-0 items-center justify-between border-b border-border pr-3 pl-5">
+        <DialogTitle className="text-sm font-semibold">Settings</DialogTitle>
         <WithTooltip label="Close settings  esc">
           <Button
             size="icon-sm"
             variant="ghost"
-            className="no-drag"
             aria-label="Close settings"
             onClick={closeSettings}
           >
@@ -1777,6 +1795,6 @@ export function Settings(): React.JSX.Element {
           </div>
         )}
       </div>
-    </div>
+    </>
   )
 }

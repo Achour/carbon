@@ -1051,8 +1051,9 @@ interface AppState {
 
   // ---- Usage page ----
   /**
-   * When true the main area shows the usage page. Mutually exclusive with
-   * `settingsOpen` — both are full-window pages that replace the chat.
+   * When true the main area shows the usage page. Mutually exclusive with the
+   * Pull requests and Scheduled pages — full-window pages that replace the
+   * chat. Settings is a dialog and opens over any of them.
    */
   usageOpen: boolean
   /** Window the page is showing, in days (see `USAGE_RANGES`). */
@@ -1066,8 +1067,8 @@ interface AppState {
 
   // ---- Pull requests page ----
   /**
-   * When true the main area shows the Pull requests page — the third
-   * full-window page, exclusive with `usageOpen` and `settingsOpen`. Its data
+   * When true the main area shows the Pull requests page — a full-window
+   * page, exclusive with `usageOpen` and `scheduledOpen`. Its data
    * is the page's own (`components/PullRequests.tsx`): nothing else reads it.
    */
   pullsOpen: boolean
@@ -1088,7 +1089,7 @@ interface AppState {
   setScheduledTasks(tasks: ScheduledTask[]): void
 
   // ---- Settings ----
-  /** When true the main area shows the settings page instead of a chat. */
+  /** When true the Settings dialog is open over whatever the window shows. */
   settingsOpen: boolean
   /**
    * Which settings section to show when the page opens. It is *state* rather
@@ -2836,13 +2837,8 @@ export const useApp = create<AppState>((set, get) => ({
     // A section is only *offered* when one was named: reopening Settings with
     // no argument must land where the user last was, which is the page's own
     // business, not this call's.
-    set({
-      settingsOpen: true,
-      usageOpen: false,
-      pullsOpen: false,
-      scheduledOpen: false,
-      ...(section ? { settingsSection: section } : {})
-    })
+    // A dialog over the window, so whatever page is under it stays.
+    set({ settingsOpen: true, ...(section ? { settingsSection: section } : {}) })
   },
 
   setSettingsSection(section) {
