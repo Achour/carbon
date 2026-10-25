@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process'
 import { readFile, stat } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
+import { DEFAULT_BRANCHES } from '../shared/types.ts'
 import type {
   BranchChanges,
   BranchRef,
@@ -124,8 +125,6 @@ async function untrackedLineCounts(cwd: string, paths: string[]): Promise<Map<st
   }
   return counts
 }
-
-const DEFAULT_BRANCHES = ['main', 'master']
 
 /**
  * The repo's default branch, or null when it has neither `main` nor `master`.

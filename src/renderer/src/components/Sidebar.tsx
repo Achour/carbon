@@ -8,7 +8,7 @@ import {
   ChevronDown,
   ChevronRight,
   EyeOff,
-  Folder,
+  FolderCog,
   FolderGit2,
   FolderOpen,
   FolderPlus,
@@ -32,7 +32,7 @@ import {
   X
 } from 'lucide-react'
 import type { ChatMeta } from '@shared/types'
-import { PROVIDER_LABELS, projectRoot } from '@shared/types'
+import { DEFAULT_BRANCHES, PROVIDER_LABELS, projectRoot } from '@shared/types'
 import { projectGroups, projectLabel as labelOf } from '@/lib/projects'
 import { ProjectAvatar } from '@/components/ui/project-avatar'
 import { ProviderMark, PROVIDER_COLOR } from '@/components/ui/provider-mark'
@@ -86,18 +86,16 @@ import { Kbd } from '@/components/ui/kbd'
 import { WithTooltip } from '@/components/ui/tooltip'
 
 /**
- * The line a detailed row carries under its title — what makes the row stand on
- * its own without a project heading above it.
+ * What a detailed row adds to its project's name: the branch, when it is one
+ * worth reading.
  *
- * In a repo that is the project and the branch, because the branch is the thing
- * that differs between two chats that otherwise look identical (same project,
- * same title stem, one on a worktree branch and one on main). Outside a repo it
- * is just the folder path: the project name is the last segment of it, so
- * printing both would say the same word twice.
+ * The branch is what tells apart two chats that otherwise look identical (same
+ * project, same title stem, one on a worktree branch and one on main). On the
+ * mainline it tells nothing, and printed on every row it was a whole line of
+ * "main" down the list, so `branch` is null there and outside a repo.
  */
 interface ChatDetail {
-  kind: 'branch' | 'path'
-  text: string
+  branch: string | null
 }
 
 /**
@@ -193,7 +191,7 @@ const sameActivity = (a: ChatActivity, b: ChatActivity): boolean =>
   (a.kind === 'background' ? a.count : 0) === (b.kind === 'background' ? b.count : 0)
 
 const sameDetail = (a: ChatDetail | null, b: ChatDetail | null): boolean =>
-  a === b || (!!a && !!b && a.kind === b.kind && a.text === b.text)
+  a === b || (!!a && !!b && a.branch === b.branch)
 
 /**
  * A project's mark, as a row needs it — everything to draw one, nothing to
@@ -446,17 +444,15 @@ function ChatItemRow({
         }
       >
       {detail ? (
-        // **Three lines, and the title is the headline.** Every arrangement
+        // **Two lines, and the title is the headline.** Every arrangement
         // before this one led with the title and hung the row's facts off it,
         // which meant the title shared its line with a timestamp — and on a
         // 264px sidebar that is a third of the only thing the row is for. Here
         // the context comes *first*, small and muted: whose project this is,
-        // and when. The title then gets a line to itself, at full width and a
-        // step brighter than everything around it, so it reads as the headline
-        // of the row rather than its first field. Where the work happens —
-        // branch or folder — closes it, with the row's marks right-aligned
-        // beside it. No column of avatars either: the mark rides the context
-        // line, which is what leaves the title the whole row.
+        // on which branch when that is not the mainline, and when. The title
+        // then gets the next line, a step brighter than everything around it,
+        // with the row's marks at its end. It was three lines once, the branch
+        // closing the row, and on most rows that line said "main".
         <button
           type="button"
           onClick={onOpen}
@@ -476,25 +472,22 @@ function ChatItemRow({
                 !active && 'opacity-85 group-hover:opacity-100'
               )}
             />
-            <span className="min-w-0 truncate">{mark.name}</span>
+            <span className="max-w-[55%] min-w-0 shrink-0 truncate">{mark.name}</span>
+            {detail.branch && (
+              <span className="flex min-w-0 items-center gap-1 text-muted-foreground/60">
+                <GitBranch className="size-3 shrink-0" />
+                <span className="min-w-0 truncate">{detail.branch}</span>
+              </span>
+            )}
             {pinned && <PinMark active={active} />}
             <span className="ml-auto pl-2">{trailing}</span>
           </span>
-          <span className={detailTitleClass}>{chat.title || 'New chat'}</span>
-          <span className="flex min-w-0 items-center gap-1.5 text-[11px] leading-tight text-muted-foreground/55">
-            <span className="flex min-w-0 items-center gap-1">
-              {detail.kind === 'branch' ? (
-                <GitBranch className="size-3 shrink-0" />
-              ) : (
-                <Folder className="size-3 shrink-0" />
-              )}
-              <span className="min-w-0 truncate">{detail.text}</span>
-            </span>
-            {/* Pushed to the right edge rather than trailing the branch, so
-                they form a column instead of landing at a different x on every
-                row. `ml-auto` and not a spacer: with all three absent the
-                cluster takes no space at all. */}
-            <span className="ml-auto flex shrink-0 items-center gap-2 pl-2">
+          <span className="flex min-w-0 items-center gap-2">
+            <span className={cn(detailTitleClass, 'flex-1')}>{chat.title || 'New chat'}</span>
+            {/* At the title's end rather than after it, so they form a column
+                instead of landing at a different x on every row. With all
+                three absent the cluster takes no space at all. */}
+            <span className="flex shrink-0 items-center gap-2 empty:hidden">
               {/* A chat you cannot type into has to be recognizable before you
                   open it, and the mark beside it is the provider's once a CLI
                   session has been found. */}
@@ -1151,35 +1144,32 @@ function DraftItem({
       <button
         type="button"
         onClick={onOpen}
-        className="flex w-full min-w-0 items-start gap-2 py-1.5 pr-7 pl-2 text-left outline-none"
+        className="flex w-full min-w-0 flex-col gap-1 px-2 py-2 text-left outline-none"
       >
-        {/* Laid out as a chat row is, because it sits directly above them: the
-            project takes the avatar column, and the mark that says what *kind*
-            of row this is goes to the end of the second line, where a chat row
-            keeps its provider. */}
-        <ProjectAvatar
-          size="md"
-          root={mark.root}
-          name={mark.name}
-          icon={mark.icon}
-          className="mt-px size-7 rounded-[9px] text-[11px]"
-        />
-        <span className="flex min-w-0 flex-1 flex-col gap-px">
-          <span className="min-w-0 truncate text-[13px] text-sidebar-foreground/55 transition-colors group-hover:text-sidebar-foreground/90">
-            {/* Attachments with no text are still a draft worth coming back to,
-                and there is nothing to quote for them. */}
-            {draftSummary(draft.text) || 'Attachment'}
-          </span>
-          {(
-            <span className="flex min-w-0 items-center gap-1.5 text-[11px] leading-tight text-muted-foreground/65">
-              <span className="min-w-0 truncate">{mark.name}</span>
-              <WithTooltip label="Unsent draft">
-                <span className="ml-auto flex shrink-0 items-center pl-2">
-                  <PencilLine className="size-3" />
-                </span>
-              </WithTooltip>
+        {/* Laid out as a detailed chat row is, because it sits directly above
+            them: the project's mark and name on the small context line, at the
+            size theirs are, and the text as the headline. The pencil that says
+            what *kind* of row this is takes the corner where a chat row keeps
+            its time. */}
+        <span className="flex min-w-0 items-center gap-1.5 pr-5 text-[11px] leading-tight text-muted-foreground/70">
+          <ProjectAvatar
+            size="sm"
+            root={mark.root}
+            name={mark.name}
+            icon={mark.icon}
+            className="size-[18px] rounded-[6px] opacity-85 transition-opacity group-hover:opacity-100"
+          />
+          <span className="min-w-0 truncate">{mark.name}</span>
+          <WithTooltip label="Unsent draft">
+            <span className="ml-auto flex shrink-0 items-center pl-2 transition-opacity group-hover:opacity-0">
+              <PencilLine className="size-3" />
             </span>
-          )}
+          </WithTooltip>
+        </span>
+        <span className="min-w-0 truncate text-[13px] text-sidebar-foreground/70 transition-colors group-hover:text-sidebar-foreground/90">
+          {/* Attachments with no text are still a draft worth coming back to,
+              and there is nothing to quote for them. */}
+          {draftSummary(draft.text) || 'Attachment'}
         </span>
       </button>
       {/* No confirm, like the queued-message ✕ in ChatView: one unsent line, and
@@ -1307,8 +1297,8 @@ export function Sidebar(): React.JSX.Element {
     // A worktree carries its branch on the chat itself, so those rows are
     // labelled before any git read lands.
     const branch = chat.worktree?.branch ?? chatBranches[chat.cwd]
-    if (!branch) return { kind: 'path', text: shortenPath(chat.cwd, window.api.home) }
-    return { kind: 'branch', text: branch }
+    if (!branch || (!chat.worktree && (DEFAULT_BRANCHES as readonly string[]).includes(branch))) return { branch: null }
+    return { branch }
   }
 
   const markFor = (root: string): ProjectMark => ({
@@ -2084,10 +2074,12 @@ export function Sidebar(): React.JSX.Element {
               aria-label="Manage projects"
               className="shrink-0 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
             >
-              {/* A gear, not sliders: sliders beside a filter read as "filter
-                  options", and this is the settings page. The footer's gear
-                  opens the same page's siblings — same verb, same glyph. */}
-              <Settings className="size-4" />
+              {/* A folder's gear, not sliders: sliders beside a filter read as
+                  "filter options", and this is a settings page. Not the bare
+                  gear either: the footer's opens Settings itself, and two
+                  identical glyphs in one sidebar read as one button twice.
+                  The folder pairs it with Add project beside it. */}
+              <FolderCog className="size-4" />
             </button>
           </WithTooltip>
         </div>

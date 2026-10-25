@@ -1565,7 +1565,10 @@ export function Settings(): React.JSX.Element {
           <ProvidersSection />
         ) : (
           <div className="min-h-0 flex-1 overflow-y-auto">
-            <div className="mx-auto w-full max-w-2xl px-8 py-8">
+            {/* Against the nav, not centred in what is left of the window:
+                centred, a wide window opened a gap between the section list
+                and its page wider than the page's own margins. */}
+            <div className="w-full max-w-2xl px-10 py-8">
               {section === 'appearance' && (
                 <section>
                   <SectionHeader

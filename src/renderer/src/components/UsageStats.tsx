@@ -889,6 +889,59 @@ function daysBetween(a: string, b: string): number {
 // ---------- Page ----------
 
 /** The desktop's Usage page: its header, and the shared view under it. */
+/**
+ * The page's own outline while the first scan runs: headline, composition bar,
+ * columns and the breakdown's rows, in their places and at their sizes. The
+ * scan reads every session log and can take seconds, and a spinner alone on an
+ * empty page reads as nothing happening; this says what is coming and leaves
+ * nothing to jump when it lands. Bar heights are fixed rather than random so
+ * the outline is the same each time it shows.
+ */
+const SKELETON_BARS = [38, 52, 30, 64, 46, 72, 58, 24, 66, 80, 54, 42, 70, 60]
+
+function UsageSkeleton(): React.JSX.Element {
+  const block = 'animate-pulse-soft rounded-md bg-secondary'
+  return (
+    <div aria-busy="true" className="mx-auto max-w-4xl space-y-9 px-6 pt-6 pb-8">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <span className="flex items-center gap-2 text-[13px] text-muted-foreground">
+          <DotSpinner className="size-3.5" />
+          Reading session logs…
+        </span>
+        <div className="flex items-center gap-1.5">
+          <div className={cn(block, 'h-8 w-36 rounded-lg')} />
+          <div className={cn(block, 'h-8 w-52 rounded-lg')} />
+        </div>
+      </div>
+      <section>
+        <div className={cn(block, 'h-10 w-44')} />
+        <div className={cn(block, 'mt-3 h-3 w-96 max-w-full')} />
+        <div className={cn(block, 'mt-5 h-2 rounded-full')} />
+      </section>
+      <section>
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <div className={cn(block, 'h-4 w-28')} />
+          <div className={cn(block, 'h-8 w-48 rounded-lg')} />
+        </div>
+        <div className="flex items-end gap-2 pl-12" style={{ height: CHART_H }}>
+          {SKELETON_BARS.map((h, i) => (
+            <div key={i} className={cn(block, 'flex-1 rounded-sm')} style={{ height: `${h}%` }} />
+          ))}
+        </div>
+      </section>
+      <section className="space-y-3">
+        {[64, 48, 56, 40].map((w, i) => (
+          <div key={i} className="flex items-center gap-3">
+            <div className={cn(block, 'size-5')} />
+            <div className={cn(block, 'h-3.5')} style={{ width: `${w}%` }} />
+            <div className={cn(block, 'ml-auto h-3.5 w-16')} />
+          </div>
+        ))}
+      </section>
+    </div>
+  )
+}
+
 export function UsageStats(): React.JSX.Element {
   const report = useApp((s) => s.usageReport)
   const loading = useApp((s) => s.usageReportLoading)
@@ -917,10 +970,7 @@ export function UsageStats(): React.JSX.Element {
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         {!report ? (
-          <div className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground">
-            <DotSpinner className="size-4" />
-            Reading session logs…
-          </div>
+          <UsageSkeleton />
         ) : (
           <UsageLookupContext.Provider value={lookup}>
             <UsageReportView

@@ -1,17 +1,6 @@
 import * as React from 'react'
 import { DotSpinner } from '@/components/ui/dot-spinner'
-import {
-  FileDiff,
-  Folder,
-  FolderOpen,
-  FolderTree,
-  GitBranch,
-  Globe,
-  PanelLeft,
-  PanelRight,
-  Shapes,
-  SquareTerminal
-} from 'lucide-react'
+import { FolderOpen, PanelLeft, PanelRight, SquareTerminal } from 'lucide-react'
 import { cn, contextPillButton } from '@/lib/utils'
 import { createsWorktree, providerForRememberedModel } from '@shared/types'
 import type {
@@ -32,39 +21,7 @@ import { Composer } from '@/components/Composer'
 import { CodexReviewMenu } from '@/components/CodexReviewDialog'
 import { ContextStrip } from '@/components/ContextStrip'
 import { WorktreePicker } from '@/components/WorktreePicker'
-
-/** One row in the home-screen quick-launch rail. */
-function RailAction({
-  icon,
-  label,
-  onClick,
-  disabled = false,
-  children
-}: {
-  icon: React.ReactNode
-  label: string
-  onClick: () => void
-  disabled?: boolean
-  children?: React.ReactNode
-}): React.JSX.Element {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className={cn(
-        'flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-[13px] transition-colors [&_svg]:size-4',
-        disabled
-          ? 'cursor-default text-muted-foreground/40'
-          : 'text-foreground hover:bg-accent'
-      )}
-    >
-      <span className={cn('shrink-0', !disabled && 'text-muted-foreground')}>{icon}</span>
-      <span className="whitespace-nowrap">{label}</span>
-      {children}
-    </button>
-  )
-}
+import { PanelLaunchList } from '@/components/PanelActions'
 
 /**
  * Opens a terminal chat in the selected folder (and worktree), at once. A
@@ -99,10 +56,6 @@ export function NewChat(): React.JSX.Element {
   const newChat = useApp((s) => s.newChat)
   const togglePanel = useApp((s) => s.togglePanel)
   const reviewChanges = useApp((s) => s.reviewChanges)
-  const browseFiles = useApp((s) => s.browseFiles)
-  const openTerminal = useApp((s) => s.openTerminal)
-  const openPreview = useApp((s) => s.openPreview)
-  const openCanvas = useApp((s) => s.openCanvas)
   const panelOpen = useApp((s) => s.panelOpen)
   const sidebarOpen = useApp((s) => s.sidebarOpen)
   const toggleSidebar = useApp((s) => s.toggleSidebar)
@@ -266,7 +219,6 @@ export function NewChat(): React.JSX.Element {
   ])
 
   // The rail shows its own compact changes affordance, separate from the strip.
-  const hasChanges = !!git?.isRepo && git.changes.length > 0
 
   const browse = async (): Promise<void> => {
     const dir = await window.api.pickDirectory()
@@ -451,49 +403,14 @@ export function NewChat(): React.JSX.Element {
           </div>
         </div>
 
-        {/* Quick-launch rail, Cursor/Codex-style — only when width allows and no
-            panel is open (the panel provides the same tools once it's up). */}
+        {/* Quick-launch rail — only when width allows and no panel is open: the
+            empty panel draws this same list once it's up. */}
         {cwd && !panelOpen && (
           <aside
             data-quick-rail
-            className="hidden w-64 shrink-0 flex-col gap-0.5 overflow-y-auto p-3 @min-[62rem]:flex"
+            className="hidden w-64 shrink-0 flex-col overflow-y-auto p-3 @min-[62rem]:flex"
           >
-            <WithTooltip label={cwd}>
-              <div className="mb-2 flex items-center gap-1.5 px-2 text-xs text-muted-foreground/70">
-                <Folder className="size-3 shrink-0" />
-                <span className="truncate">{basename(cwd)}</span>
-                {git?.isRepo && git.branch && (
-                  <>
-                    <span className="text-border">/</span>
-                    <GitBranch className="size-3 shrink-0" />
-                    <span className="truncate">{git.branch}</span>
-                  </>
-                )}
-              </div>
-            </WithTooltip>
-            <RailAction
-              icon={<FileDiff />}
-              label="Review changes"
-              onClick={() => void reviewChanges()}
-              disabled={!hasChanges}
-            >
-              {hasChanges && (
-                <span className="ml-auto flex shrink-0 items-center gap-1 pl-2 text-[11px] whitespace-nowrap tabular-nums">
-                  {git!.additions === 0 && git!.deletions === 0 ? (
-                    <span className="text-muted-foreground">{git!.changes.length}</span>
-                  ) : (
-                    <>
-                      <span className="text-success">+{git!.additions}</span>
-                      <span className="text-destructive">−{git!.deletions}</span>
-                    </>
-                  )}
-                </span>
-              )}
-            </RailAction>
-            <RailAction icon={<FolderTree />} label="Files" onClick={browseFiles} />
-            <RailAction icon={<Shapes />} label="Canvas" onClick={() => void openCanvas(null)} />
-            <RailAction icon={<SquareTerminal />} label="Terminal" onClick={() => openTerminal()} />
-            <RailAction icon={<Globe />} label="Browser preview" onClick={() => openPreview()} />
+            <PanelLaunchList />
           </aside>
         )}
       </div>

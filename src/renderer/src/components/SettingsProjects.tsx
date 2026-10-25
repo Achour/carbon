@@ -480,7 +480,7 @@ function ProjectDetailPane({
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
-      <div className="mx-auto w-full max-w-4xl px-8 py-7">
+      <div className="w-full max-w-4xl px-10 py-7">
         <header className="flex items-start gap-3.5">
           {/* The mark is the control for itself. A menu item alone would be
               correct and unfindable — the icon is the thing you want to change

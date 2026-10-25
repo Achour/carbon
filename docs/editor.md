@@ -238,6 +238,20 @@ the seam and nothing else.
   drawing). It is also the *last* fallback in `RightPanel`'s `current` chain:
   standing alone in the strip it must draw the tree, not the launcher's
   "nothing is open".
+- **The launcher is one list, drawn in three places** (`PanelActions.tsx`).
+  The new-chat rail, the empty panel and the strip's "+" each kept their own
+  copy of the same five actions. The empty panel drew them as a grid of large
+  tiles, in another order and under shorter names ("Changes", "Browser"), so
+  opening the panel from the new-chat screen replaced the rail's list with that
+  grid. `usePanelActions` now holds the order and the names. "Review changes"
+  is disabled on a clean tree everywhere, including the "+", which used to
+  offer it regardless. It carries no +/− count: the context strip's diff chip
+  says that, and it is on screen beside every place this list is drawn. `PanelLaunchList` is the
+  rail and the empty panel's shared block: project and branch, an "Open a file…"
+  row that opens the ⌘P dialog rather than adding another file search, then the
+  actions. Terminal shows its ⌘J hint only while no terminal exists, because
+  ⌘J is `toggleTerminal`, which opens one only then, while the row always opens
+  a new one.
 - **A tab moves only within its own kind.** Files, canvases, terminals and
   previews each keep their own array and the strip draws them in that fixed
   sequence, so a drop on another kind is a no-op rather than a jump to the

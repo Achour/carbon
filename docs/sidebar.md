@@ -37,9 +37,9 @@ other:
 
 - **Compact** — one line per chat, **grouped by project**, collapsible, ordered
   by the user's saved project order.
-- **Detailed** — three lines: the project and the time, then the title as the
-  row's headline, then the branch (or the folder path, outside a repo) with the
-  row's marks — in one **flat list, in the user's order**. Grouping by project
+- **Detailed** — two lines: the project (and its branch, when that is not
+  `main`/`master`) with the time, then the title as the row's headline with the
+  row's marks at its end — in one **flat list, in the user's order**. Grouping by project
   here would print the same folder, and in a repo where nothing is isolated the
   same branch, once per row. It used to be bucketed by date ("Yesterday",
   "Previous 30 days"); the buckets went when the order became hand-made, since a
@@ -109,9 +109,11 @@ icon** at their size, not a tile: that state is a state of the *control*, not a
 project with a mark of its own. A chosen project brings its own tile into the
 same 16px box, which is the point of the column and shifts nothing. Two buttons ride its right edge, because
 they are two different verbs: `FolderPlus` opens a folder the app has never
-seen, and the gear opens **Settings → Projects**, the page that answers every
+seen, and `FolderCog` opens **Settings → Projects**, the page that answers every
 other question about a project. A gear rather than sliders: sliders beside a
-filter read as "filter options".
+filter read as "filter options". The folder's gear rather than the bare one:
+the footer's bare gear opens Settings itself, and two identical glyphs in one
+sidebar read as one button drawn twice.
 
 **At `--ui-row` and regular weight, with an icon in both of its states.** It was
 13px `font-medium` back when it was a heading, which is the failure
@@ -250,11 +252,18 @@ project it is in.* Four of those places are the sidebar proper:
   had been dead since it was written, in the row right above this one — so the
   check is for `data-base-ui-tooltip-trigger` on the element that should have it,
   not for anything a screenshot could show.
-- **Detailed rows** went to **three lines**, and the order is the point:
-  *context, headline, location.* A small muted line carries the project's mark,
-  its name and the time; the title then gets a line to itself at full width and
-  a step brighter than anything around it; the branch closes the row with the
-  marks right-aligned beside it.
+- **Detailed rows** are **two lines**, and the order is the point: *context,
+  then headline.* A small muted line carries the project's mark, its name, the
+  branch when it is not the mainline, and the time; the title then gets the
+  next line a step brighter than anything around it, with the marks
+  right-aligned at its end.
+
+  They were three lines first, the branch closing the row. On most rows that
+  third line said "main", so the list spent a line per chat on a word that
+  told one row from another nowhere. `chatDetail` now returns no branch for
+  `DEFAULT_BRANCHES` outside a worktree, and none outside a repo, where the
+  third line used to print the folder path. A worktree's branch always shows,
+  even one named `main`, since the worktree is the point of that chat.
 
   **Every arrangement before this one led with the title, and that was the
   mistake.** Leading with it means it shares its line with the timestamp, and
@@ -269,13 +278,11 @@ project it is in.* Four of those places are the sidebar proper:
   crowding.
 
   It also dissolves the avatar column. The mark rides the context line instead
-  of sitting in a gutter, so the title and the branch start at the row's own
-  left edge and get its full width — which is the second half of why nothing
-  truncates any more.
+  of sitting in a gutter, so the title starts at the row's own left edge and
+  gets its full width — which is the second half of why titles rarely truncate.
 
-  A row is ~18px taller, so about a third fewer chats fit on screen. That is
-  the trade detailed mode exists to make — compact is one line per chat and
-  unchanged.
+  A row is still taller than compact's, which is the trade detailed mode
+  exists to make — compact is one line per chat and unchanged.
 
   **Two arrangements were built and shot before this one, and both failed the
   same way: two avatar-shaped objects per row.** The first put the provider on
@@ -305,10 +312,12 @@ project it is in.* Four of those places are the sidebar proper:
   habit they were building.
 
   **A draft row is laid out identically**, because it sits directly above the
-  chats: the project takes the avatar column and the pencil — the mark that says
-  what *kind* of row this is — goes where a chat row keeps its provider. Drop the
-  project (a filtered list) and there is no second line, so the pencil leads
-  again.
+  chats: the project's mark and name on the context line, at the chat rows'
+  18px, and the unsent text as the headline. The pencil, the mark that says
+  what *kind* of row this is, takes the corner where a chat row keeps its time.
+  It used to keep a 28px avatar column of its own from before the chat rows
+  dropped theirs, so the first project mark in the list was the one drawn at
+  the wrong size.
 - **The filter** wears the selected project's mark, because filtered the control
   *is* that project; "All projects" is not a project and gets none, since a
   stack of miniatures there would be decoration standing for nothing. Its menu

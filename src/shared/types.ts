@@ -2374,6 +2374,13 @@ export type FileWriteResult =
 
 // ---------- Git ----------
 
+/**
+ * The names a repo's default branch goes by, in precedence order. Main detects
+ * the default from these (`detectDefaultBranch`); the sidebar uses them to leave
+ * a chat on its project's mainline unlabelled.
+ */
+export const DEFAULT_BRANCHES = ['main', 'master'] as const
+
 export interface GitFileChange {
   /** Repo-relative path. */
   path: string

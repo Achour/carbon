@@ -117,11 +117,19 @@ async function toAttachments(files: Iterable<File>): Promise<{
   return { attachments, skipped }
 }
 
+/** Whether the chips go on one shrinking row rather than wrapping. */
+function fitAttachments(attachments: Attachment[]): boolean {
+  return attachments.length <= 3 && attachments.every((a) => a.kind !== 'image')
+}
+
 function AttachmentChip({
   att,
+  fit = false,
   onRemove
 }: {
   att: Attachment
+  /** On a shared row that shrinks to fit (`fitAttachments`). */
+  fit?: boolean
   onRemove: () => void
 }): React.JSX.Element {
   const elementTitle =
@@ -132,7 +140,7 @@ function AttachmentChip({
   const canvas = att.kind === 'canvas' ? att.canvas : undefined
   const quote = att.kind === 'quote' ? att.quote : undefined
   return (
-    <div className="group/att relative shrink-0">
+    <div className={cn('group/att relative', fit ? 'min-w-0 shrink' : 'shrink-0')}>
       {att.kind === 'image' ? (
         <img
           src={`data:${att.mediaType};base64,${att.data}`}
@@ -143,7 +151,7 @@ function AttachmentChip({
       ) : att.kind === 'element' ? (
         <div
           title={elementTitle}
-          className="flex h-8 max-w-52 items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/10 px-2.5"
+          className="flex h-7 max-w-52 items-center gap-1.5 rounded-md border border-primary/30 bg-primary/10 px-2"
         >
           {att.data ? (
             <img
@@ -161,7 +169,7 @@ function AttachmentChip({
         // its lines would push the composer's own controls off the row.
         <div
           title={`${sel.rel ?? sel.path}\n\n${sel.text}`}
-          className="flex h-8 max-w-52 items-center gap-1.5 rounded-lg border border-border bg-secondary/60 px-2.5"
+          className="flex h-7 max-w-52 items-center gap-1.5 rounded-md border border-border bg-secondary/60 px-2"
         >
           <FileIcon path={sel.path} />
           <span className="truncate font-mono text-[11px]">{att.name}</span>
@@ -172,10 +180,17 @@ function AttachmentChip({
         // whole quote goes in the tooltip, where a selection puts its snippet.
         <div
           title={quote.text.slice(0, 400)}
-          className="flex h-8 max-w-52 items-center gap-1.5 rounded-lg border border-border bg-secondary/60 px-2.5"
+          className="flex h-7 max-w-48 items-center gap-1.5 rounded-md border border-border bg-secondary/60 px-2"
         >
           <MessageSquareQuote className="size-3.5 shrink-0 text-muted-foreground" />
-          <span className="truncate text-xs">{att.name}</span>
+          {/* In quotation marks, outside the truncation: the label is the
+              passage's own words, often cut mid-word where the drag ended, and
+              without them a fragment reads as a broken name. */}
+          <span className="flex min-w-0 text-xs">
+            <span className="text-muted-foreground">“</span>
+            <span className="truncate">{att.name}</span>
+            <span className="text-muted-foreground">”</span>
+          </span>
         </div>
       ) : canvas ? (
         // Prose face, not mono: a canvas title is a name someone wrote, where a
@@ -183,7 +198,7 @@ function AttachmentChip({
         // everywhere else in the app — the tool rows, the list, the tab.
         <div
           title={canvas.text.slice(0, 400)}
-          className="flex h-8 max-w-52 items-center gap-1.5 rounded-lg border border-border bg-secondary/60 px-2.5"
+          className="flex h-7 max-w-52 items-center gap-1.5 rounded-md border border-border bg-secondary/60 px-2"
         >
           <PenLine className="size-3.5 shrink-0 text-muted-foreground" />
           <span className="truncate text-xs">{att.name}</span>
@@ -191,7 +206,7 @@ function AttachmentChip({
       ) : (
         <div
           title={att.path}
-          className="flex h-8 max-w-44 items-center gap-1.5 rounded-lg border border-border bg-secondary/60 px-2.5"
+          className="flex h-7 max-w-44 items-center gap-1.5 rounded-md border border-border bg-secondary/60 px-2"
         >
           <FileIcon path={att.name} />
           <span className="truncate text-xs">{att.name}</span>
@@ -1426,11 +1441,21 @@ export function Composer({
           </div>
         )}
         {attachments.length > 0 && (
-          <div className={cn('flex basis-full flex-wrap items-center gap-2 pt-3', CHAT_BLEED_PAD)}>
+          <div
+            className={cn(
+              'flex min-w-0 basis-full items-center gap-1.5 pt-3',
+              // A few text chips share one row and shrink to fit it — their
+              // labels truncate, and a second row of them pushed the input
+              // down for three short quotes. Images and longer sets wrap.
+              fitAttachments(attachments) ? 'flex-nowrap' : 'flex-wrap',
+              CHAT_BLEED_PAD
+            )}
+          >
             {attachments.map((att) => (
               <AttachmentChip
                 key={att.id}
                 att={att}
+                fit={fitAttachments(attachments)}
                 onRemove={() => setAttachments((prev) => prev.filter((a) => a.id !== att.id))}
               />
             ))}

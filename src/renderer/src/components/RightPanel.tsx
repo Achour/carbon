@@ -7,7 +7,6 @@ import {
   FileDiff,
   FileText,
   FolderTree,
-  GitBranch,
   GitCompare,
   Globe,
   Maximize2,
@@ -55,6 +54,7 @@ import { MultiDiffView } from '@/components/MultiDiffView'
 import { ReviewBar } from '@/components/ReviewBar'
 import { languageForPath } from '@/lib/highlight'
 import { BrowserPane } from '@/components/BrowserPane'
+import { PanelActionRow, PanelLaunchList, usePanelActions } from '@/components/PanelActions'
 
 /**
  * xterm is ~410 KB and matters only once a terminal tab exists — which for many
@@ -290,18 +290,13 @@ function PathBar({ entry, cwd }: { entry: OpenTab; cwd: string | null }): React.
 
 /**
  * The "+" button: a quick-open. Type to fuzzy-search files (opens
- * one as a tab), or pick an action — Browser preview, Terminal, Review changes.
+ * one as a tab), or pick one of the panel's actions (`PanelActions`).
  * This is how you open files regardless of which tab is active, so the file tree
  * never needs to sit beside the browser.
  */
 function QuickOpen(): React.JSX.Element {
   const cwd = useApp((s) => s.selectedCwd)
   const openFile = useApp((s) => s.openFile)
-  const openPreview = useApp((s) => s.openPreview)
-  const openTerminal = useApp((s) => s.openTerminal)
-  const reviewChangesAction = useApp((s) => s.reviewChanges)
-  const browseFiles = useApp((s) => s.browseFiles)
-  const openCanvas = useApp((s) => s.openCanvas)
   const [open, setOpen] = React.useState(false)
   const [query, setQuery] = React.useState('')
   const [results, setResults] = React.useState<{ rel: string; path: string }[]>([])
@@ -345,52 +340,7 @@ function QuickOpen(): React.JSX.Element {
     setOpen(false)
   }
 
-  const reviewChanges = (): void => {
-    void reviewChangesAction()
-    setOpen(false)
-  }
-
-  const actions = [
-    {
-      icon: <FolderTree className="size-4" />,
-      label: 'Files',
-      run: () => {
-        browseFiles()
-        setOpen(false)
-      }
-    },
-    {
-      // `Shapes` is the library's own mark (the tab, and its empty state);
-      // `PenLine` names a single document. This row opens the library.
-      icon: <Shapes className="size-4" />,
-      label: 'Canvas',
-      run: () => {
-        void openCanvas(null)
-        setOpen(false)
-      }
-    },
-    {
-      icon: <Globe className="size-4" />,
-      label: 'Browser preview',
-      run: () => {
-        openPreview()
-        setOpen(false)
-      }
-    },
-    {
-      icon: <SquareTerminal className="size-4" />,
-      label: 'Terminal',
-      run: () => {
-        openTerminal()
-        setOpen(false)
-      }
-    },
-    {
-      icon: <GitBranch className="size-4" />,
-      label: 'Review changes',
-      run: reviewChanges
-    }
-  ]
+  const actions = usePanelActions()
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -462,16 +412,8 @@ function QuickOpen(): React.JSX.Element {
             </div>
           ) : (
             <>
-              {actions.map((a) => (
-                <button
-                  key={a.label}
-                  type="button"
-                  onClick={a.run}
-                  className="flex w-full items-center gap-2.5 rounded-md px-2 py-2 text-left text-[13px] transition-colors hover:bg-accent"
-                >
-                  <span className="text-muted-foreground">{a.icon}</span>
-                  {a.label}
-                </button>
+              {actions.map(({ id, ...a }) => (
+                <PanelActionRow key={id} {...a} onDone={() => setOpen(false)} />
               ))}
             </>
           )}
@@ -559,41 +501,13 @@ function TabScroller({ children }: { children: React.ReactNode }): React.JSX.Ele
 }
 
 /**
- * Shown in the viewer when the panel is open but nothing is: a launcher
- * grid. "File" opens a blank Untitled tab (a picker until you choose).
+ * Shown in the viewer when the panel is open but nothing is: the same list the
+ * new-chat rail draws, so opening the panel beside it hands the list over.
  */
 function EmptyLauncher(): React.JSX.Element {
-  const reviewChanges = useApp((s) => s.reviewChanges)
-  const openPreview = useApp((s) => s.openPreview)
-  const openTerminal = useApp((s) => s.openTerminal)
-  const browseFiles = useApp((s) => s.browseFiles)
-  const openCanvas = useApp((s) => s.openCanvas)
-
-  const items = [
-    { icon: <GitBranch />, label: 'Changes', run: () => void reviewChanges() },
-    { icon: <Globe />, label: 'Browser', run: () => openPreview() },
-    { icon: <SquareTerminal />, label: 'Terminal', run: () => openTerminal() },
-    { icon: <FolderTree />, label: 'Files', run: () => browseFiles() },
-    { icon: <Shapes />, label: 'Canvas', run: () => void openCanvas(null) }
-  ]
   return (
-    // One column until two tiles fit side by side (`@container` measures the
-    // content box, so the threshold is two tiles plus the gap): a panel that
-    // has yielded to a small window is narrower than a pair of them.
-    <div className="@container flex h-full items-center justify-center p-6">
-      <div className="grid grid-cols-1 gap-3 @min-[268px]:grid-cols-2">
-        {items.map((it) => (
-          <button
-            key={it.label}
-            type="button"
-            onClick={it.run}
-            className="flex size-32 flex-col items-center justify-center gap-2.5 rounded-xl border border-border/60 text-muted-foreground transition-colors hover:border-border hover:bg-accent/50 hover:text-foreground [&_svg]:size-6"
-          >
-            {it.icon}
-            <span className="text-[13px]">{it.label}</span>
-          </button>
-        ))}
-      </div>
+    <div className="flex h-full items-center justify-center overflow-y-auto p-6">
+      <PanelLaunchList className="w-full max-w-64" />
     </div>
   )
 }
