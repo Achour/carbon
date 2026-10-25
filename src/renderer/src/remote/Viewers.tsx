@@ -10,6 +10,7 @@ import { useAgentPart } from '@/components/messages/AgentRows'
 import { SubAgentStream } from '@/components/messages/ToolCard'
 import { DiffView } from '@/components/DiffView'
 import { languageForPath } from '@/lib/highlight'
+import { isNative, useNativeViewer } from './native'
 import { changes as fetchChanges, diff as fetchDiff, invoke, type ChangedFile } from './api'
 
 const EASE = 'cubic-bezier(0.32, 0.72, 0, 1)'
@@ -61,6 +62,8 @@ function FullView({
     paint(layer.current?.offsetWidth ?? window.innerWidth, 300)
     setTimeout(() => done.current(), 300)
   }, [paint])
+  // Inside the iOS app the bar is the app's: its title, and its Back is `leave`.
+  useNativeViewer(typeof title === 'string' ? title : '', leave)
 
   // In from the right, on the next frame so the start position paints first.
   React.useLayoutEffect(() => {
@@ -107,9 +110,13 @@ function FullView({
       <div
         ref={layer}
         role="dialog"
-        className="absolute inset-0 flex flex-col bg-background pt-[env(safe-area-inset-top)] shadow-[-8px_0_32px_rgb(0_0_0/0.18)] will-change-transform"
+        className={cn(
+          'absolute inset-0 flex flex-col bg-background shadow-[-8px_0_32px_rgb(0_0_0/0.18)] will-change-transform',
+          isNative ? 'pt-[var(--native-top,0px)]' : 'pt-[env(safe-area-inset-top)]'
+        )}
         style={{ transform: 'translateX(100%)' }}
       >
+        {!isNative && (
         <div className="flex h-[52px] shrink-0 items-center gap-1 border-b border-border/70 px-1.5">
           <button
             type="button"
@@ -121,6 +128,7 @@ function FullView({
           </button>
           <span className="min-w-0 flex-1 truncate pr-12 text-center text-[16px] font-semibold">{title}</span>
         </div>
+        )}
         <div className="relative min-h-0 flex-1">
           {children}
           <div

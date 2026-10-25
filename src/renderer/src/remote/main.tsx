@@ -7,6 +7,7 @@ import { App } from './App'
 import { installDesktopBridge } from './desktop'
 import { installPushWorker } from './push'
 import { installPrefs } from './prefs'
+import { installNativeBridge, isNative } from './native'
 import './remote.css'
 
 // The palette, the color mode (System follows the phone, live) and both type
@@ -44,7 +45,9 @@ function fitStandalone(): void {
   window.addEventListener('resize', fit)
   window.addEventListener('orientationchange', () => setTimeout(fit, 300))
 }
-fitStandalone()
+// Inside the iOS app the page fills its web view and the keyboard is the
+// app's to follow, so neither of these has anything to correct.
+if (!isNative) fitStandalone()
 
 // With the keyboard up, the app is the visible area above it (`--kb-height`).
 // Left full height, the page is taller than what shows, and iOS scrolls the
@@ -77,7 +80,7 @@ function followKeyboard(): void {
     }, 300)
   })
 }
-followKeyboard()
+if (!isNative) followKeyboard()
 
 /** The page reaches up under the status bar: a top safe-area inset is reported. */
 function underStatusBar(): boolean {
@@ -91,8 +94,9 @@ function underStatusBar(): boolean {
 
 // Before the first render: the transcript is the desktop's components.
 installDesktopBridge()
+installNativeBridge()
 // So a tap on a notification can open its chat, whatever screen this launched on.
-installPushWorker()
+if (!isNative) installPushWorker()
 
 createRoot(document.getElementById('root')!).render(
   <TooltipProvider delay={500}>

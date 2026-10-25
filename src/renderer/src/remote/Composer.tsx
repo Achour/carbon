@@ -11,6 +11,7 @@ import { useRemote, type QueuedMessage } from './state'
 import { Sheet } from './Sheet'
 import { clearDraft, patchDraft, readDraft } from './drafts'
 import * as api from './api'
+import { isNative, useNativeComposer } from './native'
 
 /** Longest side of an attached photo. A phone camera's 12 MP is wasted on a model. */
 const MAX_SIDE = 2000
@@ -204,6 +205,14 @@ export function Composer({
   // the composer and the keys. A hardware keyboard (an iPad's) leaves the
   // indicator showing, hence the coarse-pointer test.
   const [typing, setTyping] = React.useState(false)
+  // Counts the text changes the composer makes itself (a pick, a send, a
+  // suggestion taken), as opposed to typing: inside the iOS app, the field is
+  // the app's, and this is its cue to take the page's text over its own.
+  const [pageRev, setPageRev] = React.useState(0)
+  const edit = (next: string): void => {
+    setText(next)
+    setPageRev((n) => n + 1)
+  }
   const area = React.useRef<HTMLTextAreaElement>(null)
   const file = React.useRef<HTMLInputElement>(null)
   const send = useRemote((s) => s.send)
@@ -309,7 +318,7 @@ export function Composer({
   const pickFile = (r: { rel: string; path: string }): void => {
     if (!mention) return
     const head = text.slice(0, mention.at)
-    setText(`${head}${r.rel} ${text.slice(caret)}`)
+    edit(`${head}${r.rel} ${text.slice(caret)}`)
     // Attached by path, as the desktop's mention does, so the agent is handed
     // the file and not only its name in the prose.
     setAttachments((prev) =>
@@ -328,7 +337,7 @@ export function Composer({
       void submit(command)
       return
     }
-    setText(`${command} ${tail.replace(/^\s+/, '')}`)
+    edit(`${command} ${tail.replace(/^\s+/, '')}`)
     putCaret(command.length + 1)
   }
 
@@ -342,7 +351,7 @@ export function Composer({
     const message = (override ?? text).trim()
     if ((!message && attachments.length === 0) || sending || reading) return
     if (onCommand && attachments.length === 0 && onCommand(message)) {
-      setText('')
+      edit('')
       if (draftKey) clearDraft(draftKey)
       return
     }
@@ -354,7 +363,7 @@ export function Composer({
     try {
       if (onSubmit) await onSubmit(message, attachments)
       else if (chatId) await send(chatId, message, attachments)
-      setText('')
+      edit('')
       setAttachments([])
       latest.current = ''
       if (draftKey) clearDraft(draftKey)
@@ -365,6 +374,77 @@ export function Composer({
     }
   }
   const stop = busy && chatId && empty
+
+  // Inside the iOS app this is the composer's model, not its view: the app
+  // draws the field on the keyboard and calls back here for every change, so
+  // the queue, the drafts, `@`, `/` and `onCommand` stay this component's.
+  const menu =
+    menuOpen && mention && files.length > 0
+      ? { kind: 'files' as const, rows: files.map((r) => ({ id: r.path, label: r.rel })) }
+      : menuOpen && !mention && commandRows.length > 0
+        ? {
+            kind: 'commands' as const,
+            rows: commandRows.map((c) => ({
+              id: c.name,
+              label: `/${c.name}${c.argumentHint ? ` ${c.argumentHint}` : ''}`,
+              detail: c.description || undefined
+            }))
+          }
+        : undefined
+  useNativeComposer(
+    {
+      key: draftKey ?? chatId ?? 'composer',
+      chatId,
+      placeholder: placeholder ?? (busy ? 'Queue a message…' : 'Message…'),
+      text,
+      textRev: pageRev,
+      caret,
+      busy: !!busy,
+      stop: !!stop,
+      sending,
+      reading,
+      attachments: attachments.map((a) => ({ id: a.id, name: a.name, kind: a.kind })),
+      queued: queued.map((q) => ({ id: q.id, text: q.text || (q.attachments?.map((a) => a.name).join(', ') ?? '') })),
+      suggestion: offer,
+      menu
+    },
+    {
+      setText: (next, at) => {
+        setText(next)
+        setCaret(at)
+      },
+      submit: () => void submit(),
+      stop: () => {
+        if (chatId) void interrupt(chatId)
+      },
+      pick: (id) => {
+        if (mention) {
+          const r = files.find((f) => f.path === id)
+          if (r) pickFile(r)
+        } else {
+          const c = commandRows.find((row) => row.name === id)
+          if (c) pickCommand(c)
+        }
+      },
+      dismissMenu: () => setDismissed(menuKey),
+      removeAttachment: (id) => setAttachments((prev) => prev.filter((a) => a.id !== id)),
+      addFiles,
+      takeSuggestion: () => {
+        if (offer) edit(offer)
+      }
+    }
+  )
+  if (isNative) {
+    // The pickers register themselves from inside `tools` and draw nothing;
+    // `above` (a pending switch) stays on the page, just over the app's
+    // composer; the project and worktree chips mount there to register.
+    return (
+      <>
+        {above && <div className="shrink-0 px-3">{above}</div>}
+        {tools}
+      </>
+    )
+  }
 
   return (
     <div className={cn('shrink-0 px-3 pt-1', typing ? 'pb-2' : 'pb-[max(env(safe-area-inset-bottom),10px)]')}>
@@ -404,7 +484,7 @@ export function Composer({
           type="button"
           onMouseDown={keepKeyboard}
           onClick={() => {
-            setText(offer)
+            edit(offer)
             putCaret(offer.length)
           }}
           className="mb-2 flex h-9 max-w-full animate-in items-center gap-2 rounded-xl border border-border bg-card px-3 text-[14px] duration-200 fade-in active:bg-accent"

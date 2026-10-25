@@ -28,7 +28,7 @@ import { navigate } from './App'
 import * as api from './api'
 import { useTouchSort } from './touchSort'
 import { setArchived, setPinned } from './chatActions'
-import { baseName, chatTitle, listedChats } from './format'
+import { baseName, chatTitle, listedChats, sidebarSections } from './format'
 import { PUSH_HINT, usePush } from './push'
 import { SettingsSheet } from './Settings'
 import { Sheet, SheetRow } from './Sheet'
@@ -185,30 +185,10 @@ export function Sidebar({ activeId, onNavigate }: { activeId: string | null; onN
     return [...latest.entries()].sort((a, b) => b[1].latest - a[1].latest).map(([root, p]) => ({ root, count: p.count }))
   }, [chats])
 
-  const { waiting, pinned, groups, flat } = React.useMemo(() => {
-    const q = query.trim().toLowerCase()
-    const all = listedChats(chats).filter(
-      (c) => !q || `${c.title} ${baseName(projectRoot(c))}`.toLowerCase().includes(q)
-    )
-    const asking = (c: ChatMeta): boolean => (permissions[c.id]?.length ?? 0) > 0
-    // "Needs you" ignores the filter: a question waiting in another project
-    // is usually why the phone was picked up, and a filter must not hide it.
-    const waiting = all.filter(asking)
-    const scoped = filterProject ? all.filter((c) => projectRoot(c) === filterProject) : all
-    const pinned = scoped.filter((c) => !asking(c) && c.pinnedAt).sort((a, b) => a.pinnedAt! - b.pinnedAt!)
-    const flat = scoped.filter((c) => !asking(c) && !c.pinnedAt)
-    const byProject = new Map<string, { chats: ChatMeta[]; latest: number }>()
-    for (const c of scoped) {
-      if (asking(c) || c.pinnedAt) continue
-      const root = projectRoot(c)
-      const g = byProject.get(root) ?? { chats: [], latest: 0 }
-      g.chats.push(c)
-      g.latest = Math.max(g.latest, c.updatedAt)
-      byProject.set(root, g)
-    }
-    const groups = [...byProject.entries()].sort((a, b) => b[1].latest - a[1].latest)
-    return { waiting, pinned, groups, flat }
-  }, [chats, permissions, query, filterProject])
+  const { waiting, pinned, groups, flat } = React.useMemo(
+    () => sidebarSections(chats, permissions, query, filterProject),
+    [chats, permissions, query, filterProject]
+  )
 
   const searchingNow = searching || !!query
   // A filtered compact list drops its project row: the filter already names

@@ -458,6 +458,76 @@ the window open. The phone is one more window onto them.
   `chats:create`. Omitting the model would make `rememberOptions` record an
   empty one, quietly resetting the Mac's New-chat model.
 
+### Inside the iOS app (`remote/native.ts`)
+
+A native app (its own repository, `carbon-ios`, not shipped with Carbon) holds
+this client in one `WKWebView`. It draws the sidebar, the navigation bar, the
+composer and the pickers natively, over the page, because gestures and the
+keyboard were the parts a web page got wrong. The transcript stays the
+desktop's, which is the reason this is a shell and not a rewrite.
+
+- **The page is the model and the app is a view of it.** `native.ts` posts
+  what the app draws (`publish`: the sidebar's sections, the open chat, the
+  composer, the pickers, whether a layer is open) over
+  `webkit.messageHandlers.carbon`. Each top-level slice goes only when its JSON
+  changed, at most once a frame. A tap comes back as
+  `window.carbonNative.call(name, …)`. The app never talks to the Mac itself,
+  so pairing, the cookie, the resync and the queue are this client's, unchanged.
+- **Detection is the handler, not a URL.** The app registers `carbon` before
+  the first load, so `isNative` is settled before any module runs. A Safari tab
+  and the Home Screen app never see it.
+- **The screens hand over what they would have drawn.** `Composer` keeps all
+  its logic and, inside the app, renders only `above` (a pending switch, the
+  project and worktree chips) while `useNativeComposer` publishes the rest.
+  `OptionChips` publishes `usePickers`' answer through `useNativePickers` and
+  draws nothing. The text is the app's while the user types; a change the page
+  makes itself (a picked `@` file, a send clearing it, a suggestion taken)
+  bumps `textRev`, which is the app's cue to take the page's text.
+- **The prompts, the pickers and the project are native too, and the
+  decisions stay here.** `nativeRequest` (`PermissionCard.tsx`) describes each
+  waiting request in the cards' own words. The app answers a tool or a plan
+  with a decision, and a question card with its raw choices
+  (`answerQuestions`), so `questionDecision` still builds what each provider
+  expects. `WorktreeChip` and the New-chat screen publish where the next chat
+  runs and in which project (`useNativePlace`, `useNativeNewChat`), and draw
+  nothing.
+- **The changes list, a diff, a canvas and a plan are the app's own
+  screens.** They are pushed on its navigation stack (or shown as a sheet)
+  from `notifyApp('open', …)`, so Back is the system's swipe. Their data comes
+  through the page (`changes`, `diff`, `canvas`, `branches` return values the
+  app awaits), because the pairing cookie is the web view's and the app never
+  talks to the Mac. A sub-agent's transcript is the exception: it is the
+  desktop's own components, so `FullView` stays on the page under the app's
+  bar (`useNativeViewer`), with the app's Back calling its `leave`.
+- **Anything else the page opens over the transcript hides the app's
+  chrome.** `Sheet` and the lightbox count themselves in `useNativeOverlay`.
+  A web sheet sliding up behind the native composer was the failure this
+  prevents.
+- **The transcript runs under the glass.** The app sends where its bars end,
+  the header's bottom and the top of the composer with whatever floats over
+  it (`insets` → `--native-top` / `--native-bottom`), and `ChatScreen` pads its
+  scroller by them instead of stopping at the bars. The bottom is that
+  distance from the page's own bottom (`100dvh` minus it). When the composer
+  moves with the keyboard, `carbon-native-insets` carries the change, and the
+  reader keeps the same bottom edge. The page's viewport itself never changes
+  for the app's keyboard. What did move it was the app's navigation stack
+  shifting its content to reveal a focused field, which is why the composer
+  floats above the stack instead of inside it. `fitStandalone` and `followKeyboard` do not run
+  inside the app: the keyboard is the app's to follow.
+- **The home screen is the app's, from the board.** On `#/` the page draws
+  nothing of its own (`nativeHome` in `NewChat.tsx`); `publish` sends
+  `deriveBoard`'s three lists (Needs you, Working, Done, with each waiting
+  chat's first request in the cards' words), and the app draws them. A tool
+  approval is answered from the row; anything else opens its chat. It is what
+  the phone has instead of notifications: a pocketed phone hears nothing, so
+  the Mac's per-device Done marks are what it reads when opened.
+- **Pairing is the QR code, scanned in the app.** The code the Mac shows is
+  its first address and the one-time code in one link, so the app's first
+  screen opens on a camera viewfinder and connects on sight. The link is kept
+  only as the Mac's origin afterwards, since its code is spent.
+- **The sidebar's sections are one function.** `sidebarSections` (`format.ts`)
+  is what both this client's sidebar and the app's list are built from.
+
 ### Notifications (`main/webPush.ts`, `main/tailscaleCert.ts`, `remote/push.ts`)
 
 A phone in a pocket hears about a turn that finished, failed, or is waiting on
@@ -548,7 +618,9 @@ below. With nothing to show it is the plain screen again, and `#/new/<project>`
 - **A native app was considered and rejected.** On a free Apple account it
   cannot receive push at all, it stops opening after 7 days, and a widget
   without push cannot refresh when a turn ends. This web app already has push,
-  so the board went here.
+  so the board went here. (A native *shell* came later, for gestures and the
+  keyboard rather than push: "Inside the iOS app" above. It draws this board
+  from the page, like everything else.)
 - **Done is kept by the Mac, per device, not by the page.** A backgrounded
   phone hears nothing; only main saw the turn end. `maybePush`'s own moments
   (a `turn` or `error` event) write a mark (`RemoteUnseen`: when, failed, and

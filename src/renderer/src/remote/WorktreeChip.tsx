@@ -6,6 +6,7 @@ import { DotSpinner } from '@/components/ui/dot-spinner'
 import { invoke } from './api'
 import { Sheet, SheetRow, SheetSection } from './Sheet'
 import { useRemote } from './state'
+import { isNative, useNativePlace } from './native'
 
 /** The kind of place, as the desktop's `WorktreePicker` names it. */
 const TARGET_LABEL: Record<WorktreeTarget['kind'], string> = {
@@ -78,7 +79,9 @@ export function WorktreeChip({
     if (!refs.some((r) => r.path === value.path)) onChange({ kind: 'local' })
   }, [refs, value, onChange])
 
-  if (!refs?.length) return null
+  // Inside the iOS app the chip and its sheet are native (`native.ts`).
+  useNativePlace(cwd, value, refs, onChange, () => setOpened((n) => n + 1))
+  if (isNative || !refs?.length) return null
   const repoRoot = refs.find((r) => r.isMain)?.path ?? cwd
   const linked = refs.filter((r) => !r.isMain)
   const branch = targetBranch(value)

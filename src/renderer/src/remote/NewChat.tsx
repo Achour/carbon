@@ -24,6 +24,7 @@ import { Sheet, SheetRow } from './Sheet'
 import { useBoard } from './board'
 import { HomeBoard } from './HomeBoard'
 import { WorktreeChip } from './WorktreeChip'
+import { isNative, useNativeNewChat } from './native'
 import { clearDraft, draftOptions, newChatDraftKey, patchDraft, readDraft } from './drafts'
 
 /**
@@ -71,6 +72,8 @@ export function NewChatScreen({
   const [cwd, setCwd] = React.useState<string | null>(initialCwd)
   const selected = cwd ?? projects[0] ?? null
   const [picking, setPicking] = React.useState(false)
+  // Inside the iOS app the project chip is a native menu.
+  useNativeNewChat(selected, projects, setCwd)
 
   // Seeded from the Mac's New-chat defaults, the way its own screen is: the
   // remembered model, with the effort and speed last used on that model. A
@@ -97,11 +100,19 @@ export function NewChatScreen({
   const name = selected ? baseName(selected) : ''
   const board = useBoard()
   const showBoard = !initialCwd && board.needs.length + board.working.length + board.done.length > 0
+  // Inside the iOS app the home screen (the greeting and the board) is the
+  // app's own; this screen is only the composer's project and place.
+  const nativeHome = isNative && !initialCwd
 
   return (
-    <div className="flex h-full flex-col">
-      <Header title={null} />
-      {showBoard ? (
+    <div
+      className="flex h-full flex-col"
+      style={isNative ? { paddingTop: 'var(--native-top, 0px)', paddingBottom: 'var(--native-bottom, 0px)' } : undefined}
+    >
+      {!isNative && <Header title={null} />}
+      {nativeHome ? (
+        <div className="min-h-0 flex-1" />
+      ) : showBoard ? (
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pt-2 pb-4">
           <h1 className="mb-4 px-1 text-[22px] font-semibold tracking-tight">{greeting()}</h1>
           <HomeBoard board={board} />
@@ -214,6 +225,10 @@ function NewChatComposer({
         provider={values.provider}
         draftKey={key}
         above={
+          isNative ? (
+            // The app draws both chips; the worktree one still has to mount to say what it found.
+            <WorktreeChip cwd={cwd} value={target} onChange={setTarget} disabled={starting} refresh={failures} />
+          ) : (
           <>
             <div className="no-scrollbar flex gap-2 overflow-x-auto">
               <button
@@ -235,6 +250,7 @@ function NewChatComposer({
               </p>
             )}
           </>
+          )
         }
         tools={<OptionChips values={values} onChange={(patch) => setPicked((prev) => ({ ...prev, ...patch }))} />}
         onCommand={(text) => {
@@ -275,7 +291,8 @@ function NotifyCard(): React.JSX.Element | null {
       return false
     }
   })
-  if (state !== 'off' || dismissed) return null
+  // The app has no service worker to push to; notifications are the web app's.
+  if (isNative || state !== 'off' || dismissed) return null
   const dismiss = (): void => {
     setDismissed(true)
     try {

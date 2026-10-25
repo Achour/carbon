@@ -23,6 +23,43 @@ export function listedChats(chats: ChatMeta[]): ChatMeta[] {
     .sort((a, b) => (b.sortKey ?? b.updatedAt) - (a.sortKey ?? a.updatedAt))
 }
 
+/**
+ * The sidebar's sections, shared by the page's sidebar and the iOS app's
+ * (`native.ts`): "Needs you" first, then pins, then the rest — flat in the
+ * user's order, and grouped by project with the most recently active first.
+ */
+export function sidebarSections(
+  chats: ChatMeta[],
+  permissions: Record<string, unknown[] | undefined>,
+  query: string,
+  filterProject: string | null
+): {
+  waiting: ChatMeta[]
+  pinned: ChatMeta[]
+  groups: [string, { chats: ChatMeta[]; latest: number }][]
+  flat: ChatMeta[]
+} {
+  const q = query.trim().toLowerCase()
+  const all = listedChats(chats).filter((c) => !q || `${c.title} ${baseName(projectRoot(c))}`.toLowerCase().includes(q))
+  const asking = (c: ChatMeta): boolean => (permissions[c.id]?.length ?? 0) > 0
+  // "Needs you" ignores the filter: a question waiting in another project
+  // is usually why the phone was picked up, and a filter must not hide it.
+  const waiting = all.filter(asking)
+  const scoped = filterProject ? all.filter((c) => projectRoot(c) === filterProject) : all
+  const pinned = scoped.filter((c) => !asking(c) && c.pinnedAt).sort((a, b) => a.pinnedAt! - b.pinnedAt!)
+  const flat = scoped.filter((c) => !asking(c) && !c.pinnedAt)
+  const byProject = new Map<string, { chats: ChatMeta[]; latest: number }>()
+  for (const c of flat) {
+    const root = projectRoot(c)
+    const g = byProject.get(root) ?? { chats: [], latest: 0 }
+    g.chats.push(c)
+    g.latest = Math.max(g.latest, c.updatedAt)
+    byProject.set(root, g)
+  }
+  const groups = [...byProject.entries()].sort((a, b) => b[1].latest - a[1].latest)
+  return { waiting, pinned, groups, flat }
+}
+
 export function isBusy(status: ChatStatus | undefined): boolean {
   return !!status && status !== 'idle'
 }

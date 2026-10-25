@@ -22,6 +22,7 @@ import { PermissionCard } from './PermissionCard'
 import { Sheet } from './Sheet'
 import { chatDraftKey } from './drafts'
 import { CodexReviewMenu } from '@/components/CodexReviewDialog'
+import { isNative, notifyApp, useNativeCommand } from './native'
 
 const NO_REQUESTS: PermissionRequestPayload[] = []
 
@@ -37,7 +38,12 @@ export function ChatScreen({ chatId }: { chatId: string }): React.JSX.Element {
   const expandedTurns = useApp((s) => s.expandedTurns)
   const toggleTurnExpanded = useApp((s) => s.toggleTurnExpanded)
   const [plan, setPlan] = React.useState<string | null>(null)
-  const onOpenPlan = React.useCallback((text: string) => setPlan(text), [])
+  // Inside the iOS app the plan, a diff and a canvas open as the app's own
+  // screens; only a sub-agent's transcript is still drawn here.
+  const onOpenPlan = React.useCallback(
+    (text: string) => (isNative ? notifyApp('open', { kind: 'plan', text }) : setPlan(text)),
+    []
+  )
   const transcriptChat = React.useMemo(
     () => (chat ? { chatId: chat.id, provider: chat.provider } : null),
     [chat?.id, chat?.provider]
@@ -54,10 +60,11 @@ export function ChatScreen({ chatId }: { chatId: string }): React.JSX.Element {
       panels: false,
       openChat: (id) => navigate(`#/c/${encodeURIComponent(id)}`),
       openAgent: (_parent, toolUseId) => setView({ kind: 'agent', toolUseId }),
-      openCanvas: (id) => setView({ kind: 'canvas', id }),
-      openDiff: (path) => setView({ kind: 'diff', path })
+      openCanvas: (id) => (isNative ? notifyApp('open', { kind: 'canvas', id }) : setView({ kind: 'canvas', id })),
+      openDiff: (path) =>
+        isNative ? notifyApp('open', { kind: 'diff', chatId, path }) : setView({ kind: 'diff', path })
     }),
-    []
+    [chatId]
   )
   React.useEffect(() => setView(null), [chatId])
 
@@ -147,6 +154,32 @@ export function ChatScreen({ chatId }: { chatId: string }): React.JSX.Element {
   }, [open !== null])
 
   const [reviewOpen, setReviewOpen] = React.useState(false)
+  // Inside the iOS app the header and the composer are the app's; it asks
+  // for what their taps did here, and steps aside for what opens over the page.
+  useNativeCommand('scrollTop', toTop)
+  // The app's composer moved (the keyboard): the transcript's padding under
+  // it changed by `delta`, so hold the bottom edge where the reader had it.
+  React.useEffect(() => {
+    if (!isNative) return undefined
+    const on = (e: Event): void => {
+      const el = scroller.current
+      if (!el) return
+      if (pinned.current) el.scrollTop = el.scrollHeight
+      else el.scrollTop += (e as CustomEvent<number>).detail
+    }
+    window.addEventListener('carbon-native-insets', on)
+    return () => window.removeEventListener('carbon-native-insets', on)
+  }, [])
+  // Dragging the transcript puts the app's keyboard away, once per drag.
+  const dragging = React.useRef(false)
+  const dragged = (): void => {
+    if (dragging.current) return
+    dragging.current = true
+    notifyApp('drag')
+  }
+  const released = (): void => {
+    dragging.current = false
+  }
   const branch = useRemote((s) => (chat ? (s.branches[chat.cwd] ?? undefined) : undefined))
   const values: OptionValues | null = chat
     ? {
@@ -161,7 +194,7 @@ export function ChatScreen({ chatId }: { chatId: string }): React.JSX.Element {
   return (
     <div className="flex h-full flex-col">
       <div className="relative min-h-0 flex-1">
-      <Header
+      {!isNative && <Header
         ref={header}
         floating
         scrolled={underHeader}
@@ -169,13 +202,22 @@ export function ChatScreen({ chatId }: { chatId: string }): React.JSX.Element {
         actions={chat ? <ChatMenu chat={chat} onViewChanges={() => setView({ kind: 'changes' })} /> : undefined}
         title={chat ? chatTitle(chat) : 'Chat'}
         subtitle={chat ? `${projectName(chat)}${chat.worktree ? ` · ${chat.worktree.branch}` : ''}` : undefined}
-      />
+      />}
       <div
         ref={scroller}
         onScroll={onScroll}
+        onTouchMove={isNative ? dragged : undefined}
+        onTouchEnd={isNative ? released : undefined}
         // The header floats over the top, measured, so the first line and
         // the earlier-messages hint start below it rather than under the blur.
-        style={{ paddingTop: headerHeight + 12 }}
+        // Inside the iOS app the transcript runs under the app's glass bars,
+        // top and bottom (the prompts waiting on an answer are the app's
+        // too, over its composer), and pads itself clear of them.
+        style={
+          isNative
+            ? { paddingTop: 'calc(var(--native-top, 0px) + 12px)', paddingBottom: 'calc(var(--native-bottom, 0px) + 16px)' }
+            : { paddingTop: headerHeight + 12 }
+        }
         className="h-full overflow-y-auto overscroll-contain px-6 pb-6"
       >
         <div ref={column} className="reading-zoom">
@@ -216,12 +258,15 @@ export function ChatScreen({ chatId }: { chatId: string }): React.JSX.Element {
       {/* The last lines fade into the composer instead of meeting a hard edge.
           An overlay rather than a mask on the scroller: a masked scroller is
           composited whole on every frame, and transcripts get long. */}
-      <div aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 h-7 bg-gradient-to-t from-background to-transparent" />
+      {!isNative && (
+        <div aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 h-7 bg-gradient-to-t from-background to-transparent" />
+      )}
       <button
         type="button"
         aria-label="Jump to latest"
         tabIndex={awayFromEnd ? 0 : -1}
         onClick={toEnd}
+        style={isNative ? { bottom: 'calc(var(--native-bottom, 0px) + 12px)' } : undefined}
         className={cn(
           'absolute bottom-3 left-1/2 z-10 flex size-10 -translate-x-1/2 items-center justify-center rounded-full border border-border bg-popover/90 text-foreground shadow-lg backdrop-blur-md transition-[opacity,transform] duration-200 active:scale-90',
           awayFromEnd ? 'opacity-100' : 'pointer-events-none translate-y-2 scale-90 opacity-0'
@@ -232,8 +277,10 @@ export function ChatScreen({ chatId }: { chatId: string }): React.JSX.Element {
         {busy && <span className="absolute -top-0.5 -right-0.5 size-2.5 rounded-full bg-primary ring-2 ring-background" />}
       </button>
       </div>
-      {requests?.length ? (
-        <div className="flex max-h-[60dvh] shrink-0 flex-col gap-2 overflow-y-auto px-3 pt-1">
+      {!isNative && requests?.length ? (
+        <div
+          className="flex max-h-[60dvh] shrink-0 flex-col gap-2 overflow-y-auto px-3 pt-1"
+        >
           {requests.map((r) => (
             <PermissionCard key={r.id} chatId={chatId} request={r} provider={chat?.provider ?? 'claude'} />
           ))}
@@ -277,7 +324,8 @@ export function ChatScreen({ chatId }: { chatId: string }): React.JSX.Element {
             : undefined
         }
         busy={busy}
-        above={chat?.pendingModel !== undefined && chat.pendingProvider ? <PendingSwitch chat={chat} /> : null}
+        // Inside the iOS app the pending switch is the app's, over its composer.
+        above={!isNative && chat?.pendingModel !== undefined && chat.pendingProvider ? <PendingSwitch chat={chat} /> : null}
         tools={
           values && (
             <OptionChips

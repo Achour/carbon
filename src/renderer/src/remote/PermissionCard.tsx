@@ -90,7 +90,7 @@ const PREVIEW_LINES = 40
  * What the tool will actually do, which is what an approval is about: the
  * whole command, the text a write puts in the file, the lines an edit swaps.
  */
-function previewOf(input: unknown): PreviewLine[] | null {
+export function previewOf(input: unknown): PreviewLine[] | null {
   const i = (input ?? {}) as Record<string, unknown>
   const lines = (v: unknown, kind: PreviewLine['kind']): PreviewLine[] =>
     typeof v === 'string' ? v.split('\n').map((text) => ({ kind, text })) : []
@@ -209,6 +209,63 @@ function PlanCard({
   )
 }
 
+/** The answers to a question card, as the decision each provider expects. */
+export function questionDecision(
+  request: PermissionRequestPayload,
+  provider: Provider,
+  values: string[][]
+): PermissionDecision {
+  const input = (request.input ?? {}) as Record<string, unknown>
+  const questions = (Array.isArray(input.questions) ? input.questions : []) as UserQuestion[]
+  const answers: Record<string, string> = {}
+  const answersById: Record<string, string[]> = {}
+  questions.forEach((q, i) => {
+    const v = values[i] ?? []
+    if (!v.length) return
+    answers[q.question] = v.join(', ')
+    if (q.id) answersById[q.id] = v
+  })
+  return {
+    behavior: 'allow',
+    updatedInput: provider === 'codex' ? { ...input, answers, answersById } : { ...input, answers }
+  }
+}
+
+/**
+ * A request as the iOS app draws it (`native.ts`): the same three shapes and
+ * the same words as the cards here, with the decisions still built on the page.
+ */
+export function nativeRequest(request: PermissionRequestPayload, provider: Provider): Record<string, unknown> {
+  const agent = PROVIDER_SHORT_LABELS[provider]
+  const input = (request.input ?? {}) as Record<string, unknown>
+  if (request.toolName === 'ExitPlanMode') {
+    return { id: request.id, kind: 'plan', title: `${agent} has a plan ready`, plan: (input.plan as string | undefined) ?? '' }
+  }
+  if (request.toolName === 'AskUserQuestion') {
+    const questions = (Array.isArray(input.questions) ? input.questions : []) as UserQuestion[]
+    return {
+      id: request.id,
+      kind: 'question',
+      title: questions.length === 1 ? `${agent} has a question` : `${agent} has ${questions.length} questions`,
+      questions: questions.map((q) => ({
+        question: q.question,
+        multiSelect: !!q.multiSelect,
+        options: (q.options ?? []).map((o) => ({ label: o.label, description: o.description ?? null }))
+      }))
+    }
+  }
+  const { label, detail } = toolLine({ name: request.toolName, input: request.input })
+  return {
+    id: request.id,
+    kind: 'tool',
+    title: `${agent} wants to use ${request.displayName ?? label}`,
+    detail: request.description ?? detail ?? null,
+    preview: previewOf(request.input),
+    reason: request.decisionReason ?? null,
+    always: !!(request.hasSuggestions && !request.noAlwaysAllow)
+  }
+}
+
 function QuestionCard({
   request,
   agent,
@@ -244,20 +301,7 @@ function QuestionCard({
       return { ...prev, [i]: next }
     })
 
-  const submit = (): void => {
-    const answers: Record<string, string> = {}
-    const answersById: Record<string, string[]> = {}
-    questions.forEach((q, i) => {
-      const v = values(i)
-      if (!v.length) return
-      answers[q.question] = v.join(', ')
-      if (q.id) answersById[q.id] = v
-    })
-    answer({
-      behavior: 'allow',
-      updatedInput: provider === 'codex' ? { ...input, answers, answersById } : { ...input, answers }
-    })
-  }
+  const submit = (): void => answer(questionDecision(request, provider, questions.map((_, i) => values(i))))
 
   return (
     <Card

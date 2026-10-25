@@ -10,6 +10,7 @@ import { UsageScreen } from './UsageScreen'
 import { Sidebar } from './Sidebar'
 import { useAppBadge } from './board'
 import { clearCache, loadSnapshot } from './cache'
+import { isNative, useNative } from './native'
 
 /**
  * Routes live in the hash — `#/` (a new chat), `#/c/<id>`, `#/new/<project>`,
@@ -95,6 +96,11 @@ export function App(): React.JSX.Element {
     if (paired) void useRemote.getState().openChat(openId)
   }, [paired, openId])
 
+  const phase = paired === null ? 'loading' : !paired || connection === 'unpaired' ? 'pairing' : 'app'
+  React.useEffect(() => {
+    if (isNative) useNative.setState({ phase })
+  }, [phase])
+
   if (paired === null) return <div className="h-[var(--kb-height,var(--app-height,100dvh))]" />
   if (!paired || connection === 'unpaired') {
     return <PairScreen initialCode={pairCode ?? ''} onPaired={() => location.reload()} />
@@ -106,6 +112,27 @@ export function App(): React.JSX.Element {
       : route.name === 'usage'
         ? 'usage'
         : `n:${route.cwd ?? ''}:${route.worktree?.path ?? ''}`
+  // Inside the iOS app the drawer, the header and the composer are native
+  // (`native.ts`): the page is the screen alone, under them.
+  if (isNative) {
+    return (
+      <div key={key} className="h-[100dvh] animate-in fade-in duration-200">
+        {route.name === 'chat' ? (
+          <ChatScreen chatId={route.id} />
+        ) : (
+          <NewChatScreen
+            initialCwd={route.name === 'new' ? route.cwd : null}
+            initialTarget={
+              route.name === 'new' && route.worktree && route.cwd
+                ? { kind: 'existing', path: route.worktree.path, branch: route.worktree.branch, repoRoot: route.cwd }
+                : undefined
+            }
+          />
+        )}
+      </div>
+    )
+  }
+
   return (
     <>
       <Shell activeId={openId}>

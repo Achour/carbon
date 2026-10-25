@@ -2,6 +2,7 @@ import * as React from 'react'
 import { createPortal } from 'react-dom'
 import { Check } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { useNativeOverlay } from './native'
 
 /** Past this far down, or this fast (px/ms), a released drag dismisses the sheet. */
 const DISMISS_DISTANCE = 110
@@ -37,6 +38,7 @@ export function Sheet({
 }): React.JSX.Element | null {
   const [mounted, setMounted] = React.useState(open)
   const [leaving, setLeaving] = React.useState(false)
+  useNativeOverlay(mounted)
   const flung = React.useRef(false)
   const panel = React.useRef<HTMLDivElement>(null)
   const scrim = React.useRef<HTMLButtonElement>(null)

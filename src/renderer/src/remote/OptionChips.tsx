@@ -7,6 +7,7 @@ import { ProviderMark, PROVIDER_COLOR } from '@/components/ui/provider-mark'
 import { cn } from '@/lib/utils'
 import { groupByProvider, usePickers, type OptionValues } from './options'
 import { Sheet, SheetRow, SheetSection } from './Sheet'
+import { isNative, useNativePickers } from './native'
 
 /**
  * The composer's pickers, shaped like the desktop's: one chip for the model
@@ -30,6 +31,9 @@ export function OptionChips({
   const mode = permissionAppearance(p.permissionMode, values.provider === 'codex')
   const effortLabel = p.efforts.find((e) => e.id === p.effort)?.label
   const tinted = p.permissionMode !== 'default'
+  // Inside the iOS app the chips and their sheets are native (`native.ts`).
+  useNativePickers(values, p, onChange)
+  if (isNative) return <></>
 
   return (
     <>
