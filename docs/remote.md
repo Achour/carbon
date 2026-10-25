@@ -483,6 +483,10 @@ desktop's, which is the reason this is a shell and not a rewrite.
   draws nothing. The text is the app's while the user types; a change the page
   makes itself (a picked `@` file, a send clearing it, a suggestion taken)
   bumps `textRev`, which is the app's cue to take the page's text.
+  The footer's context ring is the one part of the card that is not on the
+  composer's spec: `Composer` takes it as a prop the app never sees, so the
+  open chat's slice carries it (`context`, with `contextUsage` when one has
+  arrived) and the app draws the ring and its breakdown sheet.
 - **The prompts, the pickers and the project are native too, and the
   decisions stay here.** `nativeRequest` (`PermissionCard.tsx`) describes each
   waiting request in the cards' own words. The app answers a tool or a plan

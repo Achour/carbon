@@ -567,6 +567,15 @@ function snapshot(): Record<string, unknown> {
           subtitle: `${baseName(projectRoot(chat))}${chat.worktree ? ` · ${chat.worktree.branch}` : ''}`,
           provider: PROVIDER_LABELS[chat.provider],
           pinned: chat.pinnedAt !== undefined,
+          // The composer's context ring, with the breakdown its sheet shows.
+          context: chat.contextTokens
+            ? {
+                used: chat.contextTokens,
+                window: chat.contextWindow ?? 200_000,
+                provider: PROVIDER_SHORT_LABELS[chat.provider],
+                usage: r.open?.id === chat.id ? (r.open.contextUsage ?? null) : null
+              }
+            : null,
           // A cross-provider pick is armed, not applied: the app says so, with Undo.
           pendingSwitch:
             chat.pendingModel !== undefined && chat.pendingProvider
