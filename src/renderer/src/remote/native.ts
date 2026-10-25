@@ -1,16 +1,26 @@
 import * as React from 'react'
 import { create } from 'zustand'
-import { PROVIDER_LABELS, modelDisplayName, projectRoot, type PermissionModeId } from '@shared/types'
-import { PROVIDER_COLOR } from '@/components/ui/provider-mark'
+import {
+  PROVIDER_LABELS,
+  PROVIDER_SHORT_LABELS,
+  PROVIDERS,
+  modelDisplayName,
+  projectRoot,
+  type PermissionModeId,
+  type ProviderUsage
+} from '@shared/types'
+import { PATHS, PROVIDER_COLOR } from '@/components/ui/provider-mark'
+import { USAGE_CRITICAL, USAGE_WARN, peakUtilization } from '@/components/UsageBar'
+import { shortenPath } from '@/lib/format'
 import { chatActivityKind } from '@/lib/chatActivity'
 import { assembleModelOptions, modelKey } from '@/lib/models'
 import { useApp } from '@/store'
 import { useRemote } from './state'
-import { CODE_MAX, CODE_MIN, TEXT_SIZES, usePrefs } from './prefs'
+import { CHATS_PER_PROJECT_MAX, CHATS_PER_PROJECT_MIN, CODE_MAX, CODE_MIN, TEXT_SIZES, usePrefs } from './prefs'
 import { THEMES } from '@/lib/themes'
 import { baseName, chatTitle, listedChats, sidebarSections } from './format'
 import { groupByProvider, type OptionValues, type Pickers } from './options'
-import { rename, setArchived, setPinned } from './chatActions'
+import { placeChat, rename, setArchived, setPinned } from './chatActions'
 import { changes, diff, invoke, markSeen } from './api'
 import { deriveBoard } from './board'
 import { greeting } from '@/lib/format'
@@ -327,6 +337,82 @@ function placeState(place: NonNullable<NativeUi['place']>, home: string): unknow
   }
 }
 
+/**
+ * Images the app can decode. UIKit reads PNG and JPEG but not SVG, and a
+ * project's mark is often an SVG (a favicon, an app icon), as every provider
+ * mark is: those are drawn to a canvas here, once each, and posted as PNG.
+ * Until one is ready it reads as missing, which draws initials.
+ */
+const rasters = new Map<string, string | null>()
+
+function raster(uri: string): string | null {
+  if (!uri.startsWith('data:image/svg')) return uri
+  const done = rasters.get(uri)
+  if (done !== undefined) return done
+  rasters.set(uri, null)
+  const img = new Image()
+  img.onload = () => {
+    const size = 96
+    const canvas = Object.assign(document.createElement('canvas'), { width: size, height: size })
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    const w = img.naturalWidth || size
+    const h = img.naturalHeight || size
+    const scale = Math.min(size / w, size / h)
+    ctx.drawImage(img, (size - w * scale) / 2, (size - h * scale) / 2, w * scale, h * scale)
+    rasters.set(uri, canvas.toDataURL('image/png'))
+    publish()
+  }
+  img.src = uri
+  return null
+}
+
+let marks: Record<string, string | null> | null = null
+
+/**
+ * Each provider's mark in its own colour, as the app draws it beside a row.
+ * Built once per theme (`publishTheme` drops it), not once per post: a post
+ * goes out every frame a reply streams.
+ */
+function providerMarks(): Record<string, string | null> {
+  if (marks && Object.values(marks).every(Boolean)) return marks
+  const out: Record<string, string | null> = {}
+  for (const p of PROVIDERS) {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="96" height="96" fill="${cssHex(PROVIDER_COLOR[p])}">${PATHS[p].map((d) => `<path d="${d}"/>`).join('')}</svg>`
+    out[p] = raster(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`)
+  }
+  marks = out
+  return out
+}
+
+const tone = (pct: number | null | undefined): 'normal' | 'warn' | 'critical' =>
+  pct == null ? 'normal' : pct >= USAGE_CRITICAL ? 'critical' : pct >= USAGE_WARN ? 'warn' : 'normal'
+
+/** The plan's headroom, as the web app's Usage sheet shows it. */
+function usageState(usage: { claude: ProviderUsage; codex: ProviderUsage } | null): unknown {
+  if (!usage) return null
+  const peak = peakUtilization(usage)
+  return {
+    peak: peak
+      ? { label: `${PROVIDER_SHORT_LABELS[peak.provider]} ${Math.round(peak.pct)}%`, pct: peak.pct, tone: tone(peak.pct) }
+      : null,
+    providers: [usage.claude, usage.codex].map((p) => ({
+      provider: p.provider,
+      name: PROVIDER_SHORT_LABELS[p.provider],
+      plan: p.plan ?? null,
+      available: p.available,
+      note: p.note ?? null,
+      resetCredits: p.resetCredits ?? 0,
+      windows: p.windows.map((w) => ({
+        label: w.label,
+        pct: w.utilization,
+        tone: tone(w.utilization),
+        resetsAt: w.resetsAt ? Date.parse(w.resetsAt) || null : null
+      }))
+    }))
+  }
+}
+
 let probe: CanvasRenderingContext2D | null = null
 
 /**
@@ -412,13 +498,30 @@ function snapshot(): Record<string, unknown> {
       id: c.id,
       title: chatTitle(c),
       project: baseName(projectRoot(c)),
+      root: projectRoot(c),
+      // The detailed row's third line: where the work happens.
+      branch: c.worktree?.branch ?? r.branches[c.cwd] ?? null,
+      folder: shortenPath(c.cwd, r.home || undefined),
+      provider: c.provider,
       activity: kind,
       unseen: mark ? (mark.failed ? 'failed' : 'done') : null,
       pinned: c.pinnedAt !== undefined,
       updatedAt: c.updatedAt
     }
   }
-  const { waiting, pinned, groups } = sidebarSections(r.chats, r.permissions, '', null)
+  const prefs = usePrefs.getState()
+  // A saved filter naming a project with no chats left reads as no filter (`useProjectFilter`).
+  const listed = listedChats(r.chats)
+  const filter = prefs.sidebarProject && listed.some((c) => projectRoot(c) === prefs.sidebarProject) ? prefs.sidebarProject : null
+  const { waiting, pinned, groups, flat } = sidebarSections(r.chats, r.permissions, '', filter)
+  const detailed = prefs.sidebarDensity === 'detailed'
+  const counts = new Map<string, { count: number; latest: number }>()
+  for (const c of listed) {
+    const p = counts.get(projectRoot(c)) ?? { count: 0, latest: 0 }
+    p.count++
+    p.latest = Math.max(p.latest, c.updatedAt)
+    counts.set(projectRoot(c), p)
+  }
   const chat = at.name === 'chat' ? r.chats.find((c) => c.id === at.id) : undefined
   const projects: string[] = []
   for (const dir of r.defaults?.recentDirs ?? []) if (!projects.includes(dir)) projects.push(dir)
@@ -432,12 +535,23 @@ function snapshot(): Record<string, unknown> {
     overlay: n.overlays > 0 || useApp.getState().lightbox !== null,
     waiting: waiting.length > 0,
     sidebar: {
+      density: prefs.sidebarDensity,
+      chatsPerProject: prefs.chatsPerProject,
+      filter,
+      filters: [...counts.entries()]
+        .sort((a, b) => b[1].latest - a[1].latest)
+        .map(([root, p]) => ({ root, name: baseName(root), count: p.count })),
       waiting: waiting.map(row),
       pinned: pinned.map(row),
-      groups: groups.map(([root, g]) => ({ root, name: baseName(root), chats: g.chats.map(row) }))
+      // Detailed rows and a filtered list are one flat list in the user's order;
+      // compact rows hang under their project.
+      flat: detailed || filter ? flat.map(row) : [],
+      groups: detailed || filter ? [] : groups.map(([root, g]) => ({ root, name: baseName(root), chats: g.chats.map(row) }))
     },
     projects: projects.map((root) => ({ root, name: baseName(root) })),
-    icons: r.icons,
+    icons: Object.fromEntries(Object.entries(r.icons).map(([root, uri]) => [root, uri ? raster(uri) : null])),
+    providerMarks: providerMarks(),
+    usage: usageState(r.usage),
     chat: chat
       ? {
           id: chat.id,
@@ -470,7 +584,11 @@ function snapshot(): Record<string, unknown> {
         textSizes: TEXT_SIZES.map((z) => Math.round(z * 100)),
         codeSize: p.codeSize,
         codeMin: CODE_MIN,
-        codeMax: CODE_MAX
+        codeMax: CODE_MAX,
+        sidebarDensity: p.sidebarDensity,
+        chatsPerProject: p.chatsPerProject,
+        chatsPerProjectMin: CHATS_PER_PROJECT_MIN,
+        chatsPerProjectMax: CHATS_PER_PROJECT_MAX
       }
     })(),
     // The home screen: what needs you, what is working, what finished unseen
@@ -539,6 +657,9 @@ function publishTheme(): void {
   const json = JSON.stringify(next)
   if (json === themeSent) return
   themeSent = json
+  // Brand colours can differ per appearance.
+  marks = null
+  publish()
   handler?.postMessage({ type: 'theme', theme: next })
 }
 
@@ -623,6 +744,15 @@ const commands: Record<string, (...args: never[]) => unknown> = {
   // page hidden and visible again, and `state.ts` reconnects on that.
   dismissError: () => useRemote.getState().setError(null),
   clearDone: () => void useRemote.getState().clearDone(),
+  refreshUsage: (force: boolean) => void useRemote.getState().refreshUsage(force),
+  setSidebarDensity: (density: 'compact' | 'detailed') => {
+    usePrefs.getState().setSidebarDensity(density)
+    // Detailed rows name their branch; compact ones never read it.
+    void useRemote.getState().refreshBranches()
+  },
+  setChatsPerProject: (n: number) => usePrefs.getState().setChatsPerProject(n),
+  setSidebarProject: (root: string | null) => usePrefs.getState().setSidebarProject(root),
+  placeChat: (zone: string, from: string, target: string, after: boolean) => placeChat(zone, from, { id: target, after }),
   /** One row off Done: the Mac clears its mark and says so to every screen. */
   markSeen: (chatId: string) => void markSeen([chatId]).catch(() => {}),
   /** Take back an armed cross-provider switch, as the page's Undo does. */

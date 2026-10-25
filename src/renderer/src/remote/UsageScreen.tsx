@@ -2,7 +2,8 @@ import * as React from 'react'
 import { DotSpinner } from '@/components/ui/dot-spinner'
 import { UsageLookupContext, UsageReportView } from '@/components/UsageStats'
 import { useRemote } from './state'
-import { Header } from './App'
+import { Header, navigate } from './App'
+import { isNative, useNativeViewer } from './native'
 
 const NO_NAMES: Record<string, string> = {}
 
@@ -28,9 +29,12 @@ export function UsageScreen(): React.JSX.Element {
     if (connection === 'live') void load()
   }, [connection, load])
 
+  // Inside the iOS app the bar is the app's, and Back goes home.
+  useNativeViewer('Usage', () => navigate('#/'))
+
   return (
-    <div className="flex h-full flex-col">
-      <Header title="Usage" />
+    <div className="flex h-full flex-col" style={isNative ? { paddingTop: 'var(--native-top, 0px)' } : undefined}>
+      {!isNative && <Header title="Usage" />}
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-[env(safe-area-inset-bottom)]">
         {!report ? (
           <div className="flex h-full items-center justify-center gap-2.5 text-[14px] text-muted-foreground">

@@ -526,7 +526,15 @@ desktop's, which is the reason this is a shell and not a rewrite.
   screen opens on a camera viewfinder and connects on sight. The link is kept
   only as the Mac's origin afterwards, since its code is spent.
 - **The sidebar's sections are one function.** `sidebarSections` (`format.ts`)
-  is what both this client's sidebar and the app's list are built from.
+  is what both this client's sidebar and the app's list are built from, and
+  `placeChat` (`chatActions.ts`) is how either reorders. The app's sidebar
+  keeps everything this one has except the notifications bell (the app has no
+  push): both row shapes (`prefs.sidebarDensity`), the project filter, the
+  per-project fold, pin and archive with Undo. Plan usage lives in the app's
+  Settings rather than the sidebar's foot.
+- **The app decodes PNG and JPEG, not SVG.** Project marks are often SVG, and
+  every provider mark is, so `raster` draws each to a canvas once and posts
+  the PNG; until it is ready the row draws initials.
 
 ### Notifications (`main/webPush.ts`, `main/tailscaleCert.ts`, `remote/push.ts`)
 

@@ -119,6 +119,8 @@ export function App(): React.JSX.Element {
       <div key={key} className="h-[100dvh] animate-in fade-in duration-200">
         {route.name === 'chat' ? (
           <ChatScreen chatId={route.id} />
+        ) : route.name === 'usage' ? (
+          <UsageScreen />
         ) : (
           <NewChatScreen
             initialCwd={route.name === 'new' ? route.cwd : null}
