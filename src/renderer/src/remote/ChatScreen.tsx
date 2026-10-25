@@ -23,6 +23,8 @@ import { Sheet } from './Sheet'
 import { chatDraftKey } from './drafts'
 import { CodexReviewMenu } from '@/components/CodexReviewDialog'
 import { isNative, notifyApp, useNativeCommand } from './native'
+import { TaskDock } from '@/components/TaskDock'
+import { useTaskList } from '@/taskListStore'
 
 const NO_REQUESTS: PermissionRequestPayload[] = []
 
@@ -59,7 +61,9 @@ export function ChatScreen({ chatId }: { chatId: string }): React.JSX.Element {
     () => ({
       panels: false,
       openChat: (id) => navigate(`#/c/${encodeURIComponent(id)}`),
-      openAgent: (_parent, toolUseId) => setView({ kind: 'agent', toolUseId }),
+      // Inside the app a sub-agent's transcript is its own screen too.
+      openAgent: (_parent, toolUseId) =>
+        isNative ? notifyApp('open', { kind: 'agent', chatId, toolUseId }) : setView({ kind: 'agent', toolUseId }),
       openCanvas: (id) => (isNative ? notifyApp('open', { kind: 'canvas', id }) : setView({ kind: 'canvas', id })),
       openDiff: (path) =>
         isNative ? notifyApp('open', { kind: 'diff', chatId, path }) : setView({ kind: 'diff', path })
@@ -327,7 +331,17 @@ export function ChatScreen({ chatId }: { chatId: string }): React.JSX.Element {
         }
         busy={busy}
         // Inside the iOS app the pending switch is the app's, over its composer.
-        above={!isNative && chat?.pendingModel !== undefined && chat.pendingProvider ? <PendingSwitch chat={chat} /> : null}
+        // Inside the iOS app the pending switch and the checklist are the app's.
+        above={
+          isNative ? null : (
+            <>
+              {chat?.pendingModel !== undefined && chat.pendingProvider && <PendingSwitch chat={chat} />}
+              <div className="rounded-2xl border border-border bg-card empty:hidden [&_[data-task-dock]]:border-b-0">
+                <TaskDock chatId={chatId} />
+              </div>
+            </>
+          )
+        }
         tools={
           values && (
             <OptionChips
@@ -406,7 +420,7 @@ function Transcript({
   onOpenPlan: (plan: string) => void
 }): React.JSX.Element {
   const messages = useRemote((s) => (s.open?.id === chat.id ? s.open.messages : NO_MESSAGES))
-  const { nodes, showActivity, activityLabel, showActivityLabel } = useTranscript({
+  const { nodes, showActivity, activityLabel, showActivityLabel, tasks } = useTranscript({
     chat,
     messages,
     busy,
@@ -415,6 +429,14 @@ function Transcript({
     onToggleTurn,
     onOpenPlan
   })
+  // The live checklist, for the dock over the composer (and the app's own),
+  // published the way the desktop's `ChatView` does (`taskListStore`).
+  const setTasks = useTaskList((s) => s.setTasks)
+  const clearTasks = useTaskList((s) => s.clearTasks)
+  React.useEffect(() => {
+    setTasks(chat.id, tasks)
+  }, [chat.id, tasks, setTasks])
+  React.useEffect(() => () => clearTasks(chat.id), [chat.id, clearTasks])
   return (
     <div className="flex flex-col gap-4">
       {nodes}

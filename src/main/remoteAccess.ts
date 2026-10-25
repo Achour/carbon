@@ -21,6 +21,7 @@ import { git, gitDiff, gitStatus } from './git'
 import { promptLine } from '@shared/promptLine'
 import type {
   AppDefaults,
+  BackgroundJob,
   ChatEvent,
   ChatMeta,
   ChatStatus,
@@ -126,6 +127,9 @@ export const REMOTE_CHANNELS = new Set([
   'chat:send',
   'chat:interrupt',
   'chat:respond-permission',
+  // Stopping a dev server or shell the agent left running: the same kind of
+  // act as stopping the turn, and the only way to from the phone.
+  'chat:stop-background-job',
   // Model, effort, speed and permission mode — the composer's own pickers. A
   // cross-provider model only arms the switch, as on the desktop; it applies
   // at the next send (`applyPendingSwitch`).
@@ -242,6 +246,8 @@ export class RemoteAccess {
   private permissions = new Map<string, PermissionRequestPayload[]>()
   /** Each idle chat's suggested reply, so a phone that connects later still has it. */
   private suggestions = new Map<string, string>()
+  /** What each chat left running in the background, for the same reason. */
+  private jobs = new Map<string, BackgroundJob[]>()
   private clients = new Map<string, EventClient>()
   /**
    * The listening socket. It reads each connection's first byte and hands it
@@ -306,6 +312,9 @@ export class RemoteAccess {
       fresh = !prior.some((r) => r.id === ev.request.id)
       const list = prior.filter((r) => r.id !== ev.request.id)
       this.permissions.set(ev.chatId, [...list, ev.request])
+    } else if (ev.type === 'background-jobs') {
+      if (ev.jobs.length) this.jobs.set(ev.chatId, ev.jobs)
+      else this.jobs.delete(ev.chatId)
     } else if (ev.type === 'permission-resolved') {
       const list = (this.permissions.get(ev.chatId) ?? []).filter((r) => r.id !== ev.requestId)
       if (list.length) this.permissions.set(ev.chatId, list)
@@ -320,6 +329,7 @@ export class RemoteAccess {
     this.statuses.delete(chatId)
     this.suggestions.delete(chatId)
     this.permissions.delete(chatId)
+    this.jobs.delete(chatId)
     const s = this.settings()
     const touched = s.devices.filter((d) => d.unseen && chatId in d.unseen)
     if (!touched.length) return
@@ -747,6 +757,7 @@ export class RemoteAccess {
       statuses: Object.fromEntries(this.statuses),
       permissions: Object.fromEntries(this.permissions),
       suggestions: Object.fromEntries(this.suggestions),
+      jobs: Object.fromEntries(this.jobs),
       defaults,
       ...(await this.host.models()),
       unseen: device.unseen ?? {}

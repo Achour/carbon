@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import type {
   AppDefaults,
   AssistantMessage,
+  BackgroundJob,
   Attachment,
   ChatEvent,
   ChatMessage,
@@ -69,6 +70,8 @@ interface RemoteState {
   /** The provider's guess at each idle chat's next message (`suggestion`). */
   suggestions: Record<string, string>
   permissions: Record<string, PermissionRequestPayload[]>
+  /** What each chat left running in the background: a dev server, a shell. */
+  jobs: Record<string, BackgroundJob[]>
   /** Turns that ended while this phone was not looking — the home screen's Done (`board.ts`). */
   unseen: Record<string, RemoteUnseen>
   defaults: AppDefaults | null
@@ -163,6 +166,7 @@ export const useRemote = create<RemoteState>((set, get) => {
         statuses: snap.statuses,
         suggestions: snap.suggestions ?? {},
         permissions: snap.permissions,
+        jobs: snap.jobs ?? {},
         unseen: snap.unseen ?? {},
         defaults: snap.defaults,
         models: snap.models ?? [],
@@ -280,6 +284,7 @@ export const useRemote = create<RemoteState>((set, get) => {
     statuses: {},
     suggestions: {},
     permissions: {},
+    jobs: {},
     unseen: cached?.unseen ?? {},
     defaults: cached?.defaults ?? null,
     models: cached?.models ?? [],
@@ -613,6 +618,10 @@ export function reduce(s: RemoteState, ev: ChatEvent): Partial<RemoteState> {
     case 'suggestion': {
       const { [ev.chatId]: _prior, ...rest } = s.suggestions
       return { suggestions: ev.text ? { ...rest, [ev.chatId]: ev.text } : rest }
+    }
+    case 'background-jobs': {
+      const { [ev.chatId]: _prior, ...rest } = s.jobs
+      return { jobs: ev.jobs.length ? { ...rest, [ev.chatId]: ev.jobs } : rest }
     }
     case 'permission-request':
       return {

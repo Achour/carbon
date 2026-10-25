@@ -1558,6 +1558,13 @@ export interface RemoteSnapshot {
   permissions: Record<string, PermissionRequestPayload[]>
   /** Each idle chat's suggested reply (`ChatEvent` `suggestion`). */
   suggestions: Record<string, string>
+  /**
+   * What each chat left running in the background (`background-jobs`): a dev
+   * server, a shell, a monitor. Only ever told as an event, so a phone that
+   * connects later would otherwise not know any were running. Optional for a
+   * Mac older than the field.
+   */
+  jobs?: Record<string, BackgroundJob[]>
   defaults: AppDefaults
   /**
    * The model picker's inputs, exactly as the desktop composer gets them: the

@@ -18,7 +18,7 @@ import { useApp } from '@/store'
 import { useRemote } from './state'
 import { CHATS_PER_PROJECT_MAX, CHATS_PER_PROJECT_MIN, CODE_MAX, CODE_MIN, TEXT_SIZES, usePrefs } from './prefs'
 import { THEMES } from '@/lib/themes'
-import { baseName, chatTitle, isBusy, listedChats, sidebarSections } from './format'
+import { baseName, chatTitle, isBusy, listedChats, sidebarSections, toolLine } from './format'
 import { groupByProvider, type OptionValues, type Pickers } from './options'
 import { placeChat, rename, setArchived, setPinned } from './chatActions'
 import { changes, diff, invoke, markSeen } from './api'
@@ -33,10 +33,13 @@ import type {
   ChatMeta,
   ChatStatus,
   PermissionDecision,
+  ToolPart,
   WorktreeRef,
   WorktreeTarget
 } from '@shared/types'
-import { foldAgentRuns } from '@shared/agentRuns'
+import { agentRunOf, findAgentPart, foldAgentRuns, isAgentPart } from '@shared/agentRuns'
+import { useTaskList } from '@/taskListStore'
+import { isAgentJob, jobLabel } from '@/components/BackgroundJobs'
 
 /**
  * The Carbon iOS app's half of the page (`docs/remote.md`, "Inside the iOS
@@ -117,6 +120,11 @@ interface NativeUi {
   viewers: { id: number; title: string; close: () => void }[]
   /** The New-chat screen's project, and the projects it offers. */
   newChat: { cwd: string; projects: string[]; pick: (root: string) => void } | null
+  /**
+   * Sub-agents whose transcript the app has on screen, by spawning call id.
+   * A set, because one agent's screen can push another's.
+   */
+  watchedAgents: string[]
   /** Where the next chat runs (`WorktreeChip`): only for a repository. */
   place: {
     cwd: string
@@ -132,6 +140,7 @@ export const useNative = create<NativeUi>(() => ({
   composer: null,
   composerActions: null,
   pickers: null,
+  watchedAgents: [],
   overlays: 0,
   viewers: [],
   newChat: null,
@@ -320,6 +329,60 @@ function agentRows(messages: ChatMessage[]): unknown[] {
   }))
   agentFold = { messages, rows }
   return rows
+}
+
+/** One sub-agent's transcript, as rows the app draws: its words and its calls. */
+const detailCache = new Map<string, { part: ToolPart; detail: unknown }>()
+function agentDetail(messages: ChatMessage[], id: string, cwd: string): unknown {
+  const part = findAgentPart(messages, id)
+  if (!part) return null
+  const hit = detailCache.get(id)
+  if (hit?.part === part) return hit.detail
+  const run = agentRunOf(part)
+  const input = (part.input ?? {}) as Record<string, unknown>
+  const items: unknown[] = []
+  let text = ''
+  const flush = (): void => {
+    if (text.trim()) items.push({ kind: 'text', id: `t${items.length}`, text: text.trim() })
+    text = ''
+  }
+  for (const child of part.children ?? []) {
+    if (!child) continue
+    if (child.type === 'text') {
+      text += (text ? '\n\n' : '') + child.text
+    } else if (child.type === 'tool') {
+      flush()
+      const line = toolLine(child, cwd)
+      items.push({
+        kind: 'tool',
+        id: child.toolUseId,
+        label: line.label,
+        detail: line.detail ?? null,
+        status: child.status,
+        agent: isAgentPart(child)
+      })
+    }
+  }
+  flush()
+  // The agent's answer comes back as the call's result, which a provider may
+  // not also stream as a message; it is what the screen is opened for.
+  const answer = part.status !== 'running' ? part.output?.trim() : undefined
+  if (answer && !items.some((i) => (i as { text?: string }).text === answer)) {
+    items.push({ kind: 'text', id: 'answer', text: answer })
+  }
+  const detail = {
+    id,
+    title: run.description || run.type || 'Agent',
+    type: run.type ?? null,
+    status: run.status,
+    prompt: typeof input.prompt === 'string' ? input.prompt : null,
+    startedAt: run.startedAt ?? null,
+    endedAt: run.endedAt ?? null,
+    tokens: run.tokens ?? null,
+    items
+  }
+  detailCache.set(id, { part, detail })
+  return detail
 }
 
 function delegateRow(c: ChatMeta, status: ChatStatus | undefined): unknown {
@@ -647,6 +710,23 @@ function snapshot(): Record<string, unknown> {
           // loaded) and the chats its agent delegated to. Neither is in the
           // list: a delegate is a side chat, a sub-agent a tool call.
           agents: r.open?.id === chat.id ? agentRows(r.open.messages) : [],
+          // The agent's live checklist (`foldTaskTimeline`, published by the
+          // transcript); a finished one is a card in the transcript instead.
+          tasks: (useTaskList.getState().byChat[chat.id] ?? []).map((t) => ({
+            id: t.id,
+            subject: t.subject,
+            status: t.status,
+            activeForm: t.activeForm ?? null
+          })),
+          // What it left running: a dev server, a shell, a monitor. Agents
+          // are listed as agents (`isAgentJob`), not twice.
+          jobs: (r.jobs[chat.id] ?? [])
+            .filter((j) => !isAgentJob(j.type))
+            .map((j) => ({ id: j.id, kind: jobLabel(j.type), description: j.description, stoppable: j.stoppable !== false })),
+          // The transcripts of the sub-agents the app has open.
+          agentDetails: Object.fromEntries(
+            n.watchedAgents.map((id) => [id, r.open?.id === chat.id ? agentDetail(r.open.messages, id, chat.cwd) : null])
+          ),
           delegates: r.chats
             .filter((c) => c.delegation?.parentId === chat.id)
             .sort((a, b) => a.delegation!.createdAt - b.delegation!.createdAt)
@@ -827,6 +907,12 @@ const commands: Record<string, (...args: never[]) => unknown> = {
   // Reads for the app's own screens, which only the page can make: the
   // pairing cookie is the web view's.
   changes: (chatId: string) => changes(chatId),
+  /** The app's agent screen came on (or left): publish that agent's transcript while it shows. */
+  watchAgent: (id: string, on: boolean) =>
+    useNative.setState((s) => ({
+      watchedAgents: on ? [...s.watchedAgents.filter((a) => a !== id), id] : s.watchedAgents.filter((a) => a !== id)
+    })),
+  stopJob: (chatId: string, id: string) => invoke('chat:stop-background-job', chatId, id),
   diff: (chatId: string, path: string, scope?: 'repo') => diff(chatId, path, scope),
   canvas: (id: string) => invoke<Canvas | null>('canvas:get', id),
   // Coming back from the background needs nothing here: WebKit reports the
@@ -869,6 +955,7 @@ export function installNativeBridge(): void {
   document.documentElement.classList.add('native')
   useRemote.subscribe(publish)
   useNative.subscribe(publish)
+  useTaskList.subscribe(publish)
   usePrefs.subscribe(() => {
     requestAnimationFrame(publishTheme)
     publish()

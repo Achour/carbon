@@ -46,7 +46,7 @@ export function isAgentJob(type: string): boolean {
   return type === 'subagent' || type === 'local_agent' || type === 'remote_agent'
 }
 
-function jobLabel(type: string): string {
+export function jobLabel(type: string): string {
   switch (type) {
     case 'local_bash':
       return 'shell'

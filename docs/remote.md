@@ -495,24 +495,34 @@ desktop's, which is the reason this is a shell and not a rewrite.
   expects. `WorktreeChip` and the New-chat screen publish where the next chat
   runs and in which project (`useNativePlace`, `useNativeNewChat`), and draw
   nothing.
-- **Agents and delegates come with the open chat.** Neither is in the list
-  (a delegate is a side chat, a sub-agent a tool call), so the chat slice
-  carries both: `agents` folded from the loaded messages (`foldAgentRuns`,
-  once per messages array, so only as far back as the phone has scrolled) and
-  `delegates` from `ChatMeta.delegation`. The app draws a pill while any is
-  working and a sheet listing them; a delegate opens as a chat whose header
-  leads back to its parent (`delegation` on the slice), and a sub-agent opens
-  its transcript through the `openAgent` command. A delegate that is asking
-  or working is also on the board and in "Needs you" (`isLiveDelegate`): its
+- **What the agent has going comes with the open chat.** None of it is in
+  the list, so the chat slice carries it: `agents` folded from the loaded
+  messages (`foldAgentRuns`, once per messages array, so only as far back as
+  the phone has scrolled), `delegates` from `ChatMeta.delegation`, `tasks`
+  (the live checklist the transcript folds, published to `taskListStore` as
+  `ChatView` does, which is also what puts the desktop's `TaskDock` over the
+  web client's composer) and `jobs` (`background-jobs`, agents left out by
+  `isAgentJob`). Jobs were only ever told as an event, so `RemoteAccess`
+  keeps them per chat for the snapshot, and `chat:stop-background-job` is
+  relayed so the phone can stop one. The app draws one pill over the composer
+  (the checklist's current step first, the rest as counts) and an Activity
+  sheet listing all four. A delegate opens as a chat whose header leads back
+  to its parent (`delegation` on the slice). A delegate that is asking or
+  working is also on the board and in "Needs you" (`isLiveDelegate`): its
   permission prompt would otherwise reach the phone nowhere.
+- **A sub-agent's transcript is the app's own screen.** The app says which
+  agents it has on screen (`watchAgent`), and the slice carries each one's
+  rows in `agentDetails`: its words and its tool calls (`toolLine`), plus the
+  call's result, which is the agent's answer and is not always streamed as a
+  message. A nested agent's row pushes its own screen. The transcript card
+  reaches it through `notifyApp('open', { kind: 'agent' })`.
 - **The changes list, a diff, a canvas and a plan are the app's own
   screens.** They are pushed on its navigation stack (or shown as a sheet)
   from `notifyApp('open', …)`, so Back is the system's swipe. Their data comes
   through the page (`changes`, `diff`, `canvas`, `branches` return values the
   app awaits), because the pairing cookie is the web view's and the app never
-  talks to the Mac. A sub-agent's transcript is the exception: it is the
-  desktop's own components, so `FullView` stays on the page under the app's
-  bar (`useNativeViewer`), with the app's Back calling its `leave`.
+  talks to the Mac. `FullView` and `useNativeViewer` remain for the page's
+  Usage screen, under the app's bar with the app's Back calling its `leave`.
 - **Anything else the page opens over the transcript hides the app's
   chrome.** `Sheet` and the lightbox count themselves in `useNativeOverlay`.
   A web sheet sliding up behind the native composer was the failure this
