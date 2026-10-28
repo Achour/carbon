@@ -176,6 +176,11 @@ const HTML_CANDIDATES = ['index.html', 'public/index.html', 'src/index.html'] as
  */
 const ICON_DIRS = [
   'public',
+  // A favicon generator's whole output, kept in its own folder and declared
+  // from code (a router's `head()`) rather than from an `index.html`.
+  'public/favicon',
+  'public/favicons',
+  'public/icons',
   'static',
   'app',
   'src/app',

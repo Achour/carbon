@@ -223,7 +223,11 @@ So four tiers sit under the exact list (`main/iconCandidates.ts`, pinned by
 4. **A directory scan** of the folders icons live in — one `readdir` apiece, no
    recursion, names anchored on `favicon`/`icon`/`logo`. A guess, which is why
    it is last before the leftovers, and it is the tier that catches the size and
-   version suffixes nobody standardized.
+   version suffixes nobody standardized. The folders include a favicon
+   generator's own (`public/favicon/`, `public/icons/`): an app that declares
+   its links from code — a router's `head()`, no `index.html`, a manifest built
+   at runtime — leaves nothing for the declared tiers to read, and its whole
+   icon set sits one level below `public/`.
 5. **Framework leftovers** (`vite.svg`, `next.svg`), which identify the
    *framework* and would otherwise give three unrelated projects the same mark.
 
