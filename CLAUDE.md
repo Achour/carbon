@@ -412,6 +412,7 @@ it guards**, and put new reasoning in that file rather than back in this one.
   (`QuoteBar`, `lib/quoteSelection.ts`) and the turn rail with its bookmarks
   (`TurnRail`, `lib/turnRail.ts`, `ChatMeta.bookmarks`).
 - **`docs/chat-layout.md`** — the one reading column (`lib/chatColumn.ts`),
+  the composer's one-line/open shapes and its float over the transcript,
   tables in a message (`.markdown table`, `Markdown.tsx`), type in the chrome
   (`--ui-row`, `--code-font-size`, and why there is no text-size setting), file
   icons (`lib/fileIcon.tsx`, `--icon-*`) and the clickable file references each

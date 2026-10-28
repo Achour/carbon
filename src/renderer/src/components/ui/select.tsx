@@ -56,7 +56,8 @@ export function CompactSelect({
   className,
   disabled,
   open,
-  onOpenChange
+  onOpenChange,
+  chevron = true
 }: {
   value: string
   onValueChange: (value: string) => void
@@ -68,6 +69,8 @@ export function CompactSelect({
   /** Controlled popup state, used when a keyboard command opens this picker. */
   open?: boolean
   onOpenChange?: (open: boolean) => void
+  /** Off where the trigger's hover already says it opens — the composer's bar. */
+  chevron?: boolean
 }): React.JSX.Element {
   const selected = options.find((o) => o.value === value)
 
@@ -96,9 +99,11 @@ export function CompactSelect({
       >
         {icon}
         <span className="max-w-36 truncate">{selected?.label ?? value}</span>
-        <Select.Icon className="shrink-0">
-          <ChevronDown className="size-3 opacity-60" />
-        </Select.Icon>
+        {chevron && (
+          <Select.Icon className="shrink-0">
+            <ChevronDown className="size-3 opacity-60" />
+          </Select.Icon>
+        )}
       </Select.Trigger>
       <Select.Portal>
         <Select.Positioner

@@ -13,6 +13,7 @@ import {
 import type { ChatMeta } from '@shared/types'
 import { PROVIDER_SHORT_LABELS, projectRoot } from '@shared/types'
 import { CHAT_BLEED } from '@/lib/chatColumn'
+import { cn } from '@/lib/utils'
 import { basename } from '@/lib/format'
 import { messagesOf, severalChatsShown, useApp } from '@/store'
 import { useTaskList } from '@/taskListStore'
@@ -341,6 +342,22 @@ export const ChatView = React.memo(function ChatView({
     observer.observe(scroller)
     return () => observer.disconnect()
   }, [followBottom, jumpToBottom])
+
+  // The floating composer's height, as the room the transcript leaves under
+  // its last line. Written straight to the view's style rather than through
+  // state: it changes on every fold and every dock, and the column's own
+  // observer above already keeps a pinned reader on the bottom when it does.
+  const composerRef = React.useRef<HTMLDivElement>(null)
+  React.useLayoutEffect(() => {
+    const el = composerRef.current
+    const view = viewRef.current
+    if (!el || !view) return
+    const apply = (): void => view.style.setProperty('--composer-h', `${el.offsetHeight}px`)
+    apply()
+    const observer = new ResizeObserver(apply)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
 
   // Jump to the bottom when switching chats.
   React.useEffect(() => {
@@ -744,7 +761,7 @@ export const ChatView = React.memo(function ChatView({
                 <StreamingIndicator label={activityLabel} visible={showActivityLabel} />
               </div>
             )}
-            <div className="h-2" />
+            <div className="h-[calc(var(--composer-h,0px)+0.5rem)] shrink-0" />
           </div>
         </div>
 
@@ -769,7 +786,7 @@ export const ChatView = React.memo(function ChatView({
 
         {/* Jump to bottom */}
         {showJump && (
-          <div className="pointer-events-none absolute right-0 bottom-3 left-0 flex justify-center pr-[var(--scrollbar-width)]">
+          <div className="pointer-events-none absolute right-0 bottom-[calc(var(--composer-h,0px)+0.75rem)] left-0 z-30 flex justify-center pr-[var(--scrollbar-width)]">
             <Button
               size="icon-sm"
               variant="secondary"
@@ -787,160 +804,181 @@ export const ChatView = React.memo(function ChatView({
             </Button>
           </div>
         )}
-      </div>
 
-      {/* Composer.
+        {/* Composer — floating over the transcript's foot, which scrolls under
+            it: `--composer-h` (measured below) is the room the column, the jump
+            button and the turn rail leave for it.
 
-          The padding sits *inside* `max-w-3xl`, exactly as it does on the
-          transcript above — spelled the other way round it made `max-w-3xl`
-          mean the box in one place and the text column in the other, so the
-          composer ran 48px wider than the reply it answers. `pr` is the
-          scrollbar the scroller reserves and this element does not, without
-          which the two columns are centered 6px apart. */}
-      <div className="shrink-0 pb-5 pr-[var(--scrollbar-width)]">
-        <div className="mx-auto max-w-3xl px-6">
-          {/* One bleed for the whole stack: the pill rows are framed objects
-              like the composer, and they read as one column only while their
-              borders share an edge. */}
-          <div className={CHAT_BLEED}>
-            <AgentActivityBar chatId={chat.id} />
-            {stripHere && (
-              <ContextStrip
-                cwd={chat.cwd}
-                project={projectRoot(chat)}
-                git={git}
-                onReviewChanges={() => void reviewChanges()}
-                onUpdateFromDefault={() => void runGitAction('update-from-main')}
-              />
-            )}
-            {queued.length > 0 && (
-              <div className="mb-2 space-y-1.5">
-                {queued.map((q) => (
-                  <div
-                    key={q.id}
-                    className="flex animate-enter items-center gap-2 rounded-lg border border-border bg-secondary/40 px-3 py-1.5 text-xs text-muted-foreground"
-                  >
-                    <Clock className="size-3 shrink-0" />
-                    <span className="min-w-0 flex-1 truncate">
-                      {q.text || q.attachments?.map((a) => a.name).join(', ')}
-                    </span>
-                    <span className="shrink-0 text-[10px] tracking-wide text-muted-foreground/60 uppercase">
-                      queued
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => void sendQueuedNow(chat.id, q.id)}
-                      aria-label="Send now"
-                      title="Send now — interrupts the current turn"
-                      className="shrink-0 rounded p-0.5 transition-colors hover:bg-accent hover:text-foreground"
+            The padding sits *inside* `max-w-3xl`, exactly as it does on the
+            transcript above — spelled the other way round it made `max-w-3xl`
+            mean the box in one place and the text column in the other, so the
+            composer ran 48px wider than the reply it answers. `pr` is the
+            scrollbar the scroller reserves and this element does not, without
+            which the two columns are centered 6px apart. */}
+        <div
+          ref={composerRef}
+          className={cn(
+            'pointer-events-none absolute inset-x-0 bottom-0 z-20 pr-[var(--scrollbar-width)]',
+            // Solid only below the frame — under the strip, where passing text
+            // would collide with its own — and clear from the frame's lower
+            // edge up, so the transcript runs under the whole box.
+            stripHere
+              ? 'bg-[linear-gradient(to_top,var(--background)_0,var(--background)_26px,transparent_38px)] pb-2.5'
+              : 'bg-[linear-gradient(to_top,var(--background)_0,var(--background)_10px,transparent_20px)] pb-5'
+          )}
+        >
+          <div className="mx-auto max-w-3xl px-6">
+            {/* One bleed for the whole stack: the pill rows are framed objects
+                like the composer, and they read as one column only while their
+                borders share an edge. */}
+            <div className={cn(CHAT_BLEED, 'pointer-events-auto')}>
+              <AgentActivityBar chatId={chat.id} />
+              {queued.length > 0 && (
+                <div className="mb-2 space-y-1.5">
+                  {queued.map((q) => (
+                    <div
+                      key={q.id}
+                      className="flex animate-enter items-center gap-2 rounded-lg border border-border bg-secondary/40 px-3 py-1.5 text-xs text-muted-foreground"
                     >
-                      <ArrowUp className="size-3" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => removeQueued(chat.id, q.id)}
-                      aria-label="Remove queued message"
-                      className="shrink-0 rounded p-0.5 transition-colors hover:bg-accent hover:text-foreground"
-                    >
-                      <X className="size-3" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-            <Composer
-              // Everything that belongs to the input rides the composer's own
-              // box rather than sitting above it, so the stack reads as one
-              // object however the border moves.
-              //
-              // Order is by what is waiting on whom, and the prompts come last
-              // because last is *adjacent to the textarea*: the checklist and
-              // the goal bar grow and collapse on their own, and above the
-              // prompt their movement never pushes the question you have to
-              // answer away from the keys that answer it.
-              //
-              // Every column carries its own: the goal bar, the checklist and
-              // the prompts are all keyed by chat id.
-              header={
-                <>
-                  {chat.provider === 'codex' && (
-                    <CodexGoalBar chatId={chat.id} threadId={chat.sessionId} working={busy} />
-                  )}
-                  <TaskDock chatId={chat.id} />
-                  <CodexReviewMenu
-                    open={reviewOpen}
-                    onOpenChange={setReviewOpen}
-                    cwd={chat.cwd}
-                    currentBranch={git?.branch}
-                    defaultBranch={git?.defaultBranch}
-                    onStart={(target) => startCodexReview(chat.id, target)}
-                  />
-                  <PromptDock
-                    chatId={chat.id}
-                    provider={chat.provider}
-                    requests={permissions}
-                    onReviewPlan={reviewPendingPlan}
-                  />
-                  <BtwDock chatId={chat.id} cwd={chat.cwd} />
-                </>
-              }
-              // Returned, not voided: the composer needs the promise so a failed
-              // send restores the draft instead of discarding it.
-              onSend={(text, attachments) => {
-                if (
-                  composerProvider === 'codex' &&
-                  text.trim().toLowerCase() === '/review' &&
-                  attachments.length === 0
-                ) {
-                  setReviewOpen(true)
-                  return Promise.resolve()
+                      <Clock className="size-3 shrink-0" />
+                      <span className="min-w-0 flex-1 truncate">
+                        {q.text || q.attachments?.map((a) => a.name).join(', ')}
+                      </span>
+                      <span className="shrink-0 text-[10px] tracking-wide text-muted-foreground/60 uppercase">
+                        queued
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => void sendQueuedNow(chat.id, q.id)}
+                        aria-label="Send now"
+                        title="Send now — interrupts the current turn"
+                        className="shrink-0 rounded p-0.5 transition-colors hover:bg-accent hover:text-foreground"
+                      >
+                        <ArrowUp className="size-3" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => removeQueued(chat.id, q.id)}
+                        aria-label="Remove queued message"
+                        className="shrink-0 rounded p-0.5 transition-colors hover:bg-accent hover:text-foreground"
+                      >
+                        <X className="size-3" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <Composer
+                // Everything that belongs to the input rides the composer's own
+                // box rather than sitting above it, so the stack reads as one
+                // object however the border moves.
+                //
+                // Order is by what is waiting on whom, and the prompts come last
+                // because last is *adjacent to the textarea*: the checklist and
+                // the goal bar grow and collapse on their own, and above the
+                // prompt their movement never pushes the question you have to
+                // answer away from the keys that answer it.
+                //
+                // Every column carries its own: the goal bar, the checklist and
+                // the prompts are all keyed by chat id.
+                header={
+                  <>
+                    {chat.provider === 'codex' && (
+                      <CodexGoalBar chatId={chat.id} threadId={chat.sessionId} working={busy} />
+                    )}
+                    <TaskDock chatId={chat.id} />
+                    <CodexReviewMenu
+                      open={reviewOpen}
+                      onOpenChange={setReviewOpen}
+                      cwd={chat.cwd}
+                      currentBranch={git?.branch}
+                      defaultBranch={git?.defaultBranch}
+                      onStart={(target) => startCodexReview(chat.id, target)}
+                    />
+                    <PromptDock
+                      chatId={chat.id}
+                      provider={chat.provider}
+                      requests={permissions}
+                      onReviewPlan={reviewPendingPlan}
+                    />
+                    <BtwDock chatId={chat.id} cwd={chat.cwd} />
+                  </>
                 }
-                return sendMessage(chat.id, text, attachments)
-              }}
-              draft={initialDraft}
-              onDraftChange={(next) => saveChatDraft(chat.id, next)}
-              collapsible={collapsible}
-              // Only the thread's own chat takes the caret on mount. Every
-              // column mounts at once when a thread opens, and each grabbing it
-              // left focus — and with it the thread's focused chat — on the
-              // last column. A column added or jumped to is handed the caret
-              // explicitly (`focusComposer`).
-              autoFocus={!side}
-              streaming={busy}
-              onStop={() => void interrupt(chat.id)}
-              // A cross-provider pick is only armed until the next send; the
-              // composer previews it (chip, efforts, placeholder) while the chat
-              // itself stays on its current backend.
-              model={chat.pendingModel ?? chat.model ?? ''}
-              onModelChange={(model, modelProvider) =>
-                void setChatOptions(chat.id, { model, modelProvider })
-              }
-              effort={chat.effort ?? ''}
-              onEffortChange={(effort, opts) => void setChatOptions(chat.id, { effort, ...opts })}
-              modelEfforts={modelEfforts}
-              modelServiceTiers={modelServiceTiers}
-              serviceTier={chat.serviceTier ?? 'standard'}
-              onServiceTierChange={(serviceTier, opts) =>
-                void setChatOptions(chat.id, { serviceTier, ...opts })
-              }
-              permissionMode={chat.permissionMode}
-              onPermissionModeChange={(permissionMode) =>
-                void setChatOptions(chat.id, { permissionMode })
-              }
-              contextTokens={chat.contextTokens}
-              contextWindow={chat.contextWindow}
-              provider={composerProvider}
-              chatId={chat.id}
-              cwd={chat.cwd}
-              commands={commands}
-              // Busy-gated so a note left behind by a crash can never stick.
-              switchingNote={busy ? chat.switchingNote : undefined}
-              placeholder={
-                composerProvider === 'claude'
-                  ? undefined
-                  : `Ask ${PROVIDER_SHORT_LABELS[composerProvider]} anything…`
-              }
-            />
+                // Returned, not voided: the composer needs the promise so a failed
+                // send restores the draft instead of discarding it.
+                onSend={(text, attachments) => {
+                  if (
+                    composerProvider === 'codex' &&
+                    text.trim().toLowerCase() === '/review' &&
+                    attachments.length === 0
+                  ) {
+                    setReviewOpen(true)
+                    return Promise.resolve()
+                  }
+                  return sendMessage(chat.id, text, attachments)
+                }}
+                draft={initialDraft}
+                onDraftChange={(next) => saveChatDraft(chat.id, next)}
+                collapsible={collapsible}
+                floating
+                // Only the thread's own chat takes the caret on mount. Every
+                // column mounts at once when a thread opens, and each grabbing it
+                // left focus — and with it the thread's focused chat — on the
+                // last column. A column added or jumped to is handed the caret
+                // explicitly (`focusComposer`).
+                autoFocus={!side}
+                streaming={busy}
+                onStop={() => void interrupt(chat.id)}
+                // A cross-provider pick is only armed until the next send; the
+                // composer previews it (chip, efforts, placeholder) while the chat
+                // itself stays on its current backend.
+                model={chat.pendingModel ?? chat.model ?? ''}
+                onModelChange={(model, modelProvider) =>
+                  void setChatOptions(chat.id, { model, modelProvider })
+                }
+                effort={chat.effort ?? ''}
+                onEffortChange={(effort, opts) => void setChatOptions(chat.id, { effort, ...opts })}
+                modelEfforts={modelEfforts}
+                modelServiceTiers={modelServiceTiers}
+                serviceTier={chat.serviceTier ?? 'standard'}
+                onServiceTierChange={(serviceTier, opts) =>
+                  void setChatOptions(chat.id, { serviceTier, ...opts })
+                }
+                permissionMode={chat.permissionMode}
+                onPermissionModeChange={(permissionMode) =>
+                  void setChatOptions(chat.id, { permissionMode })
+                }
+                contextTokens={chat.contextTokens}
+                contextWindow={chat.contextWindow}
+                provider={composerProvider}
+                chatId={chat.id}
+                cwd={chat.cwd}
+                commands={commands}
+                // Busy-gated so a note left behind by a crash can never stick.
+                switchingNote={busy ? chat.switchingNote : undefined}
+                placeholder={
+                  composerProvider === 'claude'
+                    ? undefined
+                    : `Ask ${PROVIDER_SHORT_LABELS[composerProvider]} anything…`
+                }
+              />
+              {/* Under the box rather than above it: where the chat runs and
+                  what it has changed are facts to glance at, not controls to
+                  reach for before typing, and a pill row above the input read
+                  as a second toolbar. Inset by the pill's own padding so the
+                  folder's text lands on the column. */}
+              {stripHere && (
+                <ContextStrip
+                  quiet
+                  className="mt-1.5 px-2"
+                  cwd={chat.cwd}
+                  project={projectRoot(chat)}
+                  git={git}
+                  onReviewChanges={() => void reviewChanges()}
+                  onUpdateFromDefault={() => void runGitAction('update-from-main')}
+                />
+              )}
+            </div>
           </div>
         </div>
       </div>

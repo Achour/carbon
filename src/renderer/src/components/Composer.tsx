@@ -3,14 +3,12 @@ import {
   ArrowUp,
   Brain,
   Check,
-  ChevronDown,
   ChevronRight,
   CornerDownRight,
   MessageSquareQuote,
   MousePointerClick,
-  Paperclip,
+  Plus,
   PenLine,
-  Sparkles,
   Square,
   Search,
   Zap,
@@ -64,7 +62,6 @@ import { CompactSelect } from '@/components/ui/select'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { ProviderAvatar } from '@/components/ui/provider-mark'
 import { WithTooltip } from '@/components/ui/tooltip'
-import { SessionPanel } from '@/components/SessionPanel'
 
 /**
  * How long typing pauses before the draft reaches the store. Long enough that a
@@ -270,7 +267,7 @@ function ContextRing({
             strokeDasharray={`${c * pct} ${c}`}
           />
         </svg>
-        <span className="text-[10px] tabular-nums">{Math.round(pct * 100)}%</span>
+        {pct > 0.7 && <span className="text-[10px] tabular-nums">{Math.round(pct * 100)}%</span>}
       </PopoverTrigger>
       <PopoverContent side="top" align="end" className="w-64">
         <ContextDetail used={used} window={win} name={name} chatId={chatId} />
@@ -410,14 +407,14 @@ function ModelSettingsPicker({
         }`}
         className="no-drag inline-flex h-7 min-w-0 max-w-full select-none items-center gap-1 overflow-hidden rounded-md px-2 text-xs font-medium text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[popup-open]:bg-accent data-[popup-open]:text-foreground disabled:opacity-50"
       >
-        <Sparkles className="size-3 shrink-0" />
-        <span className="max-w-32 truncate">{selectedName}</span>
+        <span className="max-w-32 truncate text-foreground">{selectedName}</span>
         {/* The effort is the first thing a narrow column gives up: the model
             name says which backend answers, and the popover still shows both. */}
         {!compact && efforts.length > 1 && (
           <>
-            <span className="shrink-0 text-muted-foreground/50 @max-[400px]:hidden">·</span>
-            <span className="shrink-0 @max-[400px]:hidden">{selectedEffort?.label ?? effort}</span>
+            <span className="shrink-0 font-normal @max-[400px]:hidden">
+              {selectedEffort?.label ?? effort}
+            </span>
           </>
         )}
         {serviceTier === 'fast' && !compact && (
@@ -436,7 +433,6 @@ function ModelSettingsPicker({
             </span>
           </>
         )}
-        <ChevronDown className="size-3 shrink-0 opacity-60" />
       </PopoverTrigger>
       {/* w-80, not w-72: the Default row carries a label, the model it resolves
           to, and a context badge, which truncates the label at the narrower width. */}
@@ -676,6 +672,7 @@ export function Composer({
   clearToken = 0,
   header,
   collapsible = false,
+  floating = false,
   submitLabel
 }: {
   /** May be async; if it rejects, the composer restores the draft. */
@@ -753,6 +750,8 @@ export function Composer({
    * each column. See `collapsed` below for what counts as writing.
    */
   collapsible?: boolean
+  /** Drawn over the transcript, which scrolls under it: the frame goes translucent. */
+  floating?: boolean
   /**
    * Words on the send button instead of the arrow, for a composer whose send
    * is not a message — the Scheduled page's, where it saves the task.
@@ -1128,6 +1127,13 @@ export function Composer({
     slashQuery === null &&
     mention === null
   const engage = collapsible ? () => setEngaged(true) : undefined
+  // One line until the draft outgrows it: the input and the toolbar share a
+  // row — the folded shape, without the folding — and the toolbar drops under
+  // the text the moment a line wraps, breaks, or a chip arrives. Sticky until
+  // the input empties, so deleting back under the edge does not flip the
+  // layout under the caret on every keystroke.
+  const [stacked, setStacked] = React.useState(false)
+  const inline = collapsed || (!stacked && attachments.length === 0 && !text.includes('\n'))
 
   // The provider's own guess at the next message (Claude's and Grok's): a chip
   // at the head of the empty composer, taken by Tab or a click into the input
@@ -1160,11 +1166,25 @@ export function Composer({
     if (!el) return
     el.style.height = 'auto'
     el.style.height = `${Math.min(el.scrollHeight, 220)}px`
+    // A scrollbar only at the cap: `scrollHeight` is rounded, and three lines
+    // of a 22.75px line-height overflow the height it reports by a fraction —
+    // enough to draw a full-length track beside text that fits.
+    el.style.overflowY = el.scrollHeight > 220 ? 'auto' : 'hidden'
   }, [])
   // Folding changes the input's padding and wrapping, and an empty input is as
   // tall as its placeholder wraps, so all three are measured again rather than
   // kept from the previous shape.
-  React.useLayoutEffect(fitInput, [fitInput, text, collapsed, inputPlaceholder])
+  React.useLayoutEffect(fitInput, [fitInput, text, inline, inputPlaceholder])
+  // Read after the input is fitted: on one line it does not wrap, so a draft
+  // that has outgrown the line is one wider than the box.
+  React.useLayoutEffect(() => {
+    if (text === '') {
+      if (stacked) setStacked(false)
+      return
+    }
+    const el = ref.current
+    if (el && inline && !collapsed && el.scrollWidth > el.clientWidth + 1) setStacked(true)
+  }, [text, inline, collapsed, stacked])
   // So is a change of width — the panel, the sidebar, a thread column, the
   // window. Measured only on text changes, an input sized while its column was
   // narrow (a wrapped placeholder, a long draft) kept that height after the
@@ -1194,7 +1214,7 @@ export function Composer({
   React.useLayoutEffect(() => {
     const el = frameRef.current
     const from = lastHeight.current
-    if (!el || from === null || !collapsible) return
+    if (!el || from === null) return
     const to = el.getBoundingClientRect().height
     if (Math.abs(to - from) < 1) return
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
@@ -1209,8 +1229,8 @@ export function Composer({
     }
     grow.onfinish = release
     grow.oncancel = release
-    // `collapsible` is read, not a trigger: only the fold itself animates.
-  }, [collapsed])
+    // Only the change of shape animates — the fold, and the line becoming a box.
+  }, [inline])
   React.useLayoutEffect(() => {
     lastHeight.current = frameRef.current?.getBoundingClientRect().height ?? null
   })
@@ -1232,65 +1252,71 @@ export function Composer({
       <Button
         size="icon-sm"
         variant="ghost"
-        // Folded, attach moves after the pickers, beside send, as one cluster.
-        className={cn('shrink-0 text-muted-foreground', collapsed && 'order-1')}
+        // First in every shape: on one line it leads the row, ahead of the
+        // input; open, it leads the toolbar under it.
+        className={cn('shrink-0 text-muted-foreground', inline && 'ml-1.5')}
         onClick={() => fileInputRef.current?.click()}
         disabled={locked}
         aria-label="Attach files"
       >
-        <Paperclip />
+        <Plus />
       </Button>
     </WithTooltip>
   )
   // Model owns its related inference controls; permissions remains a separate
   // safety decision. This keeps the footer compact.
-  const pickers = (
-    <>
-      <ModelSettingsPicker
-        model={selectedModel}
-        onModelChange={handleModelChange}
-        models={pickerModels}
-        effort={effortValue}
-        onEffortChange={onEffortChange}
-        efforts={effortOptions}
-        serviceTier={serviceTierValue}
-        onServiceTierChange={onServiceTierChange}
-        serviceTiers={serviceTierOptions}
-        fastNote={fastNote}
-        disabled={locked}
-        compact={collapsed}
-        open={modelSettingsOpen}
-        onOpenChange={setModelSettingsOpen}
-      />
-      <CompactSelect
-        value={permissionValue}
-        onValueChange={(v) => onPermissionModeChange(v as PermissionModeId)}
-        options={permissionOptions.map((m) => {
-          const appearance = permissionAppearance(m.id, isCodex)
-          return {
-            value: m.id,
-            label: m.label,
-            description: m.description,
-            icon: <appearance.Icon className={cn('size-3.5', appearance.iconClassName)} />
-          }
-        })}
-        icon={<selectedPermissionAppearance.Icon className="size-3.5" />}
-        // Icon only in a narrow column: its colour already says how much the
-        // agent may do, and the label is one click away.
-        className={cn(
-          'min-w-0 shrink-0 @max-[400px]:[&>span]:hidden',
-          // Folded, the input shares the line, so the words go sooner.
-          collapsed && '@max-[520px]:[&>span]:hidden',
-          selectedPermissionAppearance.triggerClassName
-        )}
-        open={permissionOpen}
-        onOpenChange={setPermissionOpen}
-      />
-    </>
+  const modelPicker = (
+    <ModelSettingsPicker
+      model={selectedModel}
+      onModelChange={handleModelChange}
+      models={pickerModels}
+      effort={effortValue}
+      onEffortChange={onEffortChange}
+      efforts={effortOptions}
+      serviceTier={serviceTierValue}
+      onServiceTierChange={onServiceTierChange}
+      serviceTiers={serviceTierOptions}
+      fastNote={fastNote}
+      disabled={locked}
+      compact={inline}
+      open={modelSettingsOpen}
+      onOpenChange={setModelSettingsOpen}
+    />
+  )
+  const permissionPicker = (
+    <CompactSelect
+      value={permissionValue}
+      onValueChange={(v) => onPermissionModeChange(v as PermissionModeId)}
+      options={permissionOptions.map((m) => {
+        const appearance = permissionAppearance(m.id, isCodex)
+        return {
+          value: m.id,
+          label: m.label,
+          description: m.description,
+          icon: <appearance.Icon className={cn('size-3.5', appearance.iconClassName)} />
+        }
+      })}
+      icon={
+        <selectedPermissionAppearance.Icon
+          className={cn('size-3.5', selectedPermissionAppearance.iconClassName)}
+        />
+      }
+      chevron={false}
+      // Icon only in a narrow column: its colour already says how much the
+      // agent may do, and the label is one click away.
+      className={cn(
+        'min-w-0 shrink-0 @max-[400px]:[&>span]:hidden',
+        // On one line the input needs the room, and the label is back once
+        // the toolbar has a row of its own.
+        inline && '[&>span]:hidden'
+      )}
+      open={permissionOpen}
+      onOpenChange={setPermissionOpen}
+    />
   )
   const contextRing =
     contextTokens != null && contextTokens > 0 ? (
-      <div className={cn('flex shrink-0', collapsed && 'order-1')}>
+      <div className={cn('flex shrink-0', inline && 'order-1')}>
         <ContextRing
           used={contextTokens}
           window={contextWindow ?? 200_000}
@@ -1303,10 +1329,10 @@ export function Composer({
     streaming && onStop ? (
       <WithTooltip label="Stop generating">
         <Button
-          size="icon"
+          size="icon-sm"
           variant="destructive"
           onClick={onStop}
-          className={cn('shrink-0 rounded-full [&_svg]:size-3', collapsed && 'order-2')}
+          className={cn('size-8 shrink-0 rounded-full [&_svg]:size-3', inline && 'order-2')}
           aria-label="Stop generating"
         >
           <Square className="fill-current" />
@@ -1317,16 +1343,16 @@ export function Composer({
         size="sm"
         onClick={submit}
         disabled={!canSend}
-        className={cn('shrink-0 rounded-full px-3.5', collapsed && 'order-2')}
+        className={cn('h-7 shrink-0 rounded-full px-3', inline && 'order-2')}
       >
         {submitLabel}
       </Button>
     ) : (
       <Button
-        size="icon"
+        size="icon-sm"
         onClick={submit}
         disabled={!canSend}
-        className={cn('shrink-0 rounded-full', collapsed && 'order-2')}
+        className={cn('size-8 shrink-0 rounded-full', inline && 'order-2')}
         aria-label="Send message"
       >
         <ArrowUp className="size-4" strokeWidth={2.5} />
@@ -1364,6 +1390,9 @@ export function Composer({
           // The frame is shared with the sent prompt above it (`CHAT_FRAME`);
           // what is added here is only what is true of the composer alone.
           CHAT_FRAME,
+          // Over the transcript, the frame lets it through — blurred, so the
+          // words passing under it never compete with the ones being typed.
+          floating && 'bg-card/60 backdrop-blur-md backdrop-saturate-150',
           // A wrapping row, so folding is only a change of basis: folded, the
           // input and the toolbar share one line; open, each takes its own.
           // The container is the frame, since a content-sized toolbar cannot
@@ -1490,6 +1519,10 @@ export function Composer({
             </button>
           </div>
         )}
+        {/* Outside the toolbar while on one line, since the toolbar sits after
+            the input there and this belongs before it. A stateless button, so
+            moving it between the two places costs nothing. */}
+        {inline && attachButton}
         <textarea
           ref={ref}
           onFocus={engage}
@@ -1599,11 +1632,11 @@ export function Composer({
             // paragraph. Anything else here and the text misses it.
             CHAT_BLEED_PAD,
             'no-drag block max-h-[220px] w-full resize-none bg-transparent text-[14px] leading-relaxed outline-none select-text placeholder:text-muted-foreground/60',
-            // Folded, the placeholder stays on one line: a column-width input
+            // On one line the placeholder stays on it: a column-width input
             // wrapped "Queue a message for when this turn ends…" onto a second.
-            collapsed
-              ? 'min-w-0 flex-1 basis-0 overflow-hidden py-3 whitespace-nowrap placeholder:text-ellipsis'
-              : 'basis-full pt-3.5 pb-1'
+            inline
+              ? 'min-w-0 flex-1 basis-0 overflow-hidden py-2.5 pl-1.5 whitespace-nowrap placeholder:text-ellipsis'
+              : 'basis-full pt-3.5 pb-1.5'
           )}
         />
         {/* One toolbar in both shapes, so nothing remounts when the composer
@@ -1613,15 +1646,22 @@ export function Composer({
           ref={barRef}
           data-composer-bar
           className={cn(
-            'flex items-center gap-1',
-            collapsed ? 'flex-none pr-2' : 'basis-full px-2.5 pb-2.5'
+            'flex items-center gap-0.5',
+            inline ? 'flex-none pr-1.5' : 'basis-full px-2 pb-2'
           )}
         >
-          {attachButton}
-          <div className={cn('flex min-w-0 items-center gap-1', collapsed ? 'flex-none' : 'flex-1')}>
-            {pickers}
+          {/* Attach alone on the left; the settings for the turn sit with the
+              send they apply to. */}
+          {!inline && attachButton}
+          <div
+            className={cn(
+              'flex min-w-0 items-center gap-0.5',
+              inline ? 'flex-none' : 'flex-1 justify-end'
+            )}
+          >
+            {modelPicker}
+            {permissionPicker}
           </div>
-          <SessionPanel chatId={chatId ?? null} />
           {contextRing}
           {sendButton}
         </div>

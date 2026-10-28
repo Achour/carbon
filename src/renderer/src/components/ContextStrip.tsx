@@ -5,6 +5,13 @@ import { basename } from '@/lib/format'
 import { cn, contextPill, contextPillAction, missingTag, MISSING_TITLE } from '@/lib/utils'
 import { WithTooltip } from '@/components/ui/tooltip'
 
+const quietPill =
+  'flex min-w-0 items-center gap-1.5 rounded-md px-1.5 py-0.5 text-[11px] text-muted-foreground/70'
+const quietPillAction = cn(
+  quietPill,
+  'outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring'
+)
+
 /**
  * Repo · branch · working-tree changes — context for what you're about to send,
  * sitting with the composer instead of the crowded top bar. Shared by the
@@ -20,6 +27,7 @@ export function ContextStrip({
   onReviewChanges,
   onUpdateFromDefault,
   className,
+  quiet = false,
   children
 }: {
   cwd: string
@@ -46,6 +54,12 @@ export function ContextStrip({
   onUpdateFromDefault?: () => void
   /** Replaces the spacing below it — the thread header draws it inline. */
   className?: string
+  /**
+   * Plain text rather than chips, with the changes pushed to the far end — for
+   * the line under an open chat's composer, where a row of raised pills above
+   * it was a second toolbar for facts that rarely change.
+   */
+  quiet?: boolean
   children?: React.ReactNode
 }): React.JSX.Element {
   // Said out loud because every other symptom is a lie: git answers a missing
@@ -58,15 +72,20 @@ export function ContextStrip({
   // override the new-chat screen passes for a worktree it hasn't started in.
   const behind = branch === undefined ? (git?.behindDefault ?? 0) : 0
   const base = git?.defaultBranch ?? 'main'
+  const pill = quiet ? quietPill : contextPill
+  const pillAction = quiet ? quietPillAction : contextPillAction
   return (
-    <div data-context-strip className={cn('mb-2 flex items-center gap-2', className)}>
+    <div
+      data-context-strip
+      className={cn('flex items-center', quiet ? 'gap-1' : 'mb-2 gap-2', className)}
+    >
       <WithTooltip label={missing ? `${cwd} — ${MISSING_TITLE.toLowerCase()}` : cwd}>
-        <div className={contextPill}>
+        <div className={pill}>
           <Folder className={cn('size-3 shrink-0', missing && 'text-muted-foreground/50')} />
           <span className="max-w-44 truncate">{basename(project ?? cwd)}</span>
           {git?.isRepo && shown && (
             <>
-              <span className="text-border">/</span>
+              <span className={quiet ? 'text-muted-foreground/40' : 'text-border'}>/</span>
               <GitBranch className="size-3 shrink-0" />
               <span className="max-w-32 truncate">{shown}</span>
             </>
@@ -93,7 +112,7 @@ export function ContextStrip({
             disabled={!onUpdateFromDefault}
             aria-label={`Update from ${base}`}
             className={cn(
-              onUpdateFromDefault ? contextPillAction : contextPill,
+              onUpdateFromDefault ? pillAction : pill,
               'tabular-nums text-muted-foreground'
             )}
           >
@@ -109,7 +128,7 @@ export function ContextStrip({
             type="button"
             onClick={onReviewChanges}
             aria-label="Review changes"
-            className={cn(contextPillAction, 'tabular-nums')}
+            className={cn(pillAction, 'tabular-nums', quiet && 'ml-auto')}
           >
             <FileDiff className="size-3 text-muted-foreground" />
             {git.additions === 0 && git.deletions === 0 ? (

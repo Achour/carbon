@@ -40,6 +40,35 @@ border 508, prose 522.
   border 14px out; anything else inside and the placeholder misses the prose
   column by the difference.
 
+### The composer's shape (`Composer.tsx`, `ChatView.tsx`)
+
+- **One line until the draft outgrows it.** Empty or short, input and toolbar
+  share a row: `+`, the input, the model's name, the permission icon, the
+  context ring, send. A wrapped line, a line break or an attachment drops the
+  toolbar under the text, where `+` stands alone on the left and the model
+  ("**Opus 5** High"), the permission mode, the ring and send sit on the right.
+  The switch is sticky until the input empties (`stacked`), so deleting back
+  under the edge never flips the layout under the caret. Overflow is read as
+  `scrollWidth > clientWidth`, which works because the one-line input does not
+  wrap. The thread column's fold is the same shape, reached by `collapsed`.
+- **The toolbar is one element in both shapes**; only `+` moves (before the
+  input on one line, at the head of the bar when open), and it is stateless.
+- **The input scrolls only at its cap.** `scrollHeight` is rounded, and three
+  lines of a 22.75px line-height overflow it by a fraction — enough to draw a
+  full-length scrollbar beside text that fits.
+- **Where the chat runs is under the box, not above it.** `ContextStrip quiet`
+  draws folder, branch and changes as plain text below the frame; the pill row
+  above read as a second toolbar. The new-chat screen keeps its pills, which
+  are pickers there.
+- **The stack floats over the transcript.** It is absolutely placed at the
+  view's foot, its measured height written to `--composer-h` (straight to the
+  style, no state), which the column's foot spacer, the jump button and the
+  turn rail leave room for. The column's `ResizeObserver` already keeps a
+  pinned reader on the bottom when it changes. The frame is translucent with a
+  backdrop blur (`floating`), over a gradient that keeps the strip legible.
+- **No session-info button.** The activity glyph that opened `SessionPanel`
+  was removed from the bar; the component remains, unmounted.
+
 ### Tables in a message (`.markdown table`)
 
 A table is a **framed block**, like a code fence is, and both halves of that —

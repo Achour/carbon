@@ -235,7 +235,7 @@ export function TurnRail({
   return (
     <div
       ref={railRef}
-      className="pointer-events-none absolute inset-y-0 left-0 z-10 flex items-center"
+      className="pointer-events-none absolute top-0 bottom-[var(--composer-h,0px)] left-0 z-10 flex items-center"
       style={{ width: geo.card - 4 }}
     >
       {!empty && (
