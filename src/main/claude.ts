@@ -21,6 +21,7 @@ import type {
   AssistantPart,
   Attachment,
   BackgroundJob,
+  BtwAnswer,
   ChatData,
   CodexGoal,
   CodexGoalStatus,
@@ -190,6 +191,13 @@ import {
   buildReplayContext,
   serializeTranscript
 } from './handoff'
+import {
+  BTW_SYSTEM,
+  BTW_TIMEOUT_MS,
+  BTW_TRANSCRIPT_CHARS,
+  buildBtwPrompt,
+  type BtwExchange
+} from '@shared/btw'
 
 /**
  * Appended to the claude_code preset. The GUI renders ```mermaid fenced blocks
@@ -1427,6 +1435,46 @@ class ClaudeSession implements AgentSession {
       [],
       'supportedModels'
     )
+  }
+
+  /**
+   * `/btw` over the CLI's `side_question` control request: it forks the live
+   * conversation with no tools and answers while a turn runs, leaving the
+   * turn and the transcript as they were. A resumed session that has taken no
+   * turn answers from its history too, so this never needs a send first.
+   *
+   * `askSideQuestion` is on the SDK's query object but not in its types, so it
+   * is reached structurally and may simply be missing — `null` then, and the
+   * manager falls back to a one-shot. Not `control()`: that gives up after 8 s
+   * and waits on `ready`, which a session that has taken no turn never
+   * reaches; the SDK queues the request behind `initialize` itself.
+   */
+  async askSideQuestion(
+    question: string,
+    history: BtwExchange[],
+    signal: AbortSignal
+  ): Promise<BtwAnswer | null> {
+    const q = this.q as Query & {
+      askSideQuestion?: (
+        question: string,
+        opts?: { history?: BtwExchange[]; signal?: AbortSignal }
+      ) => Promise<{ response: string; synthetic?: boolean } | null>
+    }
+    if (this.dead || typeof q.askSideQuestion !== 'function') return null
+    try {
+      const res = await q.askSideQuestion(question, { history, signal })
+      if (!res?.response?.trim()) return { error: 'No answer came back.' }
+      // `synthetic` is the CLI's own words standing in for an answer (an API
+      // error, a refusal) — shown, but as what it is.
+      return res.synthetic ? { error: res.response.trim() } : { text: res.response.trim() }
+    } catch (err) {
+      if (signal.aborted) return { error: 'Cancelled.' }
+      const message = err instanceof Error ? err.message : String(err)
+      // A CLI that predates the request refuses its subtype: not an answer to
+      // show, a reason to take the other path.
+      if (/unsupported control request|not supported/i.test(message)) return null
+      return { error: message }
+    }
   }
 
   async listAgents(): Promise<AgentInfo[]> {
@@ -3948,6 +3996,81 @@ export class ChatManager {
     } catch (err) {
       console.error('[handoff] brief failed, delivering without context:', err)
       return undefined
+    }
+  }
+
+  /** Pending `/btw` questions by request id, so a dismissed card can cancel its own. */
+  private btwRequests = new Map<string, AbortController>()
+
+  /**
+   * `/btw`: a side question answered from the chat's context, outside it — no
+   * turn starts, nothing is queued or persisted, and a running turn carries on.
+   *
+   * Claude answers natively (`ClaudeSession.askSideQuestion`), from the live
+   * session or a resumed one started for the purpose: that is the real
+   * context, cache and all, rather than a summary of it. Every other provider,
+   * and a Claude CLI too old for the request, answers on the throwaway
+   * one-shot the handoff uses, over the serialized transcript. The chat's
+   * current backend answers, not an armed `pendingModel`: it is the one
+   * holding the conversation.
+   */
+  async askBtw(
+    chatId: string,
+    requestId: string,
+    question: string,
+    history: BtwExchange[] = []
+  ): Promise<BtwAnswer> {
+    const chat = this.store.getChat(chatId)
+    if (!chat) return { error: 'This chat no longer exists.' }
+    if (!question.trim()) return { error: 'Ask a question after /btw.' }
+    const abort = new AbortController()
+    this.btwRequests.set(requestId, abort)
+    try {
+      const live = this.sessionFor(chatId)
+      // A Claude chat with history can always answer natively; one with none
+      // has no context worth spawning a CLI for.
+      const session =
+        live ?? (chat.provider === 'claude' && chat.sessionId ? this.createSession(chat) : null)
+      const native = session?.askSideQuestion
+        ? await withTimeout(
+            session.askSideQuestion(question, history, abort.signal),
+            BTW_TIMEOUT_MS,
+            { error: 'No answer in time.' } as BtwAnswer
+          )
+        : null
+      if (native) return native
+      if (abort.signal.aborted) return { error: 'Cancelled.' }
+      return await this.btwOneShot(chat, question, history)
+    } finally {
+      this.btwRequests.delete(requestId)
+    }
+  }
+
+  cancelBtw(requestId: string): void {
+    this.btwRequests.get(requestId)?.abort()
+  }
+
+  private async btwOneShot(
+    chat: ChatData,
+    question: string,
+    history: BtwExchange[]
+  ): Promise<BtwAnswer> {
+    // Off the IPC tick, as the handoff's serialization is.
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    const prompt = buildBtwPrompt(this.transcriptFor(chat, BTW_TRANSCRIPT_CHARS), question, history)
+    const joined = `${BTW_SYSTEM}\n\n${prompt}`
+    const generate: Record<Provider, () => Promise<string | null>> = {
+      claude: () => generateClaudeText(chat.cwd, chat.model, BTW_SYSTEM, prompt),
+      codex: () => generateCodexText(chat.cwd, chat.model, joined),
+      grok: () => generateGrokText(chat.cwd, chat.model, joined),
+      antigravity: () => generateAntigravityText(chat.model, joined),
+      cursor: () => generateCursorText(chat.model, joined)
+    }
+    try {
+      const text = await withTimeout(generate[chat.provider](), BTW_TIMEOUT_MS, null)
+      return text ? { text } : { error: 'No answer came back.' }
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : String(err) }
     }
   }
 

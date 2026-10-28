@@ -40,6 +40,7 @@ import type { ComposerDraft } from '@/lib/drafts'
 import { FileIcon } from '@/lib/fileIcon'
 import { availableProviders } from '@/lib/modelCatalog'
 import { CODEX_SLASH_COMMANDS, codexComposerControl } from '@shared/codexCommands'
+import { withBtw } from '@shared/btw'
 import {
   assembleModelOptions,
   canonicalModelId,
@@ -998,7 +999,12 @@ export function Composer({
   // model switch, or to another column in a side-chat thread. Codex's native
   // commands are fixed: use this composer's provider rather than that cache,
   // so Enter on /review cannot select a Claude command such as /code-review.
-  const slashCommands = isCodex ? CODEX_SLASH_COMMANDS : commands
+  // `/btw` is Carbon's own and every provider's, so it joins here rather than
+  // in a provider's list — but only beside a conversation to ask about.
+  const slashCommands = React.useMemo(() => {
+    const own = isCodex ? CODEX_SLASH_COMMANDS : commands
+    return chatId ? withBtw(own) : own
+  }, [isCodex, commands, chatId])
 
   const updateSlash = (value: string, caret: number): void => {
     const m = /^\/([\w:-]*)$/.exec(value.slice(0, caret))
@@ -1130,6 +1136,8 @@ export function Composer({
   // Folded, there is no room for a row, and the placeholder is all there is.
   // Anything typed, a live turn or a pending switch hides it.
   const suggestion = useApp((s) => (chatId ? s.suggestions[chatId] : undefined))
+  const hasBtw = useApp((s) => !!(chatId && s.btw[chatId]?.length))
+  const dismissBtw = useApp((s) => s.dismissBtw)
   const ghost =
     suggestion && !streaming && !locked && !switchingNote && text === '' && attachments.length === 0
       ? suggestion
@@ -1551,6 +1559,14 @@ export function Composer({
                 setMention(null)
                 return
               }
+            }
+            // An open `/btw` card closes before anything under it answers the
+            // key: it is the newest thing on screen, and the one Escape leaves
+            // no trace of. Only from an empty input, which a draft never is.
+            if (e.key === 'Escape' && chatId && hasBtw && text === '' && attachments.length === 0) {
+              e.preventDefault()
+              dismissBtw(chatId)
+              return
             }
             if (e.key === 'Tab' && !e.shiftKey && ghost) {
               e.preventDefault()

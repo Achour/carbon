@@ -4,6 +4,7 @@ import type {
   AssistantMessage,
   BackgroundJob,
   Attachment,
+  BtwAnswer,
   ChatEvent,
   ChatMessage,
   ChatMeta,
@@ -26,6 +27,7 @@ import type {
   WorktreeTarget
 } from '@shared/types'
 import { USAGE_DEFAULT_DAYS } from '@shared/types'
+import { btwHistory, parseBtw, type BtwEntry } from '@shared/btw'
 import { randomId } from '@/lib/insecureContext'
 import * as api from './api'
 import { usePrefs } from './prefs'
@@ -98,12 +100,17 @@ interface RemoteState {
   open: OpenChat | null
   /** Typed while a turn ran; sent, oldest first, as the chat goes idle. */
   queued: Record<string, QueuedMessage[]>
+  /** Each chat's open `/btw` sheet, oldest question first — the desktop's `btw`. */
+  btw: Record<string, BtwEntry[]>
   error: string | null
 
   start(): void
   openChat(id: string | null): Promise<void>
   loadOlder(): Promise<void>
   send(chatId: string, text: string, attachments?: Attachment[]): Promise<void>
+  /** `/btw`: a side question, answered beside the turn rather than queued behind it. */
+  askBtw(chatId: string, question: string): void
+  dismissBtw(chatId: string): void
   interrupt(chatId: string): Promise<void>
   /**
    * A new, empty project folder on the Mac (`projects:create`), listed among
@@ -309,6 +316,7 @@ export const useRemote = create<RemoteState>((set, get) => {
     drawer: false,
     open: null,
     queued: {},
+    btw: {},
     error: null,
 
     start() {
@@ -380,6 +388,13 @@ export const useRemote = create<RemoteState>((set, get) => {
     },
 
     async send(chatId, text, attachments) {
+      // Ahead of the queue, as on the desktop (`sendMessage`).
+      const question = parseBtw(text)
+      if (question !== null) {
+        if (attachments?.length) throw new Error('A side question cannot take attachments.')
+        get().askBtw(chatId, question)
+        return
+      }
       const status = get().statuses[chatId] ?? 'idle'
       if (status !== 'idle') {
         set((s) => ({
@@ -392,6 +407,36 @@ export const useRemote = create<RemoteState>((set, get) => {
       } catch (err) {
         set({ error: message(err) })
       }
+    },
+
+    askBtw(chatId, question) {
+      const entry: BtwEntry = { id: randomId(), question }
+      const prior = get().btw[chatId] ?? []
+      const patch = (fields: Partial<BtwEntry>): void =>
+        set((s) => {
+          const list = s.btw[chatId]
+          if (!list?.some((e) => e.id === entry.id)) return {}
+          return { btw: { ...s.btw, [chatId]: list.map((e) => (e.id === entry.id ? { ...e, ...fields } : e)) } }
+        })
+      set((s) => ({ btw: { ...s.btw, [chatId]: [...prior, entry] } }))
+      if (!question) {
+        patch({ error: 'Type your question after /btw, e.g. “/btw which file was that?”' })
+        return
+      }
+      api
+        .invoke<BtwAnswer>('chat:btw', chatId, entry.id, question, btwHistory(prior))
+        .then((res) => patch('text' in res ? { answer: res.text } : { error: res.error }))
+        .catch((err: unknown) => patch({ error: message(err) }))
+    },
+
+    dismissBtw(chatId) {
+      for (const e of get().btw[chatId] ?? []) {
+        if (!e.answer && !e.error) void api.invoke('chat:btw-cancel', e.id).catch(() => {})
+      }
+      set((s) => {
+        const { [chatId]: _gone, ...btw } = s.btw
+        return { btw }
+      })
     },
 
     async createProject(parent, name, git) {

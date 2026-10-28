@@ -140,7 +140,7 @@ export const usePrefs = create<Prefs>((set, get) => ({
   appearance: systemDark.matches ? 'dark' : 'light',
   textSize: readInt(TEXT_KEY, 0, TEXT_SIZES.length - 1, TEXT_DEFAULT),
   codeSize: readInt(CODE_KEY, CODE_MIN, CODE_MAX, CODE_DEFAULT),
-  sidebarDensity: read(DENSITY_KEY) === 'detailed' ? 'detailed' : 'compact',
+  sidebarDensity: read(DENSITY_KEY) === 'compact' ? 'compact' : 'detailed',
   chatsPerProject: readInt(PER_PROJECT_KEY, CHATS_PER_PROJECT_MIN, CHATS_PER_PROJECT_MAX, CHATS_PER_PROJECT_DEFAULT),
   sidebarProject: read(PROJECT_KEY) || null,
   setTheme: (id) => set({ themeId: id, appearance: paint(id, get().themeMode) }),

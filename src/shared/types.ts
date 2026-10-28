@@ -2919,6 +2919,9 @@ export interface SlashCommand {
   aliases?: string[]
 }
 
+/** A `/btw` side question's outcome: the answer, or why there is none. */
+export type BtwAnswer = { text: string } | { error: string }
+
 // ---------- Preload API ----------
 
 /** An Open VSX extension that contributes at least one color theme. */
@@ -3103,6 +3106,20 @@ export interface Api {
    * separate, opt-in half of that).
    */
   editMessage(chatId: string, messageId: string, text: string): Promise<EditMessageResult>
+  /**
+   * `/btw`: a side question answered from the chat's context without becoming
+   * part of it — no turn, no queue, nothing persisted. `history` is the side
+   * questions already answered in the open card. `requestId` names it for
+   * `cancelBtw`.
+   */
+  askBtw(
+    chatId: string,
+    requestId: string,
+    question: string,
+    history?: { question: string; response: string }[]
+  ): Promise<BtwAnswer>
+  /** Give up a pending `askBtw` (the card was dismissed). */
+  cancelBtw(requestId: string): Promise<void>
   // ---- Session introspection ----
   /** Whether the chat has a running CLI session (introspection needs one). */
   sessionLive(chatId: string): Promise<boolean>

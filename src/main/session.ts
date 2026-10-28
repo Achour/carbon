@@ -6,6 +6,7 @@ import type {
   CodexReviewTarget,
   AgentInfo,
   Attachment,
+  BtwAnswer,
   ChatEvent,
   McpServerInfo,
   ModelOption,
@@ -16,6 +17,7 @@ import type {
   ServiceTier,
   UsageInfo
 } from '@shared/types'
+import type { BtwExchange } from '@shared/btw'
 
 /** Sink for every main → renderer event, over the single `chat:event` channel. */
 export type Emit = (ev: ChatEvent) => void
@@ -86,6 +88,17 @@ export interface AgentSession {
    * provider before the approval reaches this session (see ChatManager).
    */
   pendingPlan?(requestId: string): string | null
+  /**
+   * `/btw` answered natively, from the live conversation and without touching
+   * it. `null` means this session cannot — no such request, or a CLI too old to
+   * take it — and the manager answers on a one-shot instead. Absent on every
+   * provider but Claude.
+   */
+  askSideQuestion?(
+    question: string,
+    history: BtwExchange[],
+    signal: AbortSignal
+  ): Promise<BtwAnswer | null>
   interrupt(): Promise<void>
   setModel(model?: string): Promise<void>
   setPermissionMode(mode: PermissionModeId): Promise<void>

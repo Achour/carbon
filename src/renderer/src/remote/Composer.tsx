@@ -3,6 +3,7 @@ import { ArrowUp, Clock, CornerDownRight, FileText, Paperclip, Square, X } from 
 import type { Attachment, SlashCommand } from '@shared/types'
 import { PROVIDER_SHORT_LABELS, type Provider } from '@shared/types'
 import { CODEX_SLASH_COMMANDS } from '@shared/codexCommands'
+import { withBtw } from '@shared/btw'
 import { FileIcon } from '@/lib/fileIcon'
 import { randomId } from '@/lib/insecureContext'
 import { cn } from '@/lib/utils'
@@ -301,11 +302,12 @@ export function Composer({
   React.useEffect(() => {
     if (!wantsCommands || !cwd || !provider) return undefined
     let alive = true
-    void commandsFor(cwd, provider).then((list) => alive && setCommands(list))
+    // `/btw` only beside a conversation, as on the desktop.
+    void commandsFor(cwd, provider).then((list) => alive && setCommands(chatId ? withBtw(list) : list))
     return () => {
       alive = false
     }
-  }, [wantsCommands, cwd, provider])
+  }, [wantsCommands, cwd, provider, chatId])
   const commandRows = slashQuery !== null ? rankCommands(commands, slashQuery) : []
 
   const putCaret = (pos: number): void => {

@@ -118,6 +118,13 @@ const api: Api = {
     invoke('chat:rewind-files', chatId, userMessageId, dryRun),
   editMessage: (chatId: string, messageId: string, text: string) =>
     invoke('chat:edit-message', chatId, messageId, text),
+  askBtw: (
+    chatId: string,
+    requestId: string,
+    question: string,
+    history?: { question: string; response: string }[]
+  ) => invoke('chat:btw', chatId, requestId, question, history),
+  cancelBtw: (requestId: string) => invoke('chat:btw-cancel', requestId),
   sessionLive: (chatId: string) => invoke('session:live', chatId),
   mcpStatus: (chatId: string) => invoke('mcp:status', chatId),
   mcpReconnect: (chatId: string, name: string) => invoke('mcp:reconnect', chatId, name),

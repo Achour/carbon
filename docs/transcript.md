@@ -771,6 +771,45 @@ would visibly disagree at the moments the user is acting. Two things follow:
   is the general hazard in moving anything into the composer: every rule that
   said "inside the composer" silently widened.
 
+### Side questions (`/btw`, `shared/btw.ts`, `BtwDock`)
+
+`/btw <question>` asks about the conversation without becoming part of it. It is
+intercepted in the store's `sendMessage` **before** the queue check, because
+answering while a turn runs is the whole point: no turn starts, nothing is
+queued, and neither the question nor the answer is written to the chat. The
+phone's `send` (`remote/state.ts`) does the same.
+
+- **Claude answers natively.** The Agent SDK's query object has an
+  `askSideQuestion` that sends the CLI's `side_question` control request. It
+  forks the live conversation with no tools and answers mid-turn, and the
+  running turn is untouched. Measured: ~2 s on Haiku with a `sleep 20` tool call
+  in flight, and the turn finished normally afterwards. A *resumed* session that
+  has taken no turn answers from its history too, so a Claude chat with a
+  `sessionId` and no live session gets one started for the question rather
+  than a summary. The method is **not in the SDK's types**, so
+  `ClaudeSession.askSideQuestion` reaches it structurally and returns `null`
+  when it is missing or the CLI refuses the subtype.
+- **Everything else answers on a one-shot.** That covers the other providers
+  and the `null` case. It uses the same throwaway generators the handoff brief
+  does, over `transcriptFor(chat, BTW_TRANSCRIPT_CHARS)`. The budget is smaller
+  than the handoff's because this is paid per question. The chat's *current*
+  backend answers, not an armed `pendingModel`. Measured on Codex: ~3.5 s.
+- **Follow-ups carry the card.** Answered entries ride as `history`, which is
+  the CLI's own `{question, response}` shape, or are written into the one-shot
+  prompt. So "and what did you mean by that?" reads as one thread.
+- **The card is in flow, where `TaskDock`'s list floats.** It opens because you
+  just asked something, with your eye on the composer. Floated, it would cover
+  the foot of the transcript, which is the part a running turn writes to. It
+  closes on its button or on Escape from an empty composer, and that Escape is
+  taken before `PromptDock`'s, so one press never both closes the card and
+  denies a permission. Closing cancels a pending native answer
+  (`chat:btw-cancel` aborts the control request). A one-shot cannot be
+  cancelled; it runs out against `BTW_TIMEOUT_MS`.
+- **Text only.** `/btw` with attachments is refused in the card, and the
+  composer gets the draft back. It is offered on the `/` menu only beside a
+  conversation (`chatId`), never on the New-chat screen. On the phone it opens
+  a `Sheet`, since inside the iOS app the composer is native.
+
 ### The turn's changed files (`TurnChangesCard`, `lib/turnChanges.ts`)
 
 One card at the end of a turn saying what it edited: a count, the turn's line

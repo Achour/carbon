@@ -59,6 +59,7 @@ import type {
   WorktreeStatus
 } from '@shared/types'
 import { PROVIDERS, effortForProvider, providerForRememberedModel } from '@shared/types'
+import type { BtwExchange } from '@shared/btw'
 import { withTimeout } from './session'
 import { ChatManager } from './claude'
 import { ChatTerminalManager } from './chatTerminal'
@@ -1072,6 +1073,12 @@ function registerIpc(): void {
     manager.rewindFiles(chatId, userMessageId, dryRun)
   )
 
+  ipcMain.handle(
+    'chat:btw',
+    (_e, chatId: string, requestId: string, question: string, history?: BtwExchange[]) =>
+      manager.askBtw(chatId, requestId, question, history)
+  )
+  ipcMain.handle('chat:btw-cancel', (_e, requestId: string) => manager.cancelBtw(requestId))
   ipcMain.handle('session:live', (_e, chatId: string) => manager.sessionLive(chatId))
   ipcMain.handle('mcp:status', (_e, chatId: string) => manager.mcpStatus(chatId))
   ipcMain.handle('mcp:reconnect', (_e, chatId: string, name: string) =>

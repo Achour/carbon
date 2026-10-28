@@ -24,9 +24,12 @@ import { chatDraftKey } from './drafts'
 import { CodexReviewMenu } from '@/components/CodexReviewDialog'
 import { isNative, notifyApp, useNativeCommand } from './native'
 import { TaskDock } from '@/components/TaskDock'
+import { BtwThread } from '@/components/BtwDock'
+import type { BtwEntry } from '@shared/btw'
 import { useTaskList } from '@/taskListStore'
 
 const NO_REQUESTS: PermissionRequestPayload[] = []
+const NO_BTW: BtwEntry[] = []
 
 export function ChatScreen({ chatId }: { chatId: string }): React.JSX.Element {
   const chat = useRemote((s) => s.chats.find((c) => c.id === chatId))
@@ -40,6 +43,8 @@ export function ChatScreen({ chatId }: { chatId: string }): React.JSX.Element {
   const expandedTurns = useApp((s) => s.expandedTurns)
   const toggleTurnExpanded = useApp((s) => s.toggleTurnExpanded)
   const [plan, setPlan] = React.useState<string | null>(null)
+  const btw = useRemote((s) => s.btw[chatId] ?? NO_BTW)
+  const dismissBtw = useRemote((s) => s.dismissBtw)
   // Inside the iOS app the plan, a diff and a canvas open as the app's own
   // screens; only a sub-agent's transcript is still drawn here.
   const onOpenPlan = React.useCallback(
@@ -303,6 +308,17 @@ export function ChatScreen({ chatId }: { chatId: string }): React.JSX.Element {
           onClose={() => setView(null)}
         />
       )}
+      {/* `/btw`: a sheet rather than the desktop's card above the composer —
+          the phone's screen is the transcript, and inside the iOS app the
+          composer is native, so a sheet is the one surface both draw. */}
+      <Sheet open={btw.length > 0} onClose={() => dismissBtw(chatId)} title="Side question">
+        <div className="max-h-[60dvh] overflow-y-auto px-4 pb-6">
+          <p className="pb-3 text-[13px] text-muted-foreground">Not added to the chat.</p>
+          <div className="reading-zoom">
+            <BtwThread entries={btw} cwd={chat?.cwd} />
+          </div>
+        </div>
+      </Sheet>
       <Sheet open={plan !== null} onClose={() => setPlan(null)} title="Plan">
         <div className="max-h-[70dvh] overflow-y-auto px-4 pb-6">
           <div className="reading-zoom">{plan && <Markdown text={plan} />}</div>
