@@ -33,13 +33,13 @@ export function SwitchPill({
       onClick={onChange}
       className={cn(
         'relative h-[18px] w-8 shrink-0 rounded-full transition-colors',
-        on && !disabled ? 'bg-primary' : 'bg-secondary',
+        on && !disabled ? 'bg-primary' : 'surface-well switch-track',
         disabled && 'cursor-not-allowed opacity-40'
       )}
     >
       <span
         className={cn(
-          'absolute top-[2px] left-[2px] size-3.5 rounded-full bg-background shadow-sm transition-transform',
+          'absolute top-[2px] left-[2px] size-3.5 rounded-full bg-background shadow-[0_1px_2px_oklch(0_0_0/30%),inset_0_1px_0_var(--surface-highlight)] transition-transform',
           on && !disabled && 'translate-x-[14px]'
         )}
       />

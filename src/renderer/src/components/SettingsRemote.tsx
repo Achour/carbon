@@ -4,6 +4,7 @@ import { Bell, Copy, Lock, Smartphone, Trash2, TriangleAlert } from 'lucide-reac
 import type { RemoteAccessState } from '@shared/types'
 import { relativeTime } from '@/lib/format'
 import { Button } from '@/components/ui/button'
+import { Group } from '@/components/ui/group'
 import { SwitchPill } from '@/components/ui/switch-pill'
 
 /**
@@ -44,55 +45,58 @@ export function RemoteSection(): React.JSX.Element {
   if (!state) return <div />
 
   return (
-    <div className="space-y-1">
-      <div className="flex items-center gap-4 px-2 py-2.5">
-        <div className="min-w-0 flex-1">
-          <div className="text-[13px] font-medium">Use Carbon from your phone</div>
-          <div className="mt-0.5 text-xs text-muted-foreground">
-            Read chats as they stream, send messages and answer approvals from your phone's browser.
-            Agents keep running here, so this Mac has to stay on.
+    <div>
+      {/* The two switches share a card: the second widens who the first lets
+          in, and the connection card below is what the pair produces. */}
+      <Group>
+        <div className="flex items-center gap-4 px-2 py-2.5">
+          <div className="min-w-0 flex-1">
+            <div className="text-[13px] font-medium">Use Carbon from your phone</div>
+            <div className="mt-0.5 text-xs text-muted-foreground">
+              Read chats as they stream, send messages and answer approvals from your phone's
+              browser. Agents keep running here, so this Mac has to stay on.
+            </div>
           </div>
+          <SwitchPill
+            on={state.enabled}
+            disabled={busy}
+            label="Remote access"
+            onChange={() => void run(() => window.api.remoteConfigure({ enabled: !state.enabled }))}
+          />
         </div>
-        <SwitchPill
-          on={state.enabled}
-          disabled={busy}
-          label="Remote access"
-          onChange={() => void run(() => window.api.remoteConfigure({ enabled: !state.enabled }))}
-        />
-      </div>
+        <div className="flex items-center gap-4 px-2 py-2.5">
+          <div className="min-w-0 flex-1">
+            <div className="text-[13px] font-medium">Allow the local network</div>
+            <div className="mt-0.5 text-xs text-muted-foreground">
+              Also accept phones on this Wi-Fi, not only over Tailscale. Traffic on the local
+              network is not encrypted, so leave this off on networks you don't trust.
+            </div>
+          </div>
+          <SwitchPill
+            on={state.allowLan}
+            disabled={busy}
+            label="Allow the local network"
+            onChange={() =>
+              void run(() => window.api.remoteConfigure({ allowLan: !state.allowLan }))
+            }
+          />
+        </div>
+      </Group>
 
       {state.error && (
-        <div className="mx-2 flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs">
+        <div className="mt-3 flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs">
           <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-destructive" />
           <span>{state.error}</span>
         </div>
       )}
 
       {state.enabled && state.running && (
-        <>
+        <Group title="Connection" className="mt-6">
           <Address state={state} />
           <Https state={state} />
           <Pairing state={state} busy={busy} onPair={() => void run(() => window.api.remotePair())} />
-        </>
+        </Group>
       )}
-
-      <div className="mx-2 my-3 border-t border-border" />
-
-      <div className="flex items-center gap-4 px-2 py-2.5">
-        <div className="min-w-0 flex-1">
-          <div className="text-[13px] font-medium">Allow the local network</div>
-          <div className="mt-0.5 text-xs text-muted-foreground">
-            Also accept phones on this Wi-Fi, not only over Tailscale. Traffic on the local network
-            is not encrypted, so leave this off on networks you don't trust.
-          </div>
-        </div>
-        <SwitchPill
-          on={state.allowLan}
-          disabled={busy}
-          label="Allow the local network"
-          onChange={() => void run(() => window.api.remoteConfigure({ allowLan: !state.allowLan }))}
-        />
-      </div>
 
       <Devices state={state} onForget={(id) => void run(() => window.api.remoteForget(id))} />
     </div>
@@ -110,15 +114,17 @@ const ADDRESS_LABEL: Record<RemoteAccessState['urls'][number]['kind'], string> =
 function Address({ state }: { state: RemoteAccessState }): React.JSX.Element {
   if (state.urls.length === 0) {
     return (
-      <div className="mx-2 rounded-lg border border-border bg-secondary/40 px-3 py-2.5 text-xs text-muted-foreground">
-        <div className="font-medium text-foreground">No Tailscale connection found</div>
-        Install Tailscale on this Mac and on your phone, sign both into the same account, and the
-        address appears here. Or turn on “Allow the local network” to use it on this Wi-Fi only.
+      <div className="px-2 py-2.5">
+        <div className="text-[13px] font-medium">No Tailscale connection found</div>
+        <div className="mt-0.5 text-xs text-muted-foreground">
+          Install Tailscale on this Mac and on your phone, sign both into the same account, and the
+          address appears here. Or turn on “Allow the local network” to use it on this Wi-Fi only.
+        </div>
       </div>
     )
   }
   return (
-    <div className="space-y-1 px-2 py-1">
+    <div className="space-y-1 px-2 py-2">
       {state.urls.map((u) => (
         <div key={u.url} className="flex items-center gap-2 text-xs">
           <span className="w-20 shrink-0 text-muted-foreground">{ADDRESS_LABEL[u.kind]}</span>
@@ -147,7 +153,7 @@ function Https({ state }: { state: RemoteAccessState }): React.JSX.Element | nul
   if (https.status === 'off') return null
   if (https.status === 'on') {
     return (
-      <div className="flex items-start gap-2 px-2 py-1.5 text-xs text-muted-foreground">
+      <div className="flex items-start gap-2 px-2 py-2.5 text-xs text-muted-foreground">
         <Lock className="mt-0.5 size-3.5 shrink-0 text-success" />
         <span>
           Notifications are available at the HTTPS address. Pair the phone there, add it to the Home Screen,
@@ -158,16 +164,18 @@ function Https({ state }: { state: RemoteAccessState }): React.JSX.Element | nul
   }
   if (https.status === 'pending') {
     return (
-      <div className="flex items-start gap-2 px-2 py-1.5 text-xs text-muted-foreground">
+      <div className="flex items-start gap-2 px-2 py-2.5 text-xs text-muted-foreground">
         <Lock className="mt-0.5 size-3.5 shrink-0" />
         <span>Asking Tailscale for a certificate… The first one can take a minute.</span>
       </div>
     )
   }
   return (
-    <div className="mx-2 rounded-lg border border-border bg-secondary/40 px-3 py-2.5 text-xs text-muted-foreground">
-      <div className="font-medium text-foreground">No notifications on the phone yet</div>
-      They need an HTTPS address, which Carbon gets from Tailscale. {https.reason}
+    <div className="px-2 py-2.5">
+      <div className="text-[13px] font-medium">No notifications on the phone yet</div>
+      <div className="mt-0.5 text-xs text-muted-foreground">
+        They need an HTTPS address, which Carbon gets from Tailscale. {https.reason}
+      </div>
     </div>
   )
 }
@@ -226,7 +234,7 @@ function Pairing({
   const minutes = Math.floor(left / 60_000)
   const seconds = Math.floor((left % 60_000) / 1000)
   return (
-    <div className="mx-2 flex gap-4 rounded-lg border border-border bg-secondary/40 p-3">
+    <div className="flex gap-4 px-2 py-3">
       {svg && (
         <div
           className="size-36 shrink-0 overflow-hidden rounded-md bg-white p-1 [&>svg]:size-full"
@@ -265,17 +273,19 @@ function Devices({
 }): React.JSX.Element | null {
   if (state.devices.length === 0) return null
   return (
-    <div className="pt-2">
-      <div className="flex items-center px-2 pb-1">
-        <div className="flex-1 text-[13px] font-medium">Paired devices</div>
-        {state.devices.length > 1 && (
-          <Button variant="ghost" size="sm" onClick={() => onForget()}>
+    <Group
+      title="Paired devices"
+      className="mt-6"
+      action={
+        state.devices.length > 1 && (
+          <Button variant="ghost" size="sm" className="h-6 px-2" onClick={() => onForget()}>
             Unpair all
           </Button>
-        )}
-      </div>
+        )
+      }
+    >
       {state.devices.map((d) => (
-        <div key={d.id} className="flex items-center gap-3 rounded-lg px-2 py-2 hover:bg-accent/40">
+        <div key={d.id} className="flex items-center gap-3 rounded-lg px-2 py-2.5 hover:bg-accent/40">
           <Smartphone className="size-4 text-muted-foreground" />
           <div className="min-w-0 flex-1">
             <div className="truncate text-[13px]">{d.name}</div>
@@ -290,6 +300,6 @@ function Devices({
           </Button>
         </div>
       ))}
-    </div>
+    </Group>
   )
 }

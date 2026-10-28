@@ -435,10 +435,10 @@ function ChatItemRow({
             }}
             className={cn(
               'group relative rounded-md transition-colors',
-              // Active fill is a foreground-tinted overlay, not the sidebar-accent
-              // token — the latter is barely lighter than the sidebar and vanishes
-              // over the frost. This reliably reads as a raised pill in both themes.
-              active ? 'bg-sidebar-foreground/[0.14] dark:bg-sidebar-foreground/[0.16]' : 'hover:bg-sidebar-accent/60'
+              // Raised like every other selection (index.css, "Depth"). Not the
+              // sidebar-accent token — barely lighter than the sidebar, it
+              // vanished over the frost; translucent chrome alphas this instead.
+              active ? 'surface-raised' : 'hover:bg-sidebar-accent/60'
             )}
           />
         }
@@ -1953,7 +1953,7 @@ export function Sidebar(): React.JSX.Element {
           aria-pressed={pullsOpen}
           className={cn(
             'group flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] text-sidebar-foreground transition-colors hover:bg-sidebar-accent/60',
-            pullsOpen && 'bg-sidebar-accent'
+            pullsOpen && 'surface-raised'
           )}
         >
           <GitPullRequest className="size-4 shrink-0 text-muted-foreground" />
@@ -1965,7 +1965,7 @@ export function Sidebar(): React.JSX.Element {
           aria-pressed={scheduledOpen}
           className={cn(
             'group flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] text-sidebar-foreground transition-colors hover:bg-sidebar-accent/60',
-            scheduledOpen && 'bg-sidebar-accent'
+            scheduledOpen && 'surface-raised'
           )}
         >
           <CalendarClock className="size-4 shrink-0 text-muted-foreground" />

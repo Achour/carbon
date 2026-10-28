@@ -416,6 +416,9 @@ it guards**, and put new reasoning in that file rather than back in this one.
   (`--ui-row`, `--code-font-size`, and why there is no text-size setting), file
   icons (`lib/fileIcon.tsx`, `--icon-*`) and the clickable file references each
   provider writes in its own syntax (`lib/fileLink.ts`).
+- **`docs/depth.md`** — the surface levels every panel and page is built from
+  (`surface-card` / `-group` / `-raised` / `-overlay` / `-well` in `index.css`,
+  `ui/segmented.tsx`, `ui/group.tsx`) and why the transcript stays flat.
 - **`docs/editor.md`** — the file editor (`CodeEditor.tsx`,
   `lib/editorBuffers.ts`, `lib/frontmatter.ts`), code selections
   (`lib/codeSelection.ts`), the panel's tabs (`RightPanel.tsx`,
@@ -470,7 +473,8 @@ it guards**, and put new reasoning in that file rather than back in this one.
 - **`docs/threads.md`** — a chat as a thread of up to four columns sharing one
   right panel, floating over them while several show (`ThreadView`, `ChatMeta.sideOf`, `SideChatSlot`,
   `sideColumns`, `focusedChatId`, `panelFloating`, the per-chat `agentsStore` /
-  `taskListStore`).
+  `taskListStore`) and the session details rail beside it (`SessionRail`,
+  `quickRail`, `railHidden`).
 - **`docs/drafts.md`** — text typed and not sent (`lib/drafts.ts`, `DraftItem`,
   `NewChat`).
 - **`docs/image-viewer.md`** — the lightbox (`ImageView.tsx`,

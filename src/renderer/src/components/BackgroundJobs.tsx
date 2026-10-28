@@ -87,7 +87,7 @@ export function BackgroundJobs({ chatId }: { chatId: string }): React.JSX.Elemen
           <Button
             variant="ghost"
             size="sm"
-            className="no-drag h-7 shrink-0 gap-1.5 rounded-md border border-border bg-secondary/50 px-2 text-xs font-normal text-muted-foreground hover:text-foreground"
+            className="no-drag surface-raised h-7 shrink-0 gap-1.5 rounded-md px-2 text-xs font-normal text-muted-foreground hover:text-foreground"
             aria-label={`${jobs.length} background job${jobs.length === 1 ? '' : 's'} running`}
           >
             <DotSpinner className="size-3 text-primary" />

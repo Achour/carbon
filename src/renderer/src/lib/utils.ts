@@ -11,7 +11,7 @@ export function cn(...inputs: ClassValue[]): string {
  * single row of the same thing rather than drifting per component.
  */
 export const contextPill =
-  'flex min-w-0 items-center gap-1.5 rounded-md border border-border/70 bg-secondary/40 px-2 py-1 text-xs text-muted-foreground'
+  'surface-raised flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground'
 
 /**
  * The tag both places that can report a vanished folder render — the project

@@ -4,6 +4,7 @@ import { RefreshCw, X } from 'lucide-react'
 import { PROVIDER_LABELS, USAGE_KINDS, USAGE_RANGES } from '@shared/types'
 import type { UsageFact, UsageKind, UsageProvider, UsageReport, UsageUnit } from '@shared/types'
 import { cn } from '@/lib/utils'
+import { Segmented } from '@/components/ui/segmented'
 import { formatTokens, formatUsd, relativeTime } from '@/lib/format'
 import { projectLabel } from '@/lib/projects'
 import { projectHue } from '@/lib/projectIdentity'
@@ -267,49 +268,6 @@ function Swatch({ color }: { color: string }): React.JSX.Element {
   )
 }
 
-function Segmented<T extends string>({
-  value,
-  options,
-  onChange,
-  ariaLabel,
-  touch,
-  className
-}: {
-  value: T
-  options: { id: T; label: string }[]
-  onChange: (id: T) => void
-  ariaLabel: string
-  /** Thumb-sized, the segments sharing the width. */
-  touch?: boolean
-  className?: string
-}): React.JSX.Element {
-  return (
-    <div
-      role="group"
-      aria-label={ariaLabel}
-      className={cn('flex bg-secondary', touch ? 'rounded-xl p-1' : 'rounded-md p-0.5', className)}
-    >
-      {options.map((o) => (
-        <button
-          key={o.id}
-          type="button"
-          aria-pressed={value === o.id}
-          onClick={() => onChange(o.id)}
-          className={cn(
-            'transition-colors',
-            touch ? 'h-9 flex-1 rounded-lg px-2 text-[13.5px]' : 'rounded-[5px] px-2.5 py-1 text-[11px]',
-            value === o.id
-              ? 'bg-card font-medium text-foreground shadow-sm'
-              : 'text-muted-foreground hover:text-foreground'
-          )}
-        >
-          {o.label}
-        </button>
-      ))}
-    </div>
-  )
-}
-
 /** A filter that is on, said in words, with its own way off. */
 function Chip({ children, onClear }: { children: React.ReactNode; onClear: () => void }): React.JSX.Element {
   return (
@@ -400,7 +358,7 @@ function Summary({
   details.push(`${slice.responses.toLocaleString()} responses`)
 
   return (
-    <section>
+    <div>
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <span className="text-[40px] leading-none font-semibold tracking-tight tabular-nums">
           {measure === 'cost' ? formatUsd(value) : formatTokens(value)}
@@ -460,7 +418,7 @@ function Summary({
           </div>
         ))}
       </div>
-    </section>
+    </div>
   )
 }
 
@@ -767,17 +725,17 @@ function Breakdown({
   const label = GROUPS.find((g) => g.id === by)!.label
 
   return (
-    <section>
+    <section className="surface-card px-1.5 pt-3 pb-1.5">
       <table className="w-full text-[13px]">
         <thead>
           <tr className="text-[11px] text-muted-foreground">
-            <th className="pb-2 text-left font-normal">{label}</th>
+            <th className="pb-2 pl-2 text-left font-normal">{label}</th>
             {USAGE_KINDS.map((k) => (
               <th key={k} className="hidden pb-2 pl-3 text-right font-normal whitespace-nowrap md:table-cell">
                 {KIND_LABEL[k]}
               </th>
             ))}
-            <th className="pb-2 pl-3 text-right font-normal">Total</th>
+            <th className="pb-2 pr-2 pl-3 text-right font-normal">Total</th>
           </tr>
         </thead>
         <tbody>
@@ -794,7 +752,7 @@ function Breakdown({
                 aria-selected={on}
                 className={cn(
                   'group cursor-pointer border-t border-border/60 transition-colors',
-                  on ? 'bg-secondary' : 'hover:bg-secondary/50',
+                  on ? 'bg-[var(--surface-raised)]' : 'hover:bg-secondary/50',
                   focus && !on && 'text-muted-foreground'
                 )}
               >
@@ -840,7 +798,7 @@ function Breakdown({
         <button
           type="button"
           onClick={() => setAll((v) => !v)}
-          className="mt-2 px-2 text-[12px] text-muted-foreground hover:text-foreground"
+          className="mt-1 px-2 py-1 text-[12px] text-muted-foreground hover:text-foreground"
         >
           {all ? 'Show fewer' : `Show all ${rows.length}`}
         </button>
@@ -903,7 +861,7 @@ const SKELETON_BARS = [38, 52, 30, 64, 46, 72, 58, 24, 66, 80, 54, 42, 70, 60]
 function UsageSkeleton(): React.JSX.Element {
   const block = 'animate-pulse-soft rounded-md bg-secondary'
   return (
-    <div aria-busy="true" className="mx-auto max-w-4xl space-y-9 px-6 pt-6 pb-8">
+    <div aria-busy="true" className="mx-auto max-w-4xl space-y-6 px-6 pt-6 pb-8">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <span className="flex items-center gap-2 text-[13px] text-muted-foreground">
           <DotSpinner className="size-3.5" />
@@ -914,23 +872,25 @@ function UsageSkeleton(): React.JSX.Element {
           <div className={cn(block, 'h-8 w-52 rounded-lg')} />
         </div>
       </div>
-      <section>
+      <section className="surface-card p-5">
         <div className={cn(block, 'h-10 w-44')} />
         <div className={cn(block, 'mt-3 h-3 w-96 max-w-full')} />
         <div className={cn(block, 'mt-5 h-2 rounded-full')} />
       </section>
       <section>
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <div className={cn(block, 'h-4 w-28')} />
-          <div className={cn(block, 'h-8 w-48 rounded-lg')} />
+        <div className="mb-2 flex items-center justify-between gap-3 px-1">
+          <div className={cn(block, 'h-3.5 w-28')} />
+          <div className={cn(block, 'h-7 w-48 rounded-lg')} />
         </div>
-        <div className="flex items-end gap-2 pl-12" style={{ height: CHART_H }}>
-          {SKELETON_BARS.map((h, i) => (
-            <div key={i} className={cn(block, 'flex-1 rounded-sm')} style={{ height: `${h}%` }} />
-          ))}
+        <div className="surface-card p-5">
+          <div className="flex items-end gap-2 pl-12" style={{ height: CHART_H }}>
+            {SKELETON_BARS.map((h, i) => (
+              <div key={i} className={cn(block, 'flex-1 rounded-sm')} style={{ height: `${h}%` }} />
+            ))}
+          </div>
         </div>
       </section>
-      <section className="space-y-3">
+      <section className="surface-card space-y-3 px-3.5 py-4">
         {[64, 48, 56, 40].map((w, i) => (
           <div key={i} className="flex items-center gap-3">
             <div className={cn(block, 'size-5')} />
@@ -1078,27 +1038,28 @@ export function UsageReportView({
     { id: 'tokens', label: 'Tokens' }
   ]
   const ranges = USAGE_RANGES.map((r) => ({ id: String(r.days), label: r.label }))
+  const card = cn('surface-card', touch ? 'p-4' : 'p-5')
   const refresh = (
     <RefreshCw className={cn(touch ? 'size-4' : 'size-3.5', loading && 'animate-spin')} />
   )
 
   return (
-    <div className={cn('mx-auto max-w-4xl', touch ? 'space-y-7 px-4 pt-4 pb-8' : 'space-y-9 px-6 pt-6 pb-8')}>
+    <div className={cn('mx-auto max-w-4xl', touch ? 'space-y-5 px-4 pt-4 pb-8' : 'space-y-6 px-6 pt-6 pb-8')}>
       {/* What the page is about, and every control that changes it. */}
       {touch ? (
         // A phone stacks them: the window across the full width, then the
         // measure beside a refresh — four ranges and two measures in one row
         // would leave no segment a thumb could hit.
         <div className="space-y-2.5">
-          <Segmented touch ariaLabel="Window" value={String(range)} onChange={(v) => onLoad(Number(v))} options={ranges} />
+          <Segmented size="touch" ariaLabel="Window" value={String(range)} onChange={(v) => onLoad(Number(v))} options={ranges} />
           <div className="flex items-center gap-2">
-            <Segmented touch className="flex-1" ariaLabel="Measure" value={measure} onChange={setMeasure} options={measures} />
+            <Segmented size="touch" className="flex-1" ariaLabel="Measure" value={measure} onChange={setMeasure} options={measures} />
             <button
               type="button"
               aria-label="Refresh usage"
               disabled={loading}
               onClick={() => onLoad(range, true)}
-              className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-secondary text-muted-foreground active:bg-accent disabled:opacity-60"
+              className="flex size-11 shrink-0 items-center justify-center rounded-xl surface-raised text-muted-foreground active:bg-accent disabled:opacity-60"
             >
               {refresh}
             </button>
@@ -1109,8 +1070,8 @@ export function UsageReportView({
         <div className="flex flex-wrap items-center justify-between gap-3">
           {title}
           <div className="flex items-center gap-1.5">
-            <Segmented ariaLabel="Measure" value={measure} onChange={setMeasure} options={measures} />
-            <Segmented ariaLabel="Window" value={String(range)} onChange={(v) => onLoad(Number(v))} options={ranges} />
+            <Segmented size="sm" ariaLabel="Measure" value={measure} onChange={setMeasure} options={measures} />
+            <Segmented size="sm" ariaLabel="Window" value={String(range)} onChange={(v) => onLoad(Number(v))} options={ranges} />
             <WithTooltip label="Re-read session logs">
               <Button
                 size="icon-sm"
@@ -1126,15 +1087,17 @@ export function UsageReportView({
         </div>
       )}
 
-      <Summary report={report} facts={pageFacts} measure={measure} filtered={filtered} bucket={bucket} />
+      <section className={card}>
+        <Summary report={report} facts={pageFacts} measure={measure} filtered={filtered} bucket={bucket} />
+      </section>
 
       <section>
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-[13px] font-semibold">
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-1">
+          <h2 className="text-xs font-medium text-muted-foreground">
             {measure === 'cost' ? 'Cost' : 'Tokens'} by {report.unit}
           </h2>
           <Segmented
-            touch={touch}
+            size={touch ? 'touch' : 'sm'}
             className={touch ? 'w-full' : undefined}
             ariaLabel="Group by"
             value={by}
@@ -1145,31 +1108,33 @@ export function UsageReportView({
             options={GROUPS}
           />
         </div>
-        <Columns
-          buckets={report.buckets}
-          unit={report.unit}
-          stack={stack}
-          info={info}
-          measure={measure}
-          selectedBucket={bucket}
-          onBucket={setBucket}
-          touch={touch}
-          keptFrom={completeFrom(report)}
-          prunedLabel={`${(Object.keys(report.keptFrom) as UsageProvider[])
-            .filter((p) => (report.keptFrom[p] ?? '') > report.from)
-            .map((p) => PROVIDER_LABELS[p])
-            .join(' and ')} logs deleted`}
-        />
-        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1.5 pl-12">
-          {[...stack.keys].reverse().map((key) => {
-            const si = info(key)
-            return (
-              <span key={key} className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
-                <Swatch color={si.color} />
-                <span className={cn('max-w-48 truncate', si.mono && 'font-mono text-[10.5px]')}>{si.label}</span>
-              </span>
-            )
-          })}
+        <div className={card}>
+          <Columns
+            buckets={report.buckets}
+            unit={report.unit}
+            stack={stack}
+            info={info}
+            measure={measure}
+            selectedBucket={bucket}
+            onBucket={setBucket}
+            touch={touch}
+            keptFrom={completeFrom(report)}
+            prunedLabel={`${(Object.keys(report.keptFrom) as UsageProvider[])
+              .filter((p) => (report.keptFrom[p] ?? '') > report.from)
+              .map((p) => PROVIDER_LABELS[p])
+              .join(' and ')} logs deleted`}
+          />
+          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1.5 pl-12">
+            {[...stack.keys].reverse().map((key) => {
+              const si = info(key)
+              return (
+                <span key={key} className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+                  <Swatch color={si.color} />
+                  <span className={cn('max-w-48 truncate', si.mono && 'font-mono text-[10.5px]')}>{si.label}</span>
+                </span>
+              )
+            })}
+          </div>
         </div>
       </section>
 

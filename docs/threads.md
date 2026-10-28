@@ -367,3 +367,28 @@ reference identity across columns, the cap, focus and unread, the layouts,
 an expansion that hides the other columns without unmounting them, close/reopen/discard, persistence and
 restore, opening a side chat by id, the floating panel's zero reflow, the docked
 reserve, and composer chips that never overlap — and shoots the five states.
+
+## Session details (`SessionRail`)
+
+The top bar's dashboard button pins a column of cards beside the thread:
+**Environment** (project, branch with its ahead/behind, this Mac or a
+worktree), **Context**, **Changes** (opens the review, with the source-control
+button under it) and **Open in panel**. It follows the focused column. The pin
+is `quickRail` in `localStorage`, off by default.
+
+- **It floats rather than squeezing.** With the panel open, or less than
+  `NARROW_PX` beside it, the chat has no width to give, so the rail lays over
+  the chat's top-right edge and is only as tall as its cards. Over the panel
+  it also drops the launch card, because the panel already is that list.
+- **Floating, it dismisses like an overlay.** A pointer or focus anywhere
+  outside it (the composer, the transcript), or Escape, sets `railHidden`. The
+  top-bar button is exempt (`data-rail-toggle`), or its own click would dismiss
+  the rail it is toggling. `railHidden` is not the pin and is not persisted.
+  Closing the panel clears it, so the rail is back beside the chat.
+- **What it costs.** The focused chat's meta is subscribed inside the rail,
+  not in `ThreadView`, so a side chat's update re-renders the rail and not
+  every column. `useNarrow` stores only the crossing of the threshold, so a
+  window drag re-renders the rail at most twice. The floating shadow is a box
+  shadow on each card, not a `drop-shadow` filter, which would re-rasterize
+  the whole column on any change inside it. The document listeners exist only
+  while the rail floats.

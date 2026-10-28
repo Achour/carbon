@@ -3,6 +3,7 @@ import { BadgeCheck, Check, Compass, FileUp, Search, TriangleAlert } from 'lucid
 import type { ThemeExtension } from '@shared/types'
 import { importThemeJson, importThemeText, type ImportedTheme } from '@shared/themeImport'
 import { cn } from '@/lib/utils'
+import { Segmented } from '@/components/ui/segmented'
 import { formatCompact } from '@/lib/format'
 import { useApp } from '@/store'
 import { Button } from '@/components/ui/button'
@@ -55,8 +56,8 @@ function ResultCard({
   return (
     <div
       className={cn(
-        'flex flex-col gap-2 rounded-xl border p-2 transition-colors',
-        previewing ? 'border-primary/70 bg-accent/50' : 'border-border bg-card/40 hover:bg-accent/30'
+        'surface-group flex flex-col gap-2 p-2 transition-colors',
+        previewing ? 'border-primary/70 bg-accent/50' : 'hover:bg-accent/30'
       )}
     >
       <button
@@ -89,7 +90,7 @@ function ResultCard({
 
 function PlaceholderCard({ label }: { label: string }): React.JSX.Element {
   return (
-    <div className="flex flex-col gap-2 rounded-xl border border-border bg-card/40 p-2">
+    <div className="surface-group flex flex-col gap-2 p-2">
       <div className="h-[74px] animate-pulse rounded-lg bg-muted" />
       <div className="min-h-7 px-0.5">
         <span className="block truncate text-[13px] font-medium text-muted-foreground">{label}</span>
@@ -417,26 +418,7 @@ function ThemeImportBody({ onDone }: { onDone: () => void }): React.JSX.Element 
             Click a theme to try it on. Keep the ones you like.
           </DialogDescription>
         </div>
-        <div role="tablist" aria-label="Source" className="grid grid-cols-2 gap-1 rounded-xl bg-secondary p-1">
-          {TABS.map((option) => (
-            <button
-              key={option.id}
-              type="button"
-              role="tab"
-              aria-selected={tab === option.id}
-              onClick={() => setTab(option.id)}
-              className={cn(
-                'flex h-7 items-center justify-center gap-1.5 rounded-lg px-2.5 text-xs font-medium outline-none transition-all focus-visible:ring-2 focus-visible:ring-ring',
-                tab === option.id
-                  ? 'bg-background text-foreground shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground'
-              )}
-            >
-              <option.icon className="size-3.5" />
-              {option.label}
-            </button>
-          ))}
-        </div>
+        <Segmented tabs ariaLabel="Source" value={tab} options={TABS} onChange={setTab} />
       </div>
 
       <div className="relative min-h-0 flex-1 overflow-y-auto px-5 py-4">
@@ -457,7 +439,7 @@ function ThemeImportBody({ onDone }: { onDone: () => void }): React.JSX.Element 
                 }}
                 placeholder="Search VS Code themes on Open VSX"
                 aria-label="Search Open VSX themes"
-                className="no-drag h-9 w-full rounded-lg border border-input bg-transparent pr-9 pl-9 text-sm outline-none transition-colors placeholder:text-muted-foreground/70 focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30"
+                className="no-drag h-9 w-full rounded-lg border border-input surface-well pr-9 pl-9 text-sm outline-none transition-colors placeholder:text-muted-foreground/70 focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30"
               />
               {searching && (
                 <div className="absolute top-1/2 right-3 -translate-y-1/2">

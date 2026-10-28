@@ -66,7 +66,7 @@ export function AgentsPanel(): React.JSX.Element {
             No agents have been spawned in this chat.
           </div>
         ) : (
-          <div className="space-y-px">
+          <div className="surface-group space-y-px p-1">
             {runs.map((run) => (
               <AgentRow key={run.id} run={run} />
             ))}
@@ -415,7 +415,7 @@ export function AgentActivityBar({ chatId }: { chatId: string }): React.JSX.Elem
     <button
       type="button"
       onClick={() => openAgentsPanel(undefined, chatId)}
-      className="group mb-2 flex w-full animate-enter items-center gap-2 rounded-lg border border-border bg-secondary/40 px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+      className="group mb-2 flex w-full animate-enter items-center gap-2 surface-raised rounded-lg px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
     >
       <StatusDot status="running" />
       <span className="shimmer-text min-w-0 flex-1 truncate text-left">

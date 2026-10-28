@@ -103,17 +103,28 @@ export function PanelActionRow({
  * opening the panel beside the rail hands the list over rather than redrawing
  * it in another shape.
  */
-export function PanelLaunchList({ className }: { className?: string }): React.JSX.Element {
+export function PanelLaunchList({
+  className,
+  title
+}: {
+  className?: string
+  /** A card title in place of the project line, where a card above names the project already. */
+  title?: string
+}): React.JSX.Element {
   const cwd = useApp((s) => s.selectedCwd)
   const git = useApp((s) => s.git)
   const setFileSearchOpen = useApp((s) => s.setFileSearchOpen)
   const actions = usePanelActions()
 
   return (
-    <div className={cn('flex flex-col gap-0.5', className)}>
-      {cwd && (
+    // A card holding a well of actions: the panel's depth levels in one place
+    // (index.css, "Depth").
+    <div className={cn('surface-card flex flex-col gap-2 p-2', className)}>
+      {title ? (
+        <div className="px-1.5 pt-0.5 text-xs font-medium text-muted-foreground">{title}</div>
+      ) : cwd && (
         <WithTooltip label={cwd}>
-          <div className="mb-2 flex items-center gap-1.5 px-2 text-xs text-muted-foreground/70">
+          <div className="flex items-center gap-1.5 px-1.5 pt-0.5 text-xs text-muted-foreground/70">
             <Folder className="size-3 shrink-0" />
             <span className="truncate">{basename(cwd)}</span>
             {git?.isRepo && git.branch && (
@@ -131,15 +142,18 @@ export function PanelLaunchList({ className }: { className?: string }): React.JS
       <button
         type="button"
         onClick={() => setFileSearchOpen(true)}
-        className="mb-2 flex w-full items-center gap-2.5 rounded-md border border-border/70 bg-background/40 px-2 py-1.5 text-left text-[13px] text-muted-foreground transition-colors hover:border-border hover:text-foreground [&_svg]:size-4"
+        className="surface-well flex w-full items-center gap-2.5 rounded-lg border border-border/70 px-2 py-1.5 text-left text-[13px] text-muted-foreground transition-colors hover:border-border hover:text-foreground [&_svg]:size-4"
       >
         <Search className="shrink-0" />
         <span className="truncate">Open a file…</span>
         <Kbd className="ml-auto bg-transparent">⌘P</Kbd>
       </button>
-      {actions.map(({ id, ...a }) => (
-        <PanelActionRow key={id} {...a} />
-      ))}
+      <div className="surface-group flex flex-col gap-0.5 p-1">
+        {actions.map(({ id, ...a }) => (
+          <PanelActionRow key={id} {...a} />
+        ))}
+      </div>
     </div>
   )
 }
+

@@ -45,6 +45,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { DotSpinner } from '@/components/ui/dot-spinner'
 import { WithTooltip } from '@/components/ui/tooltip'
+import { Segmented } from '@/components/ui/segmented'
 import { PageHeader } from '@/components/PageHeader'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
@@ -78,6 +79,12 @@ import { countRows } from '@/lib/diffRows'
  */
 
 type Tab = 'all' | 'reviewing' | 'authored'
+
+const TABS: { id: Tab; label: string }[] = [
+  { id: 'all', label: 'All' },
+  { id: 'reviewing', label: 'Reviewing' },
+  { id: 'authored', label: 'Authored' }
+]
 
 /** The Status filter. A draft is an open PR, so Draft fetches `open` and narrows. */
 type Status = 'open' | 'draft' | 'merged' | 'closed'
@@ -210,7 +217,7 @@ function PullRow({
       onClick={onSelect}
       className={cn(
         'flex w-full gap-2.5 rounded-lg px-3 py-2 text-left transition-colors',
-        active ? 'bg-accent' : 'hover:bg-accent/50'
+        active ? 'surface-raised' : 'hover:bg-accent/50'
       )}
     >
       <PullMark pr={pr} className="mt-0.5" />
@@ -273,12 +280,12 @@ function Field({
   children: React.ReactNode
 }): React.JSX.Element {
   return (
-    <div className="flex min-h-8 items-center gap-3 text-[13px]">
-      <span className="flex w-32 shrink-0 items-center gap-2 text-muted-foreground [&_svg]:size-4">
+    <div className="flex items-start gap-3 px-2 py-2 text-[13px]">
+      <span className="flex h-6 w-32 shrink-0 items-center gap-2 text-muted-foreground [&_svg]:size-4">
         {icon}
         {label}
       </span>
-      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1">{children}</div>
+      <div className="flex min-h-6 min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1">{children}</div>
     </div>
   )
 }
@@ -382,7 +389,7 @@ function ChecksField({ detail }: { detail: PullDetail }): React.JSX.Element {
         />
       </button>
       {open && (
-        <ul className="mt-1 flex flex-col gap-0.5">
+        <ul className="surface-group mt-2 mb-0.5 flex flex-col divide-y divide-border/70">
           {detail.checkRuns.map((c, i) => (
             <CheckRow key={`${c.name}-${i}`} check={c} />
           ))}
@@ -395,7 +402,7 @@ function ChecksField({ detail }: { detail: PullDetail }): React.JSX.Element {
 function CheckRow({ check }: { check: PullCheck }): React.JSX.Element {
   const openExternal = (url: string): void => void window.api.openExternal(url)
   return (
-    <li className="flex items-center gap-2 text-[12px]">
+    <li className="flex items-center gap-2 px-2.5 py-1.5 text-[12px]">
       {check.state === 'pass' ? (
         <Check className="size-3.5 text-emerald-500" />
       ) : check.state === 'fail' ? (
@@ -464,7 +471,7 @@ function EditableText({
     if (ok) setEditing(false)
   }
   const common =
-    'w-full rounded-md border border-border bg-transparent px-2 py-1.5 outline-none focus:border-ring'
+    'w-full rounded-md border border-border surface-well px-2 py-1.5 outline-none focus:border-ring'
   return (
     <div className="flex flex-col gap-2">
       {multiline ? (
@@ -537,7 +544,7 @@ function Summary({
         </div>
       </div>
 
-      <div className="flex flex-col gap-1">
+      <div className="surface-card flex flex-col divide-y divide-border/70 px-1.5 py-0.5">
         <Field icon={<GitBranch />} label="Branch">
           <span className="truncate font-mono text-[12.5px]" title={detail.headRef}>
             {detail.headRef}
@@ -583,27 +590,29 @@ function Summary({
         </Field>
       </div>
 
-      <div className="flex flex-col gap-3 border-t border-border pt-5">
+      <div>
         <button
           type="button"
           onClick={() => setBodyOpen((o) => !o)}
-          className="flex items-center gap-1 self-start text-[15px] font-semibold"
+          className="mb-1.5 flex items-center gap-1 px-1 text-xs font-medium text-muted-foreground hover:text-foreground"
         >
           Description
-          <ChevronDown className={cn('size-4 transition-transform', !bodyOpen && '-rotate-90')} />
+          <ChevronDown className={cn('size-3 transition-transform', !bodyOpen && '-rotate-90')} />
         </button>
         {bodyOpen && (
-          <EditableText
-            value={detail.body}
-            multiline
-            onSave={editable ? (body) => onEdit({ body }) : null}
-          >
-            {shownBody.trim() ? (
-              <Markdown text={shownBody} className="pr-8" />
-            ) : (
-              <p className="text-[13px] text-muted-foreground">No description.</p>
-            )}
-          </EditableText>
+          <div className="surface-card px-4 py-3">
+            <EditableText
+              value={detail.body}
+              multiline
+              onSave={editable ? (body) => onEdit({ body }) : null}
+            >
+              {shownBody.trim() ? (
+                <Markdown text={shownBody} className="pr-8" />
+              ) : (
+                <p className="text-[13px] text-muted-foreground">No description.</p>
+              )}
+            </EditableText>
+          </div>
         )}
       </div>
     </div>
@@ -915,22 +924,16 @@ function Detail({
     <div className="flex min-w-0 flex-1 flex-col">
       <div className="flex h-11 shrink-0 items-center gap-1 border-b border-border px-3">
         <PullMark pr={detail ?? pr} className="mr-1" />
-        {(['summary', 'code'] as const).map((t) => (
-          <button
-            key={t}
-            type="button"
-            aria-pressed={tab === t}
-            onClick={() => setTab(t)}
-            className={cn(
-              'rounded-md px-2.5 py-1 text-[13px] capitalize transition-colors',
-              tab === t
-                ? 'bg-accent text-foreground'
-                : 'text-muted-foreground hover:text-foreground'
-            )}
-          >
-            {t === 'code' && detail ? `Code · ${detail.changedFiles}` : t}
-          </button>
-        ))}
+        <Segmented
+          tabs
+          ariaLabel="Pull request view"
+          value={tab}
+          onChange={setTab}
+          options={[
+            { id: 'summary', label: 'Summary' },
+            { id: 'code', label: detail ? `Code · ${detail.changedFiles}` : 'Code' }
+          ]}
+        />
         <div className="ml-auto flex items-center gap-1.5">
           <WithTooltip label="Open on GitHub">
             <Button
@@ -1294,24 +1297,14 @@ export function PullRequests(): React.JSX.Element {
         <div className="flex min-h-0 flex-1">
           <div className="flex w-[380px] shrink-0 flex-col border-r border-border">
             <div className="flex flex-col gap-2.5 px-3 pt-3 pb-2">
-              <div className="flex gap-0.5">
-                {(['all', 'reviewing', 'authored'] as const).map((t) => (
-                  <button
-                    key={t}
-                    type="button"
-                    aria-pressed={tab === t}
-                    onClick={() => setTab(t)}
-                    className={cn(
-                      'rounded-md px-2.5 py-1 text-[13px] capitalize transition-colors',
-                      tab === t
-                        ? 'bg-accent text-foreground'
-                        : 'text-muted-foreground hover:text-foreground'
-                    )}
-                  >
-                    {t}
-                  </button>
-                ))}
-              </div>
+              <Segmented
+                tabs
+                ariaLabel="Pull requests"
+                value={tab}
+                onChange={setTab}
+                options={TABS}
+                className="self-start"
+              />
               <div className="flex items-center gap-1.5">
                 <div className="relative min-w-0 flex-1">
                   <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />

@@ -82,10 +82,8 @@ function StepRail({
             disabled={!done}
             onClick={() => onPick(s.id)}
             className={cn(
-              'flex items-center gap-2 rounded-lg border px-2.5 py-2 text-left transition-colors',
-              active
-                ? 'border-primary/60 bg-primary/10'
-                : 'border-border/60 bg-secondary/40 disabled:opacity-70',
+              'surface-group flex items-center gap-2 px-2.5 py-2 text-left transition-colors',
+              active ? 'border-primary/60 bg-primary/10' : 'disabled:opacity-70',
               done && 'hover:bg-accent/60'
             )}
           >
@@ -140,8 +138,8 @@ function Choice({
       disabled={disabled}
       onClick={onClick}
       className={cn(
-        'flex w-full items-center gap-2.5 rounded-lg border px-3 py-2.5 text-left transition-colors',
-        selected ? 'border-primary/60 bg-primary/10' : 'border-border/60 hover:bg-accent/50',
+        'surface-group flex w-full items-center gap-2.5 px-3 py-2.5 text-left transition-colors',
+        selected ? 'border-primary/60 bg-primary/10' : 'hover:bg-accent/50',
         disabled && 'opacity-60'
       )}
     >
@@ -172,7 +170,7 @@ function CheckRow({
       role="checkbox"
       aria-checked={checked}
       onClick={() => onChange(!checked)}
-      className="flex w-full items-start gap-2.5 rounded-lg border border-border/60 px-3 py-2.5 text-left transition-colors hover:bg-accent/40"
+      className="surface-group flex w-full items-start gap-2.5 px-3 py-2.5 text-left transition-colors hover:bg-accent/40"
     >
       <span
         className={cn(
@@ -328,7 +326,7 @@ export function PublishDialog(): React.JSX.Element | null {
 
         {done ? (
           <>
-            <div className="mt-5 flex items-center gap-2.5 rounded-lg border border-border/60 px-3 py-3">
+            <div className="surface-group mt-5 flex items-center gap-2.5 px-3 py-3">
               <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-500">
                 <Check className="size-3.5" />
               </span>
@@ -373,7 +371,7 @@ export function PublishDialog(): React.JSX.Element | null {
                     tag={!loading && !ready ? 'Setup required' : undefined}
                   />
                   {setup && !loading && (
-                    <div className="mt-3 rounded-lg border border-border/60 bg-secondary/40 p-3">
+                    <div className="surface-group mt-3 p-3">
                       <p className="text-[12px] text-muted-foreground">{setup.text}</p>
                       <code className="mt-2 block rounded bg-background/60 px-2 py-1 font-mono text-[11.5px]">
                         {setup.command}
@@ -405,7 +403,7 @@ export function PublishDialog(): React.JSX.Element | null {
               {step === 'repo' && (
                 <>
                   <p className="mb-1.5 text-[11px] font-medium text-muted-foreground">Repository</p>
-                  <div className="flex items-stretch overflow-hidden rounded-lg border border-input focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/30">
+                  <div className="flex items-stretch overflow-hidden rounded-lg border border-input surface-well focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/30">
                     <span className="flex shrink-0 items-center gap-1.5 border-r border-input bg-secondary/60 px-2.5 font-mono text-[12px] text-muted-foreground">
                       <GitHubMark className="size-3.5" />
                       github.com/
@@ -449,7 +447,7 @@ export function PublishDialog(): React.JSX.Element | null {
                       spellCheck={false}
                       placeholder="repository-name"
                       onChange={(e) => setName(sanitizeRepoName(e.target.value))}
-                      className="h-9 rounded-none border-0 font-mono focus-visible:ring-0"
+                      className="h-9 rounded-none border-0 font-mono shadow-none focus-visible:ring-0"
                     />
                   </div>
 
@@ -494,7 +492,7 @@ export function PublishDialog(): React.JSX.Element | null {
 
               {step === 'summary' && (
                 <>
-                  <div className="divide-y divide-border/60 rounded-lg border border-border/60">
+                  <div className="surface-group divide-y divide-border/70">
                     <SummaryRow icon={<Plus className="size-3.5" />}>
                       Create <span className="font-mono">{fullName}</span>
                       <span className="text-muted-foreground">

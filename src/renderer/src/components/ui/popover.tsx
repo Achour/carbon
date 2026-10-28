@@ -20,7 +20,7 @@ function PopoverContent({
       <BasePopover.Positioner align={align} side={side} sideOffset={6} className="z-50 outline-none">
         <BasePopover.Popup
           className={cn(
-            'rounded-lg border border-border bg-popover p-3 text-popover-foreground shadow-xl outline-none transition-all duration-150 data-[ending-style]:scale-95 data-[ending-style]:opacity-0 data-[starting-style]:scale-95 data-[starting-style]:opacity-0',
+            'rounded-lg border border-border bg-popover p-3 text-popover-foreground surface-overlay outline-none transition-all duration-150 data-[ending-style]:scale-95 data-[ending-style]:opacity-0 data-[starting-style]:scale-95 data-[starting-style]:opacity-0',
             className
           )}
           {...props}

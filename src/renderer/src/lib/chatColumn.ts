@@ -41,4 +41,4 @@ export const CHAT_BLEED_PAD = 'px-3.5'
  * border it takes on while a file is dragged over it.
  */
 export const CHAT_FRAME =
-  'rounded-2xl border border-border bg-card shadow-lg shadow-black/5 dark:shadow-black/20'
+  'rounded-2xl border border-border bg-card shadow-[inset_0_1px_0_var(--surface-highlight),0_10px_15px_-3px_oklch(0_0_0/5%)] dark:shadow-[inset_0_1px_0_var(--surface-highlight),0_10px_24px_-6px_oklch(0_0_0/35%)]'

@@ -6,6 +6,7 @@ import {
   Bot,
   Columns3,
   GitMerge,
+  LayoutDashboard,
   LayoutGrid,
   Maximize2,
   MessageCircleQuestion,
@@ -78,6 +79,7 @@ import {
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
+import { SessionRail } from '@/components/SessionRail'
 import {
   MergeIntoMainDialog,
   WorktreeFinishDialog,
@@ -106,19 +108,25 @@ export function ThreadView({ chat }: { chat: ChatMeta }): React.JSX.Element {
   )
   useThreadKeys(ids)
   const join = useThreadJoinDrop()
+  const railShown = useApp((s) => s.quickRail && !s.railHidden)
 
   return (
     // The frosted main column: one wash under every column, so a thread reads
     // as one surface rather than four tinted panes.
     <div data-chatview className="relative flex h-full min-w-0 flex-1 flex-col" {...join.handlers}>
       <ThreadHeader chat={chat} ids={ids} />
-      {ids.length === 1 ? (
-        <div className="flex min-h-0 flex-1">
-          <ChatView chat={chat} />
-        </div>
-      ) : (
-        <ThreadColumns ids={ids} threadId={chat.id} />
-      )}
+      <div className="relative flex min-h-0 flex-1">
+        {ids.length === 1 ? (
+          <div className="flex min-h-0 min-w-0 flex-1">
+            <ChatView chat={chat} />
+          </div>
+        ) : (
+          <ThreadColumns ids={ids} threadId={chat.id} />
+        )}
+        {/* The chat's own state beside it while it runs. Off by default; the
+            top bar's toggle pins it. Follows the focused column in a thread. */}
+        {railShown && <SessionRail chat={chat} />}
+      </div>
       {join.state && <JoinOverlay state={join.state} />}
     </div>
   )
@@ -279,6 +287,16 @@ function ThreadHeader({ chat, ids }: { chat: ChatMeta; ids: readonly string[] })
   const toggleSidebar = useApp((s) => s.toggleSidebar)
   const panelOpen = useApp((s) => s.panelOpen)
   const togglePanel = useApp((s) => s.togglePanel)
+  const quickRail = useApp((s) => s.quickRail)
+  const toggleQuickRail = useApp((s) => s.toggleQuickRail)
+  const railHidden = useApp((s) => s.railHidden)
+  const setRailHidden = useApp((s) => s.setRailHidden)
+  const railShown = quickRail && !railHidden
+  // A rail put away while it floated over the panel is back beside the chat
+  // once the panel closes: the dismissal was of the overlay, not the pin.
+  React.useEffect(() => {
+    if (!panelOpen) setRailHidden(false)
+  }, [panelOpen, setRailHidden])
   const terminalBusy = useApp((s) => s.terminalBusy)
   const focused = useApp((s) => s.focusedChatId) ?? chat.id
   const threadLayout = useApp((s) => s.threadLayout)
@@ -371,7 +389,7 @@ function ThreadHeader({ chat, ids }: { chat: ChatMeta; ids: readonly string[] })
         <div
           role="group"
           aria-label="Layout"
-          className="no-drag flex shrink-0 items-center gap-0.5 rounded-md bg-secondary/60 p-0.5"
+          className="no-drag surface-group flex shrink-0 items-center gap-0.5 rounded-md p-0.5"
         >
           <LayoutButton
             label="Columns"
@@ -392,6 +410,25 @@ function ThreadHeader({ chat, ids }: { chat: ChatMeta; ids: readonly string[] })
       <SubagentsMenu chatIds={ids.filter((id) => !isAgentColumn(id))} openIds={ids} />
       <AddChatControl count={ids.length} threadId={chat.id} />
       <ThreadMenu chat={chat} />
+      <WithTooltip label={railShown ? 'Hide session details' : 'Show session details'}>
+        <Button
+          size="icon-sm"
+          variant="ghost"
+          data-rail-toggle
+          aria-label={railShown ? 'Hide session details' : 'Show session details'}
+          aria-pressed={railShown}
+          onClick={() => {
+            // A dismissed rail comes back, and over the panel the button only
+            // puts it away; the pin itself is for the docked rail.
+            if (quickRail && railHidden) setRailHidden(false)
+            else if (quickRail && panelOpen) setRailHidden(true)
+            else toggleQuickRail()
+          }}
+          className={cn('no-drag', railShown && 'bg-accent text-foreground')}
+        >
+          <LayoutDashboard />
+        </Button>
+      </WithTooltip>
       {/* Open — docked or floating over this header — the panel's own header
           holds the collapse at this same inset, so open and close stay one
           unmoving target. */}
@@ -437,7 +474,7 @@ function LayoutButton({
         aria-pressed={active}
         className={cn(
           'flex h-5.5 w-6 items-center justify-center rounded-[5px] text-muted-foreground transition-colors [&_svg]:size-3.5',
-          active ? 'bg-background text-foreground shadow-sm' : 'hover:text-foreground'
+          active ? 'surface-raised text-foreground' : 'hover:text-foreground'
         )}
       >
         {children}
@@ -566,7 +603,7 @@ function ThreadPill({
         className={cn(
           'relative flex h-6.5 items-center gap-1.5 rounded-md border px-1.5 transition-colors',
           focused
-            ? 'border-border bg-background text-foreground shadow-sm'
+            ? 'border-transparent surface-raised text-foreground'
             : 'border-transparent text-muted-foreground hover:bg-accent hover:text-foreground'
         )}
       >
@@ -1329,7 +1366,7 @@ function ThreadColumns({
   return (
     <div
       className={cn(
-        'min-h-0 flex-1 border-t border-border',
+        'min-h-0 min-w-0 flex-1 border-t border-border',
         grid
           ? 'grid grid-cols-2 grid-rows-2'
           : cn('flex', !expandedChatId && 'overflow-x-auto')

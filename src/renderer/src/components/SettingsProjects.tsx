@@ -20,6 +20,7 @@ import {
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Group } from '@/components/ui/group'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -148,29 +149,6 @@ function Fact({ label, children }: { label: string; children: React.ReactNode })
   )
 }
 
-/** A heading inside the detail pane. */
-function Group({
-  title,
-  count,
-  children
-}: {
-  title: string
-  count?: number
-  children: React.ReactNode
-}): React.JSX.Element {
-  return (
-    <section className="mt-7">
-      <h3 className="mb-2 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
-        {title}
-        {count !== undefined && count > 0 && (
-          <span className="ml-1.5 text-muted-foreground/60 tabular-nums">{count}</span>
-        )}
-      </h3>
-      {children}
-    </section>
-  )
-}
-
 /**
  * One **linked** worktree — the main checkout never reaches here; see
  * `checkout` / `linked` in the detail pane.
@@ -214,7 +192,7 @@ function WorktreeRow({
   }
 
   return (
-    <div className="flex items-center gap-3 rounded-lg border border-border px-3 py-2.5">
+    <div className="flex items-center gap-3 px-2 py-2.5">
       <GitBranch
         className={cn('size-4 shrink-0', wt.missing ? 'text-warning' : 'text-muted-foreground')}
       />
@@ -325,7 +303,7 @@ function ProjectRow({
       aria-label={`Select ${label}`}
       className={cn(
         'flex w-full items-center gap-2.5 rounded-md px-2 py-2 text-left transition-colors',
-        selected ? 'bg-accent' : 'hover:bg-accent/50'
+        selected ? 'surface-raised' : 'hover:bg-accent/50'
       )}
     >
       <ProjectAvatar
@@ -603,8 +581,8 @@ function ProjectDetailPane({
           </div>
         )}
 
-        <Group title="Repository">
-          <div className="grid grid-cols-2 gap-x-6 gap-y-3.5 rounded-lg border border-border px-4 py-3.5 lg:grid-cols-3">
+        <Group title="Repository" className="mt-6">
+          <div className="grid grid-cols-2 gap-x-6 gap-y-3.5 px-2.5 py-3 lg:grid-cols-3">
             <Fact label="Chats">
               <MessageSquare className="size-3.5 shrink-0 text-muted-foreground" />
               <span className="tabular-nums">{chatCount}</span>
@@ -680,38 +658,40 @@ function ProjectDetailPane({
 
         {isRepo && (
           <>
-            <Group title="Worktrees" count={detail ? linked.length : undefined}>
+            <Group
+              title="Worktrees"
+              count={detail ? linked.length : undefined}
+              className="mt-6"
+            >
               {!detail ? (
-                <div className="flex items-center gap-2 py-1 text-[12px] text-muted-foreground">
+                <div className="flex items-center gap-2 px-2 py-2.5 text-[12px] text-muted-foreground">
                   <DotSpinner className="size-3.5" /> Reading the repository…
                 </div>
               ) : linked.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-border px-3 py-4 text-center text-[12px] text-muted-foreground">
+                <div className="px-2 py-4 text-center text-[12px] text-muted-foreground">
                   No worktrees — chats here run in the checkout itself.
                 </div>
               ) : (
-                <div className="space-y-1.5">
-                  {linked.map((wt) => (
-                    <WorktreeRow
-                      key={wt.path}
-                      wt={wt}
-                      root={root}
-                      onRemoved={() => {
-                        // Both halves: the list here *and* the "Worktrees"
-                        // count in the grid above, which comes from the
-                        // overview and would otherwise lie until Recheck.
-                        void loadProjectDetail(root, true)
-                        void loadProjects()
-                      }}
-                    />
-                  ))}
-                </div>
+                linked.map((wt) => (
+                  <WorktreeRow
+                    key={wt.path}
+                    wt={wt}
+                    root={root}
+                    onRemoved={() => {
+                      // Both halves: the list here *and* the "Worktrees"
+                      // count in the grid above, which comes from the
+                      // overview and would otherwise lie until Recheck.
+                      void loadProjectDetail(root, true)
+                      void loadProjects()
+                    }}
+                  />
+                ))
               )}
             </Group>
 
             {detail && detail.branches.length > 0 && (
-              <Group title="Branches" count={detail.branches.length}>
-                <div className="flex flex-wrap gap-1.5">
+              <Group title="Branches" count={detail.branches.length} className="mt-6">
+                <div className="flex flex-wrap gap-1.5 px-2 py-2.5">
                   {detail.branches.slice(0, BRANCH_CHIPS).map((b) => (
                     <span
                       key={b.name}
@@ -747,46 +727,43 @@ function ProjectDetailPane({
             in the same gesture. Turning either one *on* still asks, because
             both take a whole project off the sidebar in one click; turning it
             off is the undo and asks nothing. */}
-        <Group title="In the sidebar">
-          <div className="rounded-lg border border-border">
-            <div className="flex items-center gap-4 px-4 py-3">
-              <div className="min-w-0 flex-1">
-                <div className="text-[13px] font-medium">Show in the sidebar</div>
-                <div className="mt-0.5 text-[12px] text-muted-foreground">
-                  Off takes the project and its {chatCount === 1 ? 'chat' : 'chats'} out of the
-                  sidebar, the chat search and ⌘N. Nothing is deleted.
-                </div>
+        <Group title="In the sidebar" className="mt-6">
+          <div className="flex items-center gap-4 px-2 py-2.5">
+            <div className="min-w-0 flex-1">
+              <div className="text-[13px] font-medium">Show in the sidebar</div>
+              <div className="mt-0.5 text-[12px] text-muted-foreground">
+                Off takes the project and its {chatCount === 1 ? 'chat' : 'chats'} out of the
+                sidebar, the chat search and ⌘N. Nothing is deleted.
               </div>
-              <SwitchPill
-                on={!hidden}
-                label={`Show ${label} in the sidebar`}
-                onChange={() =>
-                  hidden ? setProjectHidden(root, false) : onPrompt({ kind: 'hide', cwd: root })
-                }
-              />
             </div>
-            <div className="mx-4 h-px bg-border" />
-            <div className="flex items-center gap-4 px-4 py-3">
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <Archive className="size-3.5 text-muted-foreground" />
-                  <span className="text-[13px] font-medium">Archived</span>
-                </div>
-                <div className="mt-0.5 text-[12px] text-muted-foreground">
-                  Folds the project into the sidebar’s Archived section instead of listing it with
-                  the rest.
-                </div>
+            <SwitchPill
+              on={!hidden}
+              label={`Show ${label} in the sidebar`}
+              onChange={() =>
+                hidden ? setProjectHidden(root, false) : onPrompt({ kind: 'hide', cwd: root })
+              }
+            />
+          </div>
+          <div className="flex items-center gap-4 px-2 py-2.5">
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <Archive className="size-3.5 text-muted-foreground" />
+                <span className="text-[13px] font-medium">Archived</span>
               </div>
-              <SwitchPill
-                on={archived}
-                label={`Archive ${label}`}
-                onChange={() =>
-                  archived
-                    ? setProjectArchived(root, false)
-                    : onPrompt({ kind: 'archive', cwd: root })
-                }
-              />
+              <div className="mt-0.5 text-[12px] text-muted-foreground">
+                Folds the project into the sidebar’s Archived section instead of listing it with
+                the rest.
+              </div>
             </div>
+            <SwitchPill
+              on={archived}
+              label={`Archive ${label}`}
+              onChange={() =>
+                archived
+                  ? setProjectArchived(root, false)
+                  : onPrompt({ kind: 'archive', cwd: root })
+              }
+            />
           </div>
         </Group>
       </div>

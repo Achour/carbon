@@ -4,6 +4,7 @@ import {
   applyCodeFontSize,
   applyTheme,
   applyTranslucent,
+  applyDepth,
   CODE_FONT_MAX,
   CODE_FONT_MIN,
   currentDockIconPalette,
@@ -18,7 +19,8 @@ import {
   storedCodeFontSize,
   storedTheme,
   storedThemeMode,
-  storedTranslucent
+  storedTranslucent,
+  storedDepth
 } from '@/lib/themes'
 import { sortChats } from '@/lib/chatOrder'
 import type { ResolvedAppearance, ThemeDef, ThemeMode } from '@/lib/themes'
@@ -873,6 +875,16 @@ interface AppState {
   loading: boolean
   sidebarOpen: boolean
   toggleSidebar(): void
+  /** The panel's launch card pinned beside a running chat (the top bar's toggle). */
+  quickRail: boolean
+  toggleQuickRail(): void
+  /**
+   * The rail dismissed while it floats over the chat (panel open, or too
+   * narrow to sit beside it) — a click elsewhere put it away. Not persisted,
+   * and not `quickRail`: the pin stands, and closing the panel clears this.
+   */
+  railHidden: boolean
+  setRailHidden(hidden: boolean): void
 
   /**
    * Turns the reader has opened, by the id of the user message that starts each
@@ -1107,6 +1119,9 @@ interface AppState {
   /** macOS-only: blur the desktop behind a translucent sidebar (native vibrancy). */
   translucentSidebar: boolean
   setTranslucentSidebar(on: boolean): void
+  /** Raised surfaces, highlights and shadows (`docs/depth.md`); off is flat. */
+  depth: boolean
+  setDepth(on: boolean): void
   codeFontSize: number
   /** Interface text size as a percent — everything that is not code. */
   notifyPrefs: NotifyPrefs
@@ -2389,6 +2404,16 @@ export const useApp = create<AppState>((set, get) => ({
   defaults: null,
   loading: true,
   sidebarOpen: localStorage.getItem('sidebarOpen') !== 'false',
+  quickRail: localStorage.getItem('quickRail') === 'true',
+  toggleQuickRail() {
+    const open = !get().quickRail
+    localStorage.setItem('quickRail', String(open))
+    set({ quickRail: open, railHidden: false })
+  },
+  railHidden: false,
+  setRailHidden(hidden) {
+    set({ railHidden: hidden })
+  },
   expandedTurns: new Set<string>(),
 
   update: null,
@@ -2934,6 +2959,13 @@ export const useApp = create<AppState>((set, get) => ({
     // Reveal/hide the constructor-created active native material alongside CSS.
     void window.api.setWindowTranslucent(on)
     set({ translucentSidebar: on })
+  },
+
+  depth: storedDepth(),
+  setDepth(on) {
+    applyDepth(on)
+    localStorage.setItem('depth', String(on))
+    set({ depth: on })
   },
 
   codeFontSize: storedCodeFontSize(),

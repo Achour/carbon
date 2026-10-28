@@ -55,6 +55,7 @@ import { ReviewBar } from '@/components/ReviewBar'
 import { languageForPath } from '@/lib/highlight'
 import { BrowserPane } from '@/components/BrowserPane'
 import { PanelActionRow, PanelLaunchList, usePanelActions } from '@/components/PanelActions'
+import { Segmented } from '@/components/ui/segmented'
 
 /**
  * xterm is ~410 KB and matters only once a terminal tab exists — which for many
@@ -153,7 +154,7 @@ function Tab({
       className={cn(
         'group relative flex h-7 shrink-0 cursor-default items-center gap-1.5 rounded-md pr-1.5 pl-2 text-xs transition-colors',
         active
-          ? 'bg-accent text-foreground'
+          ? 'surface-raised text-foreground'
           : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground'
       )}
       onClick={onSelect}
@@ -512,6 +513,12 @@ function EmptyLauncher(): React.JSX.Element {
   )
 }
 
+/** A markdown tab's two views. */
+const MD_MODES = [
+  { id: 'preview', label: 'Preview', icon: Eye },
+  { id: 'source', label: 'Source', icon: Code2 }
+] as const
+
 /** The body of an Untitled tab: an inline file picker; choosing one replaces it. */
 function UntitledView({ tabPath }: { tabPath: string }): React.JSX.Element {
   const cwd = useApp((s) => s.selectedCwd)
@@ -554,7 +561,7 @@ function UntitledView({ tabPath }: { tabPath: string }): React.JSX.Element {
     <div className="flex h-full flex-col items-center justify-center gap-3 px-6">
       <FileText className="size-8 text-muted-foreground/30" />
       <p className="text-sm text-muted-foreground">Open a file</p>
-      <div className="w-full max-w-sm overflow-hidden rounded-lg border border-border">
+      <div className="surface-card w-full max-w-sm overflow-hidden">
         <div className="flex items-center gap-2 border-b border-border px-3 py-2">
           <Search className="size-3.5 shrink-0 text-muted-foreground" />
           <input
@@ -1335,24 +1342,13 @@ export function RightPanel(): React.JSX.Element | null {
             {activeEntry && <PathBar entry={activeEntry} cwd={selectedCwd} />}
           </div>
           {activeIsMarkdown && (
-            <div className="flex shrink-0 items-center gap-0.5 rounded-lg bg-secondary/60 p-0.5">
-              {(['preview', 'source'] as const).map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  onClick={() => setMdMode(m)}
-                  className={cn(
-                    'flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium capitalize transition-colors [&_svg]:size-3',
-                    mdMode === m
-                      ? 'bg-background text-foreground shadow-sm'
-                      : 'text-muted-foreground hover:text-foreground'
-                  )}
-                >
-                  {m === 'preview' ? <Eye /> : <Code2 />}
-                  {m}
-                </button>
-              ))}
-            </div>
+            <Segmented
+              size="sm"
+              ariaLabel="Markdown view"
+              value={mdMode}
+              options={MD_MODES}
+              onChange={setMdMode}
+            />
           )}
           <WithTooltip label={dockOpen ? 'Hide file tree' : 'Show file tree'}>
             <Button

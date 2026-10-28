@@ -698,6 +698,17 @@ export function applyTranslucent(on: boolean): void {
   document.documentElement.dataset.translucent = on ? 'true' : 'false'
 }
 
+// Depth (index.css, "Depth."): on unless turned off, so the flat look is the
+// opt-out. Renderer-owned like the other appearance prefs.
+export function storedDepth(): boolean {
+  return localStorage.getItem('depth') !== 'false'
+}
+
+/** Sets the `data-depth` flag index.css flattens the surface levels on. */
+export function applyDepth(on: boolean): void {
+  document.documentElement.dataset.depth = on ? 'on' : 'off'
+}
+
 // Code font size (code blocks, file viewer, diffs) via --code-font-size.
 export const CODE_FONT_MIN = 10
 export const CODE_FONT_MAX = 24

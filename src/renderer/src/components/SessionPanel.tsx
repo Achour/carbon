@@ -177,7 +177,7 @@ export function SessionPanel({ chatId }: { chatId: string | null }): React.JSX.E
 
         <div className="space-y-4 p-3">
           {live === false && (
-            <div className="rounded-md border border-border bg-secondary/40 px-2.5 py-2 text-[11px] leading-relaxed text-muted-foreground">
+            <div className="surface-group px-2.5 py-2 text-[11px] leading-relaxed text-muted-foreground">
               {isClaude
                 ? 'The session isn’t running. Send a message to view live account, usage, MCP servers and subagents. Saved permission rules are shown below.'
                 : `This ${PROVIDER_SHORT_LABELS[provider]} session isn’t running. Send a message to start it.`}
@@ -221,7 +221,7 @@ export function SessionPanel({ chatId }: { chatId: string | null }): React.JSX.E
                 .join(' · ') || `Signed in via ${PROVIDER_LABELS[provider]}`}
             </div>
             {usage && isClaude && (
-              <div className="mt-2 flex items-center justify-between rounded-md bg-secondary/40 px-2 py-1.5 text-[11px] tabular-nums text-muted-foreground">
+              <div className="surface-group mt-2 flex items-center justify-between px-2 py-1.5 text-[11px] tabular-nums text-muted-foreground">
                 <span>Session cost {formatCost(usage.costUsd)}</span>
                 <span className="text-emerald-500">+{usage.linesAdded}</span>
                 <span className="text-destructive">−{usage.linesRemoved}</span>
@@ -251,19 +251,16 @@ export function SessionPanel({ chatId }: { chatId: string | null }): React.JSX.E
           </section>
 
           {/* MCP servers */}
-          <section className="border-t border-border pt-3">
+          <section>
             <SectionTitle icon={Server}>MCP servers</SectionTitle>
             {servers == null ? (
               <div className="text-[11px] text-muted-foreground">Loading…</div>
             ) : servers.length === 0 ? (
               <div className="text-[11px] text-muted-foreground">No MCP servers configured.</div>
             ) : (
-              <div className="space-y-1.5">
+              <div className="surface-group divide-y divide-border/70">
                 {servers.map((s) => (
-                  <div
-                    key={s.name}
-                    className="flex items-center gap-2 rounded-md border border-border px-2 py-1.5"
-                  >
+                  <div key={s.name} className="flex items-center gap-2 px-2 py-1.5">
                     <span className={cn('size-1.5 shrink-0 rounded-full', STATUS_COLOR[s.status])} />
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-xs font-medium">{s.name}</div>
@@ -306,16 +303,16 @@ export function SessionPanel({ chatId }: { chatId: string | null }): React.JSX.E
           </section>
 
           {/* Subagents */}
-          {isClaude && <section className="border-t border-border pt-3">
+          {isClaude && <section>
             <SectionTitle icon={Bot}>Subagents</SectionTitle>
             {agents == null ? (
               <div className="text-[11px] text-muted-foreground">Loading…</div>
             ) : agents.length === 0 ? (
               <div className="text-[11px] text-muted-foreground">No subagents available.</div>
             ) : (
-              <div className="space-y-1">
+              <div className="surface-group divide-y divide-border/70">
                 {agents.map((a) => (
-                  <div key={a.name} className="rounded-md px-1.5 py-1">
+                  <div key={a.name} className="px-2 py-1.5">
                     <div className="flex items-baseline gap-1.5">
                       <span className="text-xs font-medium">{a.name}</span>
                       {a.model && <span className="text-[10px] text-muted-foreground">{a.model}</span>}
@@ -332,7 +329,7 @@ export function SessionPanel({ chatId }: { chatId: string | null }): React.JSX.E
 
           {/* Permission rules — from .claude settings; Claude-only. */}
           {isClaude && (
-          <section className={cn(live !== false && 'border-t border-border pt-3')}>
+          <section>
             <SectionTitle icon={Shield}>Permission rules</SectionTitle>
             {rules == null ? (
               <div className="text-[11px] text-muted-foreground">Loading…</div>
@@ -341,11 +338,11 @@ export function SessionPanel({ chatId }: { chatId: string | null }): React.JSX.E
                 No saved rules. “Always allow” on a prompt saves one here.
               </div>
             ) : (
-              <div className="space-y-1">
+              <div className="surface-group divide-y divide-border/70">
                 {rules.map((r, i) => (
                   <div
                     key={`${r.source}:${r.behavior}:${r.value}:${i}`}
-                    className="flex items-center gap-2 rounded-md px-1.5 py-1"
+                    className="flex items-center gap-2 px-2 py-1"
                   >
                     <span
                       className={cn(

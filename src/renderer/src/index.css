@@ -399,6 +399,109 @@
   }
 }
 
+/*
+ * Depth. Surfaces stack in three levels, each a visible step lighter than the
+ * one it sits on and each drawn by its edge as well as its fill:
+ *
+ *   surface-card    a block on a panel or page (a settings section, a PR's
+ *                   checks, a panel's launch list)
+ *   surface-group   rows grouped *inside* a card, or a well of controls
+ *   surface-raised  the control you press: a button, the active segment
+ *
+ * plus `surface-overlay` for what floats over everything (menus, dialogs).
+ *
+ * A lightness step alone does not carry it — Carbon's own ladder is 0.02–0.03
+ * apart and read as one flat sheet — so dark mode adds a top highlight, the
+ * edge catching light, and light mode a soft shadow, where a highlight on
+ * near-white is invisible.
+ *
+ * Every level is *derived* from a theme token with relative color rather than
+ * given a value: `applyTheme` writes the ladder inline on <html>, so a fixed
+ * number here would be dead for every built-in and imported theme alike.
+ *
+ * The transcript stays flat. Messages and activity rows get none of this: the
+ * box around a tool row was removed on purpose, and a shadow on a streaming
+ * row is a repaint per token.
+ */
+:root {
+  --surface-group: oklch(from var(--background) calc(l - 0.012) c h);
+  --surface-raised: var(--card);
+  --surface-highlight: transparent;
+  --surface-card: var(--card);
+  --surface-well: var(--card);
+  --surface-well-shadow: inset 0 1px 2px oklch(0 0 0 / 10%);
+  --surface-raised-edge: var(--border);
+  --elevation-1: 0 1px 2px oklch(0 0 0 / 6%), 0 1px 1px oklch(0 0 0 / 3%);
+  --elevation-2: 0 1px 3px oklch(0 0 0 / 8%), 0 12px 32px oklch(0 0 0 / 12%);
+}
+.dark {
+  --surface-group: oklch(from var(--card) calc(l + 0.025) c h);
+  --surface-raised: oklch(from var(--card) calc(l + 0.055) c h);
+  --surface-highlight: oklch(1 0 0 / 6%);
+  --surface-well: oklch(from var(--background) calc(l - 0.025) c h);
+  --elevation-1: inset 0 1px 0 var(--surface-highlight), 0 1px 2px oklch(0 0 0 / 35%);
+  --elevation-2: inset 0 1px 0 var(--surface-highlight), 0 2px 6px oklch(0 0 0 / 35%), 0 16px 40px oklch(0 0 0 / 45%);
+}
+@utility surface-card {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background-color: var(--surface-card);
+  box-shadow: var(--elevation-1);
+}
+@utility surface-group {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background-color: var(--surface-group);
+  box-shadow: inset 0 1px 0 var(--surface-highlight);
+}
+@utility surface-raised {
+  background-color: var(--surface-raised);
+  box-shadow: var(--elevation-1), 0 0 0 1px var(--surface-raised-edge);
+}
+@utility surface-overlay {
+  box-shadow: var(--elevation-2);
+}
+/* An overlay is lighter than the page (`--popover` 0.245 against `--card`
+   0.23 in the default dark ladder), so a card inside Settings or a menu would
+   be a step *darker* than what it sits on — the system running backwards.
+   Re-based on the overlay's own fill; the derived levels are restated
+   because they resolved against the root's `--card`, not this one. Keyed on
+   `bg-popover` because Settings repaints its dialog `bg-background` (`cn`
+   merges the class away), and there the root ladder is already right. */
+:root.dark:not([data-depth='off']) .surface-overlay.bg-popover {
+  --card: oklch(from var(--popover) calc(l + 0.03) c h);
+  --surface-card: var(--card);
+  --surface-group: oklch(from var(--card) calc(l + 0.025) c h);
+  --surface-raised: oklch(from var(--card) calc(l + 0.055) c h);
+}
+/* An input is the inverse of a raised control: a well, a step below. */
+@utility surface-well {
+  background-color: var(--surface-well);
+  box-shadow: var(--surface-well-shadow);
+}
+/* Depth off (Settings → Appearance): every level collapses onto the one it
+   sits on. Done here, by the same variables the utilities read, rather than by
+   a second set of classes at each call site — so a surface added later can't
+   forget the flat case. Cards keep only their hairline, the selection keeps a
+   fill (the accent, as before the levels existed), overlays keep a plain drop
+   shadow. Layout does not move: only fills, highlights and shadows change. */
+/* An input keeps its border when the well goes, a switch's track has none —
+   flat, it takes the fill it had before the levels existed. */
+:root[data-depth='off'] .switch-track {
+  background-color: var(--secondary);
+}
+:root[data-depth='off'] {
+  --surface-card: transparent;
+  --surface-group: transparent;
+  --surface-raised: var(--accent);
+  --surface-raised-edge: transparent;
+  --surface-highlight: transparent;
+  --surface-well: transparent;
+  --surface-well-shadow: none;
+  --elevation-1: none;
+  --elevation-2: 0 20px 25px -5px oklch(0 0 0 / 10%), 0 8px 10px -6px oklch(0 0 0 / 10%);
+}
+
 @layer base {
   * {
     border-color: var(--color-border);
@@ -492,6 +595,15 @@
 }
 :root[data-translucent='true']:not(.dark) [data-composer] {
   background-color: oklch(from var(--card) l c h / 0.62);
+}
+/* The same reasoning for a card on the frosted home column (the launch list):
+   opaque, it reads as a chip pasted over glass. */
+/* A selected sidebar row over the frost: raised, but letting it through. */
+:root[data-translucent='true'] [data-sidebar] .surface-raised {
+  background-color: oklch(from var(--surface-raised) l c h / 0.7);
+}
+:root[data-translucent='true'] [data-newchat] .surface-card {
+  background-color: oklch(from var(--card) l c h / 0.6);
 }
 
 /* Scrollbars.

@@ -55,6 +55,8 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { ProviderAvatar, ProviderMark } from '@/components/ui/provider-mark'
+import { Group } from '@/components/ui/group'
+import { Segmented } from '@/components/ui/segmented'
 import { SwitchPill } from '@/components/ui/switch-pill'
 import { ArchiveSection } from '@/components/SettingsArchive'
 import { RemoteSection } from '@/components/SettingsRemote'
@@ -300,12 +302,12 @@ function Toggle({
       <span
         className={cn(
           'relative h-[18px] w-8 shrink-0 rounded-full transition-colors',
-          checked ? 'bg-primary' : 'bg-secondary'
+          checked ? 'bg-primary' : 'surface-well switch-track'
         )}
       >
         <span
           className={cn(
-            'absolute top-[2px] left-[2px] size-3.5 rounded-full bg-background shadow-sm transition-transform',
+            'absolute top-[2px] left-[2px] size-3.5 rounded-full bg-background shadow-[0_1px_2px_oklch(0_0_0/30%),inset_0_1px_0_var(--surface-highlight)] transition-transform',
             checked && 'translate-x-[14px]'
           )}
         />
@@ -336,32 +338,34 @@ function ProviderFeatures({ provider }: { provider: Provider }): React.JSX.Eleme
   if (!features?.length) return null
 
   return (
-    <div className="mt-3 space-y-2.5 border-t border-border pt-3">
-      {features.map((f) => (
-        <div key={f.id} className="flex items-start gap-3">
-          <div className="min-w-0 flex-1">
-            <div className="text-xs font-medium">{f.label}</div>
-            <div className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
-              {f.description}
-            </div>
-            {/* An environment variable the user set themselves outranks this
-                switch — see `resolveFeature`. Saying so beats a control that
-                silently does nothing. */}
-            {f.overriddenBy && (
-              <div className="mt-1 font-mono text-[10px] text-warning">
-                Set by {f.overriddenBy} in your environment
+    <div className="mt-6">
+      <Group title="Capabilities">
+        {features.map((f) => (
+          <div key={f.id} className="flex items-center gap-4 px-2 py-2.5">
+            <div className="min-w-0 flex-1">
+              <div className="text-[13px] font-medium">{f.label}</div>
+              <div className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                {f.description}
               </div>
-            )}
+              {/* An environment variable the user set themselves outranks this
+                  switch — see `resolveFeature`. Saying so beats a control that
+                  silently does nothing. */}
+              {f.overriddenBy && (
+                <div className="mt-1 font-mono text-[10px] text-warning">
+                  Set by {f.overriddenBy} in your environment
+                </div>
+              )}
+            </div>
+            <SwitchPill
+              on={f.enabled}
+              disabled={!!f.overriddenBy}
+              label={f.label}
+              onChange={() => void setProviderFeature(provider, f.id, !f.enabled)}
+            />
           </div>
-          <SwitchPill
-            on={f.enabled}
-            disabled={!!f.overriddenBy}
-            label={f.label}
-            onChange={() => void setProviderFeature(provider, f.id, !f.enabled)}
-          />
-        </div>
-      ))}
-      <div className="text-[11px] text-muted-foreground">
+        ))}
+      </Group>
+      <div className="mt-1.5 px-1 text-[11px] text-muted-foreground">
         Applies to new sessions. A chat that is mid-turn finishes under the old settings.
       </div>
     </div>
@@ -426,69 +430,71 @@ function ProviderDetail({ cli }: { cli: ProviderCli }): React.JSX.Element {
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6">
-        <div className="rounded-lg border border-border px-3 py-3">
-          <div className="text-xs font-medium">{cli.source === 'bundled' ? 'Runtime' : 'Binary'}</div>
-          <div className="mt-0.5 break-all text-[11px] leading-relaxed text-muted-foreground">
-            {!missing && cli.source === 'bundled' ? (
-              // Cursor: the SDK is the agent, and it ships inside Carbon.
-              <>
-                Built into Carbon — <span className="font-mono">@cursor/sdk</span>, running in the
-                app rather than as a CLI.
-              </>
-            ) : !missing ? (
-              <span className="font-mono">{cli.path}</span>
-            ) : cli.path ? (
-              // Only an env override can put a path here that doesn't run.
-              // Naming it beats "Not installed", which would send someone
-              // hunting for an install they already have.
-              <span className="text-warning">
-                Not executable: <span className="font-mono">{cli.path}</span>
-              </span>
-            ) : (
-              'Not installed'
+        <Group title="Install">
+          <div className="px-2 py-2.5">
+            <div className="text-[13px] font-medium">
+              {cli.source === 'bundled' ? 'Runtime' : 'Binary'}
+            </div>
+            <div className="mt-0.5 break-all text-xs leading-relaxed text-muted-foreground">
+              {!missing && cli.source === 'bundled' ? (
+                // Cursor: the SDK is the agent, and it ships inside Carbon.
+                <>
+                  Built into Carbon — <span className="font-mono">@cursor/sdk</span>, running in the
+                  app rather than as a CLI.
+                </>
+              ) : !missing ? (
+                <span className="font-mono">{cli.path}</span>
+              ) : cli.path ? (
+                // Only an env override can put a path here that doesn't run.
+                // Naming it beats "Not installed", which would send someone
+                // hunting for an install they already have.
+                <span className="text-warning">
+                  Not executable: <span className="font-mono">{cli.path}</span>
+                </span>
+              ) : (
+                'Not installed'
+              )}
+            </div>
+
+            {/* Carbon installs this one itself, so the next step is a button. */}
+            {missing && !cli.path && cli.installable && <ManagedInstall provider={cli.provider} />}
+
+            {/* The install command, shown only when it's the thing to do next — so
+                not when an env override resolved to a path that simply won't run. */}
+            {missing && !cli.path && !cli.installable && (
+              <div className="mt-2.5 flex items-center gap-2">
+                <code className="min-w-0 flex-1 truncate rounded-md bg-secondary px-2 py-1.5 font-mono text-[11px]">
+                  {cli.installCommand}
+                </code>
+                <Button size="sm" variant="secondary" onClick={copyInstall}>
+                  {copied ? 'Copied' : 'Copy'}
+                </Button>
+              </div>
+            )}
+
+            {/* Below the floor Carbon's adapter was written against — a warning,
+                not a block: the turn may work fine, and refusing to run it would
+                be the app overruling a version the user chose to keep. */}
+            {cli.outdated && cli.version && (
+              <div className="mt-2.5 flex items-start gap-2 text-xs text-warning">
+                <TriangleAlert className="mt-px size-3.5 shrink-0" />
+                <span>
+                  Carbon expects {cli.minVersion} or newer; this is {cli.version}. Some features may
+                  not work.
+                </span>
+              </div>
             )}
           </div>
+        </Group>
 
-          {/* Carbon installs this one itself, so the next step is a button. */}
-          {missing && !cli.path && cli.installable && <ManagedInstall provider={cli.provider} />}
+        {/* A provider with its own sign-in (Antigravity, Cursor): its account
+            lives here, because there is no CLI of its own to sign in from. */}
+        {!missing && cli.enabled && cli.ownSignIn && <ProviderAccount provider={cli.provider} />}
 
-          {/* The install command, shown only when it's the thing to do next — so
-              not when an env override resolved to a path that simply won't run. */}
-          {missing && !cli.path && !cli.installable && (
-            <div className="mt-2.5 flex items-center gap-2">
-              <code className="min-w-0 flex-1 truncate rounded-md bg-secondary px-2 py-1.5 font-mono text-[11px]">
-                {cli.installCommand}
-              </code>
-              <Button size="sm" variant="secondary" onClick={copyInstall}>
-                {copied ? 'Copied' : 'Copy'}
-              </Button>
-            </div>
-          )}
-
-          {/* Below the floor Carbon's adapter was written against — a warning,
-              not a block: the turn may work fine, and refusing to run it would
-              be the app overruling a version the user chose to keep. */}
-          {cli.outdated && cli.version && (
-            <div className="mt-2.5 flex items-start gap-2 text-xs text-warning">
-              <TriangleAlert className="mt-px size-3.5 shrink-0" />
-              <span>
-                Carbon expects {cli.minVersion} or newer; this is {cli.version}. Some features may
-                not work.
-              </span>
-            </div>
-          )}
-
-          {/* A provider with its own sign-in (Antigravity, Cursor): its account
-              lives here, because there is no CLI of its own to sign in from. */}
-          {!missing && cli.enabled && cli.ownSignIn && (
-            <ProviderAccount provider={cli.provider} />
-          )}
-
-          {/* Only for a provider that can actually run: the switches below are
-              about what a session may do, and there are no sessions without a
-              binary. `providerFeatures` answers `[]` for one anyway. */}
-          {!missing && cli.enabled && <ProviderFeatures provider={cli.provider} />}
-        </div>
+        {/* Only for a provider that can actually run: the switches below are
+            about what a session may do, and there are no sessions without a
+            binary. `providerFeatures` answers `[]` for one anyway. */}
+        {!missing && cli.enabled && <ProviderFeatures provider={cli.provider} />}
       </div>
     </div>
   )
@@ -627,39 +633,41 @@ function ProviderAccount({ provider }: { provider: Provider }): React.JSX.Elemen
             ? copy.unavailable
             : 'Checking…'
   return (
-    <div className="mt-3 space-y-2 border-t border-border pt-3">
-      <div className="flex items-center gap-3">
-        <div className="min-w-0 flex-1">
-          <div className="text-xs font-medium">{copy.title}</div>
-          <div className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">{status}</div>
+    <Group title="Account" className="mt-6">
+      <div className="space-y-2 px-2 py-2.5">
+        <div className="flex items-center gap-4">
+          <div className="min-w-0 flex-1">
+            <div className="text-[13px] font-medium">{copy.title}</div>
+            <div className="mt-0.5 text-xs leading-relaxed text-muted-foreground">{status}</div>
+          </div>
+          {auth === 'signed-in' ? (
+            <Button size="sm" variant="secondary" onClick={() => void run('out')} disabled={!!busy}>
+              {busy === 'out' && <DotSpinner />}
+              Sign out
+            </Button>
+          ) : (
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => void run('in')}
+              disabled={!!busy || !auth}
+            >
+              {busy === 'in' && <DotSpinner />}
+              {copy.button}
+            </Button>
+          )}
         </div>
-        {auth === 'signed-in' ? (
-          <Button size="sm" variant="secondary" onClick={() => void run('out')} disabled={!!busy}>
-            {busy === 'out' && <DotSpinner />}
-            Sign out
-          </Button>
-        ) : (
-          <Button
-            size="sm"
-            variant="secondary"
-            onClick={() => void run('in')}
-            disabled={!!busy || !auth}
-          >
-            {busy === 'in' && <DotSpinner />}
-            {copy.button}
-          </Button>
+        {copy.note && (
+          <div className="text-[11px] leading-relaxed text-muted-foreground/70">{copy.note}</div>
+        )}
+        {error && (
+          <div className="flex items-start gap-2 text-xs text-warning">
+            <TriangleAlert className="mt-px size-3.5 shrink-0" />
+            <span>{error}</span>
+          </div>
         )}
       </div>
-      {copy.note && (
-        <div className="text-[11px] leading-relaxed text-muted-foreground/70">{copy.note}</div>
-      )}
-      {error && (
-        <div className="flex items-start gap-2 text-xs text-warning">
-          <TriangleAlert className="mt-px size-3.5 shrink-0" />
-          <span>{error}</span>
-        </div>
-      )}
-    </div>
+    </Group>
   )
 }
 
@@ -732,7 +740,7 @@ function ModelsSection(): React.JSX.Element {
                 }}
                 className={cn(
                   'flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left transition-colors',
-                  g === selected ? 'bg-accent' : 'hover:bg-accent/50'
+                  g === selected ? 'surface-raised' : 'hover:bg-accent/50'
                 )}
               >
                 <ProviderAvatar provider={g.provider} />
@@ -807,8 +815,8 @@ function ModelsSection(): React.JSX.Element {
             />
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6">
-            <div className="overflow-hidden rounded-lg border border-border">
-              {rows.map((o, i) => {
+            <Group>
+              {rows.map((o) => {
                 const key = modelKey(o.provider, o.id)
                 const on = !hidden.has(key)
                 const resolved = resolvedModelName(o.resolvedModel)
@@ -822,10 +830,7 @@ function ModelsSection(): React.JSX.Element {
                   <div
                     key={key}
                     onClick={toggle}
-                    className={cn(
-                      'flex cursor-default items-center gap-3 px-3 py-2 transition-colors hover:bg-accent/40',
-                      i > 0 && 'border-t border-border'
-                    )}
+                    className="flex cursor-default items-center gap-4 rounded-lg px-2 py-2.5 transition-colors hover:bg-accent/40"
                   >
                     <div className="min-w-0 flex-1">
                       <div className="flex items-baseline gap-2 text-[13px]">
@@ -859,7 +864,7 @@ function ModelsSection(): React.JSX.Element {
                   Nothing matches “{query}”.
                 </div>
               )}
-            </div>
+            </Group>
           </div>
         </div>
       ) : (
@@ -923,7 +928,7 @@ function ProvidersSection(): React.JSX.Element {
                 onClick={() => setPicked(cli.provider)}
                 className={cn(
                   'flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left transition-colors',
-                  cli === selected ? 'bg-accent' : 'hover:bg-accent/50'
+                  cli === selected ? 'surface-raised' : 'hover:bg-accent/50'
                 )}
               >
                 <ProviderAvatar
@@ -994,18 +999,13 @@ const SIDEBAR_DENSITIES = [
   { id: 'detailed', label: 'Detailed', icon: LayoutList }
 ] as const
 
-/**
- * Compact vs detailed sidebar rows. No preview here on purpose — the sidebar is
- * open next to this control, so it previews itself the moment you click.
- */
 /** New-chat defaults: remembered from the last pick, or fixed here. */
 const DEFAULTS_MODES: { id: 'last' | 'fixed'; label: string; icon: LucideIcon }[] = [
   { id: 'last', label: 'Last used', icon: History },
   { id: 'fixed', label: 'Fixed', icon: Pin }
 ]
 
-const pickerTrigger =
-  'h-8 max-w-56 border border-border bg-background px-2.5 text-foreground hover:bg-accent'
+const pickerTrigger = 'h-8 max-w-56 surface-raised px-2.5 text-foreground hover:bg-accent'
 
 /**
  * What a new chat — and a thread's new column — starts on. The same four
@@ -1103,29 +1103,12 @@ function NewChatDefaults(): React.JSX.Element | null {
             : 'Whatever you picked last. Change it here or from any chat.'
         }
       >
-        <div
-          role="group"
-          aria-label="New chat defaults"
-          className="grid shrink-0 grid-cols-2 gap-1 rounded-xl bg-secondary p-1"
-        >
-          {DEFAULTS_MODES.map((m) => (
-            <button
-              key={m.id}
-              type="button"
-              aria-pressed={(m.id === 'fixed') === fixed}
-              onClick={() => void setDefaults({ fixed: m.id === 'fixed' })}
-              className={cn(
-                'flex h-8 items-center justify-center gap-1.5 rounded-lg px-2.5 text-xs font-medium outline-none transition-all focus-visible:ring-2 focus-visible:ring-ring',
-                (m.id === 'fixed') === fixed
-                  ? 'bg-background text-foreground shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground'
-              )}
-            >
-              <m.icon className="size-3.5" />
-              {m.label}
-            </button>
-          ))}
-        </div>
+        <Segmented
+          ariaLabel="New chat defaults"
+          value={fixed ? 'fixed' : 'last'}
+          options={DEFAULTS_MODES}
+          onChange={(id) => void setDefaults({ fixed: id === 'fixed' })}
+        />
       </Row>
       <Row label="Model" description="The model, and so the provider, a new chat runs on.">
         <CompactSelect
@@ -1185,77 +1168,6 @@ function NewChatDefaults(): React.JSX.Element | null {
   )
 }
 
-function SidebarDensityPicker({
-  value,
-  onChange
-}: {
-  value: SidebarDensity
-  onChange: (density: SidebarDensity) => void
-}): React.JSX.Element {
-  return (
-    <div
-      role="group"
-      aria-label="Sidebar rows"
-      className="grid shrink-0 grid-cols-2 gap-1 rounded-xl bg-secondary p-1"
-    >
-      {SIDEBAR_DENSITIES.map((option) => (
-        <button
-          key={option.id}
-          type="button"
-          aria-pressed={value === option.id}
-          onClick={() => onChange(option.id)}
-          className={cn(
-            'flex h-8 items-center justify-center gap-1.5 rounded-lg px-2.5 text-xs font-medium outline-none transition-all focus-visible:ring-2 focus-visible:ring-ring',
-            value === option.id
-              ? 'bg-background text-foreground shadow-sm'
-              : 'text-muted-foreground hover:text-foreground'
-          )}
-        >
-          <option.icon className="size-3.5" />
-          {option.label}
-        </button>
-      ))}
-    </div>
-  )
-}
-
-function ThemeModePicker({
-  value,
-  onChange,
-  disabled
-}: {
-  value: ThemeMode
-  onChange: (mode: ThemeMode) => void
-  disabled?: boolean
-}): React.JSX.Element {
-  return (
-    <div
-      role="group"
-      aria-label="Color mode"
-      className={cn('grid grid-cols-3 gap-1 rounded-xl bg-secondary p-1', disabled && 'opacity-55')}
-    >
-      {THEME_MODES.map((option) => (
-        <button
-          key={option.id}
-          type="button"
-          disabled={disabled}
-          aria-pressed={value === option.id}
-          onClick={() => onChange(option.id)}
-          className={cn(
-            'flex h-8 items-center justify-center gap-1.5 rounded-lg px-2.5 text-xs font-medium outline-none transition-all focus-visible:ring-2 focus-visible:ring-ring',
-            value === option.id
-              ? 'bg-background text-foreground shadow-sm'
-              : 'text-muted-foreground hover:text-foreground'
-          )}
-        >
-          <option.icon className="size-3.5" />
-          {option.label}
-        </button>
-      ))}
-    </div>
-  )
-}
-
 /**
  * The two modes as facing pages of one window, joined at a seam — so a card
  * shows what the theme actually looks like in both, without a badge or a legend.
@@ -1279,10 +1191,13 @@ function ThemeCard({
         aria-pressed={selected}
         onClick={() => onSelect(theme.id)}
         className={cn(
-          'flex w-full flex-col items-stretch gap-2 rounded-xl border p-2 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring',
+          'flex w-full flex-col items-stretch gap-2 rounded-[10px] p-2 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring',
+          // A card in the Appearance card, so a group a step up. The selected
+          // one is raised like every other selection, and marked with an
+          // outline: `surface-raised` owns box-shadow, so a ring would fight it.
           selected
-            ? 'border-primary/70 bg-accent/50'
-            : 'border-border bg-card/40 hover:bg-accent/30'
+            ? 'surface-raised border border-transparent outline-2 outline-solid outline-primary/70 -outline-offset-1'
+            : 'surface-group hover:bg-accent/30'
         )}
       >
         <div
@@ -1387,7 +1302,7 @@ function ThemeGrid({
       <button
         type="button"
         onClick={() => setAdding(true)}
-        className="flex min-h-[112px] flex-col items-center justify-center gap-1.5 rounded-xl border border-dashed border-border text-muted-foreground outline-none transition-colors hover:bg-accent/30 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+        className="flex min-h-[112px] flex-col items-center justify-center gap-1.5 rounded-[10px] border border-dashed border-border text-muted-foreground outline-none transition-colors hover:bg-accent/30 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
       >
         <Plus className="size-4" />
         <span className="text-[13px] font-medium">Add theme</span>
@@ -1429,7 +1344,7 @@ function SoundPicker({
     // Dimmed rather than disabled when sound is off: a click here is an
     // explicit request to hear something, and refusing it would leave the only
     // way to audition a pack behind a toggle you have to flip first.
-    <div className={cn('px-2 pb-2.5', !enabled && 'opacity-60')}>
+    <div className={cn('px-2 py-2.5', !enabled && 'opacity-60')}>
       <div className="text-[13px] font-medium">Alert sound</div>
       <div className="mt-0.5 mb-2 text-xs text-muted-foreground">
         The voice for every cue — click one to hear it
@@ -1512,6 +1427,8 @@ function SettingsBody(): React.JSX.Element {
   const setCodeFontSize = useApp((s) => s.setCodeFontSize)
   const translucentSidebar = useApp((s) => s.translucentSidebar)
   const setTranslucentSidebar = useApp((s) => s.setTranslucentSidebar)
+  const depth = useApp((s) => s.depth)
+  const setDepth = useApp((s) => s.setDepth)
   const chatsPerProject = useApp((s) => s.chatsPerProject)
   const setChatsPerProject = useApp((s) => s.setChatsPerProject)
   const sidebarDensity = useApp((s) => s.sidebarDensity)
@@ -1559,7 +1476,7 @@ function SettingsBody(): React.JSX.Element {
               className={cn(
                 'flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-[13px] transition-colors [&_svg]:size-4',
                 section === s.id
-                  ? 'bg-accent font-medium text-foreground'
+                  ? 'surface-raised font-medium text-foreground'
                   : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground'
               )}
             >
@@ -1594,7 +1511,7 @@ function SettingsBody(): React.JSX.Element {
                     title="Appearance"
                     description="Choose a color mode and theme. Changes apply instantly."
                   />
-                  <div className="mx-2 rounded-2xl border border-border bg-card/35 p-3">
+                  <div className="surface-card p-3">
                     <div className="flex items-center gap-4">
                       <div className="min-w-0 flex-1">
                         <div className="text-[13px] font-medium">Color mode</div>
@@ -1604,8 +1521,10 @@ function SettingsBody(): React.JSX.Element {
                             : 'System follows your device appearance'}
                         </div>
                       </div>
-                      <ThemeModePicker
+                      <Segmented
+                        ariaLabel="Color mode"
                         value={pinnedTheme?.appearance ?? themeMode}
+                        options={THEME_MODES}
                         onChange={setThemeMode}
                         disabled={!!pinnedTheme}
                       />
@@ -1620,32 +1539,37 @@ function SettingsBody(): React.JSX.Element {
                     <ThemeGrid selected={theme} onSelect={setTheme} />
                   </div>
 
-                  {window.api.platform === 'darwin' && (
-                    <div className="mt-7">
+                  <Group className="mt-6">
+                    <Toggle
+                      label="Depth"
+                      description="Raise cards, grouped rows and the selected control off the surface behind them. Off is flat."
+                      checked={depth}
+                      onChange={setDepth}
+                    />
+                    {window.api.platform === 'darwin' && (
                       <Toggle
                         label="Translucent chrome"
                         description="Frost the sidebar and the chat so the desktop blurs through behind them"
                         checked={translucentSidebar}
                         onChange={setTranslucentSidebar}
                       />
+                    )}
+                    <div>
+                      <Row label="Code font size" description="Code blocks, the file viewer and diffs">
+                        <Stepper
+                          value={codeFontSize}
+                          min={CODE_FONT_MIN}
+                          max={CODE_FONT_MAX}
+                          suffix="px"
+                          onChange={setCodeFontSize}
+                          onReset={() => setCodeFontSize(CODE_FONT_DEFAULT)}
+                        />
+                      </Row>
+                      <pre className="mx-2 mb-2.5 overflow-x-auto rounded-lg border border-border bg-code px-3.5 py-2.5 font-mono leading-relaxed text-[length:var(--code-font-size)]">
+                        {'const answer = compute(42)  // preview'}
+                      </pre>
                     </div>
-                  )}
-
-                  <div className="mt-8">
-                    <Row label="Code font size" description="Code blocks, the file viewer and diffs">
-                      <Stepper
-                        value={codeFontSize}
-                        min={CODE_FONT_MIN}
-                        max={CODE_FONT_MAX}
-                        suffix="px"
-                        onChange={setCodeFontSize}
-                        onReset={() => setCodeFontSize(CODE_FONT_DEFAULT)}
-                      />
-                    </Row>
-                    <pre className="mx-2 mt-1 overflow-x-auto rounded-lg border border-border bg-code px-3.5 py-2.5 font-mono leading-relaxed text-[length:var(--code-font-size)]">
-                      {'const answer = compute(42)  // preview'}
-                    </pre>
-                  </div>
+                  </Group>
                 </section>
               )}
 
@@ -1656,60 +1580,66 @@ function SettingsBody(): React.JSX.Element {
                     title="Chats"
                     description="What a new chat starts with, and how chats are organised in the sidebar."
                   />
-                  <NewChatDefaults />
-                  <div className="mx-2 my-3 border-t border-border" />
-                  <Row
-                    label="Sidebar rows"
-                    description="Detailed rows also show the backend answering and the branch — or the folder, outside a repo."
-                  >
-                    <SidebarDensityPicker
-                      value={sidebarDensity}
-                      onChange={setSidebarDensity}
+                  <Group title="New chats">
+                    <NewChatDefaults />
+                  </Group>
+                  <Group title="Sidebar" className="mt-6">
+                    <Row
+                      label="Sidebar rows"
+                      description="Detailed rows also show the backend answering and the branch — or the folder, outside a repo."
+                    >
+                      <Segmented
+                        ariaLabel="Sidebar rows"
+                        value={sidebarDensity}
+                        options={SIDEBAR_DENSITIES}
+                        onChange={setSidebarDensity}
+                      />
+                    </Row>
+                    <Row
+                      label="Recent chats per project"
+                      description="Each project shows this many recent chats. Find older ones with search."
+                    >
+                      <Stepper
+                        value={chatsPerProject}
+                        min={CHATS_PER_PROJECT_MIN}
+                        max={CHATS_PER_PROJECT_MAX}
+                        onChange={setChatsPerProject}
+                        onReset={() => setChatsPerProject(CHATS_PER_PROJECT_DEFAULT)}
+                      />
+                    </Row>
+                  </Group>
+                  <Group title="While an agent works" className="mt-6">
+                    <Toggle
+                      label="Fold activity while working"
+                      description="Show each run of tool calls as one summary line — “Ran 4 commands” — while the agent works, not only once it finishes. The step in progress shimmers instead of a spinner and a “Working…” line. Click a line to open it."
+                      checked={foldActivity}
+                      onChange={setFoldActivity}
                     />
-                  </Row>
-                  <Row
-                    label="Recent chats per project"
-                    description="Each project shows this many recent chats. Find older ones with search."
-                  >
-                    <Stepper
-                      value={chatsPerProject}
-                      min={CHATS_PER_PROJECT_MIN}
-                      max={CHATS_PER_PROJECT_MAX}
-                      onChange={setChatsPerProject}
-                      onReset={() => setChatsPerProject(CHATS_PER_PROJECT_DEFAULT)}
+                    <Toggle
+                      label="Keep computer awake"
+                      description="Stop the Mac from idle-sleeping while an agent is working. The display can still turn off, and closing the lid still sleeps it."
+                      checked={keepAwake}
+                      onChange={(on) => void setDefaults({ keepAwake: on })}
                     />
-                  </Row>
-                  <div className="mx-2 my-3 border-t border-border" />
-                  <Toggle
-                    label="Fold activity while working"
-                    description="Show each run of tool calls as one summary line — “Ran 4 commands” — while the agent works, not only once it finishes. The step in progress shimmers instead of a spinner and a “Working…” line. Click a line to open it."
-                    checked={foldActivity}
-                    onChange={setFoldActivity}
-                  />
-                  <Toggle
-                    label="Keep computer awake"
-                    description="Stop the Mac from idle-sleeping while an agent is working. The display can still turn off, and closing the lid still sleeps it."
-                    checked={keepAwake}
-                    onChange={(on) => void setDefaults({ keepAwake: on })}
-                  />
-                  <Toggle
-                    label="Resume after restart"
-                    description="When Carbon quits while an agent is working — an update, a crash, ⌘Q — that agent continues where it left off the next time Carbon opens, if that is within an hour. Approvals it was waiting on are asked again."
-                    checked={resumeAfterRestart}
-                    onChange={(on) => void setDefaults({ resumeAfterRestart: on })}
-                  />
-                  <Toggle
-                    label="Desktop buddy"
-                    description="A small bear that floats over your desktop and keeps an eye on your chats: it types while an agent works, waves when one needs you, and cheers when one finishes. Click it to open that chat; drag it anywhere."
-                    checked={buddy}
-                    onChange={(on) => void setDefaults({ buddy: on })}
-                  />
-                  <Toggle
-                    label="Agents can delegate"
-                    description="Let an agent hand a task to another provider — “have Codex review this” — which runs as a new chat beside it and reports back when done. Applies to each chat's next session."
-                    checked={allowDelegation}
-                    onChange={(on) => void setDefaults({ allowDelegation: on })}
-                  />
+                    <Toggle
+                      label="Resume after restart"
+                      description="When Carbon quits while an agent is working — an update, a crash, ⌘Q — that agent continues where it left off the next time Carbon opens, if that is within an hour. Approvals it was waiting on are asked again."
+                      checked={resumeAfterRestart}
+                      onChange={(on) => void setDefaults({ resumeAfterRestart: on })}
+                    />
+                    <Toggle
+                      label="Desktop buddy"
+                      description="A small bear that floats over your desktop and keeps an eye on your chats: it types while an agent works, waves when one needs you, and cheers when one finishes. Click it to open that chat; drag it anywhere."
+                      checked={buddy}
+                      onChange={(on) => void setDefaults({ buddy: on })}
+                    />
+                    <Toggle
+                      label="Agents can delegate"
+                      description="Let an agent hand a task to another provider — “have Codex review this” — which runs as a new chat beside it and reports back when done. Applies to each chat's next session."
+                      checked={allowDelegation}
+                      onChange={(on) => void setDefaults({ allowDelegation: on })}
+                    />
+                  </Group>
                 </section>
               )}
 
@@ -1737,7 +1667,7 @@ function SettingsBody(): React.JSX.Element {
                     title="Notifications"
                     description="Stay on top of long-running turns while you work elsewhere."
                   />
-                  <div className="space-y-0.5">
+                  <Group>
                     <Toggle
                       label="Turn complete alerts"
                       description="Notify when the agent finishes while the app is in the background"
@@ -1764,7 +1694,7 @@ function SettingsBody(): React.JSX.Element {
                       enabled={notifyPrefs.sound}
                       onSelect={(pack) => setNotifyPrefs({ pack })}
                     />
-                  </div>
+                  </Group>
                 </section>
               )}
 
@@ -1775,9 +1705,9 @@ function SettingsBody(): React.JSX.Element {
                     title="About"
                     description="Carbon — a desktop GUI for coding agents."
                   />
-                  <div className="mb-3 border-b border-border pb-2">
+                  <Group className="mb-4">
                     <UpdateRow />
-                  </div>
+                  </Group>
                   <div className="space-y-2 px-2 text-[13px] text-muted-foreground">
                     <p>
                       Sessions run through your existing Claude Code or Codex login, in whatever

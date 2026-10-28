@@ -296,7 +296,7 @@ function TaskRow({
       onClick={onSelect}
       className={cn(
         'flex w-full min-w-0 items-center gap-2.5 rounded-md px-2.5 py-2 text-left transition-colors',
-        active ? 'bg-accent' : 'hover:bg-accent/60'
+        active ? 'surface-raised' : 'hover:bg-accent/60'
       )}
     >
       <ProjectAvatar size="sm" root={mark.root} name={mark.name} icon={mark.icon} className="size-[22px] rounded-[7px]" />
@@ -317,12 +317,18 @@ function TaskRow({
 
 function Fact({ label, children }: { label: string; children: React.ReactNode }): React.JSX.Element {
   return (
-    <div className="flex min-w-0 items-baseline gap-3 py-1 text-[13px]">
+    <div className="flex min-w-0 items-baseline gap-3 px-2 py-2.5 text-[13px]">
       <span className="w-24 shrink-0 text-muted-foreground">{label}</span>
       <span className="min-w-0 flex-1">{children}</span>
     </div>
   )
 }
+
+/** The muted label above a card, the way Settings titles its groups. */
+const SECTION_TITLE = 'mb-1.5 px-1 text-xs font-medium text-muted-foreground'
+
+/** The editor's pickers, raised like Settings' select triggers. */
+const pickerTrigger = 'h-7 surface-raised px-2.5 text-[13px] font-normal text-foreground hover:bg-accent'
 
 /** How many runs the history shows before "Show more". */
 const RUNS_PAGE = 30
@@ -397,7 +403,7 @@ function TaskDetail({
             {task.enabled ? 'On' : 'Paused'}
             <SwitchPill on={task.enabled} label={task.enabled ? 'Pause task' : 'Resume task'} onChange={() => void toggle()} />
           </span>
-          <Button size="sm" variant="outline" className="h-7 gap-1.5 text-[13px]" disabled={busy} onClick={() => void runNow()}>
+          <Button size="sm" variant="secondary" className="h-7 gap-1.5 text-[13px]" disabled={busy} onClick={() => void runNow()}>
             <Play className="size-3.5" />
             Run now
           </Button>
@@ -415,7 +421,7 @@ function TaskDetail({
       </div>
       {error && <p className="-mt-2 text-xs break-words text-destructive">{error}</p>}
 
-      <div className="flex flex-col">
+      <div className="surface-card flex flex-col divide-y divide-border/70 px-1.5 py-0.5">
         <Fact label="Schedule">{describeSchedule(task.schedule)}</Fact>
         <Fact label="Next run">
           {!task.enabled
@@ -437,23 +443,25 @@ function TaskDetail({
       </div>
 
       <div>
-        <div className="mb-1.5 text-[11px] font-semibold tracking-wider text-muted-foreground/70 uppercase">Prompt</div>
-        <div className="rounded-lg border border-border bg-muted/30 px-3.5 py-2.5 text-[13px] leading-relaxed whitespace-pre-wrap">
+        <div className={SECTION_TITLE}>Prompt</div>
+        <div className="surface-card px-3.5 py-2.5 text-[13px] leading-relaxed whitespace-pre-wrap">
           {task.prompt}
         </div>
       </div>
 
       <div>
-        <div className="mb-1.5 flex items-baseline gap-2 text-[11px] font-semibold tracking-wider text-muted-foreground/70 uppercase">
+        <div className={cn(SECTION_TITLE, 'flex items-baseline gap-2')}>
           Runs
-          {runs.length > 0 && <span className="font-normal tabular-nums">{runs.length}</span>}
+          {runs.length > 0 && <span className="font-normal text-muted-foreground/70 tabular-nums">{runs.length}</span>}
         </div>
         {runs.length === 0 ? (
-          <p className="text-[13px] text-muted-foreground">
+          <p className="surface-card px-3.5 py-2.5 text-[13px] text-muted-foreground">
             Not run yet{task.enabled && task.nextRunAt !== null ? ` — the first is ${untilText(task.nextRunAt, now)}` : ''}.
           </p>
         ) : (
-          <div className="flex flex-col">
+          // The rows open chats, so their hover runs edge to edge rather than
+          // inset the way a settings card's inert rows are.
+          <div className="surface-card flex flex-col divide-y divide-border/70 overflow-hidden">
             {runs.slice(0, shown).map((chat) => {
               const run = chat.scheduled!
               const state = runState(chat, statuses[chat.id])
@@ -462,7 +470,7 @@ function TaskDetail({
                   key={chat.id}
                   type="button"
                   onClick={() => void openChat(chat.id)}
-                  className="group flex min-w-0 items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-[13px] transition-colors hover:bg-accent/60"
+                  className="group flex min-w-0 items-center gap-2.5 px-3 py-2 text-left text-[13px] transition-colors hover:bg-accent/50"
                 >
                   <WithTooltip label={state?.label ?? ''}>
                     <span className="flex w-4 shrink-0 items-center justify-center">{state?.icon}</span>
@@ -481,7 +489,7 @@ function TaskDetail({
               <button
                 type="button"
                 onClick={() => setShown((n) => n + RUNS_PAGE)}
-                className="self-start rounded-md px-2 py-1 text-[12px] text-muted-foreground hover:text-foreground"
+                className="px-3 py-2 text-left text-[12px] text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
               >
                 Show {Math.min(RUNS_PAGE, runs.length - shown)} more
               </button>
@@ -726,8 +734,8 @@ function TaskEditor({
         </Button>
       </div>
 
-      <div className="flex flex-col gap-3">
-        <label className="flex items-center gap-3 text-[13px]">
+      <div className="surface-card flex flex-col divide-y divide-border/70 px-1.5 py-0.5">
+        <label className="flex items-center gap-3 px-2 py-2.5 text-[13px]">
           <span className="w-24 shrink-0 text-muted-foreground">Name</span>
           <Input
             value={name}
@@ -737,13 +745,13 @@ function TaskEditor({
           />
         </label>
 
-        <div className="flex items-center gap-3 text-[13px]">
+        <div className="flex items-center gap-3 px-2 py-2.5 text-[13px]">
           <span className="w-24 shrink-0 text-muted-foreground">Project</span>
           <CompactSelect
             value={cwd ?? ''}
             onValueChange={(v) => (v === '__browse__' ? void browse() : setCwd(v))}
             side="bottom"
-            className="h-8 border border-border px-2.5 text-[13px] font-normal text-foreground"
+            className={cn(pickerTrigger, 'h-8')}
             options={[
               ...projectOptions.map((root) => ({
                 value: root,
@@ -764,94 +772,96 @@ function TaskEditor({
           />
         </div>
 
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-[13px]">
-          <span className="w-24 shrink-0 text-muted-foreground">When</span>
-          <CompactSelect
-            value={when.kind}
-            onValueChange={(v) => patchWhen({ kind: v as PresetKind })}
-            side="bottom"
-            className="h-7 border border-border px-2.5 text-[13px] font-normal text-foreground"
-            options={PRESET_OPTIONS}
-          />
-          {when.kind === 'minutes' && (
+        <div className="px-2 py-2.5">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-[13px]">
+            <span className="w-24 shrink-0 text-muted-foreground">When</span>
             <CompactSelect
-              value={String(when.minutes)}
-              onValueChange={(v) => patchWhen({ minutes: Number(v) })}
+              value={when.kind}
+              onValueChange={(v) => patchWhen({ kind: v as PresetKind })}
               side="bottom"
-              className="h-7 border border-border px-2.5 text-[13px] font-normal text-foreground"
-              options={MINUTE_STEPS.map((n) => ({ value: String(n), label: `every ${n} minutes` }))}
+              className={pickerTrigger}
+              options={PRESET_OPTIONS}
             />
-          )}
-          {when.kind === 'hours' && (
-            <CompactSelect
-              value={String(when.hours)}
-              onValueChange={(v) => patchWhen({ hours: Number(v) })}
-              side="bottom"
-              className="h-7 border border-border px-2.5 text-[13px] font-normal text-foreground"
-              options={HOUR_STEPS.map((n) => ({ value: String(n), label: n === 1 ? 'every hour' : `every ${n} hours` }))}
-            />
-          )}
-          {when.kind === 'hours' && (
-            <>
-              <span className="text-muted-foreground">at</span>
+            {when.kind === 'minutes' && (
               <CompactSelect
-                value={String(when.hourMinute)}
-                onValueChange={(v) => patchWhen({ hourMinute: Number(v) })}
+                value={String(when.minutes)}
+                onValueChange={(v) => patchWhen({ minutes: Number(v) })}
                 side="bottom"
-                className="h-7 border border-border px-2.5 text-[13px] font-normal text-foreground"
-                options={[...new Set([...HOUR_OFFSETS, when.hourMinute])]
-                  .sort((a, b) => a - b)
-                  .map((n) => ({ value: String(n), label: `:${pad(n)} past` }))}
+                className={pickerTrigger}
+                options={MINUTE_STEPS.map((n) => ({ value: String(n), label: `every ${n} minutes` }))}
               />
-            </>
-          )}
-          {(when.kind === 'daily' || when.kind === 'weekdays') && (
-            <>
-              <span className="text-muted-foreground">at</span>
-              {timeInput}
-            </>
-          )}
-          {when.kind === 'weekly' && (
-            <>
-              <span className="text-muted-foreground">on</span>
+            )}
+            {when.kind === 'hours' && (
               <CompactSelect
-                value={String(when.day)}
-                onValueChange={(v) => patchWhen({ day: Number(v) })}
+                value={String(when.hours)}
+                onValueChange={(v) => patchWhen({ hours: Number(v) })}
                 side="bottom"
-                className="h-7 border border-border px-2.5 text-[13px] font-normal text-foreground"
-                options={DAY_OPTIONS}
+                className={pickerTrigger}
+                options={HOUR_STEPS.map((n) => ({ value: String(n), label: n === 1 ? 'every hour' : `every ${n} hours` }))}
               />
-              <span className="text-muted-foreground">at</span>
-              {timeInput}
-            </>
-          )}
-          {when.kind === 'once' && (
-            <Input
-              type="datetime-local"
-              value={when.once}
-              onChange={(e) => patchWhen({ once: e.target.value })}
-              className="h-7 w-52 text-[13px]"
-            />
-          )}
-          {when.kind === 'custom' && (
-            <Input
-              value={when.cron}
-              onChange={(e) => patchWhen({ cron: e.target.value })}
-              placeholder="0 9 * * 1-5"
-              spellCheck={false}
-              className="h-7 w-44 font-mono text-[13px]"
-            />
-          )}
+            )}
+            {when.kind === 'hours' && (
+              <>
+                <span className="text-muted-foreground">at</span>
+                <CompactSelect
+                  value={String(when.hourMinute)}
+                  onValueChange={(v) => patchWhen({ hourMinute: Number(v) })}
+                  side="bottom"
+                  className={pickerTrigger}
+                  options={[...new Set([...HOUR_OFFSETS, when.hourMinute])]
+                    .sort((a, b) => a - b)
+                    .map((n) => ({ value: String(n), label: `:${pad(n)} past` }))}
+                />
+              </>
+            )}
+            {(when.kind === 'daily' || when.kind === 'weekdays') && (
+              <>
+                <span className="text-muted-foreground">at</span>
+                {timeInput}
+              </>
+            )}
+            {when.kind === 'weekly' && (
+              <>
+                <span className="text-muted-foreground">on</span>
+                <CompactSelect
+                  value={String(when.day)}
+                  onValueChange={(v) => patchWhen({ day: Number(v) })}
+                  side="bottom"
+                  className={pickerTrigger}
+                  options={DAY_OPTIONS}
+                />
+                <span className="text-muted-foreground">at</span>
+                {timeInput}
+              </>
+            )}
+            {when.kind === 'once' && (
+              <Input
+                type="datetime-local"
+                value={when.once}
+                onChange={(e) => patchWhen({ once: e.target.value })}
+                className="h-7 w-52 text-[13px]"
+              />
+            )}
+            {when.kind === 'custom' && (
+              <Input
+                value={when.cron}
+                onChange={(e) => patchWhen({ cron: e.target.value })}
+                placeholder="0 9 * * 1-5"
+                spellCheck={false}
+                className="h-7 w-44 font-mono text-[13px]"
+              />
+            )}
+          </div>
+          <p className={cn('mt-1.5 pl-[108px] text-xs', invalid ? 'text-destructive' : 'text-muted-foreground')}>
+            {invalid
+              ? invalid
+              : next === null
+                ? 'That time has already passed.'
+                : `Next run ${formatMoment(next, now)} · ${untilText(next, now)}`}
+          </p>
         </div>
-        <p className={cn('-mt-1 pl-[108px] text-xs', invalid ? 'text-destructive' : 'text-muted-foreground')}>
-          {invalid
-            ? invalid
-            : next === null
-              ? 'That time has already passed.'
-              : `Next run ${formatMoment(next, now)} · ${untilText(next, now)}`}
-        </p>
 
-        <div className="flex items-center gap-3 text-[13px]">
+        <div className="flex items-center gap-3 px-2 py-2.5 text-[13px]">
           <span className="w-24 shrink-0 text-muted-foreground">Worktree</span>
           <SwitchPill on={worktree} label="Run each time in a new worktree" onChange={() => setWorktree((v) => !v)} />
           <span className="text-muted-foreground">
@@ -863,7 +873,7 @@ function TaskEditor({
       </div>
 
       <div>
-        <div className="mb-1.5 text-[11px] font-semibold tracking-wider text-muted-foreground/70 uppercase">Prompt</div>
+        <div className={SECTION_TITLE}>Prompt</div>
         <Composer
           onSend={(text, attachments) => save(text, attachments)}
           draft={task ? { text: task.prompt, attachments: [] } : undefined}

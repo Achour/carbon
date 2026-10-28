@@ -3,12 +3,12 @@ import { DotSpinner } from '@/components/ui/dot-spinner'
 import { Archive, ArchiveRestore, GitBranch, SquareTerminal, Trash2 } from 'lucide-react'
 import type { ChatMeta } from '@shared/types'
 import { PROVIDER_LABELS, projectRoot } from '@shared/types'
-import { cn } from '@/lib/utils'
 import { relativeTime } from '@/lib/format'
 import { projectLabel } from '@/lib/projects'
 import { chatActivity } from '@/lib/chatActivity'
 import { useApp } from '@/store'
 import { Button } from '@/components/ui/button'
+import { Group } from '@/components/ui/group'
 import { Input } from '@/components/ui/input'
 import { ProviderAvatar } from '@/components/ui/provider-mark'
 import { WithTooltip } from '@/components/ui/tooltip'
@@ -217,7 +217,7 @@ export function ArchiveSection(): React.JSX.Element {
         </div>
       )}
 
-      <div className={cn('rounded-2xl border border-border bg-card/35 p-1.5', archived.length === 0 && 'p-0')}>
+      <Group>
         {shown.map((chat) => (
           <ArchivedRow key={chat.id} chat={chat} onDelete={() => setDeleting(chat)} />
         ))}
@@ -235,7 +235,7 @@ export function ArchiveSection(): React.JSX.Element {
             )}
           </div>
         )}
-      </div>
+      </Group>
 
       {/* The same confirm the sidebar asks, because it is the only one that can
           also destroy a worktree — see `ChatDeleteDialog`. */}

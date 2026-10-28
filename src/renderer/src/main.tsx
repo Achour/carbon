@@ -12,10 +12,12 @@ import { previewForCwd } from './lib/previewRegistry'
 import { releaseAllServers } from './lib/lspBridge'
 import {
   applyCodeFontSize,
+  applyDepth,
   applyTheme,
   applyTranslucent,
   installThemes,
   storedCodeFontSize,
+  storedDepth,
   storedTheme,
   storedThemeMode,
   storedTranslucent
@@ -25,6 +27,7 @@ installThemes()
 applyTheme(storedTheme(), storedThemeMode())
 applyCodeFontSize(storedCodeFontSize())
 applyTranslucent(storedTranslucent())
+applyDepth(storedDepth())
 
 const systemAppearance = window.matchMedia('(prefers-color-scheme: dark)')
 systemAppearance.addEventListener('change', () => useApp.getState().syncSystemAppearance())
