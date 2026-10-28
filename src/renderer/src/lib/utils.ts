@@ -46,6 +46,19 @@ export const contextPillAction = cn(
  */
 export const contextPillButton = cn(contextPillAction, 'no-drag [&>svg]:size-3 [&>svg]:shrink-0')
 
+/**
+ * The same three as plain text, for the line under the composer: where the
+ * chat runs is a fact to glance at there, and a row of raised chips above the
+ * input read as a second toolbar.
+ */
+export const quietPill =
+  'flex min-w-0 items-center gap-1.5 rounded-md px-1.5 py-0.5 text-[11px] text-muted-foreground/70'
+export const quietPillAction = cn(
+  quietPill,
+  'outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring'
+)
+export const quietPillButton = cn(quietPillAction, 'no-drag [&>svg]:size-3 [&>svg]:shrink-0')
+
 /** Shallow copy of a per-chat map with the given ids removed. */
 export function omit<T>(map: Record<string, T>, ids: string[]): Record<string, T> {
   const next = { ...map }

@@ -2,15 +2,16 @@ import * as React from 'react'
 import { ArrowDown, FileDiff, Folder, GitBranch } from 'lucide-react'
 import type { GitStatus } from '@shared/types'
 import { basename } from '@/lib/format'
-import { cn, contextPill, contextPillAction, missingTag, MISSING_TITLE } from '@/lib/utils'
-import { WithTooltip } from '@/components/ui/tooltip'
-
-const quietPill =
-  'flex min-w-0 items-center gap-1.5 rounded-md px-1.5 py-0.5 text-[11px] text-muted-foreground/70'
-const quietPillAction = cn(
+import {
+  cn,
+  contextPill,
+  contextPillAction,
+  missingTag,
+  MISSING_TITLE,
   quietPill,
-  'outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring'
-)
+  quietPillAction
+} from '@/lib/utils'
+import { WithTooltip } from '@/components/ui/tooltip'
 
 /**
  * Repo · branch · working-tree changes — context for what you're about to send,

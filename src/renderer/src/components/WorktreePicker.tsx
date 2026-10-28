@@ -2,7 +2,7 @@ import * as React from 'react'
 import { Check, ChevronDown, GitBranch, Laptop, Plus } from 'lucide-react'
 import { createsWorktree } from '@shared/types'
 import type { WorktreeRef, WorktreeTarget } from '@shared/types'
-import { contextPillButton } from '@/lib/utils'
+import { contextPillButton, quietPillButton } from '@/lib/utils'
 import { GitErrorDialog } from '@/components/BranchActions'
 import { BranchPicker } from '@/components/BranchPicker'
 import {
@@ -42,13 +42,16 @@ export function WorktreePicker({
   cwd,
   value,
   onChange,
-  disabled
+  disabled,
+  quiet = false
 }: {
   /** Any directory in the repo; every worktree of that repo is listed. */
   cwd: string
   value: WorktreeTarget
   onChange: (target: WorktreeTarget) => void
   disabled?: boolean
+  /** Plain text rather than a chip — the line under the composer. */
+  quiet?: boolean
 }): React.JSX.Element {
   // Keep results tagged with their project so the previous project's worktrees
   // disappear synchronously on a cwd change, before the next git read finishes.
@@ -101,7 +104,7 @@ export function WorktreePicker({
           <button
             type="button"
             aria-label="Where this chat runs"
-            className={contextPillButton}
+            className={quiet ? quietPillButton : contextPillButton}
           >
             {isLocal ? <Laptop /> : <GitBranch />}
             <span className="max-w-40 truncate">{TARGET_LABEL[value.kind]}</span>
@@ -153,7 +156,13 @@ export function WorktreePicker({
     </DropdownMenu>
 
     {creating && (
-      <BranchPicker cwd={cwd} value={value} onChange={onChange} disabled={disabled} />
+      <BranchPicker
+        cwd={cwd}
+        value={value}
+        onChange={onChange}
+        disabled={disabled}
+        quiet={quiet}
+      />
     )}
 
     {/* Removal is unforced, so git's refusal is the message worth showing. */}

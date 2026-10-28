@@ -58,7 +58,6 @@ import {
 import { useApp } from '@/store'
 import { ContextDetail } from '@/components/ContextDetail'
 import { Button } from '@/components/ui/button'
-import { CompactSelect } from '@/components/ui/select'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { ProviderAvatar } from '@/components/ui/provider-mark'
 import { WithTooltip } from '@/components/ui/tooltip'
@@ -290,7 +289,10 @@ function ModelSettingsPicker({
   disabled,
   compact = false,
   open: controlledOpen,
-  onOpenChange
+  onOpenChange,
+  permission,
+  permissionOpen: controlledPermissionOpen,
+  onPermissionOpenChange
 }: {
   model: string
   onModelChange: (model: string, provider: Provider) => void
@@ -312,6 +314,20 @@ function ModelSettingsPicker({
   /** Controlled by Composer so `/model` can open the existing native picker. */
   open?: boolean
   onOpenChange?: (open: boolean) => void
+  /**
+   * What the agent may do, as a third row beside Reasoning and Speed — one
+   * control for everything about the turn, rather than a second picker on the
+   * bar. Its icon rides the trigger whenever it is not the ask baseline.
+   */
+  permission?: {
+    value: PermissionModeId
+    options: { id: PermissionModeId; label: string; description: string }[]
+    onChange: (mode: PermissionModeId) => void
+    isCodex: boolean
+  }
+  /** Controlled so `/permissions` can open the picker straight onto that row. */
+  permissionOpen?: boolean
+  onPermissionOpenChange?: (open: boolean) => void
 }): React.JSX.Element {
   const [uncontrolledOpen, setUncontrolledOpen] = React.useState(false)
   const [query, setQuery] = React.useState('')
@@ -322,6 +338,16 @@ function ModelSettingsPicker({
   const listRef = React.useRef<HTMLDivElement>(null)
   const [effortOpen, setEffortOpen] = React.useState(false)
   const [speedOpen, setSpeedOpen] = React.useState(false)
+  const [uncontrolledPermissionOpen, setUncontrolledPermissionOpen] = React.useState(false)
+  const permissionMenuOpen = controlledPermissionOpen ?? uncontrolledPermissionOpen
+  const setPermissionMenuOpen = (next: boolean): void => {
+    if (controlledPermissionOpen === undefined) setUncontrolledPermissionOpen(next)
+    onPermissionOpenChange?.(next)
+  }
+  const permissionLook = permission
+    ? permissionAppearance(permission.value, permission.isCodex)
+    : undefined
+  const selectedPermission = permission?.options.find((o) => o.id === permission.value)
   const open = controlledOpen ?? uncontrolledOpen
   const setOpen = React.useCallback(
     (nextOpen: boolean) => {
@@ -395,6 +421,7 @@ function ModelSettingsPicker({
         if (!nextOpen) {
           setEffortOpen(false)
           setSpeedOpen(false)
+          setPermissionMenuOpen(false)
           setQuery('')
         }
       }}
@@ -404,7 +431,7 @@ function ModelSettingsPicker({
         title={fastNote ?? undefined}
         aria-label={`${selectedName}, ${selectedEffort?.label ?? effort}${
           serviceTier === 'fast' ? (fastNote ? `, Fast unavailable: ${fastNote}` : ', Fast') : ''
-        }`}
+        }${selectedPermission ? `, ${selectedPermission.label}` : ''}`}
         className="no-drag inline-flex h-7 min-w-0 max-w-full select-none items-center gap-1 overflow-hidden rounded-md px-2 text-xs font-medium text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[popup-open]:bg-accent data-[popup-open]:text-foreground disabled:opacity-50"
       >
         <span className="max-w-32 truncate text-foreground">{selectedName}</span>
@@ -432,6 +459,14 @@ function ModelSettingsPicker({
               Fast
             </span>
           </>
+        )}
+        {/* Ask is the baseline and says nothing; any mode that lets the agent
+            do more, or plans instead of acting, keeps its coloured mark here
+            in every shape, the one-line one included. */}
+        {permissionLook && permission?.value !== 'default' && (
+          <permissionLook.Icon
+            className={cn('ml-0.5 size-3.5 shrink-0', permissionLook.iconClassName)}
+          />
         )}
       </PopoverTrigger>
       {/* w-80, not w-72: the Default row carries a label, the model it resolves
@@ -545,13 +580,14 @@ function ModelSettingsPicker({
         {/* A provider whose effort lives in the model id (Antigravity's
             `…-high` rows) has only the Default row here, and a menu of one
             choice is not a choice. */}
-        {(efforts.length > 1 || onServiceTierChange) && (
+        {(efforts.length > 1 || onServiceTierChange || permission) && (
           <div className="border-t border-border p-1">
             {efforts.length > 1 && (
               <Popover open={effortOpen} onOpenChange={setEffortOpen}>
                 <PopoverTrigger
                   onMouseEnter={() => {
                     setSpeedOpen(false)
+                    setPermissionMenuOpen(false)
                     setEffortOpen(true)
                   }}
                   className="flex h-9 w-full items-center gap-2 rounded-md px-2 text-sm outline-none transition-colors hover:bg-accent focus-visible:bg-accent data-[popup-open]:bg-accent"
@@ -590,6 +626,7 @@ function ModelSettingsPicker({
                 <PopoverTrigger
                   onMouseEnter={() => {
                     setEffortOpen(false)
+                    setPermissionMenuOpen(false)
                     setSpeedOpen(true)
                   }}
                   className="flex h-9 w-full items-center gap-2 rounded-md px-2 text-sm outline-none transition-colors hover:bg-accent focus-visible:bg-accent data-[popup-open]:bg-accent"
@@ -630,6 +667,55 @@ function ModelSettingsPicker({
                           )}
                         </span>
                         {option.id === serviceTier && <Check className="size-3.5 shrink-0" />}
+                      </button>
+                    )
+                  })}
+                </PopoverContent>
+              </Popover>
+            )}
+
+            {permission && permissionLook && (
+              <Popover open={permissionMenuOpen} onOpenChange={setPermissionMenuOpen}>
+                <PopoverTrigger
+                  onMouseEnter={() => {
+                    setEffortOpen(false)
+                    setSpeedOpen(false)
+                    setPermissionMenuOpen(true)
+                  }}
+                  className="flex h-9 w-full items-center gap-2 rounded-md px-2 text-sm outline-none transition-colors hover:bg-accent focus-visible:bg-accent data-[popup-open]:bg-accent"
+                >
+                  <permissionLook.Icon className={cn('size-3.5', permissionLook.iconClassName)} />
+                  <span className="flex-1 text-left">Permissions</span>
+                  <span className="text-xs text-muted-foreground">
+                    {selectedPermission?.label ?? permission.value}
+                  </span>
+                  <ChevronRight className="size-3.5 text-muted-foreground" />
+                </PopoverTrigger>
+                <PopoverContent side="right" align="end" className="w-64 p-1">
+                  {permission.options.map((option) => {
+                    const look = permissionAppearance(option.id, permission.isCodex)
+                    return (
+                      <button
+                        key={option.id}
+                        type="button"
+                        aria-pressed={option.id === permission.value}
+                        onClick={() => {
+                          permission.onChange(option.id)
+                          setPermissionMenuOpen(false)
+                          setOpen(false)
+                        }}
+                        className="flex min-h-9 w-full items-start gap-2 rounded-md px-2 py-1.5 text-sm outline-none transition-colors hover:bg-accent focus-visible:bg-accent"
+                      >
+                        <look.Icon className={cn('mt-0.5 size-3.5 shrink-0', look.iconClassName)} />
+                        <span className="flex min-w-0 flex-1 flex-col text-left">
+                          <span className="truncate">{option.label}</span>
+                          <span className="text-[11px] leading-snug text-muted-foreground">
+                            {option.description}
+                          </span>
+                        </span>
+                        {option.id === permission.value && (
+                          <Check className="mt-0.5 size-3.5 shrink-0" />
+                        )}
                       </button>
                     )
                   })}
@@ -891,7 +977,6 @@ export function Composer({
   const permissionValue = permissionOptions.some((option) => option.id === requestedPermission)
     ? requestedPermission
     : 'default'
-  const selectedPermissionAppearance = permissionAppearance(permissionValue, isCodex)
 
   // The inbox is app-global — one queue fed by the editor's "Add to chat" pill,
   // the canvas list, the browser's element picker and the transcript's quote
@@ -1073,8 +1158,8 @@ export function Composer({
       setText('')
       setAttachError(null)
       setSlashQuery(null)
-      if (composerControl === 'model') setModelSettingsOpen(true)
-      else setPermissionOpen(true)
+      setModelSettingsOpen(true)
+      if (composerControl !== 'model') setPermissionOpen(true)
       return
     }
     const sentAttachments = attachments
@@ -1104,7 +1189,7 @@ export function Composer({
   const rootRef = React.useRef<HTMLDivElement>(null)
   const [engaged, setEngaged] = React.useState(false)
   React.useEffect(() => {
-    if (!collapsible || !engaged) return
+    if (!engaged) return
     const leave = (e: Event): void => {
       const target = e.target instanceof Element ? e.target : null
       if (!target || rootRef.current?.contains(target)) return
@@ -1117,7 +1202,7 @@ export function Composer({
       document.removeEventListener('pointerdown', leave, true)
       document.removeEventListener('focusin', leave, true)
     }
-  }, [collapsible, engaged])
+  }, [engaged])
   const collapsed =
     collapsible &&
     !engaged &&
@@ -1126,14 +1211,16 @@ export function Composer({
     attachments.length === 0 &&
     slashQuery === null &&
     mention === null
-  const engage = collapsible ? () => setEngaged(true) : undefined
-  // One line until the draft outgrows it: the input and the toolbar share a
-  // row — the folded shape, without the folding — and the toolbar drops under
-  // the text the moment a line wraps, breaks, or a chip arrives. Sticky until
-  // the input empties, so deleting back under the edge does not flip the
-  // layout under the caret on every keystroke.
+  const engage = (): void => setEngaged(true)
+  // One line only while the input is not in use: the input and the toolbar
+  // share a row — the folded shape, without the folding. Focus or a click in
+  // the input opens it (`engaged`, the fold's own notion of in use), as does a
+  // draft that has outgrown the line, a line break or a chip. A long draft is
+  // sticky until the input empties, so deleting back under the edge does not
+  // flip the layout under the caret on every keystroke.
   const [stacked, setStacked] = React.useState(false)
-  const inline = collapsed || (!stacked && attachments.length === 0 && !text.includes('\n'))
+  const inline =
+    collapsed || (!engaged && !stacked && attachments.length === 0 && !text.includes('\n'))
 
   // The provider's own guess at the next message (Claude's and Grok's): a chip
   // at the head of the empty composer, taken by Tab or a click into the input
@@ -1281,37 +1368,14 @@ export function Composer({
       compact={inline}
       open={modelSettingsOpen}
       onOpenChange={setModelSettingsOpen}
-    />
-  )
-  const permissionPicker = (
-    <CompactSelect
-      value={permissionValue}
-      onValueChange={(v) => onPermissionModeChange(v as PermissionModeId)}
-      options={permissionOptions.map((m) => {
-        const appearance = permissionAppearance(m.id, isCodex)
-        return {
-          value: m.id,
-          label: m.label,
-          description: m.description,
-          icon: <appearance.Icon className={cn('size-3.5', appearance.iconClassName)} />
-        }
-      })}
-      icon={
-        <selectedPermissionAppearance.Icon
-          className={cn('size-3.5', selectedPermissionAppearance.iconClassName)}
-        />
-      }
-      chevron={false}
-      // Icon only in a narrow column: its colour already says how much the
-      // agent may do, and the label is one click away.
-      className={cn(
-        'min-w-0 shrink-0 @max-[400px]:[&>span]:hidden',
-        // On one line the input needs the room, and the label is back once
-        // the toolbar has a row of its own.
-        inline && '[&>span]:hidden'
-      )}
-      open={permissionOpen}
-      onOpenChange={setPermissionOpen}
+      permission={{
+        value: permissionValue,
+        options: permissionOptions,
+        onChange: onPermissionModeChange,
+        isCodex
+      }}
+      permissionOpen={permissionOpen}
+      onPermissionOpenChange={setPermissionOpen}
     />
   )
   const contextRing =
@@ -1660,7 +1724,6 @@ export function Composer({
             )}
           >
             {modelPicker}
-            {permissionPicker}
           </div>
           {contextRing}
           {sendButton}

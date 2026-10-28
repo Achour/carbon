@@ -3,7 +3,7 @@ import { Check, GitBranch, Plus, Sparkles } from 'lucide-react'
 import type { BranchRef, WorktreeTarget } from '@shared/types'
 import { generatedBranchHint, sanitizeBranch } from '@shared/branchName'
 import { worktreeTargetKey } from '@/lib/drafts'
-import { cn, contextPillButton } from '@/lib/utils'
+import { cn, contextPillButton, quietPillButton } from '@/lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Input } from '@/components/ui/input'
 
@@ -65,7 +65,8 @@ export function BranchPicker({
   cwd,
   value,
   onChange,
-  disabled
+  disabled,
+  quiet = false
 }: {
   /** Any directory in the repo whose branches are offered. */
   cwd: string
@@ -73,6 +74,8 @@ export function BranchPicker({
   value: WorktreeTarget
   onChange: (target: WorktreeTarget) => void
   disabled?: boolean
+  /** Plain text rather than a chip — the line under the composer. */
+  quiet?: boolean
 }): React.JSX.Element {
   const [open, setOpen] = React.useState(false)
   // Tagged with its project for the same reason WorktreePicker's list is: the
@@ -208,7 +211,7 @@ export function BranchPicker({
           <button
             type="button"
             aria-label="Branch this chat runs on"
-            className={contextPillButton}
+            className={quiet ? quietPillButton : contextPillButton}
           >
             <GitBranch />
             <span

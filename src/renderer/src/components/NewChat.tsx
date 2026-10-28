@@ -277,30 +277,6 @@ export function NewChat(): React.JSX.Element {
 
             {cwd ? (
               <>
-                {/* Always shown, like ChatView's — the project you're about to
-                    work in shouldn't disappear just because the quick-launch
-                    rail also names it. */}
-                <ContextStrip
-                  cwd={cwd}
-                  git={git}
-                  // A worktree target shows its own branch, not the checkout's —
-                  // and when the branch chip is up, it owns the branch and this
-                  // segment stands down rather than naming the one place the
-                  // chat is *not* about to run.
-                  branch={
-                    creatingWorktree ? null : target.kind === 'existing' ? target.branch : undefined
-                  }
-                  onReviewChanges={() => void reviewChanges()}
-                >
-                  {git?.isRepo && (
-                    <WorktreePicker
-                      cwd={cwd}
-                      value={target}
-                      onChange={setTarget}
-                      disabled={starting}
-                    />
-                  )}
-                </ContextStrip>
                 <div className="relative">
                   <CodexReviewMenu
                     open={reviewOpen}
@@ -344,6 +320,34 @@ export function NewChat(): React.JSX.Element {
                   disabled={starting}
                   />
                 </div>
+                {/* Always shown, like ChatView's — the project you're about to
+                    work in shouldn't disappear just because the quick-launch
+                    rail also names it — and under the box like ChatView's,
+                    as plain text, inset so the folder lands on the column. */}
+                <ContextStrip
+                  quiet
+                  className="mt-1.5 px-2"
+                  cwd={cwd}
+                  git={git}
+                  // A worktree target shows its own branch, not the checkout's —
+                  // and when the branch chip is up, it owns the branch and this
+                  // segment stands down rather than naming the one place the
+                  // chat is *not* about to run.
+                  branch={
+                    creatingWorktree ? null : target.kind === 'existing' ? target.branch : undefined
+                  }
+                  onReviewChanges={() => void reviewChanges()}
+                >
+                  {git?.isRepo && (
+                    <WorktreePicker
+                      cwd={cwd}
+                      value={target}
+                      onChange={setTarget}
+                      disabled={starting}
+                      quiet
+                    />
+                  )}
+                </ContextStrip>
                 {starting && creatingWorktree && (
                   <p className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
                     <DotSpinner className="size-3" />

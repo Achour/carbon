@@ -42,13 +42,15 @@ border 508, prose 522.
 
 ### The composer's shape (`Composer.tsx`, `ChatView.tsx`)
 
-- **One line until the draft outgrows it.** Empty or short, input and toolbar
-  share a row: `+`, the input, the model's name, the permission icon, the
-  context ring, send. A wrapped line, a line break or an attachment drops the
-  toolbar under the text, where `+` stands alone on the left and the model
-  ("**Opus 5** High"), the permission mode, the ring and send sit on the right.
-  The switch is sticky until the input empties (`stacked`), so deleting back
-  under the edge never flips the layout under the caret. Overflow is read as
+- **One line only while the input is not in use.** Unfocused and empty or
+  short, input and toolbar share a row: `+`, the input, the model, the context
+  ring, send. Focus or a click in the input opens it (`engaged` — the thread
+  fold's notion of in use, now for every composer, so popups it opened still
+  count as inside), and so does a draft that outgrows the line, a line break
+  or an attachment. Open, `+` stands alone on the left and the model ("**Opus
+  5** High"), the ring and send sit on the right. A long draft is sticky until
+  the input empties (`stacked`), so deleting back under the edge never flips
+  the layout under the caret. Overflow is read as
   `scrollWidth > clientWidth`, which works because the one-line input does not
   wrap. The thread column's fold is the same shape, reached by `collapsed`.
 - **The toolbar is one element in both shapes**; only `+` moves (before the
@@ -56,10 +58,14 @@ border 508, prose 522.
 - **The input scrolls only at its cap.** `scrollHeight` is rounded, and three
   lines of a 22.75px line-height overflow it by a fraction — enough to draw a
   full-length scrollbar beside text that fits.
+- **Permissions live in the model picker**, as a row beside Reasoning and
+  Speed; the bar has one picker. Any mode other than the ask baseline keeps its
+  coloured icon on the trigger, in both shapes. `/permissions` opens the picker
+  straight onto that row (`permissionOpen`).
 - **Where the chat runs is under the box, not above it.** `ContextStrip quiet`
   draws folder, branch and changes as plain text below the frame; the pill row
-  above read as a second toolbar. The new-chat screen keeps its pills, which
-  are pickers there.
+  above read as a second toolbar. The new-chat screen does the same, its
+  worktree and branch pickers included (`quiet` on both, `quietPillButton`).
 - **The stack floats over the transcript.** It is absolutely placed at the
   view's foot, its measured height written to `--composer-h` (straight to the
   style, no state), which the column's foot spacer, the jump button and the
