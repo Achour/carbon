@@ -625,7 +625,6 @@ function registerIpc(): void {
         worktree?: WorktreeTarget
         ephemeral?: boolean
         sideOf?: string
-        surface?: 'terminal'
       }
     ) => {
     const now = Date.now()
@@ -672,16 +671,11 @@ function registerIpc(): void {
       worktree,
       ...(opts.ephemeral ? { ephemeral: true as const } : {}),
       ...(opts.sideOf ? { sideOf: opts.sideOf } : {}),
-      ...(opts.surface === 'terminal' ? { surface: 'terminal' as const } : {}),
       createdAt: now,
       updatedAt: now,
       sortKey: now,
       messages: []
     }
-    // A terminal chat has no messages, so nothing downstream will ever title it.
-    // It is "Terminal" until a CLI session is identified in the pane, and then it
-    // wears the name that CLI gave the session (`ChatTerminalManager`).
-    if (chat.surface === 'terminal') chat.title = 'Terminal'
     store.addChat(chat)
     // A side chat leaves no trace in the app's defaults. Both of these calls
     // describe *what the user chose for their next real chat*, and a throwaway
@@ -692,10 +686,7 @@ function registerIpc(): void {
       // Recents track the project the user picked, never the worktree we derived.
       store.rememberDir(worktree?.repoRoot ?? opts.cwd)
     }
-    // A terminal chat carries whatever the pickers held without anyone having
-    // chosen it — they are not drawn in terminal mode — so it is no statement
-    // about the next chat's model either.
-    if (!chat.ephemeral && chat.surface !== 'terminal') {
+    if (!chat.ephemeral) {
       store.rememberOptions({
         model: opts.model ?? '',
         modelProvider: provider,

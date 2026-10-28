@@ -1475,11 +1475,6 @@ interface AppState {
       label?: string
       /** Where the chat runs; omitted or `local` means `cwd` itself. */
       worktree?: WorktreeTarget
-      /**
-       * Open a terminal instead of a Carbon transcript — see `ChatMeta.surface`.
-       * Nothing is sent: the CLI is whatever you start in it.
-       */
-      surface?: 'terminal'
     }
   ): Promise<void>
   /**
@@ -4835,15 +4830,7 @@ export const useApp = create<AppState>((set, get) => ({
         pullsOpen: false,
         scheduledOpen: false,
         panelMaximized: false,
-        // A terminal chat mirrors only the folder into the defaults — the same
-        // line `chats:create` draws: nobody chose its model, the pickers are
-        // not even drawn for one.
-        defaults: s.defaults && meta.surface === 'terminal'
-          ? {
-              ...s.defaults,
-              recentDirs: [cwd, ...s.defaults.recentDirs.filter((d) => d !== cwd)].slice(0, 8)
-            }
-          : s.defaults?.fixed
+        defaults: s.defaults?.fixed
           ? // Fixed defaults answer only to Settings; main skips the same
             // fields in `rememberOptions`, so both halves agree on relaunch.
             {
@@ -4880,9 +4867,6 @@ export const useApp = create<AppState>((set, get) => ({
     // run the project's setup script in a visible terminal tab. Deliberately not
     // awaited: the agent starts now and the install races alongside it.
     if (meta.worktree) void get().runWorktreeSetup(meta.id)
-    // A terminal chat has no session to send to — sending would start a second
-    // conversation beside the one you are about to start in the pane.
-    if (meta.surface === 'terminal') return
     if (reviewTarget) await window.api.startReview(meta.id, reviewTarget)
     else await window.api.send(meta.id, firstMessage, attachments, label)
   },

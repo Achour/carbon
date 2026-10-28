@@ -3009,8 +3009,6 @@ export interface Api {
     ephemeral?: boolean
     /** For a side chat, the chat it is opened beside. See `ChatMeta.sideOf`. */
     sideOf?: string
-    /** Draw this chat as a terminal. See `ChatMeta.surface`. */
-    surface?: 'terminal'
   }): Promise<ChatMeta>
   /** `worktree` decides the fate of a worktree chat's directory; default 'keep'. */
   deleteChat(id: string, worktree?: WorktreeDisposition): Promise<OpResult>

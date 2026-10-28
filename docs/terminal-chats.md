@@ -7,6 +7,15 @@ row, the same header and ⋯ menu, the same right panel with files, git and diff
 Reopening the chat puts you back in the CLI session you were on, because Carbon
 noticed which one it was and the CLI kept the conversation.
 
+**New ones can no longer be started.** The Terminal pill on the New chat
+screen, and the `surface` option `chats:create` took from it, were removed on
+2026-10-28: the surface did not hold up in use, and a follow-up that wired
+Carbon's tools and delegation into the pane (a Settings-wide Terminal mode) was
+built and reverted for the same reason. Chats made before then still open,
+resume and title themselves exactly as described below, so their history is not
+stranded; nothing creates another. Taking the rest out is a matter of deleting
+this surface once no such chat is left worth keeping.
+
 `ChatMeta.surface` is the whole switch. `src/main/chatTerminal.ts` identifies
 the session and resumes it; `ChatTerminal` in `TerminalPanel.tsx` draws the
 pane; `main/terminal.ts` runs the pty and holds it open between panes.
@@ -20,11 +29,8 @@ worse copy of something the CLI already has, and it decided for you which CLI a
 chat was *before* you had started it.
 
 So a terminal chat opens a login shell in the chat's folder, and that is all.
-On the New chat screen it is one click: the Terminal pill in the context strip
-(`OpenTerminalPill`) opens the chat at once, in the folder and worktree already
-chosen beside it. It was first a Chat/Terminal picker that swapped the composer
-for an "Open terminal" button — a second click and a mode to leave, for a
-choice with nothing left to configure. The chat is titled "Terminal" and has no
+It was started from the New chat screen — first a Chat/Terminal picker, then a
+Terminal pill in the context strip — until creating them was removed (above). The chat is titled "Terminal" and has no
 provider, model or session until you run something. Your flags are
 yours and are never replayed — Carbon never saw them. The CLI restores the
 conversation on resume, and anything else is a keystroke away inside it.

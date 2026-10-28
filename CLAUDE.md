@@ -465,7 +465,8 @@ it guards**, and put new reasoning in that file rather than back in this one.
   `settleScheduled`, `archiveEarlierRuns`), the agent's `schedule_*` tools
   (`main/scheduleTools.ts`) and the page (`Scheduled.tsx`).
 - **`docs/terminal-chats.md`** — a chat that is your shell in a pty, with the
-  CLI session you start in it found and resumed (`ChatMeta.surface`,
+  CLI session you start in it found and resumed — no longer creatable (the
+  New chat entry was removed; existing ones still open) (`ChatMeta.surface`,
   `main/chatTerminal.ts`, `main/termTitle.ts`, `ChatTerminal` in
   `TerminalPanel.tsx`, `persist`/`attach`/`detach` in `main/terminal.ts`), and
   `main/parentEnv.ts` — why every spawn gets the environment a Dock launch
