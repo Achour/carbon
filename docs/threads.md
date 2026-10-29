@@ -153,7 +153,7 @@ behind it.
 
 An agent — a delegate (`agents_delegate`) or a native sub-agent — opens **in
 place of the thread's columns**, as a page of the chat that started it. The
-header's title becomes a breadcrumb, "*Chat* › codex-a *task…*", and the chat's
+header's title becomes a breadcrumb, "*Chat* › codex-a" — the agent's name, never its task, which for a delegate is a whole prompt, and the chat's
 name, Escape or the page's own "Back to chat" goes back. Every way in lands
 there: the robot menu, the rail's Agents card, the agent's card in the
 transcript, and a notification's click (`openChat` routes a delegate to

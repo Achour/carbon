@@ -745,7 +745,7 @@ function DelegatePane({ id }: { id: string }): React.JSX.Element | null {
 
 /**
  * The thread's title and the agent on screen, as a breadcrumb in place of the
- * title: "Chat / codex-a  task…". The chat's name is the way back, as Escape is.
+ * title: "Chat › codex-a". The chat's name is the way back, as Escape is.
  */
 function AgentCrumb({ thread, id, fill }: { thread: ChatMeta; id: string; fill: boolean }): React.JSX.Element {
   const closeAgentView = useApp((s) => s.closeAgentView)
@@ -754,9 +754,9 @@ function AgentCrumb({ thread, id, fill }: { thread: ChatMeta; id: string; fill: 
   const parentProvider = useApp((s) => (ref ? chatMeta(s, ref.parentId)?.provider : undefined))
   const run = useAgents((s) => (ref ? s.byChat[ref.parentId]?.runs.find((r) => r.id === ref.toolUseId) : undefined))
   const provider = delegate?.provider ?? parentProvider ?? 'claude'
-  const d = delegate?.delegation
-  const name = d?.name ?? run?.type ?? 'Agent'
-  const detail = (d ? (d.followUp ?? d.task) : run?.description)?.replace(/\s+/g, ' ').trim()
+  // The agent's name, never its task: a delegate's task is a whole prompt. A
+  // sub-agent has no name, so its short label (`description`) stands in.
+  const name = delegate?.delegation?.name ?? (run?.description?.trim() || run?.type || 'Agent')
   return (
     <div data-agent-crumb className={cn('flex min-w-0 items-center gap-1.5 text-[13px]', fill ? 'flex-1' : 'shrink')}>
       <WithTooltip label="Back to the chat  esc" side="bottom">
@@ -770,8 +770,7 @@ function AgentCrumb({ thread, id, fill }: { thread: ChatMeta; id: string; fill: 
       </WithTooltip>
       <ChevronRight className="size-3.5 shrink-0 text-muted-foreground/60" />
       <ProviderMark provider={provider} className="size-3.5 shrink-0 text-muted-foreground" />
-      <span className="shrink-0 font-semibold">{name}</span>
-      {detail && <span className="min-w-0 truncate text-muted-foreground">{detail}</span>}
+      <span className="min-w-0 truncate font-semibold">{name}</span>
       {delegate && <ChatMark id={id} labelled />}
     </div>
   )
