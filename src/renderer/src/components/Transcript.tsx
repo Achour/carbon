@@ -457,8 +457,7 @@ function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
       // "Working for", it neither folds nor offers the control — the rhythm
       // `useRunDisclosure` gives a running group, at turn scale — and the
       // continuation lands under a header that never stopped. Folding it would
-      // take a card that is still moving off screen, and take with it the node
-      // `AgentsPanel`'s row click scrolls to.
+      // take a card that is still moving off screen.
       const live = !!fold && (fold.userId === liveUserId || fold.running)
       turnLive = live
       // A turn the CLI has already closed once and that is live again is a

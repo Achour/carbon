@@ -199,7 +199,7 @@ function oneLine(text: string): string {
  * A sub-agent the provider spawned itself — Claude's `Task`, Codex's and
  * Grok's and Antigravity's `Agent` — as a row whose open form is a page of the
  * thread (`AgentPane`). Status, model and clock come off `agentRunOf`,
- * the roster's own rule, so the row, the column and the Agents panel agree.
+ * the roster's own rule, so the row, the page and the roster agree.
  */
 export function NativeAgentRow({ part }: { part: ToolPart }): React.JSX.Element {
   const ctx = React.useContext(TranscriptChat)
@@ -222,7 +222,7 @@ export function NativeAgentRow({ part }: { part: ToolPart }): React.JSX.Element 
       ? `Failed${steps}`
       : background
         ? 'Started in the background'
-        : `Finished${steps}`
+        : `Finished${steps}${run.result ? ` — ${run.result}` : ''}`
   const { openAgent } = useTranscriptSurface()
   const clickable = !!ctx && (parentShown || !!openAgent)
   return (

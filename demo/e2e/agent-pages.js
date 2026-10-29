@@ -85,14 +85,11 @@
     await sleep(700);
     check('the robot menu lists the delegate', !!document.querySelector(`[data-delegate-row="${DELEGATE}"]`));
     check('...and the sub-agent', !!document.querySelector('[data-subagent-row="tu-explore"]'));
-    const groups = [...document.querySelectorAll('[data-agent-roster] > div')].map((g) => ({
-      title: g.firstElementChild?.textContent ?? '',
-      rows: [...g.querySelectorAll('[data-delegate-row], [data-subagent-row]')]
-    }));
-    check('the roster is Working, then Finished', groups.map((g) => g.title.replace(/\d+$/, '')).join(',') === 'Working,Finished', groups.map((g) => g.title).join(' | '));
-    check('...every working row is live', groups[0]?.rows.length === 2 && groups[0].rows.every((r) => r.hasAttribute('data-live')));
-    check('...and the finished one is in Finished, by name not task',
-      groups[1]?.rows.length === 1 && groups[1].rows[0].textContent.includes('grok-a') && !groups[1].rows[0].textContent.includes('Repo:'), groups[1]?.rows[0]?.textContent);
+    const rows = [...document.querySelectorAll('[data-agent-roster] [data-delegate-row], [data-agent-roster] [data-subagent-row]')];
+    check('the roster is one list, no section headings', !/Working|Finished/.test(document.querySelector('[data-agent-roster]')?.textContent ?? ''));
+    check('...live rows first', rows.length === 3 && rows[0].hasAttribute('data-live') && rows[1].hasAttribute('data-live') && !rows[2].hasAttribute('data-live'));
+    check('...the finished one last, by name not task',
+      rows[2]?.textContent.includes('grok-a') && !rows[2]?.textContent.includes('Repo:'), rows[2]?.textContent);
     await until(10000); // shot 1: the menu
 
     document.querySelector('[data-subagent-row="tu-explore"]')?.click();

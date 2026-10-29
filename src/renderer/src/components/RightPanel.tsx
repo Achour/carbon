@@ -1,6 +1,5 @@
 import * as React from 'react'
 import {
-  Bot,
   ClipboardList,
   Code2,
   Eye,
@@ -44,8 +43,6 @@ import { Button } from '@/components/ui/button'
 import { WithTooltip } from '@/components/ui/tooltip'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { PlanContent } from '@/components/PlanPanel'
-import { AgentsPanel } from '@/components/AgentsPanel'
-import { anyRunning, anyRuns, useAgents } from '@/agentsStore'
 import { FileViewer, MARKDOWN_RE } from '@/components/FileViewer'
 import { FileTree } from '@/components/FileTree'
 import { GitPanel } from '@/components/GitPanel'
@@ -807,14 +804,6 @@ export function RightPanel(): React.JSX.Element | null {
   // a side chat entering plan mode set `activeTab: 'plan'` for a tab the strip
   // refused to show — so the plan appeared nowhere.
   const showPlan = useApp((s) => s.planPanel !== null && inActiveThread(s, s.planPanel.chatId))
-  // The Agents tab is a property of the chat: it exists exactly while the chat
-  // has spawned something. It is never auto-selected — a spawn mid-read would
-  // otherwise take the file you are looking at off screen — so the way in is the
-  // tab itself, or a run's row in the transcript.
-  // Any chat in the thread: the tab is the way into every column's roster, and
-  // which one it shows is `AgentsPanel`'s question.
-  const showAgents = useAgents(anyRuns)
-  const agentsRunning = useAgents(anyRunning)
   // Browse mode's tab: opened state, so it survives being left. See `filesTab`.
   const filesTab = useApp((s) => s.filesTab)
   const closeFilesTab = useApp((s) => s.closeFilesTab)
@@ -838,8 +827,6 @@ export function RightPanel(): React.JSX.Element | null {
         ? activeTab!
         : activeTab === 'plan' && showPlan
           ? 'plan'
-          : activeTab === 'agents' && showAgents
-          ? 'agents'
           : activeTab === 'canvas' && showCanvas
           ? 'canvas'
           : canvasTabs.some((id) => `canvas:${id}` === activeTab)
@@ -859,7 +846,6 @@ export function RightPanel(): React.JSX.Element | null {
   const currentIsPreview = shown.some((p) => p.id === current)
   const currentIsChanges = typeof current === 'string' && current.startsWith('changes:')
   const currentIsPlan = current === 'plan'
-  const currentIsAgents = current === 'agents'
   const currentIsCanvas = current === 'canvas'
   // `canvas:<id>` — one open document. Its own tab rather than a mode of the
   // list, because two canvases are read side by side.
@@ -889,7 +875,6 @@ export function RightPanel(): React.JSX.Element | null {
   // the plan has no path to show and docks no tree to toggle.
   const showBreadcrumb =
     !currentIsPlan &&
-    !currentIsAgents &&
     !currentIsCanvas &&
     !currentCanvasId &&
     !currentIsTerminal &&
@@ -1189,15 +1174,6 @@ export function RightPanel(): React.JSX.Element | null {
               onClose={closePlanPanel}
             />
           )}
-          {showAgents && (
-            <Tab
-              icon={<Bot className="size-3.5" />}
-              label="Agents"
-              active={current === 'agents'}
-              busy={agentsRunning ? 'Agent' : undefined}
-              onSelect={() => setActiveTab('agents')}
-            />
-          )}
           {showCanvas && (
             <Tab
               icon={<Shapes className="size-3.5" />}
@@ -1378,8 +1354,6 @@ export function RightPanel(): React.JSX.Element | null {
           >
             {current === 'plan' && planPanel ? (
               <PlanContent panel={planPanel} hasSuggestions={hasSuggestions} />
-            ) : currentIsAgents ? (
-              <AgentsPanel />
             ) : currentIsCanvas ? (
               <CanvasPanel />
             ) : currentCanvasId ? (
@@ -1453,7 +1427,6 @@ export function RightPanel(): React.JSX.Element | null {
           dockOpen &&
           !isEmpty &&
           !currentIsPlan &&
-          !currentIsAgents &&
           !currentIsCanvas &&
           !currentCanvasId &&
           !currentIsTerminal &&

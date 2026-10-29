@@ -2364,7 +2364,7 @@ class ClaudeSession implements AgentSession {
             startedAt: Date.now(),
             // Stamped where the spawn is *seen*, not where its first reply
             // lands: a cold sub-agent is several seconds of nothing, and that
-            // wait is exactly what the Agents panel exists to show.
+            // wait is exactly what the roster's clock exists to show.
             ...(AGENT_TOOLS.has(name) ? { agent: { startedAt: Date.now() } } : {})
           }
           this.jsonAcc.set(index, '')
@@ -2825,7 +2825,7 @@ class ClaudeSession implements AgentSession {
       messageId,
       toolUseId: parent.toolUseId,
       // Fresh array (and a fresh vitals object) so the renderer's shallow
-      // compare re-renders the card and the Agents panel.
+      // compare re-renders the card and the roster.
       patch: {
         children: parent.children ? [...parent.children] : [],
         ...(parent.agent ? { agent: { ...parent.agent } } : {})

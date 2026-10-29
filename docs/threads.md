@@ -181,6 +181,43 @@ draws no agent id.
   its slot. A killed or deleted delegate closes it (`chat-close`,
   `deleteSideChat`).
 
+- **With several chats on screen, the page opens inside the column of the chat
+  that started it** (`agentViewIn`), and the other columns stay. Taking the
+  whole thread for one agent threw away the layout the user had built, and
+  side by side is the reason a thread has columns. That column's header becomes
+  the breadcrumb; working in another column leaves the page where it is, and
+  only that column's chat being asked for (⌘N, a notification) goes back.
+  Clicking inside it claims focus for the *agent*, not the column's chat, or
+  every click there would close it. Alone, or with a column expanded, the page
+  is the thread's.
+- **⌥↑ / ⌥↓ walk the roster from an agent's page** (outside a text field),
+  in the order the robot menu lists it — the column chat's agents for a page
+  in a column, the thread's otherwise (`useAgentNeighbours`). Reviewing a
+  fan-out was a trip through the menu per agent. It is a key only: arrow
+  buttons and a "2/6" in the title bar were tried and read as clutter.
+- **A chat's agents and jobs are the chat's.** With several chats on screen
+  each column header carries its own robot menu (that chat's sub-agents and
+  delegates, `useAgentRoster(…, parentId)`) and its own background-jobs pill,
+  and the thread's bar keeps only what acts on the thread. They were one pair
+  for the whole thread, in a bar that also held the title, the strip, the
+  layout switch, ＋, ⋯ and two toggles, and that bar ran out of room.
+- **What an agent found reaches the chat that started it.** Its card in the
+  transcript carries the first line of its report, or why it failed
+  (`AgentRunView.result`, `firstLine`, the delegation's `result` / `error`), so
+  a finished agent says what it found without a click; in the roster the same
+  line is the row's tooltip — a second line under every finished row doubled
+  the card's height. A delegate waiting on an approval docks its prompt on the
+  parent's composer under its name (`DelegatePrompts`), answered in place;
+  "Open" is there for the context it asked in. A prompt nobody went looking
+  for used to keep the agent blocked.
+- **Untitled columns are named by their model** until the first answer names
+  them: four columns all reading "New chat" were four of the same.
+- **A floating panel never covers the thread's controls.** It lies over the
+  thread's right edge, title bar included, so the bar reserves its width
+  (`useFloatingPanelInset`) and keeps ＋, ⋯, the layout switch and the rail
+  toggle beside it rather than under it; the folder/branch strip gives up its
+  place while the panel is open, as the rail carries the same facts.
+
 ### Reordering columns, and dragging a thread into another
 
 **Columns reorder by drag**: a column's header dropped on the left or right
@@ -250,9 +287,7 @@ reads it with an `activeId` fallback.
   review's **Last turn** scope is the focused column's last turn — one
   `useScopedChanges` hook for the changes tree, the stacked diffs and the review
   bar, subscribed to that transcript only while the scope is picked, and the
-  same chat's turn is what the commit prompt names; the Agents tab
-  shows the focused column's roster unless it was opened for another
-  (`rosterChat`).
+  same chat's turn is what the commit prompt names.
 - **`unreadChats`** marks a column whose turn ended while another had focus —
   its header says **Done** — because with four
   columns the one that finished is not the one being read. Only with more than
@@ -358,8 +393,8 @@ why the side variant used to publish into neither: with two transcripts mounted,
 whichever folded last won, and closing a side chat cleared the main chat's
 roster. Equal columns cannot live with that, so both are keyed by chat id
 (`byChat`), each `ChatView` publishes its own entry and removes it on unmount,
-and every column now carries its own task dock and goal bar.
-The Agents tab shows while any column has runs.
+and every column now carries its own task dock and goal bar — and, with several
+chats on screen, its own agents and jobs in its header (see below).
 
 ### Notifications
 

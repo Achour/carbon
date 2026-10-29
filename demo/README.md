@@ -60,7 +60,10 @@ node demo/seed.mjs                           # write the chats
   (the robot menu, a card, `openAgentView`) opens the agent in place of the chat
   and every way out (Escape, the crumb, focusing another chat) comes back. The
   real-turn agent scripts — `subagents.js` and `delegation*.js` — assert the
-  same pages against a live model and spend tokens.
+  same pages against a live model and spend tokens. `agent-flow.js` (free) checks
+  the rest of the agent flow: outcomes on finished rows, a delegate's approval
+  on the parent's composer, ⌥↓ through the roster, and agents opening inside
+  their own column in a thread.
 
 **These probes drive the store directly, so they go stale silently.** Two of
 them called `sendMessage(text)` and `setChatOptions(patch)` — both of which grew

@@ -48,6 +48,11 @@ export interface AgentRunView {
   current?: string
   /** 0 for a spawn the main agent made; 1+ for an agent's own spawns. */
   depth: number
+  /**
+   * The first line of what a settled agent reported back, for the roster's
+   * row: a finished agent should say what it found without a click.
+   */
+  result?: string
 }
 
 export interface AgentTotals {
@@ -164,8 +169,27 @@ function viewOf(part: ToolPart, messageId: string, depth: number): AgentRunView 
     tokens: part.agent?.tokens,
     tools: tools.length,
     current,
-    depth
+    depth,
+    ...(busy ? {} : resultOf(part.output))
   }
+}
+
+function resultOf(output: string | undefined): { result?: string } {
+  const result = firstLine(output)
+  return result ? { result } : {}
+}
+
+/** The first line of `text` with words in it, markdown marks dropped, capped. */
+export function firstLine(text: string | undefined, max = 160): string | undefined {
+  if (!text) return undefined
+  const clean = (l: string): string => l.replace(/^[\s#>*\-–•\d.)]+/, '').replace(/[*_`]/g, '').trim()
+  const lines = text.split('\n').filter((l) => /\w/.test(l))
+  // A report that opens on a heading ("## Summary") says nothing in it: the
+  // first line of prose is the outcome, the heading only when there is none.
+  const prose = lines.find((l) => !/^\s*#/.test(l))
+  const line = clean(prose ?? lines[0] ?? '')
+  if (!line) return undefined
+  return line.length > max ? `${line.slice(0, max - 1)}…` : line
 }
 
 function collect(
@@ -289,7 +313,8 @@ function sameRun(a: AgentRunView, b: AgentRunView): boolean {
     a.tokens === b.tokens &&
     a.tools === b.tools &&
     a.current === b.current &&
-    a.depth === b.depth
+    a.depth === b.depth &&
+    a.result === b.result
   )
 }
 

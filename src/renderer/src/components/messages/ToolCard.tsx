@@ -1639,8 +1639,8 @@ const ActivityGroup = React.memo(function ActivityGroup({
 /**
  * Renders a sub-agent's own stream: its text, thinking and nested tool calls.
  *
- * Exported because it is no longer drawn in the transcript at all — `AgentsPanel`
- * is where an agent's work is read (see `AgentCard`).
+ * Exported because it is no longer drawn in the transcript at all — the agent's
+ * page (`AgentPane`, through `AgentStreamBody`) is where its work is read.
  *
  * **Grouped by the parent transcript's own rule** (`groupToolRuns`), which it
  * was not: every child call drew a full activity row, so an agent that ran

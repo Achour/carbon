@@ -1,12 +1,13 @@
 import * as React from 'react'
 import { Collapsible } from '@base-ui/react/collapsible'
 import { ChevronRight, ClipboardList, MessageCircleQuestion, ShieldAlert } from 'lucide-react'
-import type { PermissionRequestPayload, Provider, UserQuestion } from '@shared/types'
+import type { ChatMeta, PermissionRequestPayload, Provider, UserQuestion } from '@shared/types'
 import { PROVIDER_SHORT_LABELS } from '@shared/types'
 import { cn } from '@/lib/utils'
 import { DISCLOSURE_PANEL } from '@/lib/disclosure'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { ProviderMark } from '@/components/ui/provider-mark'
 import { focusedChatOf, useApp } from '@/store'
 
 /**
@@ -135,6 +136,69 @@ export function PromptDock({
           />
         )
       })}
+    </div>
+  )
+}
+
+/**
+ * What this chat's delegates are waiting on, answered from here.
+ *
+ * A delegate asking for approval used to be a "Needs input" word on a row the
+ * reader had to go and find, then a page to open, then the prompt: the agent
+ * sat blocked for as long as that took. Its prompt now docks on the composer
+ * of the chat that started it — the one being read — under the agent's name,
+ * and is answered in place. "Open" is still there for the context it asked in.
+ * A delegate whose own page is on screen answers there instead.
+ */
+export function DelegatePrompts({ parentId }: { parentId: string }): React.JSX.Element | null {
+  const chats = useApp((s) => s.chats)
+  const permissions = useApp((s) => s.permissions)
+  const agentView = useApp((s) => s.agentView)
+  const openAgentView = useApp((s) => s.openAgentView)
+  const asking = React.useMemo(
+    () =>
+      chats
+        .filter((c) => c.delegation?.parentId === parentId && c.id !== agentView)
+        .map((chat) => ({ chat, requests: permissions[chat.id] ?? [] }))
+        .filter((x) => x.requests.length > 0),
+    [chats, permissions, parentId, agentView]
+  )
+  if (asking.length === 0) return null
+  return (
+    <>
+      {asking.map(({ chat, requests }) => (
+        <DelegatePrompt key={chat.id} chat={chat} requests={requests} onOpen={() => void openAgentView(chat.id)} />
+      ))}
+    </>
+  )
+}
+
+function DelegatePrompt({
+  chat,
+  requests,
+  onOpen
+}: {
+  chat: ChatMeta
+  requests: PermissionRequestPayload[]
+  onOpen: () => void
+}): React.JSX.Element {
+  return (
+    <div data-delegate-prompt={chat.id} className="overflow-hidden border-b border-border first:rounded-t-2xl">
+      <div className="flex items-center gap-1.5 px-3.5 pt-2 text-[11px] text-muted-foreground">
+        <ProviderMark provider={chat.provider} className="size-3" />
+        <span className="font-medium text-foreground">{chat.delegation?.name ?? 'An agent'}</span>
+        <span>is waiting on you</span>
+        <button
+          type="button"
+          onClick={onOpen}
+          className="ml-auto rounded px-1 transition-colors hover:text-foreground"
+        >
+          Open
+        </button>
+      </div>
+      {/* Delegates never plan (`docs/delegation.md`), so there is no plan to
+          review from here. */}
+      <PromptDock chatId={chat.id} provider={chat.provider} requests={requests} onReviewPlan={() => undefined} />
     </div>
   )
 }

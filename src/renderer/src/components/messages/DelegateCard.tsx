@@ -1,6 +1,7 @@
 import type { ChatMeta, ToolPart } from '@shared/types'
 import { PROVIDER_SHORT_LABELS, knownProvider } from '@shared/types'
 import { useApp } from '@/store'
+import { firstLine } from '@shared/agentRuns'
 import { useTranscriptSurface } from './surface'
 import { AgentRowShell, useElapsed } from './AgentRows'
 
@@ -59,6 +60,8 @@ export function DelegateCard({ part }: { part: ToolPart }): React.JSX.Element {
   const task = (d?.followUp ?? d?.task ?? (typeof input.task === 'string' ? input.task : ''))
     .replace(/\s+/g, ' ')
     .trim()
+  const outcome =
+    d?.status === 'completed' ? firstLine(d.result) : d?.status === 'failed' ? firstLine(d.error) : undefined
   const { openChat } = useTranscriptSurface()
   const clickable = !!meta
 
@@ -83,6 +86,9 @@ export function DelegateCard({ part }: { part: ToolPart }): React.JSX.Element {
               nothing is owed — so "reported back" would be a claim about a
               message that never went. */}
           {!look.live && d?.deliveredAt && d.status !== 'cancelled' ? ' · reported back' : ''}
+          {/* What it found, or why it failed: the card is where the parent's
+              reader meets the outcome, so it says it rather than pointing. */}
+          {outcome ? ` — ${outcome}` : ''}
         </>
       }
       live={look.live}

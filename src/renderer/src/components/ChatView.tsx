@@ -26,7 +26,7 @@ import { ContextStrip } from '@/components/ContextStrip'
 import { TaskDock } from '@/components/TaskDock'
 import { CodexGoalBar } from '@/components/CodexGoalBar'
 import { StreamingIndicator } from '@/components/messages/Parts'
-import { PromptDock } from '@/components/PromptDock'
+import { DelegatePrompts, PromptDock } from '@/components/PromptDock'
 import { QuoteBar } from '@/components/QuoteBar'
 import { TranscriptChat } from '@/components/messages/AgentRows'
 import { useTranscript } from '@/components/Transcript'
@@ -528,9 +528,9 @@ export const ChatView = React.memo(function ChatView({
   }, [chat.id, agentRuns, setAgentRuns])
   // Cleared on unmount, in an effect of its own so it fires *only* then: folded
   // into the publish above it would empty the entry between every two updates
-  // and flicker the Agents tab out of the strip on each one. The store outlives
-  // this component — without this, leaving a thread, or closing a column, would
-  // leave that chat's roster standing in the panel.
+  // and flicker the roster's rows on each one. The store outlives this
+  // component — without this, leaving a thread, or closing a column, would
+  // leave that chat's agents standing in the rail and the robot menu.
   React.useEffect(() => () => clearAgentRuns(chat.id), [chat.id, clearAgentRuns])
 
   // Published to its own store so the dock — and only the dock — re-renders
@@ -897,6 +897,7 @@ export const ChatView = React.memo(function ChatView({
                       requests={permissions}
                       onReviewPlan={reviewPendingPlan}
                     />
+                    <DelegatePrompts parentId={chat.id} />
                     </>
                 }
                 // Returned, not voided: the composer needs the promise so a failed

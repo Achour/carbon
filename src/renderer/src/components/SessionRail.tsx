@@ -276,7 +276,8 @@ const SETTLED_ROWS = 6
 /**
  * Every agent working for this thread: the delegates its chats handed tasks to
  * (`agents_delegate`, each a chat on its own provider) and the sub-agents their
- * agents spawned, as one roster — Working, then Finished, each newest first
+ * agents spawned, as one sorted list — waiting on you, then working, then
+ * finished, each newest first
  * (`useAgentRoster`). It stands in for the header's robot menu while the rail
  * is up — `ThreadHeader` drops the menu then — so a fan-out is on screen
  * without a click. A row opens the agent in place of the chat

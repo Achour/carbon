@@ -1,6 +1,6 @@
 import * as React from 'react'
 import type { ChatMeta, Provider } from '@shared/types'
-import { agentColumnId, type AgentRunView } from '@shared/agentRuns'
+import { agentColumnId, firstLine, type AgentRunView } from '@shared/agentRuns'
 import { useApp } from '@/store'
 import { useAgents } from '@/agentsStore'
 import { isAgentJob } from '@/components/BackgroundJobs'
@@ -42,9 +42,15 @@ export function useSubagentRuns(chatIds: readonly string[]): SubagentRunRow[] {
  * `agents_delegate`. Killed ones included: this is a roster, and opening one
  * takes the kill back.
  */
-export function useThreadDelegates(threadId: string): ChatMeta[] {
+export function useThreadDelegates(threadId: string, parentId?: string): ChatMeta[] {
   const chats = useApp((s) => s.chats)
-  return React.useMemo(() => chats.filter((c) => c.sideOf === threadId && c.delegation), [chats, threadId])
+  return React.useMemo(
+    () =>
+      chats.filter(
+        (c) => c.sideOf === threadId && c.delegation && (!parentId || c.delegation.parentId === parentId)
+      ),
+    [chats, threadId, parentId]
+  )
 }
 
 /** One agent of the roster, delegate or sub-agent, with what sorting needs. */
@@ -53,9 +59,10 @@ export type RosterItem =
   | { kind: 'run'; key: string; row: SubagentRunRow; live: boolean; waiting: false; at: number }
 
 /**
- * The thread's agents as one list, split into the ones working and the ones
- * that have stopped, each newest first, and anything waiting on the user at
- * the very top. It used to be delegates oldest-first and then sub-agents in
+ * The thread's agents in roster order: anything waiting on the user at the
+ * very top, then the ones working, then the ones that have stopped, each
+ * newest first — returned as the two halves so the rail can fold old finished
+ * ones without touching the live. It used to be delegates oldest-first and then sub-agents in
  * transcript order, so a fan-out of ten read as two unordered runs with the
  * live ones scattered through them — the one question the list exists to
  * answer, "which of these is still going", had no place to look.
@@ -65,10 +72,12 @@ export type RosterItem =
  */
 export function useAgentRoster(
   threadId: string,
-  chatIds: readonly string[]
+  chatIds: readonly string[],
+  /** One chat's agents only — a column's own menu — rather than the thread's. */
+  parentId?: string
 ): { working: RosterItem[]; finished: RosterItem[] } {
   const runs = useSubagentRuns(chatIds)
-  const delegates = useThreadDelegates(threadId)
+  const delegates = useThreadDelegates(threadId, parentId)
   // Only the delegates' statuses, as one string, so a status change anywhere
   // else in the app is not a re-sort here.
   const waitingKey = useApp((s) =>
@@ -113,10 +122,18 @@ export function useAgentRoster(
   }, [delegates, runs, waitingKey])
 }
 
+/** The id `openAgentView` takes for a roster item. */
+export function rosterViewId(item: RosterItem): string {
+  return item.kind === 'delegate' ? item.chat.id : agentColumnId(item.row.chatId, item.row.run.id)
+}
+
 /**
- * The roster drawn: a "Working" group, then "Finished", each a list of rows.
- * The rail passes `limit` to fold the older finished ones behind "Show N
- * earlier"; the robot menu shows everything in a scroller.
+ * The roster drawn as one list, in one order: anything waiting on the user,
+ * then the agents working (newest started first), then the finished ones
+ * (newest finished first). The state is on each row — a spinner, a word, an
+ * outcome line — so no section headings split it. The rail passes `limit` to
+ * fold the older finished ones behind "Show N earlier"; the robot menu shows
+ * everything in a scroller.
  */
 export function AgentRoster({
   working,
@@ -131,54 +148,25 @@ export function AgentRoster({
   const shown = limit != null && !all ? finished.slice(0, limit) : finished
   const hidden = finished.length - shown.length
   return (
-    <div data-agent-roster className="flex flex-col gap-2">
-      {working.length > 0 && (
-        <RosterGroup title="Working" count={working.length}>
-          {working.map((i) => (
-            <RosterRow key={i.key} item={i} />
-          ))}
-        </RosterGroup>
-      )}
-      {finished.length > 0 && (
-        <RosterGroup title="Finished" count={finished.length}>
-          {shown.map((i) => (
-            <RosterRow key={i.key} item={i} />
-          ))}
-          {(hidden > 0 || (all && limit != null && finished.length > limit)) && (
-            <button
-              type="button"
-              onClick={(e) => {
-                // Inside the robot menu a click closes it; this one only folds.
-                e.stopPropagation()
-                setAll((a) => !a)
-              }}
-              className="rounded-md px-2 py-1 text-left text-[11px] text-muted-foreground transition-colors hover:text-foreground"
-            >
-              {all ? 'Show fewer' : `Show ${hidden} earlier`}
-            </button>
-          )}
-        </RosterGroup>
-      )}
-    </div>
-  )
-}
-
-function RosterGroup({
-  title,
-  count,
-  children
-}: {
-  title: string
-  count: number
-  children: React.ReactNode
-}): React.JSX.Element {
-  return (
-    <div>
-      <div className="flex items-center gap-1.5 px-2 pb-1 text-[11px] font-medium text-muted-foreground">
-        <span>{title}</span>
-        <span className="tabular-nums text-muted-foreground/60">{count}</span>
+    <div data-agent-roster className="flex flex-col gap-1">
+      <div className="surface-group flex flex-col gap-px p-0.5">
+        {[...working, ...shown].map((i) => (
+          <RosterRow key={i.key} item={i} />
+        ))}
       </div>
-      <div className="surface-group flex flex-col gap-px p-0.5">{children}</div>
+      {(hidden > 0 || (all && limit != null && finished.length > limit)) && (
+        <button
+          type="button"
+          onClick={(e) => {
+            // Inside the robot menu a click closes it; this one only folds.
+            e.stopPropagation()
+            setAll((a) => !a)
+          }}
+          className="rounded-md px-2 py-1 text-left text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+        >
+          {all ? 'Show fewer' : `Show ${hidden} earlier`}
+        </button>
+      )}
     </div>
   )
 }
@@ -253,9 +241,12 @@ export function SubagentRow({
         className="flex min-w-0 flex-1 items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-[13px]"
       >
         <AgentMark provider={provider} live={running} dot={failed ? 'bg-destructive' : 'bg-muted-foreground/60'} />
-        <span className={cn('min-w-0 flex-1 truncate', running ? 'text-foreground' : 'text-muted-foreground')}>
-          {run.description || run.type || 'Sub-agent'}
-        </span>
+        <RowText
+          label={run.description || run.type || 'Sub-agent'}
+          live={running}
+          outcome={run.result}
+          failed={failed}
+        />
         {failed && <span className="shrink-0 text-[11px] text-destructive">Failed</span>}
         {elapsed && (
           <span className="shrink-0 font-mono text-[11px] text-muted-foreground/70 tabular-nums">{elapsed}</span>
@@ -304,7 +295,11 @@ export function DelegateRow({ chat, waiting = false }: { chat: ChatMeta; waiting
   const live = d.status === 'running'
   const elapsed = useElapsed(d.startedAt ?? d.createdAt, d.finishedAt, live)
   const task = (d.followUp ?? d.task).replace(/\s+/g, ' ').trim()
-  const word = waiting ? (['Needs approval', 'text-warning'] as const) : DELEGATE_WORD[d.status]
+  // The same words the sidebar and the column header use for this state.
+  // What it reported, or why it failed — the reason to look, without a click.
+  const outcome =
+    d.status === 'completed' ? firstLine(d.result) : d.status === 'failed' ? firstLine(d.error) : undefined
+  const word = waiting ? (['Needs input', 'text-warning'] as const) : DELEGATE_WORD[d.status]
   return (
     <button
       type="button"
@@ -315,14 +310,43 @@ export function DelegateRow({ chat, waiting = false }: { chat: ChatMeta; waiting
       className="flex w-full min-w-0 items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-[13px] transition-colors hover:bg-accent"
     >
       <AgentMark provider={chat.provider} live={live && !waiting} dot={waiting ? 'bg-warning' : DELEGATE_DOT[d.status]} />
-      <span className={cn('min-w-0 flex-1 truncate font-medium', live ? 'text-foreground' : 'text-muted-foreground')}>
-        {d.name}
-      </span>
+      <RowText label={d.name} live={live} outcome={outcome} failed={d.status === 'failed'} strong />
       {word && <span className={cn('shrink-0 text-[11px]', word[1])}>{word[0]}</span>}
       {elapsed && (
         <span className="shrink-0 font-mono text-[11px] text-muted-foreground/70 tabular-nums">{elapsed}</span>
       )}
       {shown && <span className="size-1.5 shrink-0 rounded-full bg-foreground/60" title="On screen" />}
     </button>
+  )
+}
+
+/**
+ * A row's words: one line, its name. What a settled agent reported — or why it
+ * failed — is its tooltip: a second line under every finished row doubled the
+ * card's height for text the agent's card in the transcript already shows.
+ */
+function RowText({
+  label,
+  live,
+  outcome,
+  strong
+}: {
+  label: string
+  live: boolean
+  outcome?: string
+  failed?: boolean
+  strong?: boolean
+}): React.JSX.Element {
+  return (
+    <span
+      title={outcome ? `${label} — ${outcome}` : label}
+      className={cn(
+        'min-w-0 flex-1 truncate',
+        strong && 'font-medium',
+        live ? 'text-foreground' : 'text-muted-foreground'
+      )}
+    >
+      {label}
+    </span>
   )
 }

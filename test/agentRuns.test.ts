@@ -206,3 +206,13 @@ test('agent paths: a spawn is found by index path, nested ones through children'
   assert.equal(agentAtPath(parts, [0]), undefined)
   assert.equal(agentAtPath(parts, [9]), undefined)
 })
+
+test('firstLine is the first line of prose, unmarked and capped', async () => {
+  const { firstLine } = await import('../src/shared/agentRuns.ts')
+  assert.equal(firstLine('\n## Summary\n\n**Two bugs** in `pricing.ts`.'), 'Two bugs in pricing.ts.')
+  assert.equal(firstLine('1. Line 12 rounds early\n2. more'), 'Line 12 rounds early')
+  assert.equal(firstLine('# Only a heading'), 'Only a heading')
+  assert.equal(firstLine(''), undefined)
+  assert.equal(firstLine(undefined), undefined)
+  assert.equal(firstLine('x'.repeat(200), 10), 'xxxxxxxxx…')
+})

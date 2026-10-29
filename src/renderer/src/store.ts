@@ -66,7 +66,7 @@ import { previewShown } from '@shared/previewPane'
 import { projectRoots } from '@/lib/projects'
 // One direction only: the agents store knows nothing of this one, which is
 // what lets the panel's selection be set from every route into it.
-import { chatOfRun, useAgents } from '@/agentsStore'
+import { useAgents } from '@/agentsStore'
 import {
   CANVAS_ATTACH_MAX_CHARS,
   PROVIDER_SHORT_LABELS,
@@ -527,8 +527,11 @@ export function isUnusedSideChat(s: Pick<AppState, 'sideChats' | 'statuses'>, id
  * More than one conversation on screen: a thread with side columns, none of
  * them expanded. The one question floating and the docked reserve both ask.
  */
-export function severalChatsShown(s: Pick<AppState, 'sideColumns' | 'expandedChatId' | 'agentView'>): boolean {
-  return s.sideColumns.length > 0 && s.expandedChatId === null && s.agentView === null
+export function severalChatsShown(
+  s: Pick<AppState, 'sideColumns' | 'expandedChatId' | 'agentView' | 'agentViewIn'>
+): boolean {
+  // An agent page inside a column leaves the columns standing.
+  return s.sideColumns.length > 0 && s.expandedChatId === null && (s.agentView === null || s.agentViewIn !== null)
 }
 
 /**
@@ -536,7 +539,7 @@ export function severalChatsShown(s: Pick<AppState, 'sideColumns' | 'expandedCha
  * several chats on screen, and not maximized (where it *is* the content pane).
  */
 export function panelFloats(
-  s: Pick<AppState, 'panelFloating' | 'panelMaximized' | 'sideColumns' | 'expandedChatId' | 'agentView'>
+  s: Pick<AppState, 'panelFloating' | 'panelMaximized' | 'sideColumns' | 'expandedChatId' | 'agentView' | 'agentViewIn'>
 ): boolean {
   return s.panelFloating && !s.panelMaximized && severalChatsShown(s)
 }
@@ -743,8 +746,8 @@ interface AppState {
   sideColumnsByChat: Record<string, string[]>
   /**
    * The chat in the active thread that keys act on: which prompt ↵ and Esc
-   * answer when focus is nowhere in particular, what ⌘⇧↵ expands, which roster
-   * the Agents tab shows. Follows the pointer and the keyboard into a column;
+   * answer when focus is nowhere in particular, what ⌘⇧↵ expands, which chat
+   * the rail describes. Follows the pointer and the keyboard into a column;
    * reset to the thread's own chat on every switch.
    */
   focusedChatId: string | null
@@ -775,6 +778,13 @@ interface AppState {
    * replays nothing. Not persisted, and dropped on a thread switch.
    */
   agentView: string | null
+  /**
+   * The column the agent page is drawn in, or null when it takes the thread's
+   * whole width. With several chats on screen an agent opens *inside the
+   * column of the chat that started it*, so the other columns — the layout the
+   * user built — stay where they were; alone, it is the page.
+   */
+  agentViewIn: string | null
   /** The chat focus returns to when the agent view closes. */
   agentViewFrom: string | null
   openAgentView(id: string): Promise<void>
@@ -1456,13 +1466,6 @@ interface AppState {
   lightbox: LightboxTarget | null
   openLightbox(target: LightboxTarget): void
   closeLightbox(): void
-  /** Reveal the sub-agent roster in the right panel (see AgentsPanel). */
-  /**
-   * Show the Agents tab, reading `runId`'s stream when one is named. `chatId`
-   * names whose roster; left out, it is the chat that owns `runId`, else the
-   * focused one.
-   */
-  openAgentsPanel(runId?: string, chatId?: string): void
   openChat(id: string | null): Promise<void>
   /** Prepend the next window of older messages to `chatId`'s transcript. */
   loadOlderMessages(chatId: string): Promise<void>
@@ -1843,7 +1846,7 @@ function chatSwitchPatch(
     ...(s.activeId !== nextId && (s.sideColumns.length || s.agentView)
       ? { sideChats: omit(s.sideChats, s.agentView ? [...s.sideColumns, s.agentView] : s.sideColumns) }
       : {}),
-    ...(s.activeId !== nextId ? { agentView: null, agentViewFrom: null } : {}),
+    ...(s.activeId !== nextId ? { agentView: null, agentViewIn: null, agentViewFrom: null } : {}),
     sideColumns,
     sideColumnsByChat,
     // Focus describes the thread on screen: the next one's own chat is where
@@ -1872,6 +1875,7 @@ function leaveAgentView(
   const keepSlot = isAgentColumn(id) || s.sideColumns.includes(id)
   return {
     agentView: null,
+    agentViewIn: null,
     agentViewFrom: null,
     ...(keepSlot ? {} : { sideChats: omit(s.sideChats, [id]) })
   }
@@ -2405,6 +2409,7 @@ export const useApp = create<AppState>((set, get) => ({
   pendingCanvasDelete: null,
   sideChats: {},
   agentView: null,
+  agentViewIn: null,
   agentViewFrom: null,
   sideColumns: [],
   sideColumnsByChat: readStoredColumns(),
@@ -3373,18 +3378,6 @@ export const useApp = create<AppState>((set, get) => ({
   // The tab itself is derived from the active chat's runs (RightPanel), so this
   // only has to select it and make sure the panel is showing.
   //
-  // `runId` names the agent whose stream to open — the panel is master-detail,
-  // and every way in (a transcript card, a roster row, a background job) is one
-  // call. Omitted, it clears the selection, so the generic routes land on the
-  // roster rather than on whatever was last read.
-  openAgentsPanel(runId, chatId) {
-    const agents = useAgents.getState()
-    const s = get()
-    const owner = chatId ?? (runId ? chatOfRun(agents, runId) : null) ?? focusedChatOf(s)
-    agents.selectAgent(runId ?? null, owner)
-    set((s) => ({ activeTab: 'agents', ...panelPatch(s, true) }))
-  },
-
   // ---- Threads ----
 
   pendingSideChatDelete: null,
@@ -3396,9 +3389,12 @@ export const useApp = create<AppState>((set, get) => ({
   focusChat(id, opts) {
     set((s) => {
       const unread = id in s.unreadChats
-      // Focusing anything but the agent on screen — a pill, ⌘1–⌘4, a
-      // notification — is going back to the columns.
-      const leave = s.agentView !== null && s.agentView !== id
+      // Focusing anything but the agent on screen — ⌘1–⌘4, a notification — is
+      // going back to the columns. An agent open inside a column stays while
+      // the other columns are worked in, and goes when its own column's chat
+      // is asked for.
+      const leave =
+        s.agentView !== null && s.agentView !== id && (s.agentViewIn === null || s.agentViewIn === id)
       const moveExpansion = s.expandedChatId !== null && s.expandedChatId !== id && s.agentView !== id
       if (s.focusedChatId === id && !unread && !moveExpansion && !leave) return s
       return {
@@ -3582,6 +3578,8 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   async closeSideChat(id) {
+    // An agent page inside this column goes with it.
+    if (get().agentViewIn === id) get().closeAgentView()
     // An agent column is not a chat: closing it folds it back into its row,
     // with nothing to keep or discard.
     if (isAgentColumn(id)) {
@@ -3625,9 +3623,16 @@ export const useApp = create<AppState>((set, get) => ({
       if (meta.delegation.dismissedAt) void window.api.undismissChat(id)
     }
     const needsSlot = !agent && !s.sideChats[id]
+    // Several chats on screen: open inside the column of the chat that started
+    // it, if that chat is one of them; otherwise as the thread's page.
+    const parent = agent ? agent.parentId : chatMeta(s, id)?.delegation?.parentId
+    const columns = s.sideColumns.length > 0 && s.expandedChatId === null
+    const host =
+      columns && parent && (parent === s.activeId || s.sideColumns.includes(parent)) ? parent : null
     set((st) => ({
       ...leaveAgentView(st),
       agentView: id,
+      agentViewIn: host,
       // Back to where the user was, unless that was another agent.
       agentViewFrom: st.agentView ? st.agentViewFrom : st.focusedChatId,
       // The slot first, empty, so the view lands at once and events streaming
@@ -3696,7 +3701,7 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   async deleteSideChat(id) {
-    if (get().agentView === id) get().closeAgentView()
+    if (get().agentView === id || get().agentViewIn === id) get().closeAgentView()
     set((st) => ({
       ...closeSideColumn(st, id),
       // Drop the slot, the meta and every per-chat map keyed by it. This one is
@@ -5753,7 +5758,7 @@ export const useApp = create<AppState>((set, get) => ({
         // slot still hydrating — or a hidden window whose transcript events
         // are parked — looks exactly like one. A kill promises nothing is
         // deleted, so this is the close half alone.
-        if (get().agentView === ev.chatId) get().closeAgentView()
+        if (get().agentView === ev.chatId || get().agentViewIn === ev.chatId) get().closeAgentView()
         if (get().sideColumns.includes(ev.chatId)) {
           set((st) => ({
             ...closeSideColumn(st, ev.chatId),

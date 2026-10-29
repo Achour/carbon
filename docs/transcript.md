@@ -480,14 +480,18 @@ took is the same mistake as the silent checklist. It says which tools came back
 (see `tool_reference` under Session flow in `CLAUDE.md`) and groups with the other lookups —
 including, now, the checklist calls themselves.
 
-### The agent roster (`shared/agentRuns.ts`, `AgentsPanel`, the rail's Agents card)
+### The agent roster (`shared/agentRuns.ts`, `SubagentRow.tsx`, the rail's Agents card)
 
 A fan-out is **state, not an event**, and the transcript can only show events.
 Five spawn cards land where they were made and scroll away under the output of
 whichever agent answered first — so "what is running right now, on what, at what
-cost" had no home. The roster is a right-panel tab that answers exactly that,
-and it is fed by the parts the transcript already holds rather than by a second
-channel: `ToolPart.agent` (`AgentRun`) carries the vitals, `children` carries
+cost" had no home. The roster answers exactly that — one list
+(`useAgentRoster`) drawn by the rail's Agents card and the robot menus as one sorted list —
+waiting on the user first, then working, then finished, each newest first,
+with no section headings (a first cut split it into Working and Finished
+groups, which read as two lists), one line per agent, a settled row's tooltip
+the first line of what it reported (`AgentRunView.result`, `firstLine`) — and it is fed by the
+parts the transcript already holds rather than by a second channel: `ToolPart.agent` (`AgentRun`) carries the vitals, `children` carries
 the work, and `foldAgentRuns` reads both. One consequence worth keeping: the
 panel describes runs from a chat the app has since restarted through, because
 the parts are persisted.
@@ -562,10 +566,10 @@ cached input.
   vitals churn harder than anything else in a turn, and the transcript wants
   none of it — the `taskListStore` arrangement, for the `taskListStore` reason.
   `reconcileAgentRuns` carries an unmoved list forward by identity so the
-  panel's subscribers see nothing when nothing moved. Elapsed time ticks in the
+  roster's subscribers see nothing when nothing moved. Elapsed time ticks in the
   components (1s, only while something runs); a clock in the store would be a
   state write per second for a value two components read.
-- **The panel is master and detail, because an agent's work does not fit in a
+- **An agent's work is read on its own page, because it does not fit in a
   chat column.** It used to: `AgentCard` unfolded the agent's whole stream
   inside the transcript, one level of nesting below the conversation it was
   serving. That is fine for a six-step lookup and wrong for what a sub-agent
@@ -576,13 +580,13 @@ cached input.
   height was the agent's own prose.
 
   So the card became a **row** — description, vitals, status, a chevron — and
-  `selectedId` in `agentsStore` picks the run the panel is reading.
-  `findAgentPart` resolves it to the `ToolPart` (recursing into `children`, so a
-  nested spawn is reachable), and a selection the loaded window no longer holds
-  simply falls through to the roster: nothing keeps the two in step, which is
-  what makes a chat switch, an eviction and `loadOlder` all one case. Every way
-  in is `openAgentsPanel(runId?)` — a transcript row or a roster row. Omitting
-  the id lands on the roster. The header's
+  the work moved out: first to a master-detail tab in the right panel, which is
+  gone now, then to the agent's page (`openAgentView`, "Agents open as pages"
+  in `docs/threads.md`). `findAgentPart` resolves the page's run to its
+  `ToolPart` (recursing into `children`, so a nested spawn is reachable), and a
+  run the loaded window no longer holds draws a line saying so. The panel tab
+  went because, with the page and the roster both in place, it was a third list
+  of the same agents with nothing of its own to show. The header's
   background-jobs pill counts only shells, monitors and workflows: agents are
   the robot menu's, which also carries a backgrounded agent's Stop (matched on
   `BackgroundJob.callId`, main's `taskCalls` mapping travelling one layer
@@ -641,8 +645,7 @@ cached input.
   `start_subagent` arrives with an empty input and returns "Sub-agent spawn",
   so its page has no prompt to show — an honest blank, not a mapper gap.
   The page is never fetched, deleted or kept as a closed chat, and does not
-  survive a relaunch — the parts do, and the row reopens it. The Agents panel
-  stays as the roster.
+  survive a relaunch — the parts do, and the row reopens it.
 - **Agents are drawn out of activity runs, as one card per batch.** `Task` and
   `Agent` stay groupable — Claude sends one call per message, so a batch of
   three spawns is three messages, and the run is what batches them — but
@@ -925,8 +928,7 @@ returns at spawn and its real end arrives minutes later as a `task_notification`
 `terminalizeRunning` while `backgroundJobCount > 0` — so `TurnFold.running`
 keeps such a turn open, ticking `Working for`, with no chevron, the rhythm
 `useRunDisclosure` already gives a running group. Folding it would take a card
-that is still moving off screen, and with it the node `AgentsPanel`'s row click
-scrolls to. `turnPresentations` is fed the same reading (`settled` in
+that is still moving off screen. `turnPresentations` is fed the same reading (`settled` in
 `renderMessages`): the changes card and the mutation rows it stands in for must
 not appear at a pause the turn is going to resume from.
 

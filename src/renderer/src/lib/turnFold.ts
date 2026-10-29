@@ -38,8 +38,7 @@ export interface TurnFold {
    * live past the result (`claude.ts` skips `terminalizeRunning` while
    * `backgroundJobCount > 0`), and a backgrounded *agent*'s spawning call
    * returns at spawn while its children keep arriving. Such a turn does not
-   * fold — folding it would take a running card off screen, and with it the
-   * only thing `AgentsPanel`'s row click has to scroll to.
+   * fold — folding it would take a running card off screen.
    */
   running: boolean
   /**

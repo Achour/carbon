@@ -405,7 +405,7 @@ it guards**, and put new reasoning in that file rather than back in this one.
 - **`docs/transcript.md`** — what a turn draws: the activity rows
   (`ToolCard`, `ToolGroup`, `lib/toolSummary.ts`), the task checklist
   (`lib/taskList.ts`, `TaskDock`, `TasksCard`), the agent roster
-  (`shared/agentRuns.ts`, `AgentsPanel`), what the agent
+  (`shared/agentRuns.ts`, the roster in `SubagentRow.tsx`), what the agent
   asks you (`PromptDock`, `CodexReviewDialog`), the turn's changed files
   (`TurnChangesCard`, `lib/turnChanges.ts`), side questions (`/btw`,
   `shared/btw.ts`, `EventRow`), quoting a passage back at it

@@ -32,7 +32,7 @@ import {
   untrackedBackground
 } from '@shared/agentRuns'
 import { useAgents } from '@/agentsStore'
-import { AgentStreamBody } from '@/components/AgentsPanel'
+import { AgentStreamBody } from '@/components/AgentStream'
 import { TranscriptChat, useAgentPart, useElapsed } from '@/components/messages/AgentRows'
 import { cn } from '@/lib/utils'
 import { chatActivityKind } from '@/lib/chatActivity'
@@ -57,7 +57,7 @@ import {
 } from '@/store'
 import { ChatView } from '@/components/ChatView'
 import { BackgroundJobs } from '@/components/BackgroundJobs'
-import { AgentRoster, useAgentRoster } from '@/components/SubagentRow'
+import { AgentRoster, rosterViewId, useAgentRoster } from '@/components/SubagentRow'
 import { ContextStrip } from '@/components/ContextStrip'
 import { ProviderMark } from '@/components/ui/provider-mark'
 import { Button } from '@/components/ui/button'
@@ -109,7 +109,8 @@ export function ThreadView({ chat }: { chat: ChatMeta }): React.JSX.Element {
   useThreadKeys(ids)
   const join = useThreadJoinDrop()
   const railShown = useApp((s) => s.quickRail && !s.railHidden)
-  const agentView = useApp((s) => s.agentView)
+  // The thread-level agent page; one drawn inside a column is that column's.
+  const agentPage = useApp((s) => (s.agentViewIn ? null : s.agentView))
 
   return (
     // The frosted main column: one wash under every column, so a thread reads
@@ -120,10 +121,10 @@ export function ThreadView({ chat }: { chat: ChatMeta }): React.JSX.Element {
         {/* An agent opened is drawn in place of the columns, which stay
             mounted underneath — hidden, like an expansion's — so coming back
             replays no stream and keeps every scroll position. */}
-        <div className={cn('flex min-h-0 min-w-0 flex-1', agentView && 'hidden')}>
+        <div className={cn('flex min-h-0 min-w-0 flex-1', agentPage && 'hidden')}>
           {ids.length === 1 ? <ChatView chat={chat} /> : <ThreadColumns ids={ids} threadId={chat.id} />}
         </div>
-        {agentView && <AgentView key={agentView} id={agentView} />}
+        {agentPage && <AgentView key={agentPage} id={agentPage} />}
         {/* The chat's own state beside it while it runs. Off by default; the
             top bar's toggle pins it. Follows the focused column in a thread. */}
         {railShown && <SessionRail chat={chat} ids={ids} />}
@@ -299,6 +300,7 @@ function ThreadHeader({ chat, ids }: { chat: ChatMeta; ids: readonly string[] })
   const setRailHidden = useApp((s) => s.setRailHidden)
   const railShown = quickRail && !railHidden
   const agentView = useApp((s) => s.agentView)
+  const agentPage = useApp((s) => (s.agentViewIn ? null : s.agentView))
   const chatIds = React.useMemo(() => ids.filter((id) => !isAgentColumn(id)), [ids])
   const severalChats = useApp(severalChatsShown)
   // With the panel open, or several chats sharing the width, the rail has no
@@ -311,6 +313,7 @@ function ThreadHeader({ chat, ids }: { chat: ChatMeta; ids: readonly string[] })
   }, [panelOpen, severalChats, setRailHidden])
   // A panel docked beside the columns: too little width left for a grid.
   const panelDocked = useApp((s) => s.panelOpen && !panelFloats(s))
+  const floatInset = useFloatingPanelInset()
   const terminalBusy = useApp((s) => s.terminalBusy)
   const focused = useApp((s) => s.focusedChatId) ?? chat.id
   const threadLayout = useApp((s) => s.threadLayout)
@@ -332,6 +335,9 @@ function ThreadHeader({ chat, ids }: { chat: ChatMeta; ids: readonly string[] })
         'drag flex h-[38px] shrink-0 items-center gap-2 pl-4 pr-2.5',
         !sidebarOpen && 'pl-[84px]'
       )}
+      // A floating panel lies over the thread's right edge, title bar and all;
+      // the bar keeps its controls clear of it rather than under it.
+      style={floatInset ? { paddingRight: floatInset + 10 } : undefined}
     >
       {!sidebarOpen && (
         <WithTooltip label="Show sidebar  ⌘B">
@@ -340,8 +346,8 @@ function ThreadHeader({ chat, ids }: { chat: ChatMeta; ids: readonly string[] })
           </Button>
         </WithTooltip>
       )}
-      {agentView ? (
-        <AgentCrumb thread={chat} id={agentView} fill />
+      {agentPage ? (
+        <AgentCrumb thread={chat} id={agentPage} fill />
       ) : (
         <div
           className="min-w-0 flex-1 truncate text-[13px] font-semibold"
@@ -351,8 +357,10 @@ function ThreadHeader({ chat, ids }: { chat: ChatMeta; ids: readonly string[] })
       )}
       {/* Where the thread runs and what it has changed, once for every column.
           With one conversation showing it sits above that composer instead,
-          and while the rail is up it is the rail's, not drawn twice. */}
-      {severalChats && !railShown && (
+          while the rail is up it is the rail's, and with the panel open —
+          docked or floating — it gives its width to the controls; the rail
+          still carries it. */}
+      {severalChats && !railShown && !panelDocked && !floatInset && (
         <ContextStrip
           cwd={chat.cwd}
           project={projectRoot(chat)}
@@ -362,10 +370,14 @@ function ThreadHeader({ chat, ids }: { chat: ChatMeta; ids: readonly string[] })
           className="no-drag mb-0 shrink-0"
         />
       )}
-      {/* With the session rail up, its Agents and Background cards carry these
-          two; the header keeps them only while the rail is away. */}
-      {!railShown && <BackgroundJobs chatId={parseAgentColumn(focused)?.parentId ?? focused} />}
-      {ids.length >= 3 && !agentView && !panelDocked && (
+      {/* A chat's agents and jobs are the chat's: with several on screen each
+          column's header carries its own, and this bar keeps only what acts on
+          the thread. With one, they are here — unless the rail is up, whose
+          Agents and Background cards carry them. */}
+      {!railShown && !severalChats && (
+        <BackgroundJobs chatId={parseAgentColumn(focused)?.parentId ?? focused} />
+      )}
+      {ids.length >= 3 && !agentPage && !panelDocked && (
         <div
           role="group"
           aria-label="Layout"
@@ -387,7 +399,7 @@ function ThreadHeader({ chat, ids }: { chat: ChatMeta; ids: readonly string[] })
           </LayoutButton>
         </div>
       )}
-      {!railShown && <SubagentsMenu chatIds={chatIds} threadId={chat.id} />}
+      {!railShown && !severalChats && <SubagentsMenu chatIds={chatIds} threadId={chat.id} />}
       <AddChatControl count={ids.length} threadId={chat.id} />
       <ThreadMenu chat={chat} />
       <WithTooltip label={railShown ? 'Hide session details' : 'Show session details'}>
@@ -432,6 +444,28 @@ function ThreadHeader({ chat, ids }: { chat: ChatMeta; ids: readonly string[] })
       )}
     </header>
   )
+}
+
+/**
+ * The width a floating panel covers at the thread's right edge, while it is
+ * open — 0 otherwise. Read off the panel itself, since its width is the user's
+ * drag; only the crossing to a new width is stored.
+ */
+function useFloatingPanelInset(): number {
+  const covering = useApp((s) => s.panelOpen && panelFloats(s))
+  const [width, setWidth] = React.useState(0)
+  React.useEffect(() => {
+    if (!covering) {
+      setWidth(0)
+      return
+    }
+    const panel = document.querySelector<HTMLElement>('[data-right-panel]')
+    if (!panel) return
+    const observer = new ResizeObserver(([entry]) => setWidth(Math.round(entry.contentRect.width)))
+    observer.observe(panel)
+    return () => observer.disconnect()
+  }, [covering])
+  return covering ? width : 0
 }
 
 function LayoutButton({
@@ -559,12 +593,15 @@ function DropEdge({ side, inset }: { side: 'before' | 'after' | null; inset: str
  */
 function SubagentsMenu({
   chatIds,
-  threadId
+  threadId,
+  parentId
 }: {
   chatIds: readonly string[]
   threadId: string
+  /** One column's chat: its agents only. */
+  parentId?: string
 }): React.JSX.Element | null {
-  const { working, finished } = useAgentRoster(threadId, chatIds)
+  const { working, finished } = useAgentRoster(threadId, chatIds, parentId)
   const [open, setOpen] = React.useState(false)
   const total = working.length + finished.length
   if (!total) return null
@@ -644,11 +681,29 @@ function DelegatePane({ id }: { id: string }): React.JSX.Element | null {
 }
 
 /**
- * The thread's title and the agent on screen, as a breadcrumb in place of the
- * title: "Chat › codex-a". The chat's name is the way back, as Escape is.
+ * The chat's title and the agent on screen, as a breadcrumb in place of the
+ * title: "Chat › codex-a". The chat's name is the way back, as Escape is. In
+ * the thread's header for a page that takes the whole width; `compact`, in a
+ * column's header for one opened inside that column.
+ *
+ * ⌥↑ / ⌥↓ walk the same roster the robot menu lists — the thread's, or the
+ * column chat's when the page is in a column — in its order, so reviewing six
+ * agents is six presses rather than six trips through the menu. No buttons for
+ * it: arrows and a "2/6" in the title bar were furniture for a shortcut.
  */
-function AgentCrumb({ thread, id, fill }: { thread: ChatMeta; id: string; fill: boolean }): React.JSX.Element {
+function AgentCrumb({
+  thread,
+  id,
+  fill,
+  compact = false
+}: {
+  thread: ChatMeta
+  id: string
+  fill: boolean
+  compact?: boolean
+}): React.JSX.Element {
   const closeAgentView = useApp((s) => s.closeAgentView)
+  const openAgentView = useApp((s) => s.openAgentView)
   const ref = parseAgentColumn(id)
   const delegate = useApp((s) => (ref ? undefined : chatMeta(s, id)))
   const parentProvider = useApp((s) => (ref ? chatMeta(s, ref.parentId)?.provider : undefined))
@@ -657,23 +712,62 @@ function AgentCrumb({ thread, id, fill }: { thread: ChatMeta; id: string; fill: 
   // The agent's name, never its task: a delegate's task is a whole prompt. A
   // sub-agent has no name, so its short label (`description`) stands in.
   const name = delegate?.delegation?.name ?? (run?.description?.trim() || run?.type || 'Agent')
+  const { prev, next } = useAgentNeighbours(id)
+  const go = React.useCallback((to: string | null) => (to ? void openAgentView(to) : undefined), [openAgentView])
+  // ⌥↑ / ⌥↓ while the page is up, outside anything that edits text.
+  React.useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (!e.altKey || e.metaKey || e.ctrlKey || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return
+      const t = e.target instanceof HTMLElement ? e.target : null
+      if (t?.closest('input, textarea, [contenteditable="true"], .cm-editor')) return
+      e.preventDefault()
+      go(e.key === 'ArrowUp' ? prev : next)
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [prev, next, go])
+  const text = compact ? 'text-xs' : 'text-[13px]'
   return (
-    <div data-agent-crumb className={cn('flex min-w-0 items-center gap-1.5 text-[13px]', fill ? 'flex-1' : 'shrink')}>
+    <div data-agent-crumb className={cn('flex min-w-0 items-center gap-1.5', text, fill ? 'flex-1' : 'shrink')}>
       <WithTooltip label="Back to the chat  esc" side="bottom">
         <button
           type="button"
           onClick={closeAgentView}
-          className="no-drag min-w-0 max-w-[40%] shrink truncate rounded-md px-1 -mx-1 font-semibold text-muted-foreground transition-colors hover:text-foreground"
+          className={cn(
+            'no-drag min-w-0 max-w-[40%] shrink truncate rounded-md px-1 -mx-1 text-muted-foreground transition-colors hover:text-foreground',
+            !compact && 'font-semibold'
+          )}
         >
-          {thread.title || 'New chat'}
+          {thread.title?.trim() || 'New chat'}
         </button>
       </WithTooltip>
       <ChevronRight className="size-3.5 shrink-0 text-muted-foreground/60" />
       <ProviderMark provider={provider} className="size-3.5 shrink-0 text-muted-foreground" />
-      <span className="min-w-0 truncate font-semibold">{name}</span>
+      <span className={cn('min-w-0 truncate', compact ? 'font-medium' : 'font-semibold')}>{name}</span>
       {delegate && <ChatMark id={id} labelled />}
     </div>
   )
+}
+
+/**
+ * The agents either side of `id` in the roster its page belongs to: the
+ * column chat's when the page is open inside a column, the thread's otherwise.
+ */
+function useAgentNeighbours(id: string): { prev: string | null; next: string | null } {
+  const threadId = useApp((s) => s.activeId) ?? ''
+  const host = useApp((s) => s.agentViewIn)
+  const sideColumns = useApp((s) => s.sideColumns)
+  const chatIds = React.useMemo(
+    () => (host ? [host] : [threadId, ...sideColumns].filter((c) => c && !isAgentColumn(c))),
+    [host, threadId, sideColumns]
+  )
+  const { working, finished } = useAgentRoster(threadId, chatIds, host ?? undefined)
+  const order = React.useMemo(() => [...working, ...finished].map(rosterViewId), [working, finished])
+  const index = order.indexOf(id)
+  return {
+    prev: index > 0 ? order[index - 1] : null,
+    next: index >= 0 && index < order.length - 1 ? order[index + 1] : null
+  }
 }
 
 /**
@@ -1233,6 +1327,8 @@ function ChatColumn({
   // The whole column is the drop target, not just its header: a 32px strip is
   // too small to aim a drag at across a grid.
   const drop = useChatDrop(threadId, id)
+  // An agent this chat started, open inside this column (`agentViewIn`).
+  const hosted = useApp((s) => (s.agentViewIn === id ? s.agentView : null))
   if (!chat) return null
   // The thread's own chat can be dragged anywhere, but it is still the thread:
   // not closable, and its transcript lives in the store's singular slice.
@@ -1240,7 +1336,9 @@ function ChatColumn({
   // Pointer or keyboard entering the column — its header or its transcript —
   // makes it the thread's focused chat. Imperative, so a focus change re-renders
   // no transcript, and without the caret: clicking to read is not asking to type.
-  const claimFocus = (): void => useApp.getState().focusChat(id)
+  // With an agent open here it is the agent that is being read: focusing the
+  // column's chat instead would be asking to go back to it, and close the page.
+  const claimFocus = (): void => useApp.getState().focusChat(hosted ?? id)
   return (
     <section
       data-thread-column={id}
@@ -1250,12 +1348,24 @@ function ChatColumn({
       {...drop.handlers}
       className={cn('group/col relative flex min-h-0 min-w-0 flex-col', className)}
     >
-      <ColumnHeader chat={chat} index={index} side={side} focused={focused} expanded={expanded} />
+      <ColumnHeader
+        chat={chat}
+        index={index}
+        side={side}
+        focused={focused || hosted !== null}
+        expanded={expanded}
+        hosted={hosted}
+      />
       <div className="relative flex min-h-0 flex-1">
         {/* The transcript scrolls up under the header; a short fade there
             instead of a hard cut through a line of text. */}
         <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-3 bg-gradient-to-b from-background to-transparent" />
-        <ChatView chat={chat} side={side} />
+        {/* The chat stays mounted under an agent opened here, hidden, the way
+            the thread-level page leaves the columns. */}
+        <div className={cn('flex min-h-0 min-w-0 flex-1', hosted && 'hidden')}>
+          <ChatView chat={chat} side={side} />
+        </div>
+        {hosted && <AgentView key={hosted} id={hosted} />}
       </div>
       <DropEdge side={drop.over} inset="inset-y-0" />
     </section>
@@ -1267,7 +1377,8 @@ function ColumnHeader({
   index,
   side,
   focused,
-  expanded
+  expanded,
+  hosted
 }: {
   chat: ChatMeta
   index: number
@@ -1275,8 +1386,13 @@ function ColumnHeader({
   side: boolean
   focused: boolean
   expanded: boolean
+  /** The agent page open in this column, whose breadcrumb the header becomes. */
+  hosted: string | null
 }): React.JSX.Element {
   const toggleExpandedChat = useApp((s) => s.toggleExpandedChat)
+  // With several chats on screen, each column carries its own chat's agents and
+  // jobs; the thread's bar keeps only what acts on the thread.
+  const several = useApp(severalChatsShown)
   const leaveThread = useApp((s) => s.leaveThread)
   const closeSideChat = useApp((s) => s.closeSideChat)
   // No confirmation: closing deletes nothing — the chat keeps running if it
@@ -1284,7 +1400,11 @@ function ColumnHeader({
   // back in one click. A question in front of an
   // undoable act was a toll on every close.
   const close = (): void => void closeSideChat(chat.id)
-  const title = chat.title?.trim() || 'New chat'
+  // Until its first answer names it, a column is told apart by what runs in
+  // it: four columns all reading "New chat" were four of the same.
+  const title =
+    chat.title?.trim() ||
+    (chat.model ? modelDisplayName(chat.model, chat.provider) : PROVIDER_LABELS[chat.provider])
   return (
     <>
       <ContextMenu>
@@ -1300,24 +1420,39 @@ function ColumnHeader({
             />
         }
       >
-          <ProviderMark provider={chat.provider} className="size-3.5 shrink-0 text-muted-foreground" />
-          <span
-            title={title}
-            className={cn(
-              'min-w-0 truncate text-xs font-medium',
-              focused ? 'text-foreground' : 'text-muted-foreground'
-            )}
-          >
-            {title}
-          </span>
-          {chat.delegation && <DelegationBadge chat={chat} />}
-          <ChatMark id={chat.id} labelled />
+          {hosted ? (
+            <AgentCrumb thread={chat} id={hosted} fill compact />
+          ) : (
+            <>
+              <ProviderMark provider={chat.provider} className="size-3.5 shrink-0 text-muted-foreground" />
+              <span
+                title={title}
+                className={cn(
+                  'min-w-0 truncate text-xs font-medium',
+                  focused ? 'text-foreground' : 'text-muted-foreground'
+                )}
+              >
+                {title}
+              </span>
+              {chat.delegation && <DelegationBadge chat={chat} />}
+              <ChatMark id={chat.id} labelled />
+            </>
+          )}
+          {/* What this chat has running: always shown — it is status, not a
+              control to hide — and only while columns share the screen. */}
+          {several && !hosted && (
+            <span className="no-drag ml-auto flex shrink-0 items-center gap-1">
+              <BackgroundJobs chatId={chat.id} />
+              <SubagentsMenu chatIds={[chat.id]} threadId={chat.sideOf ?? chat.id} parentId={chat.id} />
+            </span>
+          )}
           {/* The column's own controls show where the pointer is — or the
               keyboard, or the one column focused — rather than four sets of
               icons standing over four transcripts. */}
           <div
             className={cn(
-              'ml-auto flex shrink-0 items-center transition-opacity',
+              'flex shrink-0 items-center transition-opacity',
+              !(several && !hosted) && 'ml-auto',
               focused ? 'opacity-100' : 'opacity-0 group-hover/col:opacity-100 focus-within:opacity-100'
             )}
           >

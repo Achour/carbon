@@ -67,6 +67,12 @@ nobody finds), and a settled turn's fold keeps it the way it keeps a
 screenshot — an agent the turn started is a result, and the row is the way back
 into it.
 
+**What it needs from the user, and what it found, come to the parent.** A
+delegate waiting on an approval docks the prompt on the parent's composer
+under its name (`DelegatePrompts` in `PromptDock.tsx`), answered there without
+opening it; and once it settles, its card's status line carries the first line
+of its report, or of why it failed (its roster row, as a tooltip).
+
 ### Names, and talking to one agent among several
 
 Several delegates can run at once — two Codex reviewers on two files is the

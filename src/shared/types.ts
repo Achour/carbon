@@ -728,7 +728,7 @@ export interface ToolPart {
  *
  * It rides the Task/Agent `ToolPart` rather than a live-only side channel for
  * two reasons: the part is already the persisted record of the spawn, so the
- * Agents panel can describe a run the app has since restarted through; and the
+ * roster can describe a run the app has since restarted through; and the
  * three providers report these numbers at completely different moments (Claude
  * on every sub-agent assistant message, Codex from the child's own rollout
  * file, Grok not at all), so a shape they all patch into is the only thing that
@@ -1158,7 +1158,7 @@ export interface BackgroundJob {
    * an agent listed in the header pill had no way back to the run it *is*.
    * Main already keeps the mapping (`taskCalls`) to route notifications, and
    * this is the same answer travelling one layer further: it is what lets the
-   * pill open that agent's stream in the Agents panel.
+   * robot menu offer a backgrounded agent's Stop on its own row.
    */
   callId?: string
   /** Defaults to true. False when the provider exposes status but no per-job stop API. */
