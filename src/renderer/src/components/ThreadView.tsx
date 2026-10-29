@@ -25,9 +25,7 @@ import {
 import type { ChatMeta } from '@shared/types'
 import { PROVIDER_LABELS, modelDisplayName, projectRoot } from '@shared/types'
 import {
-  agentColumnId,
   agentRunOf,
-  formatAgentDuration,
   isAgentColumn,
   parseAgentColumn,
   untrackedBackground
@@ -48,7 +46,6 @@ import {
 import {
   chatMeta,
   isClosedSideChat,
-  threadFull,
   MAX_THREAD_CHATS,
   panelFloats,
   severalChatsShown,
@@ -57,7 +54,8 @@ import {
   useApp
 } from '@/store'
 import { ChatView } from '@/components/ChatView'
-import { BackgroundJobs, isAgentJob } from '@/components/BackgroundJobs'
+import { BackgroundJobs } from '@/components/BackgroundJobs'
+import { SubagentRow, useSubagentRuns } from '@/components/SubagentRow'
 import { ContextStrip } from '@/components/ContextStrip'
 import { ProviderMark } from '@/components/ui/provider-mark'
 import { Button } from '@/components/ui/button'
@@ -125,7 +123,7 @@ export function ThreadView({ chat }: { chat: ChatMeta }): React.JSX.Element {
         )}
         {/* The chat's own state beside it while it runs. Off by default; the
             top bar's toggle pins it. Follows the focused column in a thread. */}
-        {railShown && <SessionRail chat={chat} />}
+        {railShown && <SessionRail chat={chat} ids={ids} />}
       </div>
       {join.state && <JoinOverlay state={join.state} />}
     </div>
@@ -292,6 +290,7 @@ function ThreadHeader({ chat, ids }: { chat: ChatMeta; ids: readonly string[] })
   const railHidden = useApp((s) => s.railHidden)
   const setRailHidden = useApp((s) => s.setRailHidden)
   const railShown = quickRail && !railHidden
+  const chatIds = React.useMemo(() => ids.filter((id) => !isAgentColumn(id)), [ids])
   // A rail put away while it floated over the panel is back beside the chat
   // once the panel closes: the dismissal was of the overlay, not the pin.
   React.useEffect(() => {
@@ -384,7 +383,9 @@ function ThreadHeader({ chat, ids }: { chat: ChatMeta; ids: readonly string[] })
           className="no-drag mb-0 shrink-0"
         />
       )}
-      <BackgroundJobs chatId={parseAgentColumn(focused)?.parentId ?? focused} />
+      {/* With the session rail up, its Agents and Background cards carry these
+          two; the header keeps them only while the rail is away. */}
+      {!railShown && <BackgroundJobs chatId={parseAgentColumn(focused)?.parentId ?? focused} />}
       {ids.length >= 3 && (
         <div
           role="group"
@@ -407,7 +408,7 @@ function ThreadHeader({ chat, ids }: { chat: ChatMeta; ids: readonly string[] })
           </LayoutButton>
         </div>
       )}
-      <SubagentsMenu chatIds={ids.filter((id) => !isAgentColumn(id))} openIds={ids} />
+      {!railShown && <SubagentsMenu chatIds={chatIds} openIds={ids} />}
       <AddChatControl count={ids.length} threadId={chat.id} />
       <ThreadMenu chat={chat} />
       <WithTooltip label={railShown ? 'Hide session details' : 'Show session details'}>
@@ -635,26 +636,9 @@ function SubagentsMenu({
   chatIds: readonly string[]
   openIds: readonly string[]
 }): React.JSX.Element | null {
-  const byChat = useAgents((s) => s.byChat)
-  const chats = useApp((s) => s.chats)
-  const toggleAgentColumn = useApp((s) => s.toggleAgentColumn)
-  const backgroundJobs = useApp((s) => s.backgroundJobs)
-  const stopBackgroundJob = useApp((s) => s.stopBackgroundJob)
-  const full = useApp(threadFull)
+  const rows = useSubagentRuns(chatIds)
   const [open, setOpen] = React.useState(false)
-  const rows = React.useMemo(
-    () =>
-      chatIds.flatMap((chatId) =>
-        (byChat[chatId]?.runs ?? []).map((run) => ({
-          chatId,
-          run,
-          provider: chats.find((c) => c.id === chatId)?.provider ?? 'claude'
-        }))
-      ),
-    [chatIds, byChat, chats]
-  )
   const working = rows.filter((r) => r.run.status === 'running').length
-  const now = useNow(working > 0 && open)
   if (!rows.length) return null
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -682,80 +666,13 @@ function SubagentsMenu({
           Sub-agents{working ? ` · ${working} working` : ''}
         </div>
         <div className="max-h-80 overflow-y-auto">
-          {rows.map(({ chatId, run, provider }) => {
-            const columnOpen = openIds.includes(agentColumnId(chatId, run.id))
-            const end = run.status === 'running' ? now : run.endedAt
-            const elapsed =
-              run.startedAt != null && end != null ? formatAgentDuration(end - run.startedAt) : null
-            // `callId` is the spawning call's id, which is what a run is keyed by.
-            const job =
-              run.status === 'running'
-                ? backgroundJobs[chatId]?.find((j) => isAgentJob(j.type) && j.callId === run.id)
-                : undefined
-            return (
-              <div key={`${chatId}:${run.id}`} className="group flex items-center rounded-md hover:bg-accent">
-                <button
-                  type="button"
-                  data-subagent-row={run.id}
-                  disabled={!columnOpen && full}
-                  title={!columnOpen && full ? 'The thread already shows four chats — close one to open this agent.' : undefined}
-                  onClick={() => toggleAgentColumn(chatId, run.id)}
-                  className={cn(
-                    'flex min-w-0 flex-1 items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-[13px] disabled:opacity-50',
-                    run.depth > 0 && 'pl-6'
-                  )}
-                >
-                  <span className="relative shrink-0">
-                    <ProviderMark provider={provider} className="size-3.5 text-muted-foreground" />
-                    <span
-                      className={cn(
-                        'absolute -right-1 -bottom-1 size-1.5 rounded-full',
-                        run.status === 'running'
-                          ? 'animate-pulse bg-primary'
-                          : run.status === 'failed'
-                            ? 'bg-destructive'
-                            : 'bg-success'
-                      )}
-                    />
-                  </span>
-                  <span className="min-w-0 flex-1 truncate">
-                    {run.type && <span className="text-muted-foreground">{run.type}: </span>}
-                    {run.description || 'Sub-agent'}
-                  </span>
-                  {elapsed && (
-                    <span className="shrink-0 font-mono text-[11px] text-muted-foreground/70 tabular-nums">{elapsed}</span>
-                  )}
-                  {columnOpen && <span className="size-1.5 shrink-0 rounded-full bg-foreground/60" title="Open" />}
-                </button>
-                {job && job.stoppable !== false && (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="mr-1 h-6 shrink-0 px-2 text-[11px] text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:text-destructive"
-                    onClick={() => stopBackgroundJob(chatId, job.id)}
-                  >
-                    Stop
-                  </Button>
-                )}
-              </div>
-            )
-          })}
+          {rows.map(({ chatId, run, provider }) => (
+            <SubagentRow key={`${chatId}:${run.id}`} chatId={chatId} run={run} provider={provider} openIds={openIds} />
+          ))}
         </div>
       </PopoverContent>
     </Popover>
   )
-}
-
-/** A clock for the menu, ticking only while it is open and something runs. */
-function useNow(active: boolean): number {
-  const [now, setNow] = React.useState(() => Date.now())
-  React.useEffect(() => {
-    if (!active) return
-    setNow(Date.now())
-    const t = window.setInterval(() => setNow(Date.now()), 1000)
-    return () => window.clearInterval(t)
-  }, [active])
-  return now
 }
 
 /**

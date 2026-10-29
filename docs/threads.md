@@ -373,8 +373,21 @@ reserve, and composer chips that never overlap — and shoots the five states.
 The top bar's dashboard button pins a column of cards beside the thread:
 **Environment** (project, branch with its ahead/behind, this Mac or a
 worktree), **Context**, **Changes** (opens the review, with the source-control
-button under it) and **Open in panel**. It follows the focused column. The pin
-is `quickRail` in `localStorage`, off by default.
+button under it), **Agents**, **Background jobs** and **Open in panel**. It
+follows the focused column. The pin is `quickRail` in `localStorage`, off by
+default.
+
+- **Agents and jobs move into it while it is up.** The Agents card lists the
+  thread's delegates (`agents_delegate`, side chats with a `delegation`) and
+  the sub-agents its chats' agents spawned (`useSubagentRuns`, the robot menu's
+  rows through the same `SubagentRow`); Background jobs is the "N running"
+  pill's list, Stop included (`JobRow`). With the rail shown, `ThreadHeader`
+  drops the robot menu and the pill, so one fan-out is not drawn twice; with it
+  hidden or dismissed they are back, because the rail is off by default and
+  most people would otherwise have no way to see their agents. Delegates keep
+  their pills: an open column is a tab, and switching tabs is the strip's job.
+  Settled agents past the newest `SETTLED_ROWS` fold behind "Show N earlier";
+  a running one is always listed.
 
 - **It floats rather than squeezing.** With the panel open, or less than
   `NARROW_PX` beside it, the chat has no width to give, so the rail lays over

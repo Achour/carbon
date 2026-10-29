@@ -5,6 +5,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Button } from '@/components/ui/button'
 import { useApp } from '@/store'
 import type { BackgroundJob } from '@shared/types'
+import { cn } from '@/lib/utils'
 
 // Stable empty reference so the selector never returns a fresh array (which
 // would spin the getSnapshot loop).
@@ -72,10 +73,47 @@ export function jobLabel(type: string): string {
  * from the popover. The thread header passes the focused chat, so the pill
  * always describes the column you are in.
  */
-export function BackgroundJobs({ chatId }: { chatId: string }): React.JSX.Element | null {
+/** Same filter as the pill, for the session rail's card. */
+export function useBackgroundJobs(chatId: string): BackgroundJob[] {
   const all = useApp((s) => s.backgroundJobs[chatId]) ?? EMPTY
-  const jobs = React.useMemo(() => all.filter((j) => !isAgentJob(j.type)), [all])
+  return React.useMemo(() => all.filter((j) => !isAgentJob(j.type)), [all])
+}
+
+/** One live job: its kind's icon, what it is doing, and Stop on hover. */
+export function JobRow({
+  chatId,
+  job,
+  className
+}: {
+  chatId: string
+  job: BackgroundJob
+  className?: string
+}): React.JSX.Element {
   const stopBackgroundJob = useApp((s) => s.stopBackgroundJob)
+  const Icon = jobIcon(job.type)
+  return (
+    <div className={cn('group flex items-start gap-2.5 px-3 py-2 hover:bg-accent/50', className)}>
+      <Icon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-[13px] leading-snug">{job.description || job.type}</div>
+        <div className="text-[11px] text-muted-foreground/70">{jobLabel(job.type)}</div>
+      </div>
+      {job.stoppable !== false && (
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-6 shrink-0 px-2 text-[11px] text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:text-destructive"
+          onClick={() => stopBackgroundJob(chatId, job.id)}
+        >
+          Stop
+        </Button>
+      )}
+    </div>
+  )
+}
+
+export function BackgroundJobs({ chatId }: { chatId: string }): React.JSX.Element | null {
+  const jobs = useBackgroundJobs(chatId)
   const [open, setOpen] = React.useState(false)
 
   if (jobs.length === 0) return null
@@ -102,33 +140,9 @@ export function BackgroundJobs({ chatId }: { chatId: string }): React.JSX.Elemen
           Background jobs
         </div>
         <div className="max-h-80 overflow-y-auto py-1">
-          {jobs.map((job) => {
-            const Icon = jobIcon(job.type)
-            return (
-              <div
-                key={job.id}
-                className="group flex items-start gap-2.5 px-3 py-2 hover:bg-accent/50"
-              >
-                <Icon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-[13px] leading-snug">
-                    {job.description || job.type}
-                  </div>
-                  <div className="text-[11px] text-muted-foreground/70">{jobLabel(job.type)}</div>
-                </div>
-                {job.stoppable !== false && (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="h-6 shrink-0 px-2 text-[11px] text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:text-destructive"
-                    onClick={() => stopBackgroundJob(chatId, job.id)}
-                  >
-                    Stop
-                  </Button>
-                )}
-              </div>
-            )
-          })}
+          {jobs.map((job) => (
+            <JobRow key={job.id} chatId={chatId} job={job} />
+          ))}
         </div>
       </PopoverContent>
     </Popover>

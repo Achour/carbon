@@ -476,7 +476,8 @@ it guards**, and put new reasoning in that file rather than back in this one.
   right panel, floating over them while several show (`ThreadView`, `ChatMeta.sideOf`, `SideChatSlot`,
   `sideColumns`, `focusedChatId`, `panelFloating`, the per-chat `agentsStore` /
   `taskListStore`) and the session details rail beside it (`SessionRail`,
-  `quickRail`, `railHidden`).
+  `quickRail`, `railHidden`), whose Agents and Background jobs cards stand in
+  for the header's robot menu and running pill while it is up (`SubagentRow`).
 - **`docs/drafts.md`** — text typed and not sent (`lib/drafts.ts`, `DraftItem`,
   `NewChat`).
 - **`docs/image-viewer.md`** — the lightbox (`ImageView.tsx`,

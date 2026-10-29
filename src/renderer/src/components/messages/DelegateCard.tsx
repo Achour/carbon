@@ -14,7 +14,8 @@ export function delegateChildId(part: ToolPart): string | null {
 
 type Look = { word: string; dot: string; live: boolean }
 
-function lookOf(meta: ChatMeta | undefined, waiting: boolean): Look {
+/** A delegate's state as words and a dot — its transcript row's and the rail's. */
+export function delegateLook(meta: ChatMeta | undefined, waiting: boolean): Look {
   const status = meta?.delegation?.status
   if (!meta) return { word: 'Deleted', dot: 'bg-muted-foreground/40', live: false }
   if (status === 'running') {
@@ -58,7 +59,7 @@ export function DelegateCard({ part }: { part: ToolPart }): React.JSX.Element {
   const pending = !childId
   const look: Look = pending
     ? { word: `Starting ${PROVIDER_SHORT_LABELS[provider]}…`, dot: 'bg-primary animate-pulse', live: true }
-    : lookOf(meta, waiting)
+    : delegateLook(meta, waiting)
   const elapsed = useElapsed(d?.startedAt ?? d?.createdAt, d?.finishedAt, look.live && !pending)
   const name = d?.name ?? (typeof input.name === 'string' ? input.name : PROVIDER_SHORT_LABELS[provider])
   const task = (d?.followUp ?? d?.task ?? (typeof input.task === 'string' ? input.task : ''))

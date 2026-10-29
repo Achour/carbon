@@ -2,7 +2,13 @@ import * as React from 'react'
 import { ArrowDown, ArrowUp, FileDiff, Folder, GitBranch, Laptop, Split } from 'lucide-react'
 import type { ChatMeta } from '@shared/types'
 import { PROVIDER_SHORT_LABELS } from '@shared/types'
-import { useApp } from '@/store'
+import { isAgentColumn, parseAgentColumn } from '@shared/agentRuns'
+import { threadFull, useApp } from '@/store'
+import { JobRow, useBackgroundJobs } from '@/components/BackgroundJobs'
+import { SubagentRow, useSubagentRuns } from '@/components/SubagentRow'
+import { delegateLook } from '@/components/messages/DelegateCard'
+import { useElapsed } from '@/components/messages/AgentRows'
+import { ProviderMark } from '@/components/ui/provider-mark'
 import { basename, formatTokens } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { GitActionButton } from '@/components/GitPanel'
@@ -10,18 +16,28 @@ import { PanelLaunchList } from '@/components/PanelActions'
 
 /**
  * The chat's own state, kept beside it while it runs: where it works, how full
- * its context is, what it has changed, and what the panel can open. Pinned and
+ * its context is, what it has changed, the agents and jobs it has running, and
+ * what the panel can open. Pinned and
  * unpinned from the thread's top bar (`quickRail`). Each block is a card of the
  * depth system (`docs/depth.md`), so it reads as the same furniture as
  * Settings and the panel rather than a new kind of surface.
  */
-export function SessionRail({ chat: thread }: { chat: ChatMeta }): React.JSX.Element {
+export function SessionRail({
+  chat: thread,
+  ids
+}: {
+  chat: ChatMeta
+  /** The thread's columns, chats and agents, as `ThreadView` orders them. */
+  ids: readonly string[]
+}): React.JSX.Element {
   // The focused column's chat, subscribed here rather than in `ThreadView` so a
   // side chat's meta changing re-renders the rail and not every column.
   const chat = useApp((s) => {
     const id = s.focusedChatId
     return (id && s.chats.find((c) => c.id === id)) || thread
   })
+  // Unlike `chat`, an agent column's id: its jobs are its parent chat's.
+  const focused = useApp((s) => s.focusedChatId) ?? thread.id
   const ref = React.useRef<HTMLElement>(null)
   // With the panel open, or too little width beside the chat, there is no room
   // to give: the chat would be squeezed. The rail floats over the chat's right
@@ -75,6 +91,8 @@ export function SessionRail({ chat: thread }: { chat: ChatMeta }): React.JSX.Ele
       <EnvironmentCard chat={chat} />
       <ContextCard chat={chat} />
       <ChangesCard />
+      <AgentsCard threadId={thread.id} ids={ids} />
+      <BackgroundCard chatId={parseAgentColumn(focused)?.parentId ?? focused} />
       {!panelOpen && <PanelLaunchList title="Open in panel" />}
     </aside>
   )
@@ -251,3 +269,136 @@ function ChangesCard(): React.JSX.Element | null {
   )
 }
 
+
+/** Finished rows shown before the rest fold behind "Show all". */
+const SETTLED_ROWS = 6
+
+/**
+ * Every agent working for this thread: the delegates its chats handed tasks to
+ * (`agents_delegate`, each a chat on its own provider) and the sub-agents their
+ * agents spawned. It stands in for the header's robot menu while the rail is
+ * up — `ThreadHeader` drops the menu then — so a fan-out is on screen without a
+ * click. A row opens the agent as a column, or folds an open one back.
+ *
+ * A long session spawns dozens, so the settled ones past the newest few fold
+ * away; a running one is always listed, however old.
+ */
+function AgentsCard({ threadId, ids }: { threadId: string; ids: readonly string[] }): React.JSX.Element | null {
+  const chatIds = React.useMemo(() => ids.filter((id) => !isAgentColumn(id)), [ids])
+  const runs = useSubagentRuns(chatIds)
+  const chats = useApp((s) => s.chats)
+  const delegates = React.useMemo(
+    () => chats.filter((c) => c.sideOf === threadId && c.delegation).sort((a, b) => a.createdAt - b.createdAt),
+    [chats, threadId]
+  )
+  const [all, setAll] = React.useState(false)
+  const total = delegates.length + runs.length
+  if (total === 0) return null
+  const working =
+    runs.filter((r) => r.run.status === 'running').length +
+    delegates.filter((c) => c.delegation!.status === 'running').length
+  // The newest few settled rows across both kinds, by when each settled: the
+  // runs are concatenated in column order, so their position says nothing
+  // about age. Display order is left alone; only the cut is by time.
+  const settled: { key: object; at: number }[] = [
+    ...runs
+      .filter((r) => r.run.status !== 'running')
+      .map((r) => ({ key: r as object, at: r.run.endedAt ?? r.run.startedAt ?? 0 })),
+    ...delegates
+      .filter((c) => c.delegation!.status !== 'running')
+      .map((c) => ({ key: c as object, at: c.delegation!.finishedAt ?? c.delegation!.startedAt ?? c.createdAt }))
+  ]
+  const keep = new Set(
+    (all ? settled : [...settled].sort((a, b) => b.at - a.at).slice(0, SETTLED_ROWS)).map((s) => s.key)
+  )
+  const shownRuns = runs.filter((r) => r.run.status === 'running' || keep.has(r))
+  const shownDelegates = delegates.filter((c) => c.delegation!.status === 'running' || keep.has(c))
+  const hidden = total - shownRuns.length - shownDelegates.length
+  return (
+    <Card
+      title="Agents"
+      aside={
+        <span className={cn('text-[11px] tabular-nums', working ? 'text-primary' : 'text-muted-foreground/70')}>
+          {working ? `${working} working` : total}
+        </span>
+      }
+    >
+      <div data-rail-agents className="surface-group flex flex-col gap-px p-0.5">
+        {shownDelegates.map((c) => (
+          <DelegateRow key={c.id} chat={c} open={ids.includes(c.id)} />
+        ))}
+        {shownRuns.map(({ chatId, run, provider }) => (
+          <SubagentRow key={`${chatId}:${run.id}`} chatId={chatId} run={run} provider={provider} openIds={ids} />
+        ))}
+      </div>
+      {(hidden > 0 || all) && (
+        <button
+          type="button"
+          onClick={() => setAll((a) => !a)}
+          className="mt-1.5 w-full rounded-md px-2 py-1 text-left text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+        >
+          {all ? 'Show fewer' : `Show ${hidden} earlier`}
+        </button>
+      )}
+    </Card>
+  )
+}
+
+/**
+ * A delegate as one compact row: the provider's mark with the dot its
+ * transcript card wears, `name: task`, and the round's clock. Like that card it
+ * is a toggle — it opens the delegate's column, and folds an open one back.
+ */
+function DelegateRow({ chat, open }: { chat: ChatMeta; open: boolean }): React.JSX.Element {
+  const waiting = useApp((s) => s.statuses[chat.id] === 'waiting-permission')
+  const full = useApp(threadFull)
+  const reopenSideChat = useApp((s) => s.reopenSideChat)
+  const closeSideChat = useApp((s) => s.closeSideChat)
+  const d = chat.delegation!
+  const look = delegateLook(chat, waiting)
+  const elapsed = useElapsed(d.startedAt ?? d.createdAt, d.finishedAt, look.live)
+  const task = (d.followUp ?? d.task).replace(/\s+/g, ' ').trim()
+  const blocked = !open && full
+  return (
+    <button
+      type="button"
+      data-rail-delegate={chat.id}
+      disabled={blocked}
+      title={blocked ? 'The thread already shows four chats — close one to open this agent.' : `${look.word}: ${task}`}
+      onClick={() => void (open ? closeSideChat(chat.id) : reopenSideChat(chat.id))}
+      className="flex min-w-0 items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-[13px] transition-colors hover:bg-accent disabled:opacity-50"
+    >
+      <span className="relative shrink-0">
+        <ProviderMark provider={chat.provider} className="size-3.5 text-muted-foreground" />
+        <span className={cn('absolute -right-1 -bottom-1 size-1.5 rounded-full', look.dot)} />
+      </span>
+      <span className={cn('min-w-0 flex-1 truncate', !look.live && 'text-muted-foreground')}>
+        <span className="font-medium">{d.name}</span>
+        {task && <span className="text-muted-foreground">: {task}</span>}
+      </span>
+      {elapsed && (
+        <span className="shrink-0 font-mono text-[11px] text-muted-foreground/70 tabular-nums">{elapsed}</span>
+      )}
+      {open && <span className="size-1.5 shrink-0 rounded-full bg-foreground/60" title="Open" />}
+    </button>
+  )
+}
+
+/**
+ * The focused chat's live background work that is not an agent — shells,
+ * monitors, workflows — each with its Stop. The header's "N running" pill,
+ * opened and kept open while the rail is up.
+ */
+function BackgroundCard({ chatId }: { chatId: string }): React.JSX.Element | null {
+  const jobs = useBackgroundJobs(chatId)
+  if (jobs.length === 0) return null
+  return (
+    <Card title="Background jobs" aside={<span className="text-[11px] text-primary tabular-nums">{jobs.length} running</span>}>
+      <div className="surface-group flex flex-col gap-px p-0.5">
+        {jobs.map((job) => (
+          <JobRow key={job.id} chatId={chatId} job={job} className="rounded-md px-2 py-1.5" />
+        ))}
+      </div>
+    </Card>
+  )
+}
