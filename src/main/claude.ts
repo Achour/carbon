@@ -195,6 +195,7 @@ import {
   BTW_SYSTEM,
   BTW_TIMEOUT_MS,
   BTW_TRANSCRIPT_CHARS,
+  btwHistory,
   buildBtwPrompt,
   type BtwExchange
 } from '@shared/btw'
@@ -1449,26 +1450,21 @@ class ClaudeSession implements AgentSession {
    * and waits on `ready`, which a session that has taken no turn never
    * reaches; the SDK queues the request behind `initialize` itself.
    */
-  async askSideQuestion(
-    question: string,
-    history: BtwExchange[],
-    signal: AbortSignal
-  ): Promise<BtwAnswer | null> {
+  async askSideQuestion(question: string, history: BtwExchange[]): Promise<BtwAnswer | null> {
     const q = this.q as Query & {
       askSideQuestion?: (
         question: string,
-        opts?: { history?: BtwExchange[]; signal?: AbortSignal }
+        opts?: { history?: BtwExchange[] }
       ) => Promise<{ response: string; synthetic?: boolean } | null>
     }
     if (this.dead || typeof q.askSideQuestion !== 'function') return null
     try {
-      const res = await q.askSideQuestion(question, { history, signal })
+      const res = await q.askSideQuestion(question, { history })
       if (!res?.response?.trim()) return { error: 'No answer came back.' }
       // `synthetic` is the CLI's own words standing in for an answer (an API
       // error, a refusal) — shown, but as what it is.
       return res.synthetic ? { error: res.response.trim() } : { text: res.response.trim() }
     } catch (err) {
-      if (signal.aborted) return { error: 'Cancelled.' }
       const message = err instanceof Error ? err.message : String(err)
       // A CLI that predates the request refuses its subtype: not an answer to
       // show, a reason to take the other path.
@@ -3058,6 +3054,7 @@ const FORK_SKIPPABLE_EVENT: Record<EventMessage['kind'], boolean> = {
   turn: true,
   info: true,
   switch: true,
+  btw: true,
   error: false,
   compact: false
 }
@@ -3999,32 +3996,37 @@ export class ChatManager {
     }
   }
 
-  /** Pending `/btw` questions by request id, so a dismissed card can cancel its own. */
-  private btwRequests = new Map<string, AbortController>()
-
   /**
    * `/btw`: a side question answered from the chat's context, outside it — no
-   * turn starts, nothing is queued or persisted, and a running turn carries on.
+   * turn starts, nothing is queued, and a running turn carries on. The
+   * exchange is a `btw` event row, pushed now (answer pending) and filled in
+   * when the answer lands, so it sits in the transcript where it was asked.
    *
    * Claude answers natively (`ClaudeSession.askSideQuestion`), from the live
    * session or a resumed one started for the purpose: that is the real
    * context, cache and all, rather than a summary of it. Every other provider,
    * and a Claude CLI too old for the request, answers on the throwaway
-   * one-shot the handoff uses, over the serialized transcript. The chat's
-   * current backend answers, not an armed `pendingModel`: it is the one
-   * holding the conversation.
+   * one-shot the handoff uses, over the serialized transcript — which skips
+   * `btw` rows, as the handoff does. The chat's current backend answers, not
+   * an armed `pendingModel`: it is the one holding the conversation.
    */
-  async askBtw(
-    chatId: string,
-    requestId: string,
-    question: string,
-    history: BtwExchange[] = []
-  ): Promise<BtwAnswer> {
+  async askBtw(chatId: string, question: string): Promise<void> {
     const chat = this.store.getChat(chatId)
-    if (!chat) return { error: 'This chat no longer exists.' }
-    if (!question.trim()) return { error: 'Ask a question after /btw.' }
-    const abort = new AbortController()
-    this.btwRequests.set(requestId, abort)
+    const asked = question.trim()
+    if (!chat || !asked) return
+    const history = btwHistory(chat.messages)
+    const msg: EventMessage = {
+      id: randomUUID(),
+      role: 'event',
+      kind: 'btw',
+      text: asked,
+      ts: Date.now(),
+      btw: { question: asked }
+    }
+    chat.messages.push(msg)
+    this.emit({ type: 'message', chatId, message: msg })
+    this.store.saveChatSoon(chatId)
+    let result: BtwAnswer
     try {
       const live = this.sessionFor(chatId)
       // A Claude chat with history can always answer natively; one with none
@@ -4032,22 +4034,20 @@ export class ChatManager {
       const session =
         live ?? (chat.provider === 'claude' && chat.sessionId ? this.createSession(chat) : null)
       const native = session?.askSideQuestion
-        ? await withTimeout(
-            session.askSideQuestion(question, history, abort.signal),
-            BTW_TIMEOUT_MS,
-            { error: 'No answer in time.' } as BtwAnswer
-          )
+        ? await withTimeout(session.askSideQuestion(asked, history), BTW_TIMEOUT_MS, {
+            error: 'No answer in time.'
+          } as BtwAnswer)
         : null
-      if (native) return native
-      if (abort.signal.aborted) return { error: 'Cancelled.' }
-      return await this.btwOneShot(chat, question, history)
-    } finally {
-      this.btwRequests.delete(requestId)
+      result = native ?? (await this.btwOneShot(chat, asked, history))
+    } catch (err) {
+      result = { error: err instanceof Error ? err.message : String(err) }
     }
-  }
-
-  cancelBtw(requestId: string): void {
-    this.btwRequests.get(requestId)?.abort()
+    // Mutated in place, and possibly no longer the tail by now: flagged so the
+    // incremental write pass picks it up wherever it sits.
+    msg.btw = 'text' in result ? { question: asked, answer: result.text } : { question: asked, error: result.error }
+    this.emit({ type: 'message', chatId, message: { ...msg } })
+    this.store.markMessageDirty(chatId, msg.id)
+    this.store.saveChatSoon(chatId)
   }
 
   private async btwOneShot(

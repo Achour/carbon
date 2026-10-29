@@ -56,6 +56,9 @@ function blockFor(m: ChatMessage): string | null {
     }
     return lines.length ? `## Assistant\n${lines.join('\n')}` : null
   }
+  // A side question was never part of the agent's conversation, so it is not
+  // part of the one handed over either.
+  if (m.kind === 'btw') return null
   return m.text.trim() ? `[${m.kind}] ${clip(m.text.trim(), 500)}` : null
 }
 

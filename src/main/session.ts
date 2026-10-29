@@ -94,11 +94,7 @@ export interface AgentSession {
    * take it — and the manager answers on a one-shot instead. Absent on every
    * provider but Claude.
    */
-  askSideQuestion?(
-    question: string,
-    history: BtwExchange[],
-    signal: AbortSignal
-  ): Promise<BtwAnswer | null>
+  askSideQuestion?(question: string, history: BtwExchange[]): Promise<BtwAnswer | null>
   interrupt(): Promise<void>
   setModel(model?: string): Promise<void>
   setPermissionMode(mode: PermissionModeId): Promise<void>

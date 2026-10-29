@@ -162,9 +162,8 @@ export const REMOTE_CHANNELS = new Set([
   // Codex's `/review`: a turn of its native reviewer, which is a send.
   'chat:review',
   // `/btw`: a question about the conversation the phone already reads,
-  // answered without tools — less than a send — and its cancel.
+  // answered without tools — less than a send.
   'chat:btw',
-  'chat:btw-cancel',
   // A turn's Undo. It restores only the files that turn's own checkpoint
   // recorded, which is less than the agent a phone already steers can do.
   'chat:rewind-files',

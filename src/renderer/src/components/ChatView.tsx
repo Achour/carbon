@@ -29,7 +29,6 @@ import { TaskDock } from '@/components/TaskDock'
 import { CodexGoalBar } from '@/components/CodexGoalBar'
 import { StreamingIndicator } from '@/components/messages/Parts'
 import { PromptDock } from '@/components/PromptDock'
-import { BtwDock } from '@/components/BtwDock'
 import { QuoteBar } from '@/components/QuoteBar'
 import { TranscriptChat } from '@/components/messages/AgentRows'
 import { useTranscript } from '@/components/Transcript'
@@ -901,8 +900,7 @@ export const ChatView = React.memo(function ChatView({
                       requests={permissions}
                       onReviewPlan={reviewPendingPlan}
                     />
-                    <BtwDock chatId={chat.id} cwd={chat.cwd} />
-                  </>
+                    </>
                 }
                 // Returned, not voided: the composer needs the promise so a failed
                 // send restores the draft instead of discarding it.

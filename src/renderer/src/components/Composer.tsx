@@ -1229,8 +1229,6 @@ export function Composer({
   // Folded, there is no room for a row, and the placeholder is all there is.
   // Anything typed, a live turn or a pending switch hides it.
   const suggestion = useApp((s) => (chatId ? s.suggestions[chatId] : undefined))
-  const hasBtw = useApp((s) => !!(chatId && s.btw[chatId]?.length))
-  const dismissBtw = useApp((s) => s.dismissBtw)
   const ghost =
     suggestion && !streaming && !locked && !switchingNote && text === '' && attachments.length === 0
       ? suggestion
@@ -1656,14 +1654,6 @@ export function Composer({
                 setMention(null)
                 return
               }
-            }
-            // An open `/btw` card closes before anything under it answers the
-            // key: it is the newest thing on screen, and the one Escape leaves
-            // no trace of. Only from an empty input, which a draft never is.
-            if (e.key === 'Escape' && chatId && hasBtw && text === '' && attachments.length === 0) {
-              e.preventDefault()
-              dismissBtw(chatId)
-              return
             }
             if (e.key === 'Tab' && !e.shiftKey && ghost) {
               e.preventDefault()

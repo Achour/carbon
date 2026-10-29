@@ -1,10 +1,10 @@
-import type { SlashCommand } from './types'
+import type { ChatMessage, SlashCommand } from './types'
 
 /**
- * `/btw` — a side question about the conversation that never becomes part of
- * it. It is answered from the chat's context while the agent keeps working:
- * nothing is queued, no turn starts, and neither the question nor the answer
- * is written to the transcript.
+ * `/btw` — a side question about the conversation, answered from the chat's
+ * context while the agent keeps working: nothing is queued and no turn
+ * starts. The exchange is kept in the transcript where it was asked (a `btw`
+ * event row) but is never sent to the agent, nor carried by a handoff.
  *
  * Carbon's own, offered on every provider's `/` menu. Claude answers it
  * natively (the CLI's `side_question` control request, which forks the live
@@ -37,22 +37,24 @@ export interface BtwExchange {
   response: string
 }
 
-/**
- * One side question in a chat's open card, as both clients hold it. `answer`
- * and `error` both absent means it is still being answered. Never persisted:
- * a side question is kept out of the conversation on purpose, and out of its
- * history with it.
- */
-export interface BtwEntry {
-  id: string
-  question: string
-  answer?: string
-  error?: string
-}
+/** Earlier side questions a follow-up carries: answered, since the turn's prompt, newest few. */
+export const BTW_HISTORY_MAX = 5
 
-/** The answered entries of a card, as the history the next question carries. */
-export function btwHistory(entries: BtwEntry[]): BtwExchange[] {
-  return entries.flatMap((e) => (e.answer ? [{ question: e.question, response: e.answer }] : []))
+/**
+ * The side questions already answered in the current turn — everything after
+ * the last user message — as the history the next one carries, so "and what
+ * did you mean by that?" reads as a follow-up rather than a fresh question.
+ */
+export function btwHistory(messages: ChatMessage[]): BtwExchange[] {
+  const out: BtwExchange[] = []
+  for (let i = messages.length - 1; i >= 0 && out.length < BTW_HISTORY_MAX; i--) {
+    const m = messages[i]
+    if (m.role === 'user') break
+    if (m.role === 'event' && m.kind === 'btw' && m.btw?.answer) {
+      out.push({ question: m.btw.question, response: m.btw.answer })
+    }
+  }
+  return out.reverse()
 }
 
 /** Transcript budget for the one-shot fallback — paid per question, unlike a handoff's once. */

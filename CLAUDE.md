@@ -408,7 +408,7 @@ it guards**, and put new reasoning in that file rather than back in this one.
   (`shared/agentRuns.ts`, `AgentsPanel`, `AgentActivityBar`), what the agent
   asks you (`PromptDock`, `CodexReviewDialog`), the turn's changed files
   (`TurnChangesCard`, `lib/turnChanges.ts`), side questions (`/btw`,
-  `shared/btw.ts`, `BtwDock`), quoting a passage back at it
+  `shared/btw.ts`, `EventRow`), quoting a passage back at it
   (`QuoteBar`, `lib/quoteSelection.ts`) and the turn rail with its bookmarks
   (`TurnRail`, `lib/turnRail.ts`, `ChatMeta.bookmarks`).
 - **`docs/chat-layout.md`** — the one reading column (`lib/chatColumn.ts`),

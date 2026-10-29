@@ -76,7 +76,7 @@ import {
   providerForRememberedModel
 } from '@shared/types'
 import { canvasText } from '@shared/canvasText'
-import { btwHistory, parseBtw, type BtwEntry } from '@shared/btw'
+import { parseBtw } from '@shared/btw'
 import type { PreviewViewport } from '@shared/previewDevices'
 import type {
   CanvasSummary,
@@ -598,8 +598,6 @@ interface AppState {
    * events), offered as a chip in an empty composer. Gone when a turn starts.
    */
   suggestions: Record<string, string>
-  /** Each chat's open `/btw` card, oldest question first (see `askBtw`). */
-  btw: Record<string, BtwEntry[]>
   /** Chats another Carbon instance owns; edits here are not being saved. */
   lockedChats: Record<string, true>
   /** Chats whose AI title is being generated right now (sidebar shimmers them). */
@@ -1493,14 +1491,6 @@ interface AppState {
   ): Promise<void>
   /** Start Codex's native App Server reviewer; unlike messages, reviews are never queued. */
   startCodexReview(chatId: string, target: CodexReviewTarget): Promise<void>
-  /**
-   * `/btw`: ask a side question in the chat's card. Never queued — answering
-   * while the agent works is the point — and never part of the transcript.
-   * Earlier answers in the card ride along as its history.
-   */
-  askBtw(chatId: string, question: string): void
-  /** Close a chat's `/btw` card, giving up whatever is still being answered. */
-  dismissBtw(chatId: string): void
   /** Force a queued message through now: interrupt the running turn and send it. */
   sendQueuedNow(chatId: string, id: string): Promise<void>
   removeQueued(chatId: string, id: string): void
@@ -1872,7 +1862,6 @@ function forgetChat(
     | 'queued'
     | 'statuses'
     | 'suggestions'
-    | 'btw'
     | 'titling'
     | 'permissions'
     | 'backgroundJobs'
@@ -1890,7 +1879,6 @@ function forgetChat(
     queued: omit(s.queued, ids),
     statuses: omit(s.statuses, ids),
     suggestions: omit(s.suggestions, ids),
-    btw: omit(s.btw, ids),
     titling: omit(s.titling, ids),
     permissions: omit(s.permissions, ids),
     backgroundJobs: omit(s.backgroundJobs, ids),
@@ -2364,7 +2352,6 @@ export const useApp = create<AppState>((set, get) => ({
   loadingOlder: false,
   statuses: {},
   suggestions: {},
-  btw: {},
   lockedChats: {},
   titling: {},
   backgroundJobs: {},
@@ -4975,18 +4962,13 @@ export const useApp = create<AppState>((set, get) => ({
 
   async sendMessage(id, text, attachments, label) {
     if (!id) return
-    // Ahead of the queue: a side question is answered while the turn runs.
+    // Ahead of the queue: a side question is answered while the turn runs,
+    // and main puts it in the transcript. An empty one, or one with files
+    // (it is text only), is rejected so the composer gives the draft back.
     const question = parseBtw(text)
     if (question !== null) {
-      if (attachments?.length) {
-        // Said in the card, and rejected so the composer puts the draft back,
-        // files included.
-        const error = 'A side question takes text only. Remove the attachments and ask again.'
-        const entry: BtwEntry = { id: crypto.randomUUID(), question, error }
-        set((s) => ({ btw: { ...s.btw, [id]: [...(s.btw[id] ?? []), entry] } }))
-        throw new Error(error)
-      }
-      get().askBtw(id, question)
+      if (!question || attachments?.length) throw new Error('A side question takes text only.')
+      void window.api.askBtw(id, question)
       return
     }
     // Mid-turn sends wait in a queue until the chat goes idle.
@@ -4996,34 +4978,6 @@ export const useApp = create<AppState>((set, get) => ({
       return
     }
     await window.api.send(id, text, attachments, label)
-  },
-
-  askBtw(chatId, question) {
-    const entry: BtwEntry = { id: crypto.randomUUID(), question }
-    const prior = get().btw[chatId] ?? []
-    const patch = (fields: Partial<BtwEntry>): void =>
-      set((s) => {
-        const list = s.btw[chatId]
-        // Dismissed meanwhile: the answer has nowhere to go.
-        if (!list?.some((e) => e.id === entry.id)) return {}
-        return { btw: { ...s.btw, [chatId]: list.map((e) => (e.id === entry.id ? { ...e, ...fields } : e)) } }
-      })
-    set((s) => ({ btw: { ...s.btw, [chatId]: [...prior, entry] } }))
-    if (!question) {
-      patch({ error: 'Type your question after /btw, e.g. “/btw which file was that?”' })
-      return
-    }
-    window.api
-      .askBtw(chatId, entry.id, question, btwHistory(prior))
-      .then((res) => patch('text' in res ? { answer: res.text } : { error: res.error }))
-      .catch((err: unknown) => patch({ error: err instanceof Error ? err.message : String(err) }))
-  },
-
-  dismissBtw(chatId) {
-    for (const e of get().btw[chatId] ?? []) {
-      if (!e.answer && !e.error) void window.api.cancelBtw(e.id)
-    }
-    set((s) => ({ btw: omit(s.btw, [chatId]) }))
   },
 
   async startCodexReview(id, target) {

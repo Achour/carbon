@@ -623,9 +623,12 @@ function CopyAnswer({ text }: { text: string }): React.JSX.Element {
 export const EventRow = React.memo(function EventRow({
   message,
   pending = false,
-  answer
+  answer,
+  cwd
 }: {
   message: EventMessage
+  /** `btw` rows only: the folder an answer's file references resolve in. */
+  cwd?: string
   /** Switch dividers only: the handoff this divider records is still running. */
   pending?: boolean
   /**
@@ -701,6 +704,35 @@ export const EventRow = React.memo(function EventRow({
               <Check className="size-3.5 text-success" />
             )}
           </span>
+        </div>
+      )
+    }
+    case 'btw': {
+      // A side question reads as an ordinary exchange — the prompt's own box,
+      // then a plain reply — because that is what it is to the reader. What
+      // sets it apart is invisible here and deliberate: it is an event row,
+      // not a user message, so it opens no turn, has no edit or bookmark, and
+      // is never sent to the agent or carried by a handoff.
+      const b = message.btw ?? { question: message.text }
+      return (
+        <div data-btw className="flex flex-col gap-4">
+          <div data-message-role="user" className="animate-enter">
+            <div className={cn(PROMPT_BOX, 'select-text py-2.5 break-words')}>
+              <Markdown text={`/btw ${b.question}`} breaks className="leading-relaxed" />
+            </div>
+          </div>
+          {b.answer !== undefined ? (
+            <div data-message-role="assistant">
+              <AssistantMarkdown text={b.answer} cwd={cwd ?? null} streaming={false} />
+            </div>
+          ) : b.error !== undefined ? (
+            <div className="text-[13px] text-warning">{b.error}</div>
+          ) : (
+            <div className="flex items-center gap-2 text-[13px] text-muted-foreground">
+              <DotSpinner className="size-3.5" />
+              <span>Answering…</span>
+            </div>
+          )}
         </div>
       )
     }

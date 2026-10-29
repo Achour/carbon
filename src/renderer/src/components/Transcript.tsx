@@ -112,6 +112,9 @@ function isGroupableMsg(m: ChatMessage): boolean {
  *  is the "Thinking…" / "Working…" indicator at the foot of the transcript,
  *  which runs for exactly as long as the turn does; a withheld thought leaves
  *  no trace in history, because it has nothing to say there. */
+/** A `/btw` side question's row: in the transcript, never part of the agent's turn. */
+const isBtwRow = (m: ChatMessage | undefined): boolean => m?.role === 'event' && m.kind === 'btw'
+
 function isBlankMsg(m: ChatMessage): boolean {
   return (
     m.role === 'assistant' &&
@@ -511,6 +514,7 @@ function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
           message={m}
           pending={m.id === ctx.switchPendingId}
           answer={answer || undefined}
+          cwd={ctx.cwd}
         />
       )
     }
@@ -622,7 +626,15 @@ export function useTranscript({
 }): TranscriptView {
   // The live turn's message — only the *last* message counts, so a just-sent user
   // message (before the reply starts) isn't mistaken for the previous reply.
-  const lastMsg = messages[messages.length - 1]
+  //
+  // Last, that is, but for `/btw` rows after it. A side question asked while a
+  // reply streams lands after that reply, and the reply goes on streaming
+  // above it; read strictly, the live message would drop into history for the
+  // rest of the step and every token would re-walk the whole history render.
+  // Those rows are drawn after the live block instead (`trailing`).
+  let liveIndex = messages.length - 1
+  while (liveIndex >= 0 && isBtwRow(messages[liveIndex])) liveIndex--
+  const lastMsg = messages[liveIndex]
   const liveAssistant = busy && lastMsg?.role === 'assistant' ? lastMsg : undefined
   // Has the live *turn* shown anything yet? Scanned back to the prompt that
   // started it rather than read off the last message alone: the CLI opens a
@@ -730,7 +742,7 @@ export function useTranscript({
   )
 
 
-  const historyEnd = liveAssistant ? messages.length - 1 : messages.length
+  const historyEnd = liveAssistant ? liveIndex : messages.length
   // A live message that is itself only tool calls joins the trailing run of
   // tool-only history messages in ONE live ToolGroup — the same row history
   // will render once the turn ends. Without this, each new search/read/agent
@@ -910,8 +922,18 @@ export function useTranscript({
     </React.Fragment>
   ) : null
 
+  // Under the keys `renderMessages` gives them, in the same array, so a row
+  // that history takes over once the next step opens is updated in place.
+  const trailing = liveAssistant
+    ? displayedMessages
+        .slice(liveIndex + 1)
+        .map((m) =>
+          m.role === 'event' ? <EventRow key={m.id} message={m} cwd={chat.cwd} /> : null
+        )
+    : []
+
   return {
-    nodes: liveNode ? [...historyNodes, liveNode] : historyNodes,
+    nodes: liveNode ? [...historyNodes, liveNode, ...trailing] : historyNodes,
     showActivity,
     activityLabel,
     showActivityLabel,

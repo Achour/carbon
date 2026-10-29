@@ -24,15 +24,21 @@ test('withBtw puts one /btw first', () => {
   assert.ok(BTW_COMMAND.argumentHint)
 })
 
-test('btwHistory keeps answered entries only', () => {
-  assert.deepEqual(
-    btwHistory([
-      { id: '1', question: 'a', answer: 'A' },
-      { id: '2', question: 'b', error: 'nope' },
-      { id: '3', question: 'c' }
-    ]),
-    [{ question: 'a', response: 'A' }]
-  )
+test('btwHistory carries this turn\'s answered side questions only', () => {
+  const ev = (id: string, btw: { question: string; answer?: string; error?: string }) =>
+    ({ id, role: 'event', kind: 'btw', text: btw.question, ts: 0, btw }) as const
+  const messages = [
+    ev('0', { question: 'old', answer: 'before the prompt' }),
+    { id: 'u', role: 'user', text: 'do it', ts: 0 } as const,
+    ev('1', { question: 'a', answer: 'A' }),
+    ev('2', { question: 'b', error: 'nope' }),
+    ev('3', { question: 'c' }),
+    ev('4', { question: 'd', answer: 'D' })
+  ]
+  assert.deepEqual(btwHistory(messages), [
+    { question: 'a', response: 'A' },
+    { question: 'd', response: 'D' }
+  ])
 })
 
 test('buildBtwPrompt carries transcript, history and the question', () => {

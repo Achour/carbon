@@ -771,44 +771,51 @@ would visibly disagree at the moments the user is acting. Two things follow:
   is the general hazard in moving anything into the composer: every rule that
   said "inside the composer" silently widened.
 
-### Side questions (`/btw`, `shared/btw.ts`, `BtwDock`)
+### Side questions (`/btw`, `shared/btw.ts`, `EventRow`)
 
-`/btw <question>` asks about the conversation without becoming part of it. It is
+`/btw <question>` asks about the conversation without joining it. It is
 intercepted in the store's `sendMessage` **before** the queue check, because
-answering while a turn runs is the whole point: no turn starts, nothing is
-queued, and neither the question nor the answer is written to the chat. The
-phone's `send` (`remote/state.ts`) does the same.
+answering while a turn runs is the whole point: no turn starts and nothing is
+queued. The phone's `send` (`remote/state.ts`) does the same, and the phone
+draws the row through the shared transcript.
 
+- **It reads as an ordinary exchange.** The question sits in the prompt's own
+  box and the answer is plain reply text, at the point in the transcript where
+  it was asked. A dock on the composer and a bordered card in the flow were
+  both tried and rejected: a side question is a question and an answer, and
+  should look like one.
+- **It is an event row, not a user message.** `ChatManager.askBtw` pushes a
+  `btw` event (answer pending), then fills it in and flags it with
+  `markMessageDirty`, since by then it may no longer be the tail. Being an
+  event is what keeps it out of everything else. It opens no turn or fold,
+  has no edit or bookmark, `serializeTranscript` skips it so a handoff never
+  carries it, and `FORK_SKIPPABLE_EVENT` lets an edit-and-resend fork past it.
+- **The streaming message stays live.** A question asked mid-reply lands after
+  that reply, which goes on streaming above it. `useTranscript` therefore skips
+  trailing `btw` rows when it picks the live message and draws them after the
+  live block, under the keys history will give them. Read strictly, the live
+  message would drop into history for the rest of the step.
 - **Claude answers natively.** The Agent SDK's query object has an
   `askSideQuestion` that sends the CLI's `side_question` control request. It
   forks the live conversation with no tools and answers mid-turn, and the
   running turn is untouched. Measured: ~2 s on Haiku with a `sleep 20` tool call
   in flight, and the turn finished normally afterwards. A *resumed* session that
   has taken no turn answers from its history too, so a Claude chat with a
-  `sessionId` and no live session gets one started for the question rather
-  than a summary. The method is **not in the SDK's types**, so
-  `ClaudeSession.askSideQuestion` reaches it structurally and returns `null`
-  when it is missing or the CLI refuses the subtype.
+  `sessionId` and no live session gets one started for the question. The
+  method is **not in the SDK's types**, so `ClaudeSession.askSideQuestion`
+  reaches it structurally and returns `null` when it is missing or the CLI
+  refuses the subtype.
 - **Everything else answers on a one-shot.** That covers the other providers
-  and the `null` case. It uses the same throwaway generators the handoff brief
-  does, over `transcriptFor(chat, BTW_TRANSCRIPT_CHARS)`. The budget is smaller
-  than the handoff's because this is paid per question. The chat's *current*
-  backend answers, not an armed `pendingModel`. Measured on Codex: ~3.5 s.
-- **Follow-ups carry the card.** Answered entries ride as `history`, which is
-  the CLI's own `{question, response}` shape, or are written into the one-shot
-  prompt. So "and what did you mean by that?" reads as one thread.
-- **The card is in flow, where `TaskDock`'s list floats.** It opens because you
-  just asked something, with your eye on the composer. Floated, it would cover
-  the foot of the transcript, which is the part a running turn writes to. It
-  closes on its button or on Escape from an empty composer, and that Escape is
-  taken before `PromptDock`'s, so one press never both closes the card and
-  denies a permission. Closing cancels a pending native answer
-  (`chat:btw-cancel` aborts the control request). A one-shot cannot be
-  cancelled; it runs out against `BTW_TIMEOUT_MS`.
-- **Text only.** `/btw` with attachments is refused in the card, and the
-  composer gets the draft back. It is offered on the `/` menu only beside a
-  conversation (`chatId`), never on the New-chat screen. On the phone it opens
-  a `Sheet`, since inside the iOS app the composer is native.
+  and the `null` case. It uses the throwaway generators the handoff brief
+  does, over `transcriptFor(chat, BTW_TRANSCRIPT_CHARS)`, a smaller budget
+  because this is paid per question. The chat's *current* backend answers, not
+  an armed `pendingModel`. Measured on Codex: ~3.5 s.
+- **Follow-ups carry the turn's earlier side questions** (`btwHistory`: the
+  answered `btw` rows since the last prompt, newest five). They ride as the
+  CLI's own `{question, response}` history, or in the one-shot prompt.
+- **Text only, and never empty.** Either is rejected and the composer gets the
+  draft back. `/btw` is offered on the `/` menu only beside a conversation
+  (`chatId`), never on the New-chat screen.
 
 ### The turn's changed files (`TurnChangesCard`, `lib/turnChanges.ts`)
 

@@ -1006,13 +1006,25 @@ export interface ModelSwitchInfo {
 export interface EventMessage {
   id: string
   role: 'event'
-  kind: 'error' | 'info' | 'compact' | 'turn' | 'switch'
+  kind: 'error' | 'info' | 'compact' | 'turn' | 'switch' | 'btw'
   /** Always set — the prose fallback when a renderer lacks the structured card. */
   text: string
   ts: number
   stats?: TurnStats
   /** kind 'switch' only. */
   switch?: ModelSwitchInfo
+  /** kind 'btw' only. Neither field set means the answer is still coming. */
+  btw?: BtwInfo
+}
+
+/**
+ * A `/btw` side question as the transcript keeps it: where it was asked, and
+ * saved with the chat, but never sent to the agent (see `shared/btw.ts`).
+ */
+export interface BtwInfo {
+  question: string
+  answer?: string
+  error?: string
 }
 
 export type ChatMessage = UserMessage | AssistantMessage | EventMessage
@@ -3105,19 +3117,11 @@ export interface Api {
    */
   editMessage(chatId: string, messageId: string, text: string): Promise<EditMessageResult>
   /**
-   * `/btw`: a side question answered from the chat's context without becoming
-   * part of it — no turn, no queue, nothing persisted. `history` is the side
-   * questions already answered in the open card. `requestId` names it for
-   * `cancelBtw`.
+   * `/btw`: a side question answered from the chat's context while the agent
+   * works. It lands in the transcript as a `btw` event row — no turn, no
+   * queue — and the agent never sees it. Resolves once it is answered.
    */
-  askBtw(
-    chatId: string,
-    requestId: string,
-    question: string,
-    history?: { question: string; response: string }[]
-  ): Promise<BtwAnswer>
-  /** Give up a pending `askBtw` (the card was dismissed). */
-  cancelBtw(requestId: string): Promise<void>
+  askBtw(chatId: string, question: string): Promise<void>
   // ---- Session introspection ----
   /** Whether the chat has a running CLI session (introspection needs one). */
   sessionLive(chatId: string): Promise<boolean>
