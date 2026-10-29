@@ -803,6 +803,15 @@ to place it. The root `ErrorBoundary` in `main.tsx` is the backstop — it canno
 make the app work, but a render throw anywhere must never leave a black window
 with nothing to click.
 
+**Codex reaches the user's Chrome through `node_repl`, never `cua_repl`**
+(`main/codexChrome.ts`). The ChatGPT app installs both into `~/.codex`, but
+`cua_repl`'s browser surface demands an access check only that app can answer,
+so outside it the model lists no browsers and drives Chrome by desktop clicks.
+`node_repl` with the Chrome plugin's client works from Carbon, and nothing tells
+the model so — the plugin ships no skill — so `codexChromeRules` names the route
+in the developer instructions, built only where the config and the client file
+are both present.
+
 Codex's `workspace-write` sandbox carves `.git` out as read-only, and it resolves a worktree's `.git` *pointer file* to the shared gitdir and carves that out too — so a worktree creates no Claude/Codex asymmetry that a plain checkout doesn't already have. If that ever changes, the escape hatch is `additionalDirectories` on the SDK's `ThreadOptions` (forwarded as `--add-dir`).
 
 ### Artifacts (`CLAUDE_CODE_ARTIFACT`)
