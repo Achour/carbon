@@ -3,12 +3,9 @@ import { ArrowDown, ArrowUp, FileDiff, Folder, GitBranch, Laptop, Split } from '
 import type { ChatMeta } from '@shared/types'
 import { PROVIDER_SHORT_LABELS } from '@shared/types'
 import { isAgentColumn, parseAgentColumn } from '@shared/agentRuns'
-import { threadFull, useApp } from '@/store'
+import { useApp } from '@/store'
 import { JobRow, useBackgroundJobs } from '@/components/BackgroundJobs'
-import { SubagentRow, useSubagentRuns } from '@/components/SubagentRow'
-import { delegateLook } from '@/components/messages/DelegateCard'
-import { useElapsed } from '@/components/messages/AgentRows'
-import { ProviderMark } from '@/components/ui/provider-mark'
+import { DelegateRow, SubagentRow, useSubagentRuns, useThreadDelegates } from '@/components/SubagentRow'
 import { basename, formatTokens } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { GitActionButton } from '@/components/GitPanel'
@@ -278,7 +275,7 @@ const SETTLED_ROWS = 6
  * (`agents_delegate`, each a chat on its own provider) and the sub-agents their
  * agents spawned. It stands in for the header's robot menu while the rail is
  * up — `ThreadHeader` drops the menu then — so a fan-out is on screen without a
- * click. A row opens the agent as a column, or folds an open one back.
+ * click. A row opens the agent in place of the chat (`openAgentView`).
  *
  * A long session spawns dozens, so the settled ones past the newest few fold
  * away; a running one is always listed, however old.
@@ -286,11 +283,7 @@ const SETTLED_ROWS = 6
 function AgentsCard({ threadId, ids }: { threadId: string; ids: readonly string[] }): React.JSX.Element | null {
   const chatIds = React.useMemo(() => ids.filter((id) => !isAgentColumn(id)), [ids])
   const runs = useSubagentRuns(chatIds)
-  const chats = useApp((s) => s.chats)
-  const delegates = React.useMemo(
-    () => chats.filter((c) => c.sideOf === threadId && c.delegation).sort((a, b) => a.createdAt - b.createdAt),
-    [chats, threadId]
-  )
+  const delegates = useThreadDelegates(threadId)
   const [all, setAll] = React.useState(false)
   const total = delegates.length + runs.length
   if (total === 0) return null
@@ -325,10 +318,10 @@ function AgentsCard({ threadId, ids }: { threadId: string; ids: readonly string[
     >
       <div data-rail-agents className="surface-group flex flex-col gap-px p-0.5">
         {shownDelegates.map((c) => (
-          <DelegateRow key={c.id} chat={c} open={ids.includes(c.id)} />
+          <DelegateRow key={c.id} chat={c} />
         ))}
         {shownRuns.map(({ chatId, run, provider }) => (
-          <SubagentRow key={`${chatId}:${run.id}`} chatId={chatId} run={run} provider={provider} openIds={ids} />
+          <SubagentRow key={`${chatId}:${run.id}`} chatId={chatId} run={run} provider={provider} />
         ))}
       </div>
       {(hidden > 0 || all) && (
@@ -341,46 +334,6 @@ function AgentsCard({ threadId, ids }: { threadId: string; ids: readonly string[
         </button>
       )}
     </Card>
-  )
-}
-
-/**
- * A delegate as one compact row: the provider's mark with the dot its
- * transcript card wears, `name: task`, and the round's clock. Like that card it
- * is a toggle — it opens the delegate's column, and folds an open one back.
- */
-function DelegateRow({ chat, open }: { chat: ChatMeta; open: boolean }): React.JSX.Element {
-  const waiting = useApp((s) => s.statuses[chat.id] === 'waiting-permission')
-  const full = useApp(threadFull)
-  const reopenSideChat = useApp((s) => s.reopenSideChat)
-  const closeSideChat = useApp((s) => s.closeSideChat)
-  const d = chat.delegation!
-  const look = delegateLook(chat, waiting)
-  const elapsed = useElapsed(d.startedAt ?? d.createdAt, d.finishedAt, look.live)
-  const task = (d.followUp ?? d.task).replace(/\s+/g, ' ').trim()
-  const blocked = !open && full
-  return (
-    <button
-      type="button"
-      data-rail-delegate={chat.id}
-      disabled={blocked}
-      title={blocked ? 'The thread already shows four chats — close one to open this agent.' : `${look.word}: ${task}`}
-      onClick={() => void (open ? closeSideChat(chat.id) : reopenSideChat(chat.id))}
-      className="flex min-w-0 items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-[13px] transition-colors hover:bg-accent disabled:opacity-50"
-    >
-      <span className="relative shrink-0">
-        <ProviderMark provider={chat.provider} className="size-3.5 text-muted-foreground" />
-        <span className={cn('absolute -right-1 -bottom-1 size-1.5 rounded-full', look.dot)} />
-      </span>
-      <span className={cn('min-w-0 flex-1 truncate', !look.live && 'text-muted-foreground')}>
-        <span className="font-medium">{d.name}</span>
-        {task && <span className="text-muted-foreground">: {task}</span>}
-      </span>
-      {elapsed && (
-        <span className="shrink-0 font-mono text-[11px] text-muted-foreground/70 tabular-nums">{elapsed}</span>
-      )}
-      {open && <span className="size-1.5 shrink-0 rounded-full bg-foreground/60" title="Open" />}
-    </button>
   )
 }
 

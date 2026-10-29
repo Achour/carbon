@@ -13,7 +13,7 @@ import {
 import { ProviderAvatar } from '@/components/ui/provider-mark'
 import { WithTooltip } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
-import { messagesOf, threadFull, useApp } from '@/store'
+import { messagesOf, useApp } from '@/store'
 import { useTranscriptSurface } from './surface'
 import { DelegateCard, delegateChildId } from './DelegateCard'
 
@@ -114,8 +114,8 @@ export function useElapsed(from: number | undefined, to: number | undefined, liv
 /**
  * The one row every agent draws as, native or delegated: the provider's avatar
  * with a status dot, `name: task`, a status line, the clock, and a chevron
- * that is the row's affordance — it opens the agent's column, and turned down
- * it says the column is open and a click folds it back.
+ * that is the row's affordance — it opens the agent as the page on screen.
+ * Turned down, it says that page is the one showing.
  */
 export function AgentRowShell({
   provider,
@@ -151,7 +151,7 @@ export function AgentRowShell({
       {...data}
       disabled={!clickable}
       onClick={onToggle}
-      title={clickable ? (open ? 'Collapse its column' : 'Open it beside this chat') : undefined}
+      title={clickable && !open ? 'Open this agent' : undefined}
       className={cn(
         'group flex w-full animate-step-in items-center gap-3 rounded-xl px-2 py-1.5 text-left outline-none transition-colors',
         clickable ? 'hover:bg-accent/50 focus-visible:bg-accent/50' : 'cursor-default'
@@ -197,22 +197,21 @@ function oneLine(text: string): string {
 
 /**
  * A sub-agent the provider spawned itself — Claude's `Task`, Codex's and
- * Grok's and Antigravity's `Agent` — as a row whose open form is a column of
- * the thread (`AgentColumn`). Status, model and clock come off `agentRunOf`,
+ * Grok's and Antigravity's `Agent` — as a row whose open form is a page of the
+ * thread (`AgentPane`). Status, model and clock come off `agentRunOf`,
  * the roster's own rule, so the row, the column and the Agents panel agree.
  */
 export function NativeAgentRow({ part }: { part: ToolPart }): React.JSX.Element {
   const ctx = React.useContext(TranscriptChat)
   const run = React.useMemo(() => agentRunOf(part), [part])
   const columnId = ctx ? agentColumnId(ctx.chatId, part.toolUseId) : null
-  const open = useApp((s) => (columnId ? s.sideColumns.includes(columnId) : false))
-  const full = useApp(threadFull)
-  // The column reads the agent out of its parent's transcript, so it can only
+  const open = useApp((s) => (columnId ? s.agentView === columnId : false))
+  // The view reads the agent out of its parent's transcript, so it can only
   // open while that transcript is on screen — the thread's chat or a column.
   const parentShown = useApp((s) =>
     ctx ? s.activeId === ctx.chatId || s.sideColumns.includes(ctx.chatId) : false
   )
-  const toggleAgentColumn = useApp((s) => s.toggleAgentColumn)
+  const openAgentView = useApp((s) => s.openAgentView)
   const running = run.status === 'running'
   const background = untrackedBackground(part)
   const elapsed = useElapsed(run.startedAt, run.endedAt, running)
@@ -225,7 +224,7 @@ export function NativeAgentRow({ part }: { part: ToolPart }): React.JSX.Element 
         ? 'Started in the background'
         : `Finished${steps}`
   const { openAgent } = useTranscriptSurface()
-  const clickable = !!ctx && parentShown && (open || !full || !!openAgent)
+  const clickable = !!ctx && (parentShown || !!openAgent)
   return (
     <AgentRowShell
       provider={ctx?.provider ?? 'claude'}
@@ -245,13 +244,10 @@ export function NativeAgentRow({ part }: { part: ToolPart }): React.JSX.Element 
       elapsed={background ? null : elapsed}
       open={open}
       clickable={clickable}
-      blockedReason={
-        parentShown ? 'The thread already shows four chats — close one to open this agent.' : undefined
-      }
       onToggle={() => {
         if (!ctx) return
         if (openAgent) openAgent(ctx.chatId, part.toolUseId)
-        else toggleAgentColumn(ctx.chatId, part.toolUseId)
+        else void openAgentView(columnId!)
       }}
       data={{ 'data-agent-run': part.toolUseId, 'data-agent-open': open ? 'true' : undefined }}
     />

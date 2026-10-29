@@ -191,7 +191,8 @@ export const AgentStreamBody = React.memo(function AgentStreamBody({
   live,
   running,
   lead,
-  className
+  className,
+  columnClassName
 }: {
   part: ToolPart
   cwd: string
@@ -200,6 +201,8 @@ export const AgentStreamBody = React.memo(function AgentStreamBody({
   running: boolean
   lead?: React.ReactNode
   className?: string
+  /** The measured content column — the reading column, on a full page. */
+  columnClassName?: string
 }): React.JSX.Element {
   const scrollRef = React.useRef<HTMLDivElement>(null)
   const columnRef = React.useRef<HTMLDivElement>(null)
@@ -250,7 +253,7 @@ export const AgentStreamBody = React.memo(function AgentStreamBody({
         {/* The measured element is the content, not the scroller: a
             ResizeObserver on a scroller reports the viewport, which does not
             move when the stream grows. */}
-        <div ref={columnRef}>
+        <div ref={columnRef} className={columnClassName}>
           {lead}
           {children.length > 0 ? (
             <SubAgentStream parts={children} cwd={cwd} live={live} />
@@ -391,41 +394,6 @@ function AgentRow({ run }: { run: AgentRunView }): React.JSX.Element {
             {meta.join(' · ')}
           </span>
         )}
-      </span>
-    </button>
-  )
-}
-
-/**
- * The one line the transcript gets: how many agents are working right now, what
- * they have cost between them, and the way into the roster.
- *
- * It sits above the composer rather than in the message list because a fan-out
- * is *state*, not an event — five cards spread through the transcript scroll
- * away the moment the first agent answers, and this is the thing you want on
- * screen while you read what they produce. It is present only while something
- * is running, so it costs nothing the rest of the time.
- */
-export function AgentActivityBar({ chatId }: { chatId: string }): React.JSX.Element | null {
-  const totals = useAgents((s) => (s.byChat[chatId] ?? NO_AGENTS).totals)
-  const openAgentsPanel = useApp((s) => s.openAgentsPanel)
-  if (totals.running === 0) return null
-
-  return (
-    <button
-      type="button"
-      onClick={() => openAgentsPanel(undefined, chatId)}
-      className="group mb-2 flex w-full animate-enter items-center gap-2 surface-raised rounded-lg px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
-    >
-      <StatusDot status="running" />
-      <span className="shimmer-text min-w-0 flex-1 truncate text-left">
-        {totals.running} {totals.running === 1 ? 'agent' : 'agents'} working
-      </span>
-      {totals.tokens > 0 && (
-        <span className="shrink-0 tabular-nums">Σ {formatAgentTokens(totals.tokens)} tok</span>
-      )}
-      <span className="shrink-0 text-[11px] text-muted-foreground/70 group-hover:text-foreground">
-        Open Agents ▸
       </span>
     </button>
   )

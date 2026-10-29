@@ -810,7 +810,7 @@ export function RightPanel(): React.JSX.Element | null {
   // The Agents tab is a property of the chat: it exists exactly while the chat
   // has spawned something. It is never auto-selected — a spawn mid-read would
   // otherwise take the file you are looking at off screen — so the way in is the
-  // activity bar above the composer, or the tab itself.
+  // tab itself, or a run's row in the transcript.
   // Any chat in the thread: the tab is the way into every column's roster, and
   // which one it shows is `AgentsPanel`'s question.
   const showAgents = useAgents(anyRuns)

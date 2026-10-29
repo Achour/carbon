@@ -26,73 +26,32 @@ flowchart LR
 
 **The child is a side chat, not a new kind of chat.** It carries `sideOf` (the
 parent's *thread* — the parent itself, or the thread a parent column belongs to)
-and `ephemeral`, so everything `docs/threads.md` says about columns holds for
+and `ephemeral`, so everything `docs/threads.md` says about side chats holds for
 it: it persists, it reopens from the closed list, it is deleted with its thread.
 What makes it a delegation is `ChatMeta.delegation` — the parent, the task, a
 role, and the one outcome that is reported back. Main creates it, so the
 renderer learns of it from a `chat-added` event, which only adds it to `chats`.
 
-**It arrives minimized.** The child is a closed pill in the thread header (with
-its working spinner) and a mark on the thread's sidebar row, and it becomes a
-column only when the user opens it — the pill, or its card in the parent. It
-used to open itself whenever the thread had room, and a turn that fanned out
-three agents took three columns' width from the conversation being read, with
-nobody having asked to watch them. The sidebar row marks every side chat of the
-thread, open or minimized — the same set as the header, open columns then closed
-pills, killed delegates left out of both. Marking open columns alone meant
-minimizing an agent took its icon off the row; marking only the minimized ones
-still *working* was the next wrong answer, since the icon then vanished the
+**It arrives minimized.** The child is a row in the robot menu and the rail's
+Agents card, a card in the parent's transcript, and a mark on the thread's
+sidebar row; it is on screen only when the user opens it, and then as a page of
+the thread rather than a column (`openAgentView`, "Agents open as pages" in
+`docs/threads.md`). It used to open itself as a column whenever the thread had
+room, and a turn that fanned out three agents took three columns' width from the
+conversation being read, with nobody having asked to watch them. The sidebar row
+marks every side chat of the thread, killed delegates left out. Marking only the
+ones still *working* was a wrong answer once, since the icon then vanished the
 moment the agent finished, which is when the user goes looking for it.
 
-**The child sees the task and nothing else.** Parent history is not copied; the
-tool description says so, so the parent writes a complete brief. A
-`delegateBrief` rides the child's first send as `hiddenContext` — who asked, and
-that the final message is returned verbatim — so the child's transcript shows
-the task alone.
-
-**The user names models the way people do** — "ask Sol in Codex" — and the
-parent has no catalog to translate that with, so a nickname sent straight
-through as an id is a turn that fails on the other side. `resolveModel` matches
-it against the provider's *live* catalog (loaded on demand, bounded at 15 s):
-an exact id, then id or label ignoring case and spacing, then the first row
-containing every word, which is the newest of a family because catalogs list
-newest first. No match is an error listing the real ids, so the parent retries;
-no catalog at all passes the name through.
-
-With no `model` given, a delegate gets its provider's own default row
-(`codex-default`, `grok-default`, …) rather than no model: an absent model is
-the empty id, which every picker resolves to *Claude's* "Default" row — a Codex
-delegate's composer chip read "Opus" until this was set.
-
-**Its permission mode is the parent's**, never above it, and it runs in the
-parent's cwd (and worktree). Delegation is **refused in plan mode**:
-`agents_delegate` and `agents_cancel` are in the side-effect table
-(`isAgentsSideEffect` → `isCarbonSideEffect`), the table every provider's
-permission gate reads. That also means no delegate ever runs in plan mode, which
-matters because a plan-mode child is a plan-review prompt on Claude and a plan
-collaboration turn on Codex — neither of which is a delegate doing its task.
-"Review, don't edit" is an instruction in the brief (`delegateBrief` adds it for
-review/research roles), not a sandbox: a delegate in an editing mode can edit.
-
-**One level only, enforced at the call.** A delegate's sessions are not offered
-the `agents_*` tools (`canDelegate` is false for a chat with a `delegation`),
-and `runCarbonTool` refuses them again when `ctx.delegate()` is false — the one
-choke point both transports share, because an unlisted tool name is still a
-name a model can send. The same live check is what makes the Settings switch
-(**Settings → Chats → Agents can delegate**, `AppDefaults.allowDelegation`) bite
-on a running session; whether the tools are *listed* is fixed at spawn.
-
-### One chat, two forms: the card and the column (`DelegateCard`)
+### One chat, two forms: the card and the page (`DelegateCard`)
 
 A delegate is drawn twice and is one chat both times. **Collapsed**, it is a
 row in the parent's transcript where the `agents_delegate` call was — the
 provider's avatar with a status dot, `name: task`, the state (Running, Needs
 your approval, Finished · reported back, Failed, Stopped), and the round's
-elapsed time. **Open**, it is its column. The row is a *toggle*, not a link:
-clicking opens the column (from the thread's closed list) and clicking again
-folds it back into the row; closing the column from its own ✕ leaves the row
-standing, so a delegate put away is always one click from coming back. With
-four chats already on screen the row says so instead of silently doing nothing.
+elapsed time. **Open**, it is its own chat drawn in place of the thread, with
+"*Chat* › *name*" in the header and the way back beside it. The row opens it;
+the header, Escape or a pill go back, and the row is still standing.
 
 Everything on it is the **child's** live state, read from its meta and status,
 not the tool call's — the call returns the moment the agent starts, and the
@@ -115,7 +74,7 @@ ordinary case — so each needs a handle that the **user** can say and the
 **parent** can act on. Every delegate has a `name`, unique among its parent's:
 the one the parent passed (`slugName`, so "Math Reviewer" is `math-reviewer`),
 or `<provider>-<letter>` — `codex-a`, `codex-b`, `claude-a` (`autoName`). It is
-the column's badge, the "finished" chip, the first words of every delivery and
+the breadcrumb's name, the "finished" chip, the first words of every delivery and
 of `agents_status`'s rows, so the word the user reads is the word the model
 was told.
 
@@ -176,13 +135,13 @@ whose `idle` had not flipped, which the prune would then dispose.
   said after it is `failed`.
 - **A stopped turn looks finished**, so `ChatManager.interrupt` records it in
   `delegationStopped` before the idle lands and the outcome is `cancelled` — the
-  user pressed Stop in the column, and the parent is told so it does not wait
+  user pressed Stop in its chat, and the parent is told so it does not wait
   forever. `agents_cancel` is the other cancel: the parent asked, so the record
   is settled *and* marked delivered first, and then the child's session is
   interrupted **and disposed**. An interrupt alone is best-effort — Grok and
   Antigravity have nothing to cancel while their client is still starting and
   would prompt the moment it came up — and "stopped" is a promise to the parent
-  that nothing more runs. The transcript stays; a send in the column resumes it.
+  that nothing more runs. The transcript stays; a send in its chat resumes it.
 - **Any other disposal of a busy delegate settles it as stopped.** A disposed
   session emits no final status, so an effort change or a worktree exit
   mid-turn would have left it `running` with nothing to settle it;
@@ -191,14 +150,14 @@ whose `idle` had not flipped, which the prune would then dispose.
 - **Killing one** ("kill codex-a", "kill all the agents") is `agents_cancel`,
   which the tool description points at for every word a user uses for it —
   kill, stop, cancel, close, dismiss. A working agent is stopped; a finished
-  one is not an error. Either way its column closes (`chat-close`) and nothing
+  one is not an error. Either way its page closes if it is showing (`chat-close`) and nothing
   is deleted — the card in the parent reopens it, and `agents_send` can give it
   new work. `"all"` does every delegate of the parent's. A killed delegate is
   also **dismissed** (`Delegation.dismissedAt`): it leaves the thread header's
   closed pills, since a kill is "put it away" where a ✕ is only "not now" —
   its card in the parent and the ＋ list still reach it, and reopening it
   (`chats:undismiss`) or `agents_send` clears the mark. Deleting stays the
-  user's own act, from the column's menu: a model mapping "kill" onto
+  user's own act, from its chat: a model mapping "kill" onto
   destroying a conversation would be a misheard word the user cannot undo.
 - **Deleting a delegate** reports a running one to its parent as stopped
   (`forgetDelegation`, before the row goes, since the report is read off it).
@@ -324,9 +283,9 @@ access is narrowed before `agents_send` reaches it if the parent has since
 been set to Ask.
 
 **Kill stops the session, not the record.** A delegate whose round ended can
-be put back to work by the user typing in its column — the record still says
+be put back to work by the user typing in its chat — the record still says
 `completed` while the session runs — so `agents_cancel` halts any busy session
-whatever the record says. And `chat-close` in the renderer closes the column
+whatever the record says. And `chat-close` in the renderer closes the page
 without `closeSideChat`'s discard-if-unused branch: a slot still hydrating, or
 a hidden window with its transcript events parked, looks unused, and a kill
 promises nothing is deleted.

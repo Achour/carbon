@@ -4,6 +4,7 @@ import {
   ArrowLeftRight,
   ArrowUpLeft,
   Bot,
+  ChevronRight,
   Columns3,
   GitMerge,
   LayoutDashboard,
@@ -37,6 +38,7 @@ import { cn } from '@/lib/utils'
 import { chatActivityKind } from '@/lib/chatActivity'
 import { focusComposer } from '@/lib/composerFocus'
 import { orderByHint } from '@/lib/tabOrder'
+import { CHAT_BLEED } from '@/lib/chatColumn'
 import {
   COLUMN_DRAG_MIME,
   draggedThread,
@@ -55,7 +57,7 @@ import {
 } from '@/store'
 import { ChatView } from '@/components/ChatView'
 import { BackgroundJobs } from '@/components/BackgroundJobs'
-import { SubagentRow, useSubagentRuns } from '@/components/SubagentRow'
+import { DelegateRow, SubagentRow, useSubagentRuns, useThreadDelegates } from '@/components/SubagentRow'
 import { ContextStrip } from '@/components/ContextStrip'
 import { ProviderMark } from '@/components/ui/provider-mark'
 import { Button } from '@/components/ui/button'
@@ -107,6 +109,7 @@ export function ThreadView({ chat }: { chat: ChatMeta }): React.JSX.Element {
   useThreadKeys(ids)
   const join = useThreadJoinDrop()
   const railShown = useApp((s) => s.quickRail && !s.railHidden)
+  const agentView = useApp((s) => s.agentView)
 
   return (
     // The frosted main column: one wash under every column, so a thread reads
@@ -114,13 +117,13 @@ export function ThreadView({ chat }: { chat: ChatMeta }): React.JSX.Element {
     <div data-chatview className="relative flex h-full min-w-0 flex-1 flex-col" {...join.handlers}>
       <ThreadHeader chat={chat} ids={ids} />
       <div className="relative flex min-h-0 flex-1">
-        {ids.length === 1 ? (
-          <div className="flex min-h-0 min-w-0 flex-1">
-            <ChatView chat={chat} />
-          </div>
-        ) : (
-          <ThreadColumns ids={ids} threadId={chat.id} />
-        )}
+        {/* An agent opened is drawn in place of the columns, which stay
+            mounted underneath — hidden, like an expansion's — so coming back
+            replays no stream and keeps every scroll position. */}
+        <div className={cn('flex min-h-0 min-w-0 flex-1', agentView && 'hidden')}>
+          {ids.length === 1 ? <ChatView chat={chat} /> : <ThreadColumns ids={ids} threadId={chat.id} />}
+        </div>
+        {agentView && <AgentView key={agentView} id={agentView} />}
         {/* The chat's own state beside it while it runs. Off by default; the
             top bar's toggle pins it. Follows the focused column in a thread. */}
         {railShown && <SessionRail chat={chat} ids={ids} />}
@@ -270,6 +273,11 @@ function useThreadKeys(ids: readonly string[]): void {
         st.togglePanel()
         return
       }
+      if (st.agentView) {
+        e.preventDefault()
+        st.closeAgentView()
+        return
+      }
       if (st.expandedChatId) {
         e.preventDefault()
         st.toggleExpandedChat(st.expandedChatId)
@@ -290,6 +298,7 @@ function ThreadHeader({ chat, ids }: { chat: ChatMeta; ids: readonly string[] })
   const railHidden = useApp((s) => s.railHidden)
   const setRailHidden = useApp((s) => s.setRailHidden)
   const railShown = quickRail && !railHidden
+  const agentView = useApp((s) => s.agentView)
   const chatIds = React.useMemo(() => ids.filter((id) => !isAgentColumn(id)), [ids])
   // A rail put away while it floated over the panel is back beside the chat
   // once the panel closes: the dismissal was of the overlay, not the pin.
@@ -319,7 +328,7 @@ function ThreadHeader({ chat, ids }: { chat: ChatMeta; ids: readonly string[] })
       chats
         // A killed delegate is put away, not merely closed — it stays
         // reachable from its card and the ＋ list, but not from the strip.
-        .filter((c) => isClosedSideChat(c, chat.id, sideColumns) && !c.delegation?.dismissedAt)
+        .filter((c) => isClosedSideChat(c, chat.id, sideColumns))
         .sort((a, b) => b.updatedAt - a.updatedAt),
     [chats, chat.id, sideColumns]
   )
@@ -340,14 +349,18 @@ function ThreadHeader({ chat, ids }: { chat: ChatMeta; ids: readonly string[] })
           </Button>
         </WithTooltip>
       )}
-      <div
-        className={cn(
-          'min-w-0 truncate text-[13px] font-semibold',
-          ids.length === 1 && 'flex-1'
-        )}
-      >
-        {chat.title || 'New chat'}
-      </div>
+      {agentView ? (
+        <AgentCrumb thread={chat} id={agentView} fill={ids.length === 1} />
+      ) : (
+        <div
+          className={cn(
+            'min-w-0 truncate text-[13px] font-semibold',
+            ids.length === 1 && 'flex-1'
+          )}
+        >
+          {chat.title || 'New chat'}
+        </div>
+      )}
       {(ids.length > 1 || closed.length > 0) && (
         <>
           <div
@@ -386,7 +399,7 @@ function ThreadHeader({ chat, ids }: { chat: ChatMeta; ids: readonly string[] })
       {/* With the session rail up, its Agents and Background cards carry these
           two; the header keeps them only while the rail is away. */}
       {!railShown && <BackgroundJobs chatId={parseAgentColumn(focused)?.parentId ?? focused} />}
-      {ids.length >= 3 && (
+      {ids.length >= 3 && !agentView && (
         <div
           role="group"
           aria-label="Layout"
@@ -408,7 +421,7 @@ function ThreadHeader({ chat, ids }: { chat: ChatMeta; ids: readonly string[] })
           </LayoutButton>
         </div>
       )}
-      {!railShown && <SubagentsMenu chatIds={chatIds} openIds={ids} />}
+      {!railShown && <SubagentsMenu chatIds={chatIds} threadId={chat.id} />}
       <AddChatControl count={ids.length} threadId={chat.id} />
       <ThreadMenu chat={chat} />
       <WithTooltip label={railShown ? 'Hide session details' : 'Show session details'}>
@@ -618,28 +631,32 @@ function ThreadPill({
 }
 
 /**
- * The thread's spawned sub-agents — every chat's on screen, Claude's `Task`s
- * and the other providers' `Agent`s — behind one robot icon at the right of
- * the header, rather than as pills. A working session spins up many of them,
- * and a pill each crowded out the chats the strip is for; delegates are chats
- * and keep their pills. Read off `agentsStore` (each `ChatView` publishes its
- * fold there, carried forward by identity), so the menu moves when an agent
- * does and not on every token. A row opens the agent as a column, or folds an
- * open one back. A backgrounded agent is also a live job in the CLI's task set,
+ * The thread's agents behind one robot icon at the right of the header: its
+ * delegates (`agents_delegate`) and the sub-agents every chat on screen spawned
+ * — Claude's `Task`s and the other providers' `Agent`s. A working session spins
+ * up many of them, and a pill each crowded out the chats the strip is for.
+ * Sub-agents are read off `agentsStore` (each `ChatView` publishes its fold
+ * there, carried forward by identity), so the menu moves when an agent does and
+ * not on every token. A row opens the agent in place of the chat
+ * (`openAgentView`). A backgrounded agent is also a live job in the CLI's task set,
  * and its Stop lives here rather than in the "running" pill, which leaves
  * agents to this menu so one fan-out is not counted twice.
  */
 function SubagentsMenu({
   chatIds,
-  openIds
+  threadId
 }: {
   chatIds: readonly string[]
-  openIds: readonly string[]
+  threadId: string
 }): React.JSX.Element | null {
   const rows = useSubagentRuns(chatIds)
+  const delegates = useThreadDelegates(threadId)
   const [open, setOpen] = React.useState(false)
-  const working = rows.filter((r) => r.run.status === 'running').length
-  if (!rows.length) return null
+  const total = rows.length + delegates.length
+  const working =
+    rows.filter((r) => r.run.status === 'running').length +
+    delegates.filter((c) => c.delegation!.status === 'running').length
+  if (!total) return null
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
@@ -648,12 +665,12 @@ function SubagentsMenu({
             size="sm"
             variant="ghost"
             className="no-drag relative h-6.5 shrink-0 gap-1 px-1.5"
-            aria-label={`Sub-agents: ${rows.length}${working ? `, ${working} working` : ''}`}
-            data-subagents-menu={rows.length}
+            aria-label={`Agents: ${total}${working ? `, ${working} working` : ''}`}
+            data-subagents-menu={total}
           >
             <Bot className={cn(working > 0 && 'text-primary')} />
             <span className="text-[11px] text-muted-foreground tabular-nums">
-              {working > 0 ? `${working}/${rows.length}` : rows.length}
+              {working > 0 ? `${working}/${total}` : total}
             </span>
             {working > 0 && (
               <span className="absolute top-1 right-1 size-1.5 animate-pulse rounded-full bg-primary" />
@@ -663,11 +680,15 @@ function SubagentsMenu({
       />
       <PopoverContent align="end" className="w-80 p-1">
         <div className="px-2 pt-1.5 pb-1 text-[11px] font-medium text-muted-foreground/70">
-          Sub-agents{working ? ` · ${working} working` : ''}
+          Agents{working ? ` · ${working} working` : ''}
         </div>
-        <div className="max-h-80 overflow-y-auto">
+        {/* A click opens the agent as the page on screen, so the menu goes. */}
+        <div className="max-h-80 overflow-y-auto" onClick={() => setOpen(false)}>
+          {delegates.map((c) => (
+            <DelegateRow key={c.id} chat={c} />
+          ))}
           {rows.map(({ chatId, run, provider }) => (
-            <SubagentRow key={`${chatId}:${run.id}`} chatId={chatId} run={run} provider={provider} openIds={openIds} />
+            <SubagentRow key={`${chatId}:${run.id}`} chatId={chatId} run={run} provider={provider} />
           ))}
         </div>
       </PopoverContent>
@@ -677,7 +698,7 @@ function SubagentsMenu({
 
 /**
  * The prompt the parent agent wrote, as the first message of the agent's
- * column — marked as sent by another agent, and folded past a few lines: a
+ * page — marked as sent by another agent, and folded past a few lines: a
  * brief is often pages long, and the work below it is what was opened.
  */
 function AgentPrompt({ text }: { text: string }): React.JSX.Element {
@@ -703,7 +724,61 @@ function AgentPrompt({ text }: { text: string }): React.JSX.Element {
 }
 
 /**
- * A native sub-agent opened as a thread column — Claude's `Task`, Codex's,
+ * An agent opened as a page of its thread, drawn in place of the columns:
+ * a delegate's own chat (composer and all — it is a chat, and can be talked
+ * to), or a native sub-agent's stream. The header above carries the way back.
+ */
+function AgentView({ id }: { id: string }): React.JSX.Element | null {
+  if (isAgentColumn(id)) return <AgentPane id={id} />
+  return <DelegatePane id={id} />
+}
+
+function DelegatePane({ id }: { id: string }): React.JSX.Element | null {
+  const chat = useApp((s) => chatMeta(s, id))
+  if (!chat) return null
+  return (
+    <section data-agent-view={id} aria-label={chat.delegation?.name ?? 'Agent'} className="flex min-h-0 min-w-0 flex-1">
+      <ChatView chat={chat} side />
+    </section>
+  )
+}
+
+/**
+ * The thread's title and the agent on screen, as a breadcrumb in place of the
+ * title: "Chat / codex-a  task…". The chat's name is the way back, as Escape is.
+ */
+function AgentCrumb({ thread, id, fill }: { thread: ChatMeta; id: string; fill: boolean }): React.JSX.Element {
+  const closeAgentView = useApp((s) => s.closeAgentView)
+  const ref = parseAgentColumn(id)
+  const delegate = useApp((s) => (ref ? undefined : chatMeta(s, id)))
+  const parentProvider = useApp((s) => (ref ? chatMeta(s, ref.parentId)?.provider : undefined))
+  const run = useAgents((s) => (ref ? s.byChat[ref.parentId]?.runs.find((r) => r.id === ref.toolUseId) : undefined))
+  const provider = delegate?.provider ?? parentProvider ?? 'claude'
+  const d = delegate?.delegation
+  const name = d?.name ?? run?.type ?? 'Agent'
+  const detail = (d ? (d.followUp ?? d.task) : run?.description)?.replace(/\s+/g, ' ').trim()
+  return (
+    <div data-agent-crumb className={cn('flex min-w-0 items-center gap-1.5 text-[13px]', fill ? 'flex-1' : 'shrink')}>
+      <WithTooltip label="Back to the chat  esc" side="bottom">
+        <button
+          type="button"
+          onClick={closeAgentView}
+          className="no-drag min-w-0 max-w-[40%] shrink truncate rounded-md px-1 -mx-1 font-semibold text-muted-foreground transition-colors hover:text-foreground"
+        >
+          {thread.title || 'New chat'}
+        </button>
+      </WithTooltip>
+      <ChevronRight className="size-3.5 shrink-0 text-muted-foreground/60" />
+      <ProviderMark provider={provider} className="size-3.5 shrink-0 text-muted-foreground" />
+      <span className="shrink-0 font-semibold">{name}</span>
+      {detail && <span className="min-w-0 truncate text-muted-foreground">{detail}</span>}
+      {delegate && <ChatMark id={id} labelled />}
+    </div>
+  )
+}
+
+/**
+ * A native sub-agent opened as a page of its thread — Claude's `Task`, Codex's,
  * Grok's and Antigravity's `Agent` alike. Its stream is read live out of the
  * parent chat's transcript (the spawning call's `children`), so it needs no
  * storage of its own and cannot drift from the row it was opened from.
@@ -714,29 +789,16 @@ function AgentPrompt({ text }: { text: string }): React.JSX.Element {
  *
  * There is no composer, because there is nobody to type to — no provider
  * offers a way to message a sub-agent it is running — and the footer says so:
- * "Runs on its own", with the way back to the parent.
+ * "Runs on its own", with the way back to the chat.
  */
-function AgentColumn({
-  id,
-  index,
-  focused,
-  expanded,
-  className
-}: {
-  id: string
-  index: number
-  focused: boolean
-  expanded: boolean
-  className: string
-}): React.JSX.Element | null {
+function AgentPane({ id }: { id: string }): React.JSX.Element | null {
   const ref = parseAgentColumn(id)
   const parentId = ref?.parentId ?? ''
   const parent = useApp((s) => chatMeta(s, parentId))
   // The part by reference — see `useAgentPart`: an open column re-renders when
   // its agent moves, not on every token the parent streams.
   const part = useAgentPart(parentId, ref?.toolUseId ?? '')
-  const toggleExpandedChat = useApp((s) => s.toggleExpandedChat)
-  const closeSideChat = useApp((s) => s.closeSideChat)
+  const closeAgentView = useApp((s) => s.closeAgentView)
   const provider = parent?.provider ?? 'claude'
   const transcriptChat = React.useMemo(() => ({ chatId: parentId, provider }), [parentId, provider])
   const run = React.useMemo(() => (part ? agentRunOf(part) : undefined), [part])
@@ -752,69 +814,24 @@ function AgentColumn({
     ''
   const title = run?.description || 'Subagent'
   // Stable across renders, so the memoized stream body below is skipped when
-  // nothing it draws has moved.
-  const lead = React.useMemo(
-    () => (
-      <>
-        <div className="mb-3 truncate text-[13px] font-medium text-foreground">{title}</div>
-        {prompt && <AgentPrompt text={prompt} />}
-      </>
-    ),
-    [title, prompt]
-  )
+  // nothing it draws has moved. The title is the header's breadcrumb.
+  const lead = React.useMemo(() => (prompt ? <AgentPrompt text={prompt} /> : null), [prompt])
   if (!ref) return null
   const model = run?.model ? modelDisplayName(run.model, provider) : PROVIDER_LABELS[provider]
   const claimFocus = (): void => useApp.getState().focusChat(id)
-  // Back to the chat that spawned it — and if this column was the expanded
-  // one, the expansion moves there with the focus (`focusChat`'s rule).
-  const openParent = (): void => useApp.getState().focusChat(parentId, { caret: true })
 
   return (
     <section
-      data-thread-column={id}
+      data-agent-view={id}
       data-agent-column={ref.toolUseId}
-      aria-label={`Chat ${index + 1}`}
-      // Focusable, so ⌘1–⌘4 onto it takes the keyboard away from the composer
-      // it left — there is no composer here to take it.
+      aria-label={title}
+      // Focusable, so the keyboard leaves the composer it came from — there is
+      // no composer here to take it.
       tabIndex={-1}
       onPointerDownCapture={claimFocus}
       onFocusCapture={claimFocus}
-      className={cn('relative flex min-h-0 min-w-0 flex-col outline-none', className)}
+      className="relative flex min-h-0 min-w-0 flex-1 flex-col outline-none"
     >
-      <div className="flex h-8 shrink-0 items-center gap-2 pr-1.5 pl-3">
-        <ChatNumber index={index} focused={focused} />
-        <ProviderMark provider={provider} className="size-3 shrink-0 text-muted-foreground" />
-        <Bot className="size-3 shrink-0 text-muted-foreground" />
-        <span className="shrink-0 text-xs text-muted-foreground">Subagent of</span>
-        <span
-          title={parent?.title}
-          className={cn('min-w-0 truncate text-xs font-medium', focused ? 'text-foreground' : 'text-muted-foreground')}
-        >
-          {parent?.title?.trim() || 'New chat'}
-        </span>
-        <div className="ml-auto flex shrink-0 items-center">
-          <WithTooltip label={expanded ? 'Show all chats  esc' : 'Expand  ⌘⇧↵'}>
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              onClick={() => toggleExpandedChat(id)}
-              aria-label={expanded ? 'Show all chats' : `Expand chat ${index + 1}`}
-            >
-              {expanded ? <Minimize2 /> : <Maximize2 />}
-            </Button>
-          </WithTooltip>
-          <WithTooltip label="Close">
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              onClick={() => void closeSideChat(id)}
-              aria-label={`Close chat ${index + 1}`}
-            >
-              <X />
-            </Button>
-          </WithTooltip>
-        </div>
-      </div>
       <TranscriptChat.Provider value={transcriptChat}>
         {part ? (
           <AgentStreamBody
@@ -822,39 +839,44 @@ function AgentColumn({
             cwd={parent?.cwd ?? ''}
             live={live}
             running={running}
-            className="px-4"
+            className="px-0 py-5"
+            // The chat's own reading column, so the agent reads like the
+            // conversation it was opened from rather than edge to edge.
+            columnClassName="mx-auto max-w-3xl px-6"
             lead={lead}
           />
         ) : (
           <div className="flex-1 px-4 py-6 text-[13px] text-muted-foreground">
-            This agent is not in the part of its chat that is loaded. Scroll that chat up to load
-            it, or close this column.
+            This agent is not in the part of its chat that is loaded. Go back and scroll that chat
+            up to load it.
           </div>
         )}
       </TranscriptChat.Provider>
-      <div className="@container mx-3 mb-3 flex shrink-0 items-center gap-2 rounded-2xl border border-border bg-card/60 px-3.5 py-2 text-[13px]">
-        <ProviderMark provider={provider} className="size-3.5 shrink-0" />
-        <span className="min-w-0 truncate font-medium text-foreground">{model}</span>
-        {run?.effort && <span className="shrink-0 text-muted-foreground">{run.effort}</span>}
-        <span className={cn('shrink-0 text-muted-foreground', running && 'shimmer-text')}>
-          {running
-            ? `Working${elapsed ? ` ${elapsed}` : ''}`
-            : run?.status === 'failed'
-              ? 'Failed'
-              : part && untrackedBackground(part)
-                ? 'Started in the background'
-                : `Finished${elapsed ? ` in ${elapsed}` : ''}`}
-        </span>
-        <span className="flex-1" />
-        <span className="hidden shrink-0 text-muted-foreground @[420px]:inline">Runs on its own</span>
-        <button
-          type="button"
-          onClick={openParent}
-          className="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 font-medium text-foreground transition-colors hover:bg-accent"
-        >
-          <ArrowUpLeft className="size-3.5" />
-          Open parent
-        </button>
+      <div className="mx-auto w-full max-w-3xl shrink-0 px-6 pb-5">
+        <div className={cn(CHAT_BLEED, '@container flex items-center gap-2 rounded-2xl border border-border bg-card/60 px-3.5 py-2 text-[13px]')}>
+          <ProviderMark provider={provider} className="size-3.5 shrink-0" />
+          <span className="min-w-0 truncate font-medium text-foreground">{model}</span>
+          {run?.effort && <span className="shrink-0 text-muted-foreground">{run.effort}</span>}
+          <span className={cn('shrink-0 text-muted-foreground', running && 'shimmer-text')}>
+            {running
+              ? `Working${elapsed ? ` ${elapsed}` : ''}`
+              : run?.status === 'failed'
+                ? 'Failed'
+                : part && untrackedBackground(part)
+                  ? 'Started in the background'
+                  : `Finished${elapsed ? ` in ${elapsed}` : ''}`}
+          </span>
+          <span className="flex-1" />
+          <span className="hidden shrink-0 text-muted-foreground @[420px]:inline">Runs on its own</span>
+          <button
+            type="button"
+            onClick={closeAgentView}
+            className="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 font-medium text-foreground transition-colors hover:bg-accent"
+          >
+            <ArrowUpLeft className="size-3.5" />
+            Back to chat
+          </button>
+        </div>
       </div>
     </section>
   )
@@ -1341,9 +1363,8 @@ function ThreadColumn({
   expanded: boolean
   className: string
 }): React.JSX.Element | null {
-  if (isAgentColumn(id)) {
-    return <AgentColumn id={id} index={index} focused={focused} expanded={expanded} className={className} />
-  }
+  // Agents open as a page of the thread (`AgentView`), never as a column.
+  if (isAgentColumn(id)) return null
   return <ChatColumn id={id} threadId={threadId} index={index} focused={focused} expanded={expanded} className={className} />
 }
 

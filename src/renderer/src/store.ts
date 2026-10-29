@@ -503,7 +503,9 @@ function liveColumns(chats: ChatMeta[], owner: string, ids: string[]): string[] 
 
 /** A side chat of `threadId` with no column open — a row of the `+` popover's closed list. */
 export function isClosedSideChat(c: ChatMeta, threadId: string, sideColumns: string[]): boolean {
-  return c.sideOf === threadId && !sideColumns.includes(c.id)
+  // A delegate is an agent, opened as a page of the thread (`openAgentView`)
+  // from the rail, the robot menu or its card — never offered back as a column.
+  return c.sideOf === threadId && !c.delegation && !sideColumns.includes(c.id)
 }
 
 /**
@@ -525,8 +527,8 @@ export function isUnusedSideChat(s: Pick<AppState, 'sideChats' | 'statuses'>, id
  * More than one conversation on screen: a thread with side columns, none of
  * them expanded. The one question floating and the docked reserve both ask.
  */
-export function severalChatsShown(s: Pick<AppState, 'sideColumns' | 'expandedChatId'>): boolean {
-  return s.sideColumns.length > 0 && s.expandedChatId === null
+export function severalChatsShown(s: Pick<AppState, 'sideColumns' | 'expandedChatId' | 'agentView'>): boolean {
+  return s.sideColumns.length > 0 && s.expandedChatId === null && s.agentView === null
 }
 
 /**
@@ -534,7 +536,7 @@ export function severalChatsShown(s: Pick<AppState, 'sideColumns' | 'expandedCha
  * several chats on screen, and not maximized (where it *is* the content pane).
  */
 export function panelFloats(
-  s: Pick<AppState, 'panelFloating' | 'panelMaximized' | 'sideColumns' | 'expandedChatId'>
+  s: Pick<AppState, 'panelFloating' | 'panelMaximized' | 'sideColumns' | 'expandedChatId' | 'agentView'>
 ): boolean {
   return s.panelFloating && !s.panelMaximized && severalChatsShown(s)
 }
@@ -764,6 +766,19 @@ interface AppState {
    */
   expandedByChat: Record<string, string>
   toggleExpandedChat(id: string): void
+  /**
+   * The agent drawn in place of the thread's columns — a delegate's chat id or
+   * a native sub-agent's `agentColumnId` — or null for the columns. An agent
+   * is opened *into*, as a sub-page of the chat that started it, never beside
+   * it as a column: the header reads "Chat / agent" and Escape or the chat's
+   * name goes back. The columns stay mounted underneath, hidden, so coming back
+   * replays nothing. Not persisted, and dropped on a thread switch.
+   */
+  agentView: string | null
+  /** The chat focus returns to when the agent view closes. */
+  agentViewFrom: string | null
+  openAgentView(id: string): Promise<void>
+  closeAgentView(): void
   /** The layout picked for three or more chats; null follows the count. */
   threadLayout: ThreadLayout | null
   /**
@@ -834,12 +849,6 @@ interface AppState {
    * awaited.
    */
   reopenSideChat(id: string): Promise<void>
-  /**
-   * Open a native sub-agent as a column of the thread, or fold it back into its
-   * row if it is open (`AgentColumn`). Its column id names the chat whose
-   * transcript holds the spawn — see `agentColumnId`.
-   */
-  toggleAgentColumn(parentId: string, toolUseId: string): void
   /**
    * Fetch side chats' transcripts into slots that already exist — the second
    * half of a reopen, and what a thread restored after a relaunch needs, since
@@ -1788,6 +1797,7 @@ function chatSwitchPatch(
     | 'sideChats'
     | 'expandedChatId'
     | 'expandedByChat'
+    | 'agentView'
   >,
   nextId: string | null
 ): Partial<AppState> {
@@ -1829,14 +1839,16 @@ function chatSwitchPatch(
     // a thread nobody is looking at running through `set` — and every selector
     // in the app with it. `openChat` fetches them back, alongside the thread's
     // own transcript, which it refetches anyway.
-    ...(s.sideColumns.length && s.activeId !== nextId
-      ? { sideChats: omit(s.sideChats, s.sideColumns) }
+    // An open agent view is a page of the outgoing thread, and goes with it.
+    ...(s.activeId !== nextId && (s.sideColumns.length || s.agentView)
+      ? { sideChats: omit(s.sideChats, s.agentView ? [...s.sideColumns, s.agentView] : s.sideColumns) }
       : {}),
+    ...(s.activeId !== nextId ? { agentView: null, agentViewFrom: null } : {}),
     sideColumns,
     sideColumnsByChat,
     // Focus describes the thread on screen: the next one's own chat is where
     // keys land until a column is clicked — or the column it had expanded.
-    focusedChatId: expanded ?? nextId,
+    focusedChatId: (s.activeId === nextId ? s.agentView : null) ?? expanded ?? nextId,
     expandedChatId: expanded,
     expandedByChat,
     // The closed list is scoped to the active thread, so a confirmation still
@@ -1844,6 +1856,24 @@ function chatSwitchPatch(
     // opened from is no longer drawing — `canvasScopePatch`'s rule, one level
     // down.
     pendingSideChatDelete: null
+  }
+}
+
+/**
+ * Leave the agent view. A delegate's slot goes with it unless that chat is
+ * also a column — the slot is what `onScreen` keys on, so one left standing
+ * would keep a chat nobody is looking at streaming through `set`.
+ */
+function leaveAgentView(
+  s: Pick<AppState, 'agentView' | 'sideColumns' | 'sideChats'>
+): Partial<AppState> {
+  const id = s.agentView
+  if (!id) return {}
+  const keepSlot = isAgentColumn(id) || s.sideColumns.includes(id)
+  return {
+    agentView: null,
+    agentViewFrom: null,
+    ...(keepSlot ? {} : { sideChats: omit(s.sideChats, [id]) })
   }
 }
 
@@ -2374,6 +2404,8 @@ export const useApp = create<AppState>((set, get) => ({
   canvasHtml: {},
   pendingCanvasDelete: null,
   sideChats: {},
+  agentView: null,
+  agentViewFrom: null,
   sideColumns: [],
   sideColumnsByChat: readStoredColumns(),
   focusedChatId: null,
@@ -3364,9 +3396,13 @@ export const useApp = create<AppState>((set, get) => ({
   focusChat(id, opts) {
     set((s) => {
       const unread = id in s.unreadChats
-      const moveExpansion = s.expandedChatId !== null && s.expandedChatId !== id
-      if (s.focusedChatId === id && !unread && !moveExpansion) return s
+      // Focusing anything but the agent on screen — a pill, ⌘1–⌘4, a
+      // notification — is going back to the columns.
+      const leave = s.agentView !== null && s.agentView !== id
+      const moveExpansion = s.expandedChatId !== null && s.expandedChatId !== id && s.agentView !== id
+      if (s.focusedChatId === id && !unread && !moveExpansion && !leave) return s
       return {
+        ...(leave ? leaveAgentView(s) : {}),
         focusedChatId: id,
         ...(moveExpansion ? { expandedChatId: id } : {}),
         ...(unread ? { unreadChats: omit(s.unreadChats, [id]) } : {})
@@ -3377,7 +3413,7 @@ export const useApp = create<AppState>((set, get) => ({
       // would keep landing in the composer the user just moved away from.
       if (isAgentColumn(id)) {
         requestAnimationFrame(() =>
-          document.querySelector<HTMLElement>(`[data-thread-column="${CSS.escape(id)}"]`)?.focus()
+          document.querySelector<HTMLElement>(`[data-agent-view="${CSS.escape(id)}"]`)?.focus()
         )
       } else focusComposer(id)
     }
@@ -3570,21 +3606,46 @@ export const useApp = create<AppState>((set, get) => ({
     }))
   },
 
-  toggleAgentColumn(parentId, toolUseId) {
-    const id = agentColumnId(parentId, toolUseId)
+  async openAgentView(id) {
     const s = get()
-    if (s.sideColumns.includes(id)) {
-      set((st) => closeSideColumn(st, id))
+    if (s.agentView === id) {
+      get().focusChat(id, { caret: true })
       return
     }
-    // Only beside a transcript on screen — the column reads the agent out of it.
-    if (s.activeId !== parentId && !s.sideColumns.includes(parentId)) return
-    if (threadFull(s)) return
+    const agent = parseAgentColumn(id)
+    if (agent) {
+      // The view reads the agent out of its parent's transcript, so that
+      // transcript has to be on screen — the thread's chat or a column.
+      if (s.activeId !== agent.parentId && !s.sideColumns.includes(agent.parentId)) return
+    } else {
+      // Only a delegate of the thread on screen: its tools run in that folder.
+      const meta = chatMeta(s, id)
+      if (!meta?.delegation || meta.sideOf !== s.activeId) return
+      // Opening a killed delegate takes the kill back, as reopening one did.
+      if (meta.delegation.dismissedAt) void window.api.undismissChat(id)
+    }
+    const needsSlot = !agent && !s.sideChats[id]
     set((st) => ({
-      sideColumns: [...st.sideColumns, id],
-      // Seen at once: an expanded column would hide the one just opened.
-      expandedChatId: null
+      ...leaveAgentView(st),
+      agentView: id,
+      // Back to where the user was, unless that was another agent.
+      agentViewFrom: st.agentView ? st.agentViewFrom : st.focusedChatId,
+      // The slot first, empty, so the view lands at once and events streaming
+      // in during the fetch have somewhere to go — `reopenSideChat`'s order.
+      ...(needsSlot ? { sideChats: { ...st.sideChats, [id]: EMPTY_SIDE_SLOT } } : {})
     }))
+    get().focusChat(id, { caret: true })
+    if (needsSlot) await get().hydrateSideChats([id])
+  },
+
+  closeAgentView() {
+    const s = get()
+    if (!s.agentView) return
+    const from = s.agentViewFrom
+    const back =
+      from && (from === s.activeId || s.sideColumns.includes(from)) ? from : (s.activeId ?? null)
+    set((st) => leaveAgentView(st))
+    if (back) get().focusChat(back, { caret: true })
   },
 
   async reopenSideChat(id) {
@@ -3635,6 +3696,7 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   async deleteSideChat(id) {
+    if (get().agentView === id) get().closeAgentView()
     set((st) => ({
       ...closeSideColumn(st, id),
       // Drop the slot, the meta and every per-chat map keyed by it. This one is
@@ -4592,7 +4654,10 @@ export const useApp = create<AppState>((set, get) => ({
     const side = chatMeta(get(), id)
     if (id && side?.sideOf) {
       if (get().activeId !== side.sideOf) await get().openChat(side.sideOf)
-      if (get().activeId === side.sideOf) await get().reopenSideChat(id)
+      if (get().activeId !== side.sideOf) return
+      // An agent opens as a page of its thread, never as a column.
+      if (side.delegation) await get().openAgentView(id)
+      else await get().reopenSideChat(id)
       return
     }
     // Opening an archived chat restores it, and the rule lives here rather than
@@ -5688,6 +5753,7 @@ export const useApp = create<AppState>((set, get) => ({
         // slot still hydrating — or a hidden window whose transcript events
         // are parked — looks exactly like one. A kill promises nothing is
         // deleted, so this is the close half alone.
+        if (get().agentView === ev.chatId) get().closeAgentView()
         if (get().sideColumns.includes(ev.chatId)) {
           set((st) => ({
             ...closeSideColumn(st, ev.chatId),

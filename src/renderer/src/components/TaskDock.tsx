@@ -13,7 +13,7 @@ const NO_TASKS: TaskItem[] = []
  *
  * It used to be a card in the transcript, drawn once per checklist call, and
  * that is the wrong shape for what it is: a checklist is **state, not an
- * event** — the same argument `AgentActivityBar` makes for the agent roster.
+ * event** — the same argument the session rail's Agents card makes for the roster.
  * A card lands where it was written and scrolls away under the work it
  * describes, so the one thing you want on screen while reading a long turn is
  * the one thing that isn't; and because the list changes many times a turn, the

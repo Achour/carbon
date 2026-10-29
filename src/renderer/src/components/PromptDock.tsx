@@ -13,7 +13,7 @@ import { focusedChatOf, useApp } from '@/store'
  * Everything the agent asks you, docked on the composer.
  *
  * A pending request is **state, not an event** — the argument `TaskDock` and
- * `AgentActivityBar` already make, and the one the transcript cannot hold. It
+ * the rail's Agents card already make, and the one the transcript cannot hold. It
  * has exactly one current value, it *blocks the turn*, and it must not be
  * scrollable away: drawn as the last thing in the transcript it was on screen
  * only for as long as you left the scroller pinned, so glancing up at the work

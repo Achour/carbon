@@ -149,27 +149,49 @@ behind it.
   runs in its thread's cwd by construction — counted, it would refuse to remove,
   merge or hand off the worktree the whole thread is about.
 
-### Agent columns
+### Agents open as pages, not columns (`agentView`, `AgentView`)
 
-A native sub-agent opened from its transcript row is a column too, named
-`agent:<parentChatId>:<toolUseId>` — not a chat, so every path that treats a
-column id as one steps around it: `closeSideChat` only closes it (nothing to
-keep or discard), `hydrateSideChats` and `openChat`'s restore never fetch it,
-and `liveColumns` keeps it only while the chat it reads from is in the thread.
-Closing a chat column closes its agent columns with it, since their stream is
-read out of that chat's transcript. It takes focus like any column (⌘1–⌘4
-count it), but it has **no pill**: a working session spins up many
-sub-agents, and a pill each crowded out the chats the strip is for. They live
-behind one robot icon at the right of the header instead (`SubagentsMenu`) —
-a count, a dot while any works, and a dropdown of the thread's sub-agents
-(read off `agentsStore`, so it moves when an agent does) whose rows open or
-fold their columns. Delegates are chats and keep their pills. No drag, no
-"move to its own chat", no closed pill — the menu and its row in the parent
-are the ways back. Focus on it is a *view* focus: everything that acts on a chat — the
-review's "last turn", a commit's scope, the roster, permission keys — reads
-`focusedChatOf`, which resolves it to the chat that spawned it, and ⌘1–⌘4 move
-the keyboard onto the column itself (it has no composer to receive the caret).
-See "The agent roster" in `docs/transcript.md`.
+An agent — a delegate (`agents_delegate`) or a native sub-agent — opens **in
+place of the thread's columns**, as a page of the chat that started it. The
+header's title becomes a breadcrumb, "*Chat* › codex-a *task…*", and the chat's
+name, Escape or the page's own "Back to chat" goes back. Every way in lands
+there: the robot menu, the rail's Agents card, the agent's card in the
+transcript, and a notification's click (`openChat` routes a delegate to
+`openAgentView` rather than reopening a column).
+
+They were columns first, and a column was the wrong shape for them. An agent is
+something you look into and come back from, not a conversation you keep beside
+yours; opened as a column it took a quarter of the thread's width, counted
+against its four chats, and left a pill in the strip for every delegate a turn
+started. So agents are not columns any more: `isClosedSideChat` leaves
+delegates out of the strip's closed pills and ＋'s list, and `ThreadColumn`
+draws no agent id.
+
+- **The columns stay mounted underneath, hidden**, the way an expansion hides
+  its siblings, so coming back replays no stream reveal and keeps every scroll
+  position.
+- **A delegate's page is its own `ChatView`**, composer and all: it is a chat,
+  and can be talked to. Its transcript needs a `sideChats` slot — `onScreen`
+  keys on one — so `openAgentView` makes it (empty first, then
+  `hydrateSideChats`, `reopenSideChat`'s order) and `leaveAgentView` releases
+  it unless the chat is also a column. A slot left standing would keep a chat
+  nobody is looking at streaming through `set`.
+- **A sub-agent's page is `AgentPane`**, named `agent:<parentChatId>:<toolUseId>`
+  (`agentColumnId`): the prompt marked "Sent by another agent", its stream
+  through the panel's own `AgentStreamBody` inside the chat's reading column,
+  and a footer in place of a composer — model, effort, the clock, **Runs on its
+  own**, **Back to chat** — because no provider offers a way to type to a
+  sub-agent it is running. It reads the spawning part live out of its parent's
+  transcript, so it opens only while that transcript is on screen.
+- **Focus follows the page.** `focusedChatId` is the agent while it shows (the
+  rail and the composer keys follow it; `focusedChatOf` resolves a sub-agent to
+  the chat that spawned it). Focusing anything else — a pill, ⌘1–⌘4 — is going
+  back, so `focusChat` leaves the view; it also does not move an expansion onto
+  the agent, which would hide every column. `agentViewFrom` is where focus
+  returns.
+- **Not persisted, and dropped on a thread switch** (`chatSwitchPatch`), with
+  its slot. A killed or deleted delegate closes it (`chat-close`,
+  `deleteSideChat`).
 
 ### Reordering columns, and dragging a thread into another
 
@@ -349,7 +371,7 @@ why the side variant used to publish into neither: with two transcripts mounted,
 whichever folded last won, and closing a side chat cleared the main chat's
 roster. Equal columns cannot live with that, so both are keyed by chat id
 (`byChat`), each `ChatView` publishes its own entry and removes it on unmount,
-and every column now carries its own task dock, goal bar and agent activity bar.
+and every column now carries its own task dock and goal bar.
 The Agents tab shows while any column has runs.
 
 ### Notifications
@@ -378,14 +400,15 @@ follows the focused column. The pin is `quickRail` in `localStorage`, off by
 default.
 
 - **Agents and jobs move into it while it is up.** The Agents card lists the
-  thread's delegates (`agents_delegate`, side chats with a `delegation`) and
-  the sub-agents its chats' agents spawned (`useSubagentRuns`, the robot menu's
-  rows through the same `SubagentRow`); Background jobs is the "N running"
+  thread's delegates (`agents_delegate`, side chats with a `delegation`,
+  `useThreadDelegates`) and the sub-agents its chats' agents spawned
+  (`useSubagentRuns`) — the robot menu's rows, through the same `DelegateRow`
+  and `SubagentRow`; Background jobs is the "N running"
   pill's list, Stop included (`JobRow`). With the rail shown, `ThreadHeader`
   drops the robot menu and the pill, so one fan-out is not drawn twice; with it
   hidden or dismissed they are back, because the rail is off by default and
-  most people would otherwise have no way to see their agents. Delegates keep
-  their pills: an open column is a tab, and switching tabs is the strip's job.
+  most people would otherwise have no way to see their agents. A row opens the
+  agent as the page on screen (`openAgentView`, above).
   Settled agents past the newest `SETTLED_ROWS` fold behind "Show N earlier";
   a running one is always listed.
 

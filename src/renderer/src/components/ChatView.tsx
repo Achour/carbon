@@ -24,7 +24,6 @@ import { DotSpinner } from '@/components/ui/dot-spinner'
 import { Composer } from '@/components/Composer'
 import { CodexReviewMenu } from '@/components/CodexReviewDialog'
 import { ContextStrip } from '@/components/ContextStrip'
-import { AgentActivityBar } from '@/components/AgentsPanel'
 import { TaskDock } from '@/components/TaskDock'
 import { CodexGoalBar } from '@/components/CodexGoalBar'
 import { StreamingIndicator } from '@/components/messages/Parts'
@@ -507,7 +506,7 @@ export const ChatView = React.memo(function ChatView({
   })
 
   // Sub-agent runs are folded out of the same window, for the panel and the
-  // activity bar rather than for the transcript — which is why the result goes
+  // rail rather than for the transcript — which is why the result goes
   // to `agentsStore` instead of down through props. `reconcileAgentRuns` keeps
   // an unmoved list at its old identity so neither subscriber re-renders on a
   // token that changed nothing about any agent.
@@ -831,7 +830,6 @@ export const ChatView = React.memo(function ChatView({
                 like the composer, and they read as one column only while their
                 borders share an edge. */}
             <div className={cn(CHAT_BLEED, 'pointer-events-auto')}>
-              <AgentActivityBar chatId={chat.id} />
               {queued.length > 0 && (
                 <div className="mb-2 space-y-1.5">
                   {queued.map((q) => (

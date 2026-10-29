@@ -32,7 +32,7 @@ border 508, prose 522.
   sideways the moment a chat grows long enough to scroll) and the composer's
   wrapper reserves the same amount as `pr`.
 - **The bleed wraps the whole composer stack**, not just the composer: the
-  activity bar, the context strip and the queued rows are framed objects too,
+  context strip and the queued rows are framed objects too,
   and they read as one column only while their borders share an edge. The
   checklist needs nothing — `TaskDock` already rides inside the composer's box.
 - **The composer's own padding had to come down to 14px** (`px-4` → `px-3.5` on

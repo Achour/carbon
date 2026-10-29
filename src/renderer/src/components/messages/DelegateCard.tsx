@@ -1,6 +1,6 @@
 import type { ChatMeta, ToolPart } from '@shared/types'
 import { PROVIDER_SHORT_LABELS, knownProvider } from '@shared/types'
-import { threadFull, useApp } from '@/store'
+import { useApp } from '@/store'
 import { useTranscriptSurface } from './surface'
 import { AgentRowShell, useElapsed } from './AgentRows'
 
@@ -32,13 +32,9 @@ export function delegateLook(meta: ChatMeta | undefined, waiting: boolean): Look
 
 /**
  * An agent this chat delegated to, as one live row of its transcript — the
- * *collapsed* form of the delegate's chat, whose open form is its column.
- *
- * It is the same chat either way, which is why the row is a toggle rather than
- * a link: clicking it opens the column (reopening it from the thread's closed
- * list), and clicking again folds the column back into this row. Closing the
- * column from its own ✕ leaves the row standing, so a delegate you put away
- * is always one click from coming back.
+ * *collapsed* form of the delegate's chat. A click opens that chat as the
+ * page on screen (`openAgentView`), with the way back in the header, so a
+ * delegate is always one click from its card and never takes a column.
  *
  * Everything on it is the child's live state, not the tool call's: the call
  * returns the moment the agent starts, and what a reader wants from this row
@@ -49,10 +45,8 @@ export function DelegateCard({ part }: { part: ToolPart }): React.JSX.Element {
   const childId = delegateChildId(part)
   const meta = useApp((s) => (childId ? s.chats.find((c) => c.id === childId) : undefined))
   const waiting = useApp((s) => (childId ? s.statuses[childId] === 'waiting-permission' : false))
-  const open = useApp((s) => (childId ? s.sideColumns.includes(childId) : false))
-  const full = useApp((s) => threadFull(s))
-  const reopenSideChat = useApp((s) => s.reopenSideChat)
-  const closeSideChat = useApp((s) => s.closeSideChat)
+  const open = useApp((s) => (childId ? s.agentView === childId : false))
+  const openAgentView = useApp((s) => s.openAgentView)
 
   const d = meta?.delegation
   const provider = meta?.provider ?? knownProvider(input.provider) ?? 'claude'
@@ -66,14 +60,14 @@ export function DelegateCard({ part }: { part: ToolPart }): React.JSX.Element {
     .replace(/\s+/g, ' ')
     .trim()
   const { openChat } = useTranscriptSurface()
-  const clickable = !!meta && (open || !full || !!openChat)
+  const clickable = !!meta
 
   const toggle = (): void => {
     if (!childId || !meta) return
-    // No columns here: the agent's chat is opened as the chat on screen.
+    // The agent's chat is opened as the page on screen — on the phone through
+    // its own navigation, here as the thread's agent view.
     if (openChat) openChat(childId)
-    else if (open) void closeSideChat(childId)
-    else void reopenSideChat(childId)
+    else void openAgentView(childId)
   }
 
   return (
@@ -95,7 +89,6 @@ export function DelegateCard({ part }: { part: ToolPart }): React.JSX.Element {
       elapsed={elapsed}
       open={open}
       clickable={clickable}
-      blockedReason={meta ? 'The thread already shows four chats — close one to open this agent.' : undefined}
       onToggle={toggle}
       data={{ 'data-delegate': childId ?? 'pending', 'data-delegate-open': open ? 'true' : undefined }}
     />

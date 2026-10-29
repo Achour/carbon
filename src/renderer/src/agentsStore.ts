@@ -8,14 +8,14 @@ import { omit } from '@/lib/utils'
  *
  * Agent vitals churn harder than anything else in a turn: a token total lands
  * per API call, per agent, and three agents working at once push several updates
- * a second. The Agents panel and the activity bar want every one of them; the
+ * a second. The Agents panel and the session rail want every one of them; the
  * transcript wants none — so the fold is published here and those two subscribe,
  * rather than being threaded through props across the cached history nodes,
  * where it would re-render every row in the conversation on each tick.
  *
  * It holds the runs of every chat on screen, keyed by chat id. A thread draws
- * up to four transcripts side by side, each with its own activity bar, so a
- * single slot would have the bars trade rosters as each column streamed — the
+ * up to four transcripts side by side, each publishing its own runs, so a
+ * single slot would have the columns trade rosters as each one streamed — the
  * reason the side variant used to publish nothing at all. Each `ChatView`
  * publishes its own entry and removes it on unmount.
  */
@@ -31,7 +31,7 @@ interface AgentsStore {
   /**
    * The chat whose roster the panel is showing. A thread has one panel and up
    * to four rosters, so the panel has to be told which one — set by whatever
-   * opened it (a card, an activity bar, a background job), and resolved against
+   * opened it (a card, a background job), and resolved against
    * the focused chat when it names nothing with runs (`rosterChat`).
    */
   chatId: string | null

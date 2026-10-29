@@ -405,7 +405,7 @@ it guards**, and put new reasoning in that file rather than back in this one.
 - **`docs/transcript.md`** — what a turn draws: the activity rows
   (`ToolCard`, `ToolGroup`, `lib/toolSummary.ts`), the task checklist
   (`lib/taskList.ts`, `TaskDock`, `TasksCard`), the agent roster
-  (`shared/agentRuns.ts`, `AgentsPanel`, `AgentActivityBar`), what the agent
+  (`shared/agentRuns.ts`, `AgentsPanel`), what the agent
   asks you (`PromptDock`, `CodexReviewDialog`), the turn's changed files
   (`TurnChangesCard`, `lib/turnChanges.ts`), side questions (`/btw`,
   `shared/btw.ts`, `EventRow`), quoting a passage back at it
@@ -478,6 +478,8 @@ it guards**, and put new reasoning in that file rather than back in this one.
   `taskListStore`) and the session details rail beside it (`SessionRail`,
   `quickRail`, `railHidden`), whose Agents and Background jobs cards stand in
   for the header's robot menu and running pill while it is up (`SubagentRow`).
+  Agents open as a page in place of the columns, never as one (`agentView`,
+  `openAgentView`, `AgentView`).
 - **`docs/drafts.md`** — text typed and not sent (`lib/drafts.ts`, `DraftItem`,
   `NewChat`).
 - **`docs/image-viewer.md`** — the lightbox (`ImageView.tsx`,

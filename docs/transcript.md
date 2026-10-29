@@ -338,7 +338,7 @@ server are two destinations, and a shared glyph would claim they are one.
 ### The task checklist (`lib/taskList.ts`, `TaskDock`, `TasksCard`)
 
 **A live checklist is state, not an event, so there is one of it and it lives on
-top of the composer** — `AgentActivityBar`'s argument, applied to the other
+top of the composer** — the agent roster's argument, applied to the other
 thing a turn keeps that a transcript cannot hold. (Only a *live* one: a finished
 list is a record rather than state, and moves into the transcript — below.) It was a card in the message
 list first, drawn where each call was made, and that is wrong twice over: the
@@ -480,7 +480,7 @@ took is the same mistake as the silent checklist. It says which tools came back
 (see `tool_reference` under Session flow in `CLAUDE.md`) and groups with the other lookups —
 including, now, the checklist calls themselves.
 
-### The agent roster (`shared/agentRuns.ts`, `AgentsPanel`, `AgentActivityBar`)
+### The agent roster (`shared/agentRuns.ts`, `AgentsPanel`, the rail's Agents card)
 
 A fan-out is **state, not an event**, and the transcript can only show events.
 Five spawn cards land where they were made and scroll away under the output of
@@ -582,7 +582,7 @@ cached input.
   simply falls through to the roster: nothing keeps the two in step, which is
   what makes a chat switch, an eviction and `loadOlder` all one case. Every way
   in is `openAgentsPanel(runId?)` — a transcript row or a roster row. Omitting
-  the id lands on the roster, which is what the activity bar does. The header's
+  the id lands on the roster. The header's
   background-jobs pill counts only shells, monitors and workflows: agents are
   the robot menu's, which also carries a backgrounded agent's Stop (matched on
   `BackgroundJob.callId`, main's `taskCalls` mapping travelling one layer
@@ -614,22 +614,21 @@ cached input.
   and stops following the moment the reader scrolls up. A *settled* agent opens
   at the top instead — it is a document, and its report is a scroll away where
   a report goes.
-- **…and the open form of an agent is now its own column** (`AgentColumn` in
+- **…and the open form of an agent is a page of its thread** (`AgentPane` in
   `ThreadView.tsx`, `NativeAgentRow` / `AgentGroupCard` in
   `messages/AgentRows.tsx`). The row answered the 13,816px problem by taking
-  the work out of the chat column; a thread column is the better home for it
-  than a panel tab, because it is the same shape every other conversation in
-  the thread has, and sits beside the chat that spawned it. So a transcript row is a **toggle**:
-  click opens the agent as a column — `agent:<parentChatId>:<toolUseId>`
-  (`agentColumnId`), a column that is not a chat — and click again folds it
-  back. The column reads the spawning part live out of its parent's
-  transcript (`findAgentPart`, by reference, in a memo — a selector that
-  walked the transcript would run on every streamed token), so it needs no
-  storage and cannot drift from the row. It draws "Subagent of *parent*", the
-  prompt marked "Sent by another agent" and folded past a few lines, the
-  stream through the panel's own body (`AgentStreamBody`, shared, so both
-  follow a working agent identically), and in place of a composer a footer —
-  model, effort, the clock, **Runs on its own**, **Open parent** — because no
+  the work out of the chat column. It was a thread column for a while, then
+  became a page drawn in place of the columns (`openAgentView`, see "Agents
+  open as pages" in `docs/threads.md`): a click on the row opens
+  `agent:<parentChatId>:<toolUseId>` (`agentColumnId`), which is not a chat.
+  The page reads the spawning part live out of its parent's transcript
+  (`findAgentPart`, by reference, in a memo — a selector that walked the
+  transcript would run on every streamed token), so it needs no storage and
+  cannot drift from the row. It draws the prompt marked "Sent by another
+  agent" and folded past a few lines, the stream through the panel's own body
+  (`AgentStreamBody`, shared, so both follow a working agent identically) in
+  the chat's reading column, and in place of a composer a footer — model,
+  effort, the clock, **Runs on its own**, **Back to chat** — because no
   provider offers a way to type to a sub-agent it is running. What it shows is
   what the provider reports: Claude and Codex stream the agent's work; Grok
   and Antigravity report that it ran and its result, so theirs is the prompt,
@@ -640,12 +639,10 @@ cached input.
   returns at once — drawn "Started in the background" (`untrackedBackground`)
   rather than "Finished in 0s". **Antigravity** sends nothing: its
   `start_subagent` arrives with an empty input and returns "Sub-agent spawn",
-  so its column has no prompt to show — an honest blank, not a mapper gap.
-  Agent columns go with their parent (`closeSideColumn` takes a chat's agent
-  columns with it; `liveColumns` keeps one only while its parent is in the
-  thread), are never fetched, deleted or kept as closed chats, and do not
-  survive a relaunch — the parts do, and the row reopens them. The Agents
-  panel stays as the roster.
+  so its page has no prompt to show — an honest blank, not a mapper gap.
+  The page is never fetched, deleted or kept as a closed chat, and does not
+  survive a relaunch — the parts do, and the row reopens it. The Agents panel
+  stays as the roster.
 - **Agents are drawn out of activity runs, as one card per batch.** `Task` and
   `Agent` stay groupable — Claude sends one call per message, so a batch of
   three spawns is three messages, and the run is what batches them — but
@@ -656,11 +653,14 @@ cached input.
   was one "3 agents" line with the agents inside it. And a folded turn keeps
   its agents (both fold paths: `AssistantBlock`'s survivors and
   `renderMessages`' run), the way it keeps a screenshot — an agent outlives
-  the turn that started it, and its card is the way back into its column.
+  the turn that started it, and its card is the way back into its page.
 - **The panel is still never auto-selected.** A spawn mid-read would take the
-  file you are looking at off screen. The way in is a click — the activity bar
-  above the composer, which exists only while something is running; the tab,
-  which exists only while the chat has runs; or a row in the transcript.
+  file you are looking at off screen. The way in is a click — the tab, which
+  exists only while the chat has runs; a row in the transcript; or the header's
+  robot menu and the session rail's Agents card, which open the agent as a
+  column. There used to be a "N agents working" bar above the composer too; it
+  was removed once the rail carried the same state, as one more framed row
+  between the reader and the input.
 - **A run of spawns keeps its collapsed group row**, but the row now says what
   the roster says — `3 agents · 2 working · Σ 67.8k tok` — instead of naming
   whatever the last call touched. The collapsed card's own line is deliberately
@@ -678,7 +678,7 @@ composer's own bordered box (`Composer`'s `header`, beside `TaskDock` and
 floating above it.
 
 **A pending request is state, not an event**, which is the argument `TaskDock`
-and `AgentActivityBar` already make and the reason the transcript was the wrong
+and the rail's Agents card already make and the reason the transcript was the wrong
 home for it. It has exactly one current value, it *blocks the turn*, and drawn
 as the last thing in the message list it was on screen only for as long as the
 reader left the scroller pinned — so glancing up at the very work the agent was
