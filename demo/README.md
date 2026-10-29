@@ -55,7 +55,12 @@ node demo/seed.mjs                           # write the chats
   its turns in the chat — `node demo/seed.mjs` puts the profile back.
   `scale-probe.js` is synthetic and free: it pumps one identical turn through
   the reducer at three transcript lengths to show what a long session costs per
-  event.
+  event. `agent-pages.js` is synthetic and free too: it puts a running
+  sub-agent and a delegate into a chat and checks, pass/fail, that every way in
+  (the robot menu, a card, `openAgentView`) opens the agent in place of the chat
+  and every way out (Escape, the crumb, focusing another chat) comes back. The
+  real-turn agent scripts — `subagents.js` and `delegation*.js` — assert the
+  same pages against a live model and spend tokens.
 
 **These probes drive the store directly, so they go stale silently.** Two of
 them called `sendMessage(text)` and `setChatOptions(patch)` — both of which grew

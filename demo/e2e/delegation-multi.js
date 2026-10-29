@@ -1,5 +1,5 @@
 // Two delegates at once, then a follow-up to ONE of them by name: a Claude chat
-// starts two Codex reviewers (two columns, codex-a and codex-b), both report
+// starts two Codex reviewers (codex-a and codex-b, minimized), both report
 // back, and then the user says "tell <the math reviewer> to …" — which must go
 // to that agent's own chat through `agents_send`, not start a third one. Point
 // it at a repo with src/math.js and src/cart.js:
@@ -62,34 +62,43 @@
     const labels = S().messages.filter((m) => m.role === 'user' && m.label).map((m) => m.label);
     const last = S().messages.filter((m) => m.role === 'assistant').at(-1);
     const mathChat = await window.api.getChat(math.id);
-    // The collapsed form: each agent is a live card in the parent's transcript,
-    // and the card toggles its column — closed, then open again, then closed
-    // for the shot, so it shows one agent open beside the other's card.
+    // The collapsed form: each agent is a live card in the parent's transcript.
+    // A card opens its agent as the page on screen; Escape goes back; the robot
+    // menu opens the other one; its name in the crumb's chat title goes back.
     const cardIds = [...document.querySelectorAll('[data-delegate]')].map((e) => e.getAttribute('data-delegate'));
-    const card = () => document.querySelector(`[data-delegate="${cart.id}"]`);
-    const toggles = [S().sideColumns.includes(cart.id)];
-    for (let i = 0; i < 3; i++) {
-      card()?.click();
-      await sleep(900);
-      toggles.push(S().sideColumns.includes(cart.id));
-    }
-    const cardText = card()?.textContent ?? null;
+    const cardText = document.querySelector(`[data-delegate="${cart.id}"]`)?.textContent ?? null;
+    const pages = [];
+    document.querySelector(`[data-delegate="${cart.id}"]`)?.click();
+    await sleep(1200);
+    pages.push({ via: 'card', open: S().agentView === cart.id, crumb: document.querySelector('[data-agent-crumb]')?.textContent ?? null });
     await window.api.focusWindow();
     await sleep(1200);
     const shot = await window.api.previewCaptureWindow({ x: 0, y: 0, width: window.innerWidth, height: window.innerHeight });
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await sleep(500);
+    pages.push({ via: 'escape', back: S().agentView === null });
+    // The menu sits in the header only while the session rail is away.
+    if (S().quickRail && !S().railHidden) S().toggleQuickRail();
+    document.querySelector('[data-subagents-menu]')?.click();
+    await sleep(700);
+    document.querySelector(`[data-delegate-row="${math.id}"]`)?.click();
+    await sleep(1200);
+    pages.push({ via: 'menu', open: S().agentView === math.id });
+    document.querySelector('[data-agent-crumb] button')?.click();
+    await sleep(500);
+    pages.push({ via: 'crumb', back: S().agentView === null && S().focusedChatId === parentId });
     return {
       seconds: Math.round((Date.now() - t0) / 1000),
       agents: kids(parentId).length,
       names: [before.math.name, before.cart.name],
       columnsAfterStart,
-      badges: [...document.querySelectorAll('[data-delegation]')].map((e) => e.textContent),
       parentTools: tools,
       deliveredLabels: labels,
       mathRounds: mathChat.chat.messages.filter((m) => m.role === 'user').length,
       mathAfter: { status: rerun.delegation.status, result: (rerun.delegation.result || '').slice(0, 500) },
       cardIds,
       cardText,
-      columnOpenAfterClicks: toggles,
+      pages,
       cartUntouched: cartAfter.deliveredAt === before.cart.deliveredAt && cartAfter.status === before.cart.status,
       replyHead: last ? last.parts.filter((p) => p.type === 'text').map((p) => p.text).join('\n').slice(0, 600) : '',
       shot

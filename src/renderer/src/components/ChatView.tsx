@@ -7,7 +7,6 @@ import {
   FileDiff,
   Folder,
   GitBranch,
-  MessageSquarePlus,
   X
 } from 'lucide-react'
 import type { ChatMeta } from '@shared/types'
@@ -101,8 +100,14 @@ export const ChatView = React.memo(function ChatView({
   // column shares. With several chats on screen the thread header carries them
   // once; otherwise they sit above the one conversation showing — the thread's
   // own chat, or whichever column is expanded.
+  // While the session rail is up it carries the same three facts in its
+  // Environment and Changes cards, so the strip steps aside rather than say
+  // them twice.
   const stripHere = useApp(
-    (s) => !severalChatsShown(s) && (s.expandedChatId ?? s.activeId) === chat.id
+    (s) =>
+      !severalChatsShown(s) &&
+      !(s.quickRail && !s.railHidden) &&
+      (s.agentView ?? s.expandedChatId ?? s.activeId) === chat.id
   )
   const loadingOlder = useApp((s) =>
     chat.id === s.activeId ? s.loadingOlder : !!s.sideChats[chat.id]?.loadingOlder
@@ -725,17 +730,11 @@ export const ChatView = React.memo(function ChatView({
         >
           <div ref={columnRef} className="mx-auto flex max-w-3xl flex-col gap-4 px-6 py-6">
             {/* A new column opens on an empty pane, which on its own reads as a
-                conversation that failed to load. What it has to say is the one
-                thing a reader cannot infer from it: where it runs, and where it
-                goes when its column closes. */}
+                conversation that failed to load — so it says, in one line,
+                what it is and where it runs. */}
             {side && messages.length === 0 && hiddenBefore === 0 && (
-              <div className="flex flex-col items-center gap-1.5 px-4 py-16 text-center">
-                <MessageSquarePlus className="size-5 text-muted-foreground/70" />
-                <div className="text-[13px] font-medium">New chat in this thread</div>
-                <p className="max-w-[38ch] text-xs text-balance text-muted-foreground">
-                  Runs in {basename(chat.cwd)} beside the other chats and shares their panel.
-                  Closing its column keeps it — reopen it from ＋.
-                </p>
+              <div className="px-1 py-10 text-center text-xs text-muted-foreground">
+                New chat in {basename(chat.cwd)}
               </div>
             )}
             {/* The slot is held for as long as anything is left to load and

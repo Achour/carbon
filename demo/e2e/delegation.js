@@ -1,7 +1,7 @@
 // A REAL delegation, end to end: a Claude chat is asked to have Codex review a
-// file, calls `agents_delegate`, the Codex child opens as a column of the
-// thread, runs, and its report is delivered back to the Claude chat as a turn
-// of its own (a label chip). Asserts the whole lifecycle off the store, then
+// file, calls `agents_delegate`, the Codex child starts minimized (no column,
+// not the page on screen), runs, and its report is delivered back to the Claude chat as a turn
+// of its own (a label chip). Its card then opens it as a page of the thread. Asserts the whole lifecycle off the store, then
 // captures the window. Point it at a repo, and optionally flip the direction:
 //   sed 's#__REPO__#/path/to/repo#' demo/e2e/delegation.js
 //   sed -e 's#__REPO__#/path#' -e "s#^  const PARENT = .*#  const PARENT = ['codex', 'codex-default'];#" \
@@ -37,8 +37,10 @@
     if (!child) {
       return { error: 'no delegated chat appeared', parentMessages: S().messages.length, statuses: S().statuses };
     }
-    const columnOpened = S().sideColumns.includes(child.id);
-    const badge = !!document.querySelector('[data-delegation]');
+    // Arrives minimized: not a column, and not the page on screen.
+    const minimized =
+      !S().sideColumns.includes(child.id) &&
+      S().agentView !== child.id;
     const done = await until(() => {
       const c = S().chats.find((x) => x.id === child.id);
       return c?.delegation && c.delegation.status !== 'running' && c.delegation.deliveredAt ? c : null;
@@ -55,13 +57,24 @@
     const lastReply = S().messages.filter((m) => m.role === 'assistant').at(-1);
     const replyText = lastReply ? lastReply.parts.filter((p) => p.type === 'text').map((p) => p.text).join('\n') : '';
     const status = await window.api.getChat(child.id);
+    // Its card in the parent opens it as the page on screen.
+    document.querySelector(`[data-delegate="${child.id}"]`)?.click();
+    await sleep(1500);
+    const page = {
+      agentView: S().agentView === child.id,
+      crumb: document.querySelector('[data-agent-crumb]')?.textContent ?? null,
+      composer: !!document.querySelector(`[data-agent-view="${child.id}"] [data-composer]`)
+    };
     await window.api.focusWindow();
     await sleep(1200);
     const shot = await window.api.previewCaptureWindow({ x: 0, y: 0, width: window.innerWidth, height: window.innerHeight });
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await sleep(500);
+    page.escapeBack = S().agentView === null && S().focusedChatId === parentId;
     return {
       seconds: Math.round((Date.now() - t0) / 1000),
-      columnOpened,
-      badge,
+      minimized,
+      page,
       childProvider: done.provider,
       childModel: done.model,
       childName: done.delegation.name,

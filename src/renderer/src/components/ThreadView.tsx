@@ -57,7 +57,7 @@ import {
 } from '@/store'
 import { ChatView } from '@/components/ChatView'
 import { BackgroundJobs } from '@/components/BackgroundJobs'
-import { DelegateRow, SubagentRow, useSubagentRuns, useThreadDelegates } from '@/components/SubagentRow'
+import { AgentRoster, useAgentRoster } from '@/components/SubagentRow'
 import { ContextStrip } from '@/components/ContextStrip'
 import { ProviderMark } from '@/components/ui/provider-mark'
 import { Button } from '@/components/ui/button'
@@ -300,17 +300,22 @@ function ThreadHeader({ chat, ids }: { chat: ChatMeta; ids: readonly string[] })
   const railShown = quickRail && !railHidden
   const agentView = useApp((s) => s.agentView)
   const chatIds = React.useMemo(() => ids.filter((id) => !isAgentColumn(id)), [ids])
-  // A rail put away while it floated over the panel is back beside the chat
-  // once the panel closes: the dismissal was of the overlay, not the pin.
+  const severalChats = useApp(severalChatsShown)
+  // With the panel open, or several chats sharing the width, the rail has no
+  // room beside the chat and floats instead (`SessionRail`). So it starts put
+  // away — it would otherwise land over the work until clicked off — and the
+  // top bar's button brings it up on demand. Back to one chat and no panel, it
+  // is beside the chat again: the pin is untouched, only the overlay goes.
   React.useEffect(() => {
-    if (!panelOpen) setRailHidden(false)
-  }, [panelOpen, setRailHidden])
+    setRailHidden(panelOpen || severalChats)
+  }, [panelOpen, severalChats, setRailHidden])
+  // A panel docked beside the columns: too little width left for a grid.
+  const panelDocked = useApp((s) => s.panelOpen && !panelFloats(s))
   const terminalBusy = useApp((s) => s.terminalBusy)
   const focused = useApp((s) => s.focusedChatId) ?? chat.id
   const threadLayout = useApp((s) => s.threadLayout)
   const expanded = useApp((s) => s.expandedChatId !== null)
   const setThreadLayout = useApp((s) => s.setThreadLayout)
-  const severalChats = useApp(severalChatsShown)
   const git = useApp((s) => s.git)
   const reviewChanges = useApp((s) => s.reviewChanges)
   const runGitAction = useApp((s) => s.runGitAction)
@@ -318,20 +323,6 @@ function ThreadHeader({ chat, ids }: { chat: ChatMeta; ids: readonly string[] })
   const busyLabel =
     busyTerminals.length === 1 ? busyTerminals[0] : `${busyTerminals.length} processes`
   const layout = threadLayoutFor(ids.length, threadLayout)
-  // The thread's closed chats, newest first — drawn beside the open ones so a
-  // put-away agent or side chat is one click from coming back, rather than
-  // behind ＋. Selected by identity and derived here, like `AddChatControl`.
-  const chats = useApp((s) => s.chats)
-  const sideColumns = useApp((s) => s.sideColumns)
-  const closed = React.useMemo(
-    () =>
-      chats
-        // A killed delegate is put away, not merely closed — it stays
-        // reachable from its card and the ＋ list, but not from the strip.
-        .filter((c) => isClosedSideChat(c, chat.id, sideColumns))
-        .sort((a, b) => b.updatedAt - a.updatedAt),
-    [chats, chat.id, sideColumns]
-  )
 
   return (
     <header
@@ -350,43 +341,18 @@ function ThreadHeader({ chat, ids }: { chat: ChatMeta; ids: readonly string[] })
         </WithTooltip>
       )}
       {agentView ? (
-        <AgentCrumb thread={chat} id={agentView} fill={ids.length === 1} />
+        <AgentCrumb thread={chat} id={agentView} fill />
       ) : (
         <div
-          className={cn(
-            'min-w-0 truncate text-[13px] font-semibold',
-            ids.length === 1 && 'flex-1'
-          )}
+          className="min-w-0 flex-1 truncate text-[13px] font-semibold"
         >
           {chat.title || 'New chat'}
         </div>
       )}
-      {(ids.length > 1 || closed.length > 0) && (
-        <>
-          <div
-            role="tablist"
-            aria-label="Chats in this thread"
-            className="no-drag ml-1 flex shrink-0 items-center gap-0.5 border-l border-border pl-2"
-          >
-            {/* Chats only — a delegate is a chat and has its pill; a spawned
-                sub-agent is reached from the robot menu at the right, so a
-                busy turn's fan-out does not crowd this strip. */}
-            {ids.length > 1 &&
-              ids.map((id, i) =>
-                isAgentColumn(id) ? null : (
-                  <ThreadPill key={id} id={id} threadId={chat.id} index={i} focused={id === focused} />
-                )
-              )}
-            {closed.slice(0, CLOSED_PILLS).map((c) => (
-              <ClosedPill key={c.id} chat={c} full={ids.length >= MAX_THREAD_CHATS} />
-            ))}
-          </div>
-          <div className="min-w-2 flex-1" />
-        </>
-      )}
       {/* Where the thread runs and what it has changed, once for every column.
-          With one conversation showing it sits above that composer instead. */}
-      {severalChats && (
+          With one conversation showing it sits above that composer instead,
+          and while the rail is up it is the rail's, not drawn twice. */}
+      {severalChats && !railShown && (
         <ContextStrip
           cwd={chat.cwd}
           project={projectRoot(chat)}
@@ -399,7 +365,7 @@ function ThreadHeader({ chat, ids }: { chat: ChatMeta; ids: readonly string[] })
       {/* With the session rail up, its Agents and Background cards carry these
           two; the header keeps them only while the rail is away. */}
       {!railShown && <BackgroundJobs chatId={parseAgentColumn(focused)?.parentId ?? focused} />}
-      {ids.length >= 3 && !agentView && (
+      {ids.length >= 3 && !agentView && !panelDocked && (
         <div
           role="group"
           aria-label="Layout"
@@ -501,7 +467,7 @@ const isChatDrag = (e: React.DragEvent): boolean =>
   Array.from(e.dataTransfer.types).includes(COLUMN_DRAG_MIME)
 
 /**
- * Drag handlers for chat `id`'s handle — its column header or its pill. Dropped
+ * Drag handlers for chat `id`'s handle — its column header. Dropped
  * on another column it reorders; dropped on the sidebar it leaves the thread.
  */
 function chatDragHandlers(
@@ -580,61 +546,10 @@ function DropEdge({ side, inset }: { side: 'before' | 'after' | null; inset: str
 }
 
 /**
- * One chat of the thread in the header: its number (what ⌘1–⌘4 name), its
- * provider, and whether it is working, waiting on you, or finished while you
- * were in another column. Its own component so the header subscribes to one
- * chat's status at a time, as a primitive.
- */
-function ThreadPill({
-  id,
-  threadId,
-  index,
-  focused
-}: {
-  id: string
-  threadId: string
-  index: number
-  focused: boolean
-}): React.JSX.Element | null {
-  const meta = useApp((s) => chatMeta(s, id))
-  const drop = useChatDrop(threadId, id)
-  if (isAgentColumn(id)) return null
-  if (!meta) return null
-  const title = meta.title?.trim() || 'New chat'
-  const onClick = (): void => useApp.getState().focusChat(id, { caret: true })
-  return (
-    <WithTooltip label={`${title}  ⌘${index + 1}`} side="bottom">
-      <button
-        type="button"
-        role="tab"
-        aria-selected={focused}
-        aria-label={`Chat ${index + 1}: ${title}`}
-        onClick={onClick}
-        // Pills reorder the columns too: the strip is the one place every chat
-        // is in reach at once, expanded or not.
-        {...chatDragHandlers(id)}
-        {...drop.handlers}
-        className={cn(
-          'relative flex h-6.5 items-center gap-1.5 rounded-md border px-1.5 transition-colors',
-          focused
-            ? 'border-transparent surface-raised text-foreground'
-            : 'border-transparent text-muted-foreground hover:bg-accent hover:text-foreground'
-        )}
-      >
-        <ChatNumber index={index} focused={focused} />
-        <ProviderMark provider={meta.provider} className="size-3" />
-        <ChatMark id={id} />
-        <DropEdge side={drop.over} inset="inset-y-1 -mx-[3px]" />
-      </button>
-    </WithTooltip>
-  )
-}
-
-/**
  * The thread's agents behind one robot icon at the right of the header: its
  * delegates (`agents_delegate`) and the sub-agents every chat on screen spawned
  * — Claude's `Task`s and the other providers' `Agent`s. A working session spins
- * up many of them, and a pill each crowded out the chats the strip is for.
+ * up many of them, and a row each in the header crowded out everything else.
  * Sub-agents are read off `agentsStore` (each `ChatView` publishes its fold
  * there, carried forward by identity), so the menu moves when an agent does and
  * not on every token. A row opens the agent in place of the chat
@@ -649,13 +564,9 @@ function SubagentsMenu({
   chatIds: readonly string[]
   threadId: string
 }): React.JSX.Element | null {
-  const rows = useSubagentRuns(chatIds)
-  const delegates = useThreadDelegates(threadId)
+  const { working, finished } = useAgentRoster(threadId, chatIds)
   const [open, setOpen] = React.useState(false)
-  const total = rows.length + delegates.length
-  const working =
-    rows.filter((r) => r.run.status === 'running').length +
-    delegates.filter((c) => c.delegation!.status === 'running').length
+  const total = working.length + finished.length
   if (!total) return null
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -665,31 +576,20 @@ function SubagentsMenu({
             size="sm"
             variant="ghost"
             className="no-drag relative h-6.5 shrink-0 gap-1 px-1.5"
-            aria-label={`Agents: ${total}${working ? `, ${working} working` : ''}`}
+            aria-label={`Agents: ${total}${working.length ? `, ${working.length} working` : ''}`}
             data-subagents-menu={total}
           >
-            <Bot className={cn(working > 0 && 'text-primary')} />
+            {working.length > 0 ? <DotSpinner className="size-3.5 text-foreground" /> : <Bot />}
             <span className="text-[11px] text-muted-foreground tabular-nums">
-              {working > 0 ? `${working}/${total}` : total}
+              {working.length > 0 ? `${working.length}/${total}` : total}
             </span>
-            {working > 0 && (
-              <span className="absolute top-1 right-1 size-1.5 animate-pulse rounded-full bg-primary" />
-            )}
           </Button>
         }
       />
-      <PopoverContent align="end" className="w-80 p-1">
-        <div className="px-2 pt-1.5 pb-1 text-[11px] font-medium text-muted-foreground/70">
-          Agents{working ? ` · ${working} working` : ''}
-        </div>
+      <PopoverContent align="end" className="w-80 p-1.5">
         {/* A click opens the agent as the page on screen, so the menu goes. */}
-        <div className="max-h-80 overflow-y-auto" onClick={() => setOpen(false)}>
-          {delegates.map((c) => (
-            <DelegateRow key={c.id} chat={c} />
-          ))}
-          {rows.map(({ chatId, run, provider }) => (
-            <SubagentRow key={`${chatId}:${run.id}`} chatId={chatId} run={run} provider={provider} />
-          ))}
+        <div className="max-h-96 overflow-y-auto pt-1" onClick={() => setOpen(false)}>
+          <AgentRoster working={working} finished={finished} />
         </div>
       </PopoverContent>
     </Popover>
@@ -881,60 +781,6 @@ function AgentPane({ id }: { id: string }): React.JSX.Element | null {
   )
 }
 
-/** How many closed chats get a pill; the rest stay in ＋'s list. */
-const CLOSED_PILLS = 6
-
-/**
- * A closed chat of the thread: the same pill as an open one, dimmed — its
- * provider, the activity mark a closed chat mid-turn has nowhere else to show,
- * and a click that reopens its column. One design for both, on purpose: a
- * dashed, labelled variant read as a second control rather than the same chat
- * put away. No number — numbers are ⌘1–⌘4 for what is on screen — and the
- * name lives in the tooltip.
- */
-function ClosedPill({ chat, full }: { chat: ChatMeta; full: boolean }): React.JSX.Element {
-  const reopenSideChat = useApp((s) => s.reopenSideChat)
-  // Delegates arrive minimized, so for a working one this pill is the header's
-  // only sign of it — drawn at full strength, not faded like a finished one.
-  const busy = useChatMark(chat.id) !== null
-  const name = chat.delegation?.name
-  const title = chat.title?.trim() || 'New chat'
-  const label = full
-    ? `${name ? `${name} · ` : ''}${title} — the thread shows ${MAX_THREAD_CHATS} chats; close one to reopen this`
-    : `${name ? `${name} · ` : ''}${title} — closed, click to reopen`
-  return (
-    <WithTooltip label={label} side="bottom">
-      <button
-        type="button"
-        data-closed-pill={chat.id}
-        aria-label={`Reopen ${name ?? title}`}
-        disabled={full}
-        onClick={() => void reopenSideChat(chat.id)}
-        className={cn(
-          'relative flex h-6.5 items-center gap-1.5 rounded-md border border-transparent px-1.5 text-muted-foreground transition-[background-color,color,opacity] hover:bg-accent hover:text-foreground hover:opacity-100 disabled:pointer-events-none disabled:opacity-30',
-          busy ? 'opacity-100' : 'opacity-50'
-        )}
-      >
-        <ProviderMark provider={chat.provider} className="size-3" />
-        <ChatMark id={chat.id} />
-      </button>
-    </WithTooltip>
-  )
-}
-
-function ChatNumber({ index, focused }: { index: number; focused: boolean }): React.JSX.Element {
-  return (
-    <span
-      className={cn(
-        'flex size-4 shrink-0 items-center justify-center rounded-[4px] text-[10px] leading-none font-semibold tabular-nums',
-        focused ? 'bg-foreground text-background' : 'bg-secondary text-muted-foreground'
-      )}
-    >
-      {index + 1}
-    </span>
-  )
-}
-
 /**
  * What a chat is doing, as the header draws it: waiting on you, working, a
  * background agent, finished while you were in another column — or nothing.
@@ -951,7 +797,7 @@ function useChatMark(id: string): 'needs-input' | 'working' | 'background' | 'un
 
 /**
  * A chat's status, drawn with the sidebar row's icons. `labelled` adds the words
- * a column header has room for; a pill has room for the icon alone.
+ * a column header has room for.
  */
 function ChatMark({ id, labelled = false }: { id: string; labelled?: boolean }): React.JSX.Element | null {
   const mark = useChatMark(id)
@@ -1005,17 +851,12 @@ function AddChatControl({ count, threadId }: { count: number; threadId: string }
     <Button
       size="sm"
       variant="ghost"
-      className="no-drag h-6.5 shrink-0 gap-1 px-1.5"
+      className="no-drag h-6.5 shrink-0 px-1.5"
       aria-label={label}
       disabled={full && !hasClosed}
       onClick={hasClosed ? undefined : () => void addThreadChat()}
     >
       <Plus />
-      {count > 1 && (
-        <span className="text-[11px] text-muted-foreground tabular-nums">
-          {count}/{MAX_THREAD_CHATS}
-        </span>
-      )}
     </Button>
   )
   if (!hasClosed) return <WithTooltip label={label}>{trigger}</WithTooltip>
@@ -1284,8 +1125,8 @@ function ThreadMenu({ chat }: { chat: ChatMeta }): React.JSX.Element {
  * unmounting one to expand another would restart its stream reveal, drop its
  * scroll position and replay its rows' enter animations on the way back — so an
  * expansion *hides* the others rather than removing them. Nothing stands in for
- * them on screen: the header's pills already name every chat, carry its status,
- * and switch the expansion to it.
+ * them on screen: ⌘1–⌘4 switch the expansion to another, and the expanded
+ * column's own "Show all" brings them back.
  */
 function ThreadColumns({
   ids,
@@ -1297,8 +1138,12 @@ function ThreadColumns({
   const threadLayout = useApp((s) => s.threadLayout)
   const expandedChatId = useApp((s) => s.expandedChatId)
   const focusedChatId = useApp((s) => s.focusedChatId)
+  // Beside a docked panel there is no width for a 2×2 grid: two of its cells
+  // fell off the edge. Columns scroll sideways instead, and the grid comes
+  // back with the panel closed (or floating over the chats).
+  const panelDocked = useApp((s) => s.panelOpen && !panelFloats(s))
   const layout = threadLayoutFor(ids.length, threadLayout)
-  const grid = !expandedChatId && layout === 'grid'
+  const grid = !expandedChatId && layout === 'grid' && !panelDocked
   const n = ids.length
 
   return (
@@ -1403,10 +1248,13 @@ function ChatColumn({
       onPointerDownCapture={claimFocus}
       onFocusCapture={claimFocus}
       {...drop.handlers}
-      className={cn('relative flex min-h-0 min-w-0 flex-col', className)}
+      className={cn('group/col relative flex min-h-0 min-w-0 flex-col', className)}
     >
       <ColumnHeader chat={chat} index={index} side={side} focused={focused} expanded={expanded} />
-      <div className="flex min-h-0 flex-1">
+      <div className="relative flex min-h-0 flex-1">
+        {/* The transcript scrolls up under the header; a short fade there
+            instead of a hard cut through a line of text. */}
+        <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-3 bg-gradient-to-b from-background to-transparent" />
         <ChatView chat={chat} side={side} />
       </div>
       <DropEdge side={drop.over} inset="inset-y-0" />
@@ -1432,8 +1280,8 @@ function ColumnHeader({
   const leaveThread = useApp((s) => s.leaveThread)
   const closeSideChat = useApp((s) => s.closeSideChat)
   // No confirmation: closing deletes nothing — the chat keeps running if it
-  // was, and its pill in the thread header (or its card in a parent's
-  // transcript) brings it back in one click. A question in front of an
+  // was, and ＋'s closed list (or its card in a parent's transcript) brings it
+  // back in one click. A question in front of an
   // undoable act was a toll on every close.
   const close = (): void => void closeSideChat(chat.id)
   const title = chat.title?.trim() || 'New chat'
@@ -1447,12 +1295,12 @@ function ColumnHeader({
               // The header is the column's handle: drag it onto another column to
               // swap places, or onto the sidebar to take it out of the thread.
               {...chatDragHandlers(chat.id)}
-              className="flex h-8 shrink-0 cursor-grab items-center gap-2 pr-1.5 pl-3 active:cursor-grabbing"
+              title={`${title}  ⌘${index + 1}`}
+              className="flex h-9 shrink-0 cursor-grab items-center gap-2 pr-1.5 pl-3 active:cursor-grabbing"
             />
         }
       >
-          <ChatNumber index={index} focused={focused} />
-          <ProviderMark provider={chat.provider} className="size-3 shrink-0 text-muted-foreground" />
+          <ProviderMark provider={chat.provider} className="size-3.5 shrink-0 text-muted-foreground" />
           <span
             title={title}
             className={cn(
@@ -1464,7 +1312,15 @@ function ColumnHeader({
           </span>
           {chat.delegation && <DelegationBadge chat={chat} />}
           <ChatMark id={chat.id} labelled />
-          <div className="ml-auto flex shrink-0 items-center">
+          {/* The column's own controls show where the pointer is — or the
+              keyboard, or the one column focused — rather than four sets of
+              icons standing over four transcripts. */}
+          <div
+            className={cn(
+              'ml-auto flex shrink-0 items-center transition-opacity',
+              focused ? 'opacity-100' : 'opacity-0 group-hover/col:opacity-100 focus-within:opacity-100'
+            )}
+          >
             <WithTooltip label={expanded ? 'Show all chats  esc' : 'Expand  ⌘⇧↵'}>
               <Button
                 size="icon-sm"

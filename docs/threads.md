@@ -68,7 +68,7 @@ what "the active chat" means in the renderer.
   column silently makes it the model the next New-chat screen offers.
 - **No AI title.** The adapters' `maybeGenerateTitle` still bails on
   `ephemeral`; the placeholder `send` derives from the first message is what a
-  column's header and pill show.
+  column's header shows.
 
 ### Columns are stashed, persisted and restored with their thread
 
@@ -112,28 +112,16 @@ behind it.
   used to (`CloseChatDialog`), on the argument that a ✕ in a 32px header is
   easy to hit by accident — but a close is undoable in one click, so the
   question was a toll on every close guarding against nothing. The chat keeps
-  running if it was, and comes back from its pill.
-- **Closed chats keep a pill in the thread header**, after the open ones and
-  in the *same* design, dimmed (`ClosedPill`, the newest `CLOSED_PILLS`): the
-  provider and the activity mark a closed chat mid-turn has nowhere else to
-  show, no number (those are ⌘1–⌘4 for what is on screen), the name in the
-  tooltip; a click reopens the column. A dashed, labelled variant was tried
-  first and read as a second kind of control rather than the same chat put
-  away. The strip shows whenever a thread
-  has any — including when only its own chat is open, which is exactly when a
-  way back is wanted. The `+` in the thread header still holds the full
-  **Closed chats** list, sorted on `updatedAt` (the array is the sidebar's
-  hand-made order, `ChatMeta.sortKey`, so array position says nothing about
-  recency). **One thing deletes one: the ✕ on a row there, and it asks first**
-  (`SideChatDeleteDialog`, rendered by `App` because the popover closes on the
-  click).
-  - **The slot is dropped on close and refetched on reopen.** Main keeps the
-    session alive and keeps persisting, so a retained slot would be a second copy
-    of the truth that drifts. Dropping it also makes `onScreen` false, which is
-    what turns a closed column into an ordinary background chat.
-  - **A column that was never used is discarded on close**, or `+` → ✕ would
-    leave a blank row in the list. "Never used" includes *no turn in flight*: a
-    message sent a second ago has an empty transcript and an answer on its way.
+  running if it was, and comes back from ＋'s closed list.
+- **The thread header holds no tabs.** It had a strip of pills — one per open
+  chat (number, provider, status), then the closed ones dimmed — and with
+  columns on screen every one of them repeated a column header one row down,
+  while agents moved to the robot menu and the rail. So the column header is
+  the one place a chat is named. Switching is ⌘1–⌘4 or a click in the column,
+  reordering is a drag of its header, and a closed chat comes back from the
+  `+` in the thread header, whose **Closed chats** list is sorted on
+  `updatedAt` (the array is the sidebar's order, so position says nothing
+  about recency).
 - **They survive quitting.** The tab version first deleted side chats at quit,
   and that was wrong twice: quitting is a weaker statement of intent than
   closing (a laptop lid, an update, a crash), and the purge never deleted the
@@ -195,8 +183,8 @@ draws no agent id.
 
 ### Reordering columns, and dragging a thread into another
 
-**Columns reorder by drag**: a column's header, or its pill in the thread
-header, dropped on the left or right half of another column or pill. The order
+**Columns reorder by drag**: a column's header dropped on the left or right
+half of another column. The order
 is kept as a hint per thread (`threadOrder`, persisted) and read through
 `orderByHint` rather than stored as the columns themselves, because columns are
 added, closed, reopened and restored at launch by paths that know nothing about
@@ -215,7 +203,7 @@ it had closed join the closed list. It is refused, and says so while hovering
 (`threadJoinCheck`), for a terminal chat, for a chat in another folder (a column
 runs in its thread's cwd), and when the chat and its open columns would not all
 fit — refused rather than trimmed, so a drop never silently closes something.
-**And back out**: a column's header or pill dropped on the sidebar — or "Move to
+**And back out**: a column's header dropped on the sidebar — or "Move to
 its own chat" on the header's right-click menu — takes the chat out of its thread
 (`leaveThread`, `chats:leave-thread`): `sideOf` and `ephemeral` are cleared, its
 `updatedAt` is bumped so its row lands at the top of the list rather than
@@ -236,15 +224,15 @@ first chat is what moves. So a thread has a **focused** chat — set on pointer
 down or focus inside a column (capture handlers on `ThreadColumn`'s section,
 which wraps the header and the transcript; imperative, so a focus change
 re-renders no transcript), reset to the thread's own chat on every switch, and
-moved by ⌘1–⌘4, a pill or a notification (`focusChat(id, { caret: true })`, which
+moved by ⌘1–⌘4 or a notification (`focusChat(id, { caret: true })`, which
 also puts the caret in that composer and, if another column is expanded, moves
 the expansion — focusing a chat you cannot see would leave keys answering a
 hidden column). `focusedChatId` is never null while a chat is open, so nothing
 reads it with an `activeId` fallback.
 
-- **Focus is shown without an outline.** The focused column's number badge is
-  filled, its title is at full brightness, and its pill in the thread header is
-  raised. A ring around the column was tried and removed: it said the same thing
+- **Focus is shown without an outline.** The focused column's title is at
+  full brightness and its expand and close stay visible; the others show
+  theirs only under the pointer. A ring around the column was tried and removed: it said the same thing
   a fourth time, as the one border in an app that draws none around a chat.
 - **Permission keys.** Enter/Esc ride a window listener per mounted prompt, so
   four columns each nominating their oldest prompt would all fire on one key.
@@ -266,7 +254,7 @@ reads it with an `activeId` fallback.
   shows the focused column's roster unless it was opened for another
   (`rosterChat`).
 - **`unreadChats`** marks a column whose turn ended while another had focus —
-  its header says **Done** and its pill carries a dot — because with four
+  its header says **Done** — because with four
   columns the one that finished is not the one being read. Only with more than
   one chat on screen; focusing it clears the mark.
 
@@ -287,9 +275,8 @@ that the strip scrolls sideways rather than crushing a transcript.
 - **Expanding a column (⤢, double-click its header, ⌘⇧↵) gives it the full
   width and hides the others**, with nothing drawn in their place. They were
   folded to 44px vertical rails at first, each with its number, provider and
-  status — which is exactly what the header's pills already show, one row up,
-  and a pill click already switches the expansion. So the rails were a second
-  tab strip. The others are **hidden** rather than unmounted: a column is a live
+  status — a second tab strip, when ⌘1–⌘4 already switch the expansion and the
+  expanded column's own "Show all" brings the rest back. The others are **hidden** rather than unmounted: a column is a live
   transcript, and a remount restarts its stream reveal, drops its scroll position
   and replays its rows' entrances.
 - **With several chats on screen, a composer nobody is writing in folds to one
@@ -320,7 +307,7 @@ that the strip scrolls sideways rather than crushing a transcript.
   model trigger drew its effort over the permission chip. The model name stays;
   the effort and the permission's words are one click away.
 - **The sidebar row is the thread's.** `ThreadProviders` draws one provider mark per open chat
-  *and* per minimized one (the header's closed pills, so not a killed delegate),
+  *and* per closed one (a killed delegate left out),
   four at most and the rest a "+N" chip naming them on hover — busiest first
   (waiting on you, then working), so what folds is finished work, never the
   agent that needs you. The row's activity is
@@ -412,15 +399,20 @@ default.
   Settled agents past the newest `SETTLED_ROWS` fold behind "Show N earlier";
   a running one is always listed.
 
-- **It floats rather than squeezing.** With the panel open, or less than
-  `NARROW_PX` beside it, the chat has no width to give, so the rail lays over
-  the chat's top-right edge and is only as tall as its cards. Over the panel
+- **It floats rather than squeezing.** With the panel open, several chats on
+  screen, or less than `NARROW_PX` beside it, the chat has no width to give, so
+  the rail lays over the chat's top-right edge and is only as tall as its
+  cards. Opening the panel or a second column also puts it away
+  (`railHidden`), so it never lands over the work by itself; the top-bar
+  button brings it up. Over the panel
   it also drops the launch card, because the panel already is that list.
 - **Floating, it dismisses like an overlay.** A pointer or focus anywhere
   outside it (the composer, the transcript), or Escape, sets `railHidden`. The
   top-bar button is exempt (`data-rail-toggle`), or its own click would dismiss
   the rail it is toggling. `railHidden` is not the pin and is not persisted.
-  Closing the panel clears it, so the rail is back beside the chat.
+  Opening the panel sets it, so the cards never land over the chat by
+  themselves — the top-bar button brings them up over the panel on demand —
+  and closing the panel clears it, so the rail is back beside the chat.
 - **What it costs.** The focused chat's meta is subscribed inside the rail,
   not in `ThreadView`, so a side chat's update re-renders the rail and not
   every column. `useNarrow` stores only the crossing of the threshold, so a

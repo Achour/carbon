@@ -1,7 +1,8 @@
-// Native sub-agents as columns: a chat asks its own provider to spawn two
+// Native sub-agents as pages: a chat asks its own provider to spawn two
 // sub-agents, the transcript draws them as one group card, and a row opens one
-// as a column of the thread — "Subagent of …", the prompt, its stream and the
-// "Runs on its own / Open parent" footer. Flip PARENT for another provider.
+// in place of the chat — "Chat › agent" in the header, the prompt, its stream
+// and the "Runs on its own / Back to chat" footer. Back by the footer, by
+// Escape, and in again from the robot menu. Flip PARENT for another provider.
 //   sed 's#__REPO__#/path/to/repo#' demo/e2e/subagents.js
 (() => {
   const REPO = '__REPO__';
@@ -30,60 +31,67 @@
     const spawned = await until(() => (agentParts().length >= 1 ? agentParts() : null), 240000);
     if (!spawned) return { error: 'no sub-agent spawned', tools: S().messages.flatMap((m) => (m.role === 'assistant' ? m.parts.filter((p) => p?.type === 'tool').map((p) => p.name) : [])) };
     await sleep(1500);
-    // While running: the card, then open the first agent as a column.
+    // While running: the card, then open the first agent as a page of the
+    // thread — in place of the chat, with "Chat › agent" in the header.
     const groupWhileRunning = !!document.querySelector('[data-agent-group]');
     const groupEl = document.querySelector('[data-agent-group] > button');
     if (groupEl) { groupEl.click(); await sleep(600); }
     const rows = [...document.querySelectorAll('[data-agent-run]')].map((e) => e.getAttribute('data-agent-run'));
     document.querySelector('[data-agent-run]')?.click();
     await sleep(1500);
-    const openCols = S().sideColumns.filter((c) => c.startsWith('agent:'));
-    const col = document.querySelector('[data-agent-column]');
-    const colWhileRunning = col ? {
-      header: col.querySelector('div')?.textContent?.slice(0, 120),
-      sentBy: col.textContent.includes('Sent by another agent'),
-      footer: col.lastElementChild?.textContent?.slice(0, 160)
-    } : null;
+    const pane = document.querySelector('[data-agent-view]');
+    const pageWhileRunning = {
+      agentView: S().agentView,
+      noColumn: !S().sideColumns.some((c) => c.startsWith('agent:')),
+      crumb: document.querySelector('[data-agent-crumb]')?.textContent?.slice(0, 120) ?? null,
+      sentBy: !!pane?.textContent.includes('Sent by another agent'),
+      footer: pane?.lastElementChild?.textContent?.slice(0, 160) ?? null
+    };
     await window.api.focusWindow();
     await sleep(800);
     const shotRunning = await window.api.previewCaptureWindow({ x: 0, y: 0, width: window.innerWidth, height: window.innerHeight });
     // Finish: parent idle with an answer.
     await until(() => (S().statuses[parentId] ?? 'idle') === 'idle' && S().messages.filter((m) => m.role !== 'event').at(-1)?.role === 'assistant', 420000, 2000);
     await sleep(2000);
-    const col2 = document.querySelector('[data-agent-column]');
-    const colDone = col2 ? { footer: col2.lastElementChild?.textContent?.slice(0, 160), streamChars: col2.textContent.length } : null;
-    // Open parent moves focus back; closing folds it into its row.
-    [...(col2?.querySelectorAll('button') ?? [])].find((b) => b.textContent.includes('Open parent'))?.click();
-    await sleep(500);
-    const focusedAfterOpenParent = S().focusedChatId === parentId;
+    const pane2 = document.querySelector('[data-agent-view]');
+    const pageDone = pane2 ? { footer: pane2.lastElementChild?.textContent?.slice(0, 160), streamChars: pane2.textContent.length } : null;
     await window.api.focusWindow();
     await sleep(800);
     const shotDone = await window.api.previewCaptureWindow({ x: 0, y: 0, width: window.innerWidth, height: window.innerHeight });
-    // The robot menu: agents are not pills; the dropdown lists and toggles them.
+    // "Back to chat" returns to the chat that spawned it, with the focus.
+    [...(pane2?.querySelectorAll('button') ?? [])].find((b) => b.textContent.includes('Back to chat'))?.click();
+    await sleep(500);
+    const backToChat = S().agentView === null && S().focusedChatId === parentId;
+    // The robot menu lists the agents and opens one the same way. It sits in
+    // the header only while the session rail is away.
+    if (S().quickRail && !S().railHidden) S().toggleQuickRail();
+    await sleep(300);
     const menuCount = document.querySelector('[data-subagents-menu]')?.getAttribute('data-subagents-menu') ?? null;
     const agentPills = [...document.querySelectorAll('[role="tab"]')].filter((e) => /subagent/i.test(e.getAttribute('aria-label') || '')).length;
     document.querySelector('[data-subagents-menu]')?.click();
     await sleep(700);
     const menuRows = [...document.querySelectorAll('[data-subagent-row]')].map((e) => e.getAttribute('data-subagent-row'));
-    const second = menuRows.find((r) => !S().sideColumns.some((c) => c.endsWith(':' + r)));
-    if (second) document.querySelector(`[data-subagent-row="${second}"]`)?.click();
-    await sleep(900);
-    const openedFromMenu = second ? S().sideColumns.some((c) => c.endsWith(':' + second)) : null;
-    document.querySelector('[data-subagents-menu]')?.click();
-    await sleep(700);
+    const second = menuRows[1] ?? menuRows[0];
     await window.api.focusWindow();
     await sleep(600);
     const shotMenu = await window.api.previewCaptureWindow({ x: 0, y: 0, width: window.innerWidth, height: 420 });
+    if (second) document.querySelector(`[data-subagent-row="${second}"]`)?.click();
+    await sleep(900);
+    const openedFromMenu = second ? S().agentView?.endsWith(':' + second) ?? false : null;
+    // Escape is the other way back.
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await sleep(500);
+    const escapeBack = S().agentView === null;
     const reply = S().messages.filter((m) => m.role === 'assistant').at(-1);
     return {
       seconds: Math.round((Date.now() - t0) / 1000),
       agents: agentParts().map((p) => ({ name: p.name, type: p.input?.subagent_type, desc: String(p.input?.description ?? p.input?.prompt ?? '').slice(0, 60), status: p.status, children: (p.children ?? []).length })),
       groupWhileRunning,
       rows: rows.length,
-      openCols,
-      colWhileRunning,
-      colDone,
-      focusedAfterOpenParent,
+      pageWhileRunning,
+      pageDone,
+      backToChat,
+      escapeBack,
       menuCount,
       agentPills,
       menuRows: menuRows.length,

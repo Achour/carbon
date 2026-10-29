@@ -1,7 +1,7 @@
 // "kill <agent>" and "kill all": a Claude chat starts a Codex agent that is
 // still working (a long sleep), the user kills it by name, then kills all.
-// Asserts the agent is stopped (cancelled, no delivery turn), its column is
-// closed, and its card stays in the parent to reopen it.
+// Asserts the agent is stopped (cancelled, no delivery turn), its page is not
+// showing, and its card stays in the parent to open it again.
 //   sed 's#__REPO__#/path/to/repo#' demo/e2e/delegation-kill.js
 (() => {
   const REPO = '__REPO__';
@@ -32,7 +32,7 @@
     const agent = await until(() => kids(parentId)[0], 180000);
     if (!agent) return { error: 'no agent started' };
     await until(() => settled(parentId), 180000);
-    const openBefore = S().sideColumns.includes(agent.id);
+    const openBefore = S().agentView === agent.id || S().sideColumns.includes(agent.id);
     const runningBefore = kids(parentId)[0].delegation.status;
     await S().sendMessage(parentId, `kill ${agent.delegation.name}`);
     await sleep(1500);
@@ -40,15 +40,17 @@
     const afterKill = kids(parentId)[0];
     const killState = {
       status: afterKill.delegation.status,
-      columnOpen: S().sideColumns.includes(agent.id),
+      pageOpen: S().agentView === agent.id,
       card: !!document.querySelector(`[data-delegate="${agent.id}"]`),
       childStatus: S().statuses[agent.id] ?? 'idle'
     };
-    // Reopen it from its card, then "kill all": it was not working, so it is
-    // only closed again.
+    // Open it from its card — as the page on screen — then go back and "kill
+    // all": it was not working, so its page is only closed again.
     document.querySelector(`[data-delegate="${agent.id}"]`)?.click();
     await sleep(1200);
-    const reopened = S().sideColumns.includes(agent.id);
+    const reopened = S().agentView === agent.id;
+    S().closeAgentView();
+    await sleep(500);
     await S().sendMessage(parentId, 'kill all the agents');
     await sleep(1500);
     await until(() => settled(parentId), 180000);
@@ -63,7 +65,7 @@
       openBefore,
       killState,
       reopened,
-      closedAfterKillAll: !S().sideColumns.includes(agent.id),
+      closedAfterKillAll: S().agentView !== agent.id && !S().sideColumns.includes(agent.id),
       finalStatus: kids(parentId)[0].delegation.status,
       deliveries,
       tools: tools.filter((t) => t.startsWith('agents_')),

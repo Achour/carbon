@@ -284,7 +284,8 @@
       await sleep(400);
       const first = document.querySelector('[data-thread-column]')?.getAttribute('data-thread-column');
       check('dropping a column on the left of the first moves it first', first === c4b, first);
-      check('...the pills follow', document.querySelector('[role="tablist"] [role="tab"]')?.getAttribute('aria-label')?.startsWith('Chat 1: Pricing canvas draft'));
+      check('...and it is chat 1 now', document.querySelector('[data-thread-column]')?.getAttribute('aria-label') === 'Chat 1');
+      check('the header carries no chat tabs', !document.querySelector('header [role="tablist"]'));
       check('...and the order is remembered', JSON.parse(localStorage.getItem('threadOrder') || '{}')[mainId]?.[0] === c4b);
       // Back to the default order, so the shots below stay as they were.
       app.setState({ threadOrder: {} });

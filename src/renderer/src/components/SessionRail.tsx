@@ -3,9 +3,9 @@ import { ArrowDown, ArrowUp, FileDiff, Folder, GitBranch, Laptop, Split } from '
 import type { ChatMeta } from '@shared/types'
 import { PROVIDER_SHORT_LABELS } from '@shared/types'
 import { isAgentColumn, parseAgentColumn } from '@shared/agentRuns'
-import { useApp } from '@/store'
+import { severalChatsShown, useApp } from '@/store'
 import { JobRow, useBackgroundJobs } from '@/components/BackgroundJobs'
-import { DelegateRow, SubagentRow, useSubagentRuns, useThreadDelegates } from '@/components/SubagentRow'
+import { AgentRoster, useAgentRoster } from '@/components/SubagentRow'
 import { basename, formatTokens } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { GitActionButton } from '@/components/GitPanel'
@@ -41,8 +41,11 @@ export function SessionRail({
   // edge instead, only as tall as its cards, and drops the launch card when the
   // panel is up, since the panel already is that list.
   const panelOpen = useApp((s) => s.panelOpen)
+  // Several chats already share the width; a docked rail would take a column's
+  // worth of it from them, so with more than one on screen it only floats.
+  const several = useApp(severalChatsShown)
   const narrow = useNarrow(ref)
-  const floating = panelOpen || narrow
+  const floating = panelOpen || several || narrow
   const setRailHidden = useApp((s) => s.setRailHidden)
   // Floating, it covers the chat's edge, so it behaves like anything else laid
   // over the work: a click or focus anywhere else — the composer, the
@@ -267,72 +270,34 @@ function ChangesCard(): React.JSX.Element | null {
 }
 
 
-/** Finished rows shown before the rest fold behind "Show all". */
+/** Finished agents shown before the rest fold behind "Show N earlier". */
 const SETTLED_ROWS = 6
 
 /**
  * Every agent working for this thread: the delegates its chats handed tasks to
  * (`agents_delegate`, each a chat on its own provider) and the sub-agents their
- * agents spawned. It stands in for the header's robot menu while the rail is
- * up — `ThreadHeader` drops the menu then — so a fan-out is on screen without a
- * click. A row opens the agent in place of the chat (`openAgentView`).
- *
- * A long session spawns dozens, so the settled ones past the newest few fold
- * away; a running one is always listed, however old.
+ * agents spawned, as one roster — Working, then Finished, each newest first
+ * (`useAgentRoster`). It stands in for the header's robot menu while the rail
+ * is up — `ThreadHeader` drops the menu then — so a fan-out is on screen
+ * without a click. A row opens the agent in place of the chat
+ * (`openAgentView`).
  */
 function AgentsCard({ threadId, ids }: { threadId: string; ids: readonly string[] }): React.JSX.Element | null {
   const chatIds = React.useMemo(() => ids.filter((id) => !isAgentColumn(id)), [ids])
-  const runs = useSubagentRuns(chatIds)
-  const delegates = useThreadDelegates(threadId)
-  const [all, setAll] = React.useState(false)
-  const total = delegates.length + runs.length
-  if (total === 0) return null
-  const working =
-    runs.filter((r) => r.run.status === 'running').length +
-    delegates.filter((c) => c.delegation!.status === 'running').length
-  // The newest few settled rows across both kinds, by when each settled: the
-  // runs are concatenated in column order, so their position says nothing
-  // about age. Display order is left alone; only the cut is by time.
-  const settled: { key: object; at: number }[] = [
-    ...runs
-      .filter((r) => r.run.status !== 'running')
-      .map((r) => ({ key: r as object, at: r.run.endedAt ?? r.run.startedAt ?? 0 })),
-    ...delegates
-      .filter((c) => c.delegation!.status !== 'running')
-      .map((c) => ({ key: c as object, at: c.delegation!.finishedAt ?? c.delegation!.startedAt ?? c.createdAt }))
-  ]
-  const keep = new Set(
-    (all ? settled : [...settled].sort((a, b) => b.at - a.at).slice(0, SETTLED_ROWS)).map((s) => s.key)
-  )
-  const shownRuns = runs.filter((r) => r.run.status === 'running' || keep.has(r))
-  const shownDelegates = delegates.filter((c) => c.delegation!.status === 'running' || keep.has(c))
-  const hidden = total - shownRuns.length - shownDelegates.length
+  const { working, finished } = useAgentRoster(threadId, chatIds)
+  if (working.length + finished.length === 0) return null
   return (
     <Card
       title="Agents"
       aside={
-        <span className={cn('text-[11px] tabular-nums', working ? 'text-primary' : 'text-muted-foreground/70')}>
-          {working ? `${working} working` : total}
+        <span className={cn('text-[11px] tabular-nums', working.length ? 'text-foreground' : 'text-muted-foreground/70')}>
+          {working.length ? `${working.length} working` : 'All finished'}
         </span>
       }
     >
-      <div data-rail-agents className="surface-group flex flex-col gap-px p-0.5">
-        {shownDelegates.map((c) => (
-          <DelegateRow key={c.id} chat={c} />
-        ))}
-        {shownRuns.map(({ chatId, run, provider }) => (
-          <SubagentRow key={`${chatId}:${run.id}`} chatId={chatId} run={run} provider={provider} />
-        ))}
+      <div data-rail-agents>
+        <AgentRoster working={working} finished={finished} limit={SETTLED_ROWS} />
       </div>
-      {(hidden > 0 || all) && (
-        <button
-          type="button"
-          onClick={() => setAll((a) => !a)}
-          className="mt-1.5 w-full rounded-md px-2 py-1 text-left text-[11px] text-muted-foreground transition-colors hover:text-foreground"
-        >
-          {all ? 'Show fewer' : `Show ${hidden} earlier`}
-        </button>
-      )}
     </Card>
   )
 }
