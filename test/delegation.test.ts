@@ -10,6 +10,7 @@ import {
   autoName,
   canDelegate,
   isAgentsSideEffect,
+  pendingDeliveriesContext,
   resolveDelegate,
   runAgentsTool,
   slugName,
@@ -17,6 +18,7 @@ import {
   type AgentsToolHost,
   type DelegationView
 } from '../src/main/delegation.ts'
+import { isDelivery } from '../src/shared/delivery.ts'
 
 const user = (text: string): ChatMessage => ({ id: `u-${text}`, role: 'user', text, ts: 0 })
 const said = (...texts: string[]): ChatMessage => ({
@@ -193,6 +195,11 @@ test('delivery: never starts with a slash, carries name, id, task, report and ho
   const again = { ...view, followUp: 'also write a test' }
   assert.equal(deliveryLabel(again), 'codex-a finished · also write a test')
   assert.match(deliveryText('Codex', again), /Task: \/src\/auth\.ts review\nFollow-up you sent it: also write a test/)
+  // The turn rail recognizes a delivery by its opening words, single or batched.
+  const label = deliveryLabel(view)
+  assert.ok(isDelivery({ text: body, label }))
+  assert.ok(isDelivery({ text: pendingDeliveriesContext([{ agent: 'Codex', view }]), label }))
+  assert.ok(!isDelivery({ text: body }))
 })
 
 test('side effects: delegate, send and cancel are refused in plan mode, status is not', () => {

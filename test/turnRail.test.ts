@@ -9,6 +9,7 @@ import {
   railTurns,
   reconcileTurns
 } from '../src/renderer/src/lib/turnRail.ts'
+import { isDelivery } from '../src/shared/delivery.ts'
 
 let clock = 0
 const user = (id: string, text = 'go', extra: Partial<ChatMessage> = {}): ChatMessage =>
@@ -47,6 +48,24 @@ test('a labelled action is named by its label, an attachment by what it is', () 
     user('u2', '', { attachments: [{ id: 'x', kind: 'image', name: 'a.png', mediaType: 'image/png', data: '' }] } as Partial<ChatMessage>)
   ])
   assert.deepEqual(turns.map((t) => t.prompt), ['Commit', 'Attachment'])
+})
+
+test("a delegate's delivery is not a turn: its work counts toward the turn that sent the agent", () => {
+  const delivered = (id: string) =>
+    user(id, 'Your agent sol (Codex) has finished.\n\nAgent: sol (id c1)', { label: 'sol finished · review' } as Partial<ChatMessage>)
+  const messages = [
+    user('u1', 'review it with sol'),
+    assistant('a1', [tool('t1')]),
+    delivered('d1'),
+    assistant('a2', [tool('t2'), text('sol found two bugs')]),
+    user('u2', 'Your agent words, typed by hand'),
+    assistant('a3', [text('ok')]),
+    delivered('d2')
+  ]
+  const turns = railTurns(messages, foldTurns(messages), true, isDelivery)
+  assert.deepEqual(turns.map((t) => [t.id, t.steps]), [['u1', 2], ['u2', 0]])
+  // The delivery is the newest message, so the turn it continues is the live one.
+  assert.deepEqual(turns.map((t) => t.live), [false, true])
 })
 
 test('a turn that ended on work has no answer, and only the last turn of a busy chat is live', () => {

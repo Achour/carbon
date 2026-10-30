@@ -8,6 +8,7 @@ import type {
   ModelOption,
   Provider
 } from '../shared/types.ts'
+import { DELIVERIES_OPENER, DELIVERY_OPENER } from '../shared/delivery.ts'
 
 /**
  * **Delegation: one chat's agent handing a task to another provider.**
@@ -20,8 +21,8 @@ import type {
  * it is worded for the parent. `ChatManager` is the host and owns the
  * lifecycle. See `docs/delegation.md`.
  *
- * Dependency-free on purpose — type imports only — so `node --test` runs it
- * straight off the `.ts`.
+ * Dependency-free on purpose — type imports and `shared/delivery.ts` only — so
+ * `node --test` runs it straight off the `.ts`.
  */
 
 export const AGENTS_TOOL_NAMES = ['delegate', 'send', 'status', 'cancel'] as const
@@ -507,17 +508,18 @@ export function deliveryText(
   agent: string,
   view: Pick<DelegationView, 'id' | 'name' | 'status' | 'task' | 'result' | 'error' | 'role' | 'followUp'>
 ): string {
-  const who = `${view.name} (${agent})`
+  // The opener is how the turn rail tells a delivery from a prompt (`isDelivery`).
+  const who = `${DELIVERY_OPENER}${view.name} (${agent})`
   const head =
     view.status === 'completed'
-      ? `Your agent ${who} has finished.`
+      ? `${who} has finished.`
       : view.status === 'failed'
-        ? `Your agent ${who} failed.`
+        ? `${who} failed.`
         : view.status === 'cancelled'
-          ? `Your agent ${who} was stopped by the user before it finished.`
+          ? `${who} was stopped by the user before it finished.`
           : view.status === 'interrupted'
-            ? `Your agent ${who} was interrupted: Carbon quit while it was running, so its work may be incomplete.`
-            : `Your agent ${who} is still running.`
+            ? `${who} was interrupted: Carbon quit while it was running, so its work may be incomplete.`
+            : `${who} is still running.`
   const lines = [head, '', `Agent: ${view.name} (id ${view.id})`, `Task: ${view.task}`]
   if (view.followUp) lines.push(`Follow-up you sent it: ${view.followUp}`)
   if (view.role) lines.push(`Role: ${view.role}`)
@@ -531,7 +533,7 @@ export function deliveryText(
 export function pendingDeliveriesContext(items: { agent: string; view: DelegationView }[]): string {
   if (!items.length) return ''
   return [
-    'Agents from this conversation finished while Carbon could not report them:',
+    DELIVERIES_OPENER,
     ...items.map(({ agent, view }) => `\n---\n${deliveryText(agent, view)}`)
   ].join('\n')
 }

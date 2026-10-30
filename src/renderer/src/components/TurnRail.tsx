@@ -105,8 +105,13 @@ export function TurnRail({
     if (!el) return
     let frame = 0
     let nodes: HTMLElement[] = []
+    // Only prompts the rail has a tick for: a delegate's delivery is a bubble
+    // with an id too, and reading the turn off it would light nothing.
+    const ids = new Set(idsKey.split('\n'))
     const collect = (): void => {
-      nodes = Array.from(el.querySelectorAll<HTMLElement>('[data-turn-id]'))
+      nodes = Array.from(el.querySelectorAll<HTMLElement>('[data-turn-id]')).filter((n) =>
+        ids.has(n.dataset.turnId ?? '')
+      )
     }
     const measure = (): void => {
       frame = 0

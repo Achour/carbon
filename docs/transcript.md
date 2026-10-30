@@ -1013,6 +1013,15 @@ stripped). Clicking a tick scrolls its prompt to the top.
   calls (`weightOf`). Ticks closer than `MIN_PITCH` stop being separate marks,
   so a chat with more turns than fit shows a window around the one being read,
   faded at the cut ends.
+- **A tick is a prompt the user wrote, not every user message.** A delegate's
+  outcome reaches the parent's model as a labelled user message
+  (`flushDeliveries`), so a chat that ran a dozen review rounds drew forty
+  "sol finished" ticks between the user's own prompts — 44 of 105 in one real
+  chat. `railTurns` takes `isDelivery` (`shared/delivery.ts`) and folds a
+  delivery, and the work it starts, into the turn that sent the agent. A
+  delivery carries no flag, so its opening words are the mark: main writes them
+  from the same constants. The active-turn measure reads only prompts that have
+  a tick, or a delivery bubble near the top third would light nothing.
 - **It reaches as far as the loaded window.** A long chat holds older messages
   in the database until the reader scrolls to them, and the rail does not reach
   past that. Above the first loaded turn, a three-dot mark loads the next window.

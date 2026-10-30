@@ -34,6 +34,7 @@ import { TurnRail } from '@/components/TurnRail'
 import { TurnBookmarks, type TurnBookmarksValue } from '@/components/messages/TurnBookmarks'
 import { foldTurns } from '@/lib/turnFold'
 import { bookmarkText, earlierBookmarks, railTurns, reconcileTurns, type RailTurn } from '@/lib/turnRail'
+import { isDelivery } from '@shared/delivery'
 
 const NO_PERMISSIONS: never[] = []
 const NO_QUEUED: never[] = []
@@ -548,7 +549,7 @@ export const ChatView = React.memo(function ChatView({
   // tick sees a new object.
   const railRef = React.useRef<RailTurn[]>([])
   const turns = React.useMemo(() => {
-    const next = reconcileTurns(railRef.current, railTurns(messages, foldTurns(messages), busy))
+    const next = reconcileTurns(railRef.current, railTurns(messages, foldTurns(messages), busy, isDelivery))
     railRef.current = next
     return next
   }, [messages, busy])

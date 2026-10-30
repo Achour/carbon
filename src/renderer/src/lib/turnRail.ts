@@ -1,4 +1,4 @@
-import type { ChatMessage, TurnBookmark } from '@shared/types'
+import type { ChatMessage, TurnBookmark, UserMessage } from '@shared/types'
 import type { TurnFold } from './turnFold'
 
 /**
@@ -77,14 +77,21 @@ function weightOf(answerLength: number, steps: number): RailTurn['weight'] {
 
 /**
  * The rail's turns, in order. `folds` is `foldTurns(messages)` — passed in
- * rather than recomputed, and so that this file has no runtime imports.
- * `busy` marks the last turn live: a turn that has not ended yet has no
- * `turn` row to say so.
+ * rather than recomputed, and so that this file has no runtime imports; so is
+ * `continues` (`isDelivery`), for the same reason. `busy` marks the last turn
+ * live: a turn that has not ended yet has no `turn` row to say so.
+ *
+ * A message `continues` names is not a turn of its own: a delegate reporting
+ * back is a user message only because that is how an outcome reaches the
+ * model. Its work counts toward the turn that sent the agent, so a chat that
+ * ran a dozen review rounds reads as the prompts the user wrote, not as forty
+ * ticks of "sol finished".
  */
 export function railTurns(
   messages: ChatMessage[],
   folds: ReadonlyMap<string, TurnFold>,
-  busy: boolean
+  busy: boolean,
+  continues: (message: UserMessage) => boolean = () => false
 ): RailTurn[] {
   const turns: RailTurn[] = []
   let current: { id: string; prompt: string; steps: number } | null = null
@@ -105,6 +112,7 @@ export function railTurns(
   }
 
   for (const m of messages) {
+    if (m.role === 'user' && current && continues(m)) continue
     if (m.role === 'user') {
       close(false)
       const words = m.label ?? plainText(m.text)
