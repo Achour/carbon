@@ -98,6 +98,17 @@ Timers still show up as changes (an "Uptime 3 → 4" line), which is the truth
 and costs a line. `settle` waits for loads and fetches, not for a `setTimeout`,
 so a delayed toast reads "No changes yet" and `wait_for` is the tool for it.
 
+**Targets reach into open shadow roots** (`openRoots`, `queryDeep`,
+`deepActive` in `previewPage.ts`). The snapshot's walk always entered them, so a
+component's button had a ref. But `text` targeting and `wait_for` text read
+only the document, and a selector matched only there. "Focused" also stopped
+at the outermost host, so a focused button inside a component read as the
+component, and `type` with no target typed into the host. Now text targeting
+searches every open root (the document first), a selector falls back to the
+roots when the document has no match, `wait_for` text reads each root's own
+text, and focus resolves through `shadowRoot.activeElement`. The occlusion
+check already descended through shadow roots.
+
 **A ref can never come to mean something else.** Each document numbers from
 `e1`, so the page keys refs by a per-document token (`<doc>:eN`) and refuses a
 key from another document; the model sees short aliases the driver issues from

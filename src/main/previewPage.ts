@@ -51,6 +51,16 @@ export function carbonAgentRuntime(): unknown {
     for (const [r, w] of byRef) if (!w.deref()) byRef.delete(r)
   }
 
+  /**
+   * What holds focus, through shadow roots: `document.activeElement` stops at
+   * the outermost host, so a focused button inside a component read as the
+   * component, and typing with no target went to the host.
+   */
+  const deepActive = (): Element | null => {
+    let a: Element | null = document.activeElement
+    while (a && a.shadowRoot?.activeElement) a = a.shadowRoot.activeElement
+    return a
+  }
   const norm = (s: string | null | undefined): string => (s || '').replace(/\s+/g, ' ').trim()
   const cap = (s: string, n: number): string => (s.length > n ? s.slice(0, n - 1) + '…' : s)
 
@@ -216,7 +226,7 @@ export function carbonAgentRuntime(): unknown {
     if (el.getAttribute('aria-current') && el.getAttribute('aria-current') !== 'false') out.push('current')
     if ((input as any).required || el.getAttribute('aria-required') === 'true') out.push('required')
     if (el.getAttribute('aria-invalid') === 'true') out.push('invalid')
-    if (document.activeElement === el) out.push('focused')
+    if (deepActive() === el) out.push('focused')
     return out
   }
 
@@ -301,6 +311,35 @@ export function carbonAgentRuntime(): unknown {
   /** Floating only when laid out in a fixed or absolute layer; in the flow they read in place. */
   const MAYBE_FLOATING =
     '[role="dialog"], [role="alertdialog"], [role="alert"], [role="status"], [role="menu"], [role="listbox"], [role="tooltip"], [aria-live="polite"], [aria-live="assertive"]'
+  /**
+   * The document and every open shadow root in it, nested ones included —
+   * what `querySelectorAll` on the document alone cannot see into, and the
+   * snapshot's walk does. Bounded: finding them reads no styles, only each
+   * element's own `shadowRoot`.
+   */
+  const openRoots = (): (Document | ShadowRoot)[] => {
+    const roots: (Document | ShadowRoot)[] = [document]
+    const all = document.querySelectorAll('*')
+    for (let i = 0; i < all.length && i < 60000; i++) {
+      const sr = all[i].shadowRoot
+      if (sr) roots.push(sr)
+    }
+    for (let r = 1; r < roots.length && r < 200; r++) {
+      for (const el of Array.from(roots[r].querySelectorAll('*'))) if (el.shadowRoot) roots.push(el.shadowRoot)
+    }
+    return roots
+  }
+  /** First match for a selector in the document, else in an open shadow root. */
+  const queryDeep = (sel: string): Element | null => {
+    const hit = document.querySelector(sel)
+    if (hit) return hit
+    for (const r of openRoots().slice(1)) {
+      const el = r.querySelector(sel)
+      if (el) return el
+    }
+    return null
+  }
+
   /** The composed parent: across a shadow boundary, the host. */
   const up = (n: Element): Element | null => n.parentElement || (((n.getRootNode() as ShadowRoot).host as Element | undefined) ?? null)
   /**
@@ -311,21 +350,13 @@ export function carbonAgentRuntime(): unknown {
    * searched too, as the snapshot's walk enters them.
    */
   const floating = (): Element[] => {
-    const roots: (Document | ShadowRoot)[] = [document]
-    // Bounded: finding shadow roots reads no styles, only each element's own field.
-    const all = document.querySelectorAll('*')
-    for (let i = 0; i < all.length && i < 60000; i++) {
-      const sr = all[i].shadowRoot
-      if (sr) roots.push(sr)
-    }
-    for (let r = 1; r < roots.length && r < 200; r++) {
-      for (const el of Array.from(roots[r].querySelectorAll('*'))) if (el.shadowRoot) roots.push(el.shadowRoot)
-    }
+    const roots = openRoots()
     const pick = (sel: string): Element[] => {
       const out: Element[] = []
       for (const r of roots) {
         try {
-          out.push(...Array.from(r.querySelectorAll(sel)))
+          // Not `push(...all)`: a big page's matches overflow the argument limit.
+          for (const el of Array.from(r.querySelectorAll(sel))) out.push(el)
         } catch {
           return [] // a selector this engine does not know (`:popover-open`)
         }
@@ -500,7 +531,7 @@ export function carbonAgentRuntime(): unknown {
     const head = lines.length
     if (document.body) walk(document.body, 0)
     const doc = document.scrollingElement || document.documentElement
-    const active = document.activeElement
+    const active = deepActive()
     return {
       url: location.href,
       title: document.title,
@@ -527,8 +558,7 @@ export function carbonAgentRuntime(): unknown {
 
   /** Whether focus is on `el` (or inside it, through shadow roots). */
   const hasFocus = (el: Element): boolean => {
-    let a: Element | null = document.activeElement
-    while (a && (a as Element).shadowRoot?.activeElement) a = (a as Element).shadowRoot!.activeElement
+    const a = deepActive()
     return !!a && contains(el, a)
   }
 
@@ -545,11 +575,13 @@ export function carbonAgentRuntime(): unknown {
   const findByText = (text: string): Element | null => {
     const want = norm(text).toLowerCase()
     if (!want) return null
-    const all = Array.from(document.querySelectorAll('*'))
     let exact: Element | null = null
     let partial: Element | null = null
     let textExact: Element | null = null
-    for (const el of all) {
+    // Document order, then each shadow root's: a host's content after the light
+    // DOM. Root by root, never one combined array spread into `push`, which a
+    // page of 200k elements overflows before the search begins.
+    for (const root of openRoots()) for (const el of Array.from(root.querySelectorAll('*'))) {
       if (isHidden(el) || !hasBox(el)) continue
       const role = roleOf(el)
       if (role && INTERACTIVE.has(role)) {
@@ -566,7 +598,7 @@ export function carbonAgentRuntime(): unknown {
   type Target = { ref?: string; selector?: string; text?: string; focused?: boolean }
   const resolve = (t: Target): { el: Element } | { error: string } => {
     if (t.focused) {
-      const el = document.activeElement
+      const el = deepActive()
       return el && el !== document.body ? { el } : { error: 'Nothing is focused.' }
     }
     if (t.ref) {
@@ -581,7 +613,7 @@ export function carbonAgentRuntime(): unknown {
     if (t.selector) {
       let el: Element | null = null
       try {
-        el = document.querySelector(t.selector)
+        el = queryDeep(t.selector)
       } catch (e) {
         return { error: 'Invalid selector: ' + String((e as Error).message || e) }
       }
@@ -647,7 +679,7 @@ export function carbonAgentRuntime(): unknown {
       if ('error' in found) return found
       el = found.el
     } else {
-      el = document.activeElement && document.activeElement !== document.body ? document.activeElement : null
+      el = (() => { const a = deepActive(); return a && a !== document.body ? a : null })()
       if (!el) return { error: 'Nothing is focused — name the field with ref or selector.' }
     }
     const tag = el.tagName.toLowerCase()
@@ -705,7 +737,7 @@ export function carbonAgentRuntime(): unknown {
   const insertText = (a: { ref: string; text: string; append?: boolean }): unknown => {
     const el = byRef.get(a.ref)?.deref() as HTMLElement | undefined
     if (!el || !el.isConnected) return { error: 'The field is gone.' }
-    if (document.activeElement !== el) el.focus()
+    if (deepActive() !== el) el.focus()
     const ok = a.text ? document.execCommand('insertText', false, a.text) : document.execCommand('delete')
     if (ok) return { ok: true }
     // A field the command will not edit: set the value the way a framework's
@@ -728,7 +760,7 @@ export function carbonAgentRuntime(): unknown {
    * back after; anything else cannot be clicked without acting on it.
    */
   const keyTarget = (a: { ref?: string }): unknown => {
-    const el = (a.ref ? byRef.get(a.ref)?.deref() : document.activeElement) as HTMLElement | null | undefined
+    const el = (a.ref ? byRef.get(a.ref)?.deref() : deepActive()) as HTMLElement | null | undefined
     if (!el || el === document.body || !el.isConnected) return { textual: false }
     const tag = el.tagName.toLowerCase()
     const textual =
@@ -780,7 +812,7 @@ export function carbonAgentRuntime(): unknown {
     meta: boolean
     shift: boolean
   }): unknown => {
-    const el = ((a.ref ? byRef.get(a.ref)?.deref() : document.activeElement) as HTMLElement | null | undefined) ?? document.body
+    const el = ((a.ref ? byRef.get(a.ref)?.deref() : deepActive()) as HTMLElement | null | undefined) ?? document.body
     const init = {
       key: a.key,
       code: a.code,
@@ -828,12 +860,25 @@ export function carbonAgentRuntime(): unknown {
     if (t.selector) {
       // An invalid selector throws out to the caller: read as "absent", it
       // made `wait_for(gone)` succeed at once on a typo.
-      const el = document.querySelector(t.selector)
+      const el = queryDeep(t.selector)
       return !!el && !isHidden(el) && hasBox(el)
     }
     if (t.text) {
+      const want = norm(t.text).toLowerCase()
       const body = document.body ? (document.body as HTMLElement).innerText : ''
-      return norm(body).toLowerCase().includes(norm(t.text).toLowerCase())
+      if (norm(body).toLowerCase().includes(want)) return true
+      // A host's `innerText` leaves its shadow tree out; read each root's own,
+      // only where it is shown: a hidden component's text must not satisfy a
+      // wait, nor keep a `gone` wait waiting. `innerText` of an unrendered
+      // element is its `textContent`, hence the visibility check first.
+      for (const r of openRoots().slice(1)) {
+        for (const c of Array.from(r.children)) {
+          if (!shownDeep(c)) continue
+          const t = (c as HTMLElement).innerText
+          if (typeof t === 'string' && norm(t).toLowerCase().includes(want)) return true
+        }
+      }
+      return false
     }
     return false
   }
