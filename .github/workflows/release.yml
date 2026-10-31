@@ -23,9 +23,10 @@ permissions:
 
 jobs:
   build:
-    # macos-14 is Apple Silicon; it cross-builds the x64 dmg fine, and native
-    # deps (node-pty) get rebuilt per-arch by electron-builder.
-    runs-on: macos-14
+    # macos-15 is Apple Silicon; it cross-builds the x64 dmg fine, and native
+    # deps (node-pty) get rebuilt per-arch by electron-builder. (macos-14 is
+    # retired on 2026-11-02; its brownouts were already refusing jobs.)
+    runs-on: macos-15
     # Job-level rather than on the step that uses it: the `secrets` context
     # isn't readable from a step-level `if`, and gating on `env` is what lets
     # the cask bump skip itself instead of failing the release.
