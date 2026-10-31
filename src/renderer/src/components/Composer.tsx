@@ -59,7 +59,7 @@ import { useApp } from '@/store'
 import { ContextDetail } from '@/components/ContextDetail'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { ProviderAvatar } from '@/components/ui/provider-mark'
+import { ProviderAvatar, ProviderMark } from '@/components/ui/provider-mark'
 import { WithTooltip } from '@/components/ui/tooltip'
 
 /**
@@ -248,12 +248,16 @@ function ContextRing({
     <Popover>
       <PopoverTrigger
         aria-label="Context window usage"
+        // A 32px circle like every control in the bar, on one centre line.
+        // Not raised: it is a reading, so it takes a fill only on hover.
         className={cn(
-          'no-drag flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 outline-none transition-colors hover:bg-accent data-[popup-open]:bg-accent',
+          'no-drag flex h-8 min-w-8 shrink-0 items-center justify-center gap-1 rounded-full text-xs font-medium tabular-nums outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring hover:bg-[var(--surface-control-hover)] data-[popup-open]:bg-[var(--surface-control-hover)]',
+          pct > 0.7 && 'px-2',
           pct > 0.9 ? 'text-destructive' : pct > 0.7 ? 'text-amber-500' : 'text-muted-foreground'
         )}
       >
-        <svg width="14" height="14" viewBox="0 0 14 14" className="-rotate-90">
+        {/* `block`: an inline svg sits on the text baseline, below centre. */}
+        <svg width="14" height="14" viewBox="0 0 14 14" className="block shrink-0 -rotate-90">
           <circle cx="7" cy="7" r={r} fill="none" strokeWidth="2.5" className="stroke-border" />
           <circle
             cx="7"
@@ -266,7 +270,7 @@ function ContextRing({
             strokeDasharray={`${c * pct} ${c}`}
           />
         </svg>
-        {pct > 0.7 && <span className="text-[10px] tabular-nums">{Math.round(pct * 100)}%</span>}
+        {pct > 0.7 && <span className="leading-none">{Math.round(pct * 100)}%</span>}
       </PopoverTrigger>
       <PopoverContent side="top" align="end" className="w-64">
         <ContextDetail used={used} window={win} name={name} chatId={chatId} />
@@ -277,6 +281,7 @@ function ContextRing({
 
 function ModelSettingsPicker({
   model,
+  provider,
   onModelChange,
   models,
   effort,
@@ -287,7 +292,6 @@ function ModelSettingsPicker({
   serviceTiers,
   fastNote,
   disabled,
-  compact = false,
   open: controlledOpen,
   onOpenChange,
   permission,
@@ -295,6 +299,8 @@ function ModelSettingsPicker({
   onPermissionOpenChange
 }: {
   model: string
+  /** The backend the composer will send to — its mark leads the chip. */
+  provider: Provider
   onModelChange: (model: string, provider: Provider) => void
   models: ModelOption[]
   effort: EffortId | ''
@@ -306,18 +312,13 @@ function ModelSettingsPicker({
   /** Why the provider isn't serving Fast, when it says so; null when it is. */
   fastNote?: string | null
   disabled?: boolean
-  /**
-   * The model's name alone — for the folded composer, where the chip shares one
-   * line with the input. The effort and Fast stay one click away in the popover.
-   */
-  compact?: boolean
   /** Controlled by Composer so `/model` can open the existing native picker. */
   open?: boolean
   onOpenChange?: (open: boolean) => void
   /**
    * What the agent may do, as a third row beside Reasoning and Speed — one
    * control for everything about the turn, rather than a second picker on the
-   * bar. Its icon rides the trigger whenever it is not the ask baseline.
+   * bar. Named on the trigger in its colour whenever it is not the ask baseline.
    */
   permission?: {
     value: PermissionModeId
@@ -432,19 +433,25 @@ function ModelSettingsPicker({
         aria-label={`${selectedName}, ${selectedEffort?.label ?? effort}${
           serviceTier === 'fast' ? (fastNote ? `, Fast unavailable: ${fastNote}` : ', Fast') : ''
         }${selectedPermission ? `, ${selectedPermission.label}` : ''}`}
-        className="no-drag inline-flex h-7 min-w-0 max-w-full select-none items-center gap-1 overflow-hidden rounded-md px-2 text-xs font-medium text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[popup-open]:bg-accent data-[popup-open]:text-foreground disabled:opacity-50"
+        className="no-drag surface-control inline-flex h-8 min-w-0 max-w-full select-none items-center gap-1.5 overflow-hidden rounded-full pr-3 pl-2.5 text-xs font-medium text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[popup-open]:text-foreground disabled:opacity-50 hover:bg-[var(--surface-control-hover)] data-[popup-open]:bg-[var(--surface-control-hover)]"
       >
+        <ProviderMark provider={provider} className="size-3.5 shrink-0 text-foreground" />
         <span className="max-w-32 truncate text-foreground">{selectedName}</span>
-        {/* The effort is the first thing a narrow column gives up: the model
-            name says which backend answers, and the popover still shows both. */}
-        {!compact && efforts.length > 1 && (
+        {/* Provider · model · reasoning, one separator between each, in both
+            of the composer's shapes. The permission mode is not on the chip:
+            it is set once and rarely moved, and a third coloured word made the
+            bar read as a sentence. The popover shows it, and the button's
+            label still names it. Only a column too narrow for them gives the
+            words up. */}
+        {efforts.length > 1 && (
           <>
+            <span className="shrink-0 text-muted-foreground/50 @max-[400px]:hidden">·</span>
             <span className="shrink-0 font-normal @max-[400px]:hidden">
               {selectedEffort?.label ?? effort}
             </span>
           </>
         )}
-        {serviceTier === 'fast' && !compact && (
+        {serviceTier === 'fast' && (
           <>
             <span className="shrink-0 text-muted-foreground/50 @max-[400px]:hidden">·</span>
             {/* Struck through, not hidden: Fast is still what's selected — the
@@ -459,14 +466,6 @@ function ModelSettingsPicker({
               Fast
             </span>
           </>
-        )}
-        {/* Ask is the baseline and says nothing; any mode that lets the agent
-            do more, or plans instead of acting, keeps its coloured mark here
-            in every shape, the one-line one included. */}
-        {permissionLook && permission?.value !== 'default' && (
-          <permissionLook.Icon
-            className={cn('ml-0.5 size-3.5 shrink-0', permissionLook.iconClassName)}
-          />
         )}
       </PopoverTrigger>
       {/* w-80, not w-72: the Default row carries a label, the model it resolves
@@ -1339,7 +1338,7 @@ export function Composer({
         variant="ghost"
         // First in every shape: on one line it leads the row, ahead of the
         // input; open, it leads the toolbar under it.
-        className={cn('shrink-0 text-muted-foreground', inline && 'ml-1.5')}
+        className={cn('surface-control size-8 shrink-0 rounded-full text-muted-foreground hover:bg-[var(--surface-control-hover)] data-[popup-open]:bg-[var(--surface-control-hover)]', inline && 'ml-1.5')}
         onClick={() => fileInputRef.current?.click()}
         disabled={locked}
         aria-label="Attach files"
@@ -1353,6 +1352,7 @@ export function Composer({
   const modelPicker = (
     <ModelSettingsPicker
       model={selectedModel}
+      provider={provider}
       onModelChange={handleModelChange}
       models={pickerModels}
       effort={effortValue}
@@ -1363,7 +1363,6 @@ export function Composer({
       serviceTiers={serviceTierOptions}
       fastNote={fastNote}
       disabled={locked}
-      compact={inline}
       open={modelSettingsOpen}
       onOpenChange={setModelSettingsOpen}
       permission={{
@@ -1405,7 +1404,7 @@ export function Composer({
         size="sm"
         onClick={submit}
         disabled={!canSend}
-        className={cn('h-7 shrink-0 rounded-full px-3', inline && 'order-2')}
+        className={cn('h-8 shrink-0 rounded-full px-3.5 disabled:opacity-100 disabled:bg-[var(--surface-raised)] disabled:text-muted-foreground disabled:shadow-[var(--surface-control-shadow)]', inline && 'order-2')}
       >
         {submitLabel}
       </Button>
@@ -1414,7 +1413,7 @@ export function Composer({
         size="icon-sm"
         onClick={submit}
         disabled={!canSend}
-        className={cn('size-8 shrink-0 rounded-full', inline && 'order-2')}
+        className={cn('size-8 shrink-0 rounded-full disabled:opacity-100 disabled:bg-[var(--surface-raised)] disabled:text-muted-foreground disabled:shadow-[var(--surface-control-shadow)]', inline && 'order-2')}
         aria-label="Send message"
       >
         <ArrowUp className="size-4" strokeWidth={2.5} />
@@ -1428,6 +1427,9 @@ export function Composer({
         ref={frameRef}
         data-composer
         data-collapsed={collapsed || undefined}
+        // Read by the line under the new-chat box, which lines its right end up
+        // with the send button — whose inset differs between the two shapes.
+        data-inline={inline || undefined}
         onDragEnter={(e) => {
           if (!hasFileDrag(e)) return
           e.preventDefault()
@@ -1700,7 +1702,9 @@ export function Composer({
           ref={barRef}
           data-composer-bar
           className={cn(
-            'flex items-center gap-0.5',
+            // One gap between every control in the bar, so no two hover boxes
+            // ever touch.
+            'flex items-center gap-1.5',
             inline ? 'flex-none pr-1.5' : 'basis-full px-2 pb-2'
           )}
         >
@@ -1709,7 +1713,7 @@ export function Composer({
           {!inline && attachButton}
           <div
             className={cn(
-              'flex min-w-0 items-center gap-0.5',
+              'flex min-w-0 items-center gap-1.5',
               inline ? 'flex-none' : 'flex-1 justify-end'
             )}
           >

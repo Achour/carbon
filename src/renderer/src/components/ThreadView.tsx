@@ -333,10 +333,11 @@ function ThreadHeader({ chat, ids }: { chat: ChatMeta; ids: readonly string[] })
         </div>
       )}
       {/* Where the thread runs and what it has changed, once for every column.
-          With one conversation showing it sits above that composer instead,
-          while the rail is up it is the rail's, and with the panel open —
-          docked or floating — it gives its width to the controls; the rail
-          still carries it. */}
+          With one conversation showing it is the rail's alone (a line under
+          that composer said it again for facts that rarely change), while the
+          rail is up it is the rail's, and with the panel open — docked or
+          floating — it gives its width to the controls; the rail still
+          carries it. */}
       {severalChats && !railShown && !panelDocked && !floatInset && (
         <ContextStrip
           cwd={chat.cwd}

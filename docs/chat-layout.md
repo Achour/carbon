@@ -59,19 +59,28 @@ border 508, prose 522.
   lines of a 22.75px line-height overflow it by a fraction — enough to draw a
   full-length scrollbar beside text that fits.
 - **Permissions live in the model picker**, as a row beside Reasoning and
-  Speed; the bar has one picker. Any mode other than the ask baseline keeps its
-  coloured icon on the trigger, in both shapes. `/permissions` opens the picker
-  straight onto that row (`permissionOpen`).
-- **Where the chat runs is under the box, not above it.** `ContextStrip quiet`
-  draws folder, branch and changes as plain text below the frame; the pill row
-  above read as a second toolbar. The new-chat screen does the same, its
-  worktree and branch pickers included (`quiet` on both, `quietPillButton`).
+  Speed; the bar has one picker. Every control in the bar is a 32px circle or
+  pill, 6px apart (the bar's one `gap`); with depth on, attach and the chip are
+  raised (`surface-control`, `docs/depth.md`). The trigger reads provider mark ·
+  model · reasoning in both shapes, and does not name the mode: it was a coloured icon
+  (read as part of the effort), then a coloured word (the bar read as a
+  sentence). `/permissions` opens the picker straight onto that row
+  (`permissionOpen`).
+- **Where an open chat runs is not under its box.** It was: a pill row above
+  the input read as a second toolbar, so it moved below the frame as plain text
+  (`ContextStrip quiet`), and there it still cost a line for folder, branch and
+  changes — facts that rarely move and that the session rail's Environment and
+  Changes cards already carry, with the branch's actions. The open chat now
+  leaves them to the rail; the turn's own changes card covers what a turn did.
+  The new-chat screen keeps its line, because there it is where the chat is
+  about to run, worktree and branch pickers included (`quiet` on both,
+  `quietPillButton`).
 - **The stack floats over the transcript.** It is absolutely placed at the
   view's foot, its measured height written to `--composer-h` (straight to the
   style, no state), which the column's foot spacer, the jump button and the
   turn rail leave room for. The column's `ResizeObserver` already keeps a
   pinned reader on the bottom when it changes. The frame is translucent with a
-  backdrop blur (`floating`), over a gradient that keeps the strip legible.
+  backdrop blur (`floating`), over a short gradient below the frame.
 - **No session-info button.** The activity glyph that opened `SessionPanel`
   was removed from the bar; the component remains, unmounted.
 

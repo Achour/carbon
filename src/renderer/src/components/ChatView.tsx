@@ -97,22 +97,9 @@ export const ChatView = React.memo(function ChatView({
   // With several chats on screen, a composer nobody is writing in folds to its
   // input line — see `Composer`'s `collapsible`.
   const collapsible = useApp(severalChatsShown)
-  // The folder, branch and changes chips describe the thread, which every
-  // column shares. With several chats on screen the thread header carries them
-  // once; otherwise they sit above the one conversation showing — the thread's
-  // own chat, or whichever column is expanded.
-  // While the session rail is up it carries the same three facts in its
-  // Environment and Changes cards, so the strip steps aside rather than say
-  // them twice.
   // The branch's actions act on the thread, whose own chat carries the
   // worktree — this one, unless it is a column expanded in it.
   const threadId = chat.sideOf ?? chat.id
-  const stripHere = useApp(
-    (s) =>
-      !severalChatsShown(s) &&
-      !(s.quickRail && !s.railHidden) &&
-      (s.agentView ?? s.expandedChatId ?? s.activeId) === chat.id
-  )
   const loadingOlder = useApp((s) =>
     chat.id === s.activeId ? s.loadingOlder : !!s.sideChats[chat.id]?.loadingOlder
   )
@@ -824,12 +811,9 @@ export const ChatView = React.memo(function ChatView({
           ref={composerRef}
           className={cn(
             'pointer-events-none absolute inset-x-0 bottom-0 z-20 pr-[var(--scrollbar-width)]',
-            // Solid only below the frame — under the strip, where passing text
-            // would collide with its own — and clear from the frame's lower
-            // edge up, so the transcript runs under the whole box.
-            stripHere
-              ? 'bg-[linear-gradient(to_top,var(--background)_0,var(--background)_26px,transparent_38px)] pb-2.5'
-              : 'bg-[linear-gradient(to_top,var(--background)_0,var(--background)_10px,transparent_20px)] pb-5'
+            // Solid only below the frame, and clear from its lower edge up, so
+            // the transcript runs under the whole box.
+            'bg-[linear-gradient(to_top,var(--background)_0,var(--background)_10px,transparent_20px)] pb-5'
           )}
         >
           <div className="mx-auto max-w-3xl px-6">
@@ -966,23 +950,6 @@ export const ChatView = React.memo(function ChatView({
                     : `Ask ${PROVIDER_SHORT_LABELS[composerProvider]} anything…`
                 }
               />
-              {/* Under the box rather than above it: where the chat runs and
-                  what it has changed are facts to glance at, not controls to
-                  reach for before typing, and a pill row above the input read
-                  as a second toolbar. Inset by the pill's own padding so the
-                  folder's text lands on the column. */}
-              {stripHere && (
-                <ContextStrip
-                  quiet
-                  className="mt-1.5 px-2"
-                  cwd={chat.cwd}
-                  project={projectRoot(chat)}
-                  git={git}
-                  onReviewChanges={() => void reviewChanges()}
-                  onUpdateFromDefault={() => void runGitAction('update-from-main')}
-                  threadId={threadId}
-                />
-              )}
             </div>
           </div>
         </div>

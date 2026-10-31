@@ -458,6 +458,36 @@
   background-color: var(--surface-raised);
   box-shadow: var(--elevation-1), 0 0 0 1px var(--surface-raised-edge);
 }
+/* A control that sits on a card rather than in a list: the composer's attach
+   button and model chip. Raised with depth on; with depth off it is the plain
+   ghost control it was, a fill only on hover. Its hover moves toward the
+   foreground, so it brightens in dark and darkens in light alike. */
+:root {
+  --surface-control: var(--surface-raised);
+  --surface-control-hover: color-mix(in oklch, var(--surface-raised), var(--foreground) 8%);
+  --surface-control-shadow: var(--elevation-1), 0 0 0 1px var(--surface-raised-edge);
+}
+@utility surface-control {
+  background-color: var(--surface-control);
+  box-shadow: var(--surface-control-shadow);
+}
+/* A filled button (primary, destructive) is lifted off the page. In light
+   mode an outer shadow does it alone. On a near-black page no shadow reads,
+   so dark mode adds what every raised level here uses (`docs/depth.md`): the
+   top edge catching light, one line, with the outer shadow under it. Not the
+   rest of the bevel: a shaded bottom edge and a sheen made it look embossed,
+   and a glow of the fill was a haze around a white primary. Flat: a plain
+   fill. */
+:root {
+  --fill-shadow: 0 1px 2px oklch(0 0 0 / 16%), 0 2px 6px -1px oklch(0 0 0 / 12%);
+}
+.dark {
+  --fill-shadow: inset 0 1px 0 oklch(1 0 0 / 30%), 0 1px 2px oklch(0 0 0 / 60%),
+    0 4px 10px -2px oklch(0 0 0 / 55%);
+}
+@utility surface-fill {
+  box-shadow: var(--fill-shadow);
+}
 @utility surface-overlay {
   box-shadow: var(--elevation-2);
 }
@@ -500,6 +530,10 @@
   --surface-well-shadow: none;
   --elevation-1: none;
   --elevation-2: 0 20px 25px -5px oklch(0 0 0 / 10%), 0 8px 10px -6px oklch(0 0 0 / 10%);
+  --surface-control: transparent;
+  --surface-control-hover: var(--accent);
+  --surface-control-shadow: none;
+  --fill-shadow: none;
 }
 
 @layer base {

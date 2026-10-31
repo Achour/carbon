@@ -277,7 +277,7 @@ export function NewChat(): React.JSX.Element {
 
             {cwd ? (
               <>
-                <div className="relative">
+                <div className="peer relative">
                   <CodexReviewMenu
                     open={reviewOpen}
                     onOpenChange={setReviewOpen}
@@ -323,10 +323,13 @@ export function NewChat(): React.JSX.Element {
                 {/* Always shown, like ChatView's — the project you're about to
                     work in shouldn't disappear just because the quick-launch
                     rail also names it — and under the box like ChatView's,
-                    as plain text, inset so the folder lands on the column. */}
+                    as plain text, inset so the folder lands on the column. Its
+                    right end lands under the send button's: the bar's inset
+                    (6px one-line, 8px open) plus the border, less the pill's
+                    own 6px padding. */}
                 <ContextStrip
                   quiet
-                  className="mt-1.5 px-2"
+                  className="mt-1.5 pl-2 pr-[3px] peer-has-[[data-inline]]:pr-px"
                   cwd={cwd}
                   git={git}
                   // A worktree target shows its own branch, not the checkout's —

@@ -11,6 +11,7 @@ defined once, in `index.css` under "Depth.", as utilities:
 | `surface-raised` | a control you press | `Button variant="secondary"`, the active segment, the active panel tab, context chips |
 | `surface-overlay` | what floats over everything | popover, menus, select, dialog, tooltip |
 | `surface-well` | an input, a step *below* | `Input`, the panel's file search, edit fields |
+| `surface-fill` | a filled button, lifted by an outer shadow only | `Button` default and destructive, the send button, the commit split button |
 
 ## Why it is built this way
 
@@ -31,6 +32,14 @@ defined once, in `index.css` under "Depth.", as utilities:
   and a shadow on a streaming row costs a repaint per token. The one exception
   is `CHAT_FRAME`, which the composer and a sent prompt share. It takes the top
   highlight only.
+- **The composer's controls are the one place inside it that is raised.**
+  With depth on, the composer was the only flat thing on a raised page: the
+  same outlined box either way, its unarmed send a half-transparent white disc.
+  `surface-control` is the level for a control sitting on a card: the attach
+  button and the model chip take it, the unarmed send takes `--surface-raised`
+  with the same edge, and hover moves toward the foreground. Depth off maps it
+  to transparent with an accent hover, which is the ghost control it was. The
+  frame itself stays `CHAT_FRAME`, so it still matches the sent prompt.
 
 ## Primitives that carry it
 

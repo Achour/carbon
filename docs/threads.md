@@ -49,7 +49,8 @@ what "the active chat" means in the renderer.
   thread, which every column shares, and drawn in the first column alone they
   read as that chat's — the others looked like they had no branch and no
   changes. With one conversation showing (a single chat, or one expanded) they
-  sit above that composer, as a chat's always have.
+  are the rail's alone: the line under that composer said them a second time
+  and cost the composer a row for it.
   With a single chat the header is the one the chat always had plus the `+`
   that adds a column, so a chat that never grew one looks as it did.
 - **The header has no ⋯ menu.** It held rename, delete, the branch's two
@@ -58,10 +59,10 @@ what "the active chat" means in the renderer.
   branch actions could not follow them there: they read the store's `git`
   slice, which is the *open* thread's checkout, so a sidebar row would offer a
   merge for any chat and run it against the wrong branch. They hang off what
-  names the branch instead (`BranchMenu`): the folder/branch pill of the strip,
-  wherever it is drawn, and the rail's branch row. Every state draws one of
-  the two — the strip steps aside only for the rail, or in the header for a
-  panel, and the rail toggle stays in the bar. Both are given the thread's own
+  names the branch instead (`BranchMenu`): the folder/branch pill of the
+  header's strip while several chats show, and the rail's branch row. With one
+  chat and the rail hidden neither is drawn, and the actions are the rail
+  toggle away — it stays in the bar for that. Both are given the thread's own
   chat, since a side chat carries no worktree.
 - **`listChats` is where side chats are hidden, and `listSideChats` is the
   second read that brings them back at launch.** `listChats` seeds the sidebar's

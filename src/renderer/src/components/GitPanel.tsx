@@ -433,7 +433,7 @@ export function GitActionButton(): React.JSX.Element | null {
     // truncated label here is this button sliced down the middle at the panel's
     // default width — and the label is already `truncate`, which does nothing
     // inside a wrapper that refuses to give up any width.
-    <div className="isolate flex min-w-0 shrink shadow-sm">
+    <div className="isolate flex min-w-0 shrink">
       <WithTooltip label={tip}>
         <Button
           size="sm"
@@ -456,7 +456,7 @@ export function GitActionButton(): React.JSX.Element | null {
               <Button
                 size="sm"
                 variant="default"
-                className="h-7 w-7 shrink-0 rounded-l-none px-0 shadow-none"
+                className="h-7 w-7 shrink-0 rounded-l-none px-0"
                 disabled={gitBusy}
                 aria-label="Choose the default source-control action"
               >
