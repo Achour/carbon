@@ -70,9 +70,22 @@ rather than give a partial list. Some rules keep it cheap and honest:
   (`presentRefs`): a ref'd line gone from a truncated capture whose element is
   still connected and visible (`checkVisibility`, so a closed dialog's buttons
   count as gone) is dropped. A text line gone from one, or any line new after
-  one, may only have crossed the limit. Those are kept and worded as such in
-  the header, rather than dropped or counted. A ref changed in place (`~`) is
-  exact either way.
+  one, may only have crossed the limit. When something above grows or
+  shrinks by k lines, those are the last k lines of a capture, so the unsure
+  lines there are folded into one ("… 3 lines at the capture limit moved in
+  or out of it"). An unsure line higher up stays inline, under a header saying
+  it may only have moved. A ref changed in place (`~`) is exact either way.
+- **Floating content is read first** (`floating()` in `previewPage.ts`).
+  Portals put dialogs, toasts and menus at the end of `<body>`, which on a
+  long page is past where the capture stops, so a modal opening there was
+  invisible to both the snapshot and an action's changes. The top layer
+  (`aria-modal`, `dialog[open]`, `:popover-open`) is lifted to the head of the
+  tree, under a `floating:` line. So is a dialog, alert, status, menu, listbox,
+  tooltip or live region inside a fixed or absolute layer. In the flow they
+  read in place, so a page's own nav menu does not jump to the top. They must
+  be visible, counting ancestors, and only the outermost is lifted. Its lines
+  are the capture's `head`, read whole whenever the capture goes on past them,
+  so a change there is exact even on a truncated page.
 - **`type` skips only a change to the typed field's value**, which its own
   confirmation states. A change to the field's state (`[invalid]`), its name
   or its presence is still reported.

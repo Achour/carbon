@@ -30,6 +30,11 @@ export interface Observation {
   focused: string | null
   /** The capture stopped at its budget, so changes further down are unseen. */
   truncated: boolean
+  /**
+   * How many leading lines are floating content (dialogs, toasts, menus),
+   * which the page reads before its body so the budget always reaches it.
+   */
+  head: number
 }
 
 export type Delta =
@@ -64,9 +69,12 @@ export function normalizeLine(line: string): string {
     .trimEnd()
 }
 
-export function observe(tree: string, focused: string | null, truncated: boolean): Observation {
-  return { lines: tree ? tree.split('\n').map(normalizeLine) : [], focused, truncated }
+export function observe(tree: string, focused: string | null, truncated: boolean, head = 0): Observation {
+  return { lines: tree ? tree.split('\n').map(normalizeLine) : [], focused, truncated, head }
 }
+
+/** Whether the floating head was read whole: the capture went on past it, or was not cut at all. */
+const headWhole = (o: Observation): boolean => !o.truncated || o.lines.length > o.head
 
 const refOf = (line: string): string | undefined => REF.exec(line)?.[1]
 
@@ -88,7 +96,9 @@ const stateOf = (line: string): string => STATE.exec(line)?.[1] ?? ''
  * removal is unproven and worded as `crossed`, not reported as certain. A text line gone from a truncated capture, or
  * any line new to one taken after a truncated one, may still have only
  * crossed the limit; those are kept and the result says `crossed`, for the
- * caller to word as such. A ref changed in place (`~`) is exact either way.
+ * caller to word as such. A ref changed in place (`~`) is exact either way,
+ * and so is a line in the floating head when both captures read it whole:
+ * nothing crosses the limit there, the limit being further down.
  */
 export function pageDelta(
   before: Observation,
@@ -110,7 +120,8 @@ export function pageDelta(
   if (m * n > LCS_CELLS) return { kind: 'large', count: m + n }
 
   // Plain LCS over the middle, then walked forwards into ordered ops.
-  const ops: { op: '+' | '-'; line: string }[] = []
+  /** `at`: the line's index on its own side (`b` for `+`, `a` for `-`). */
+  const ops: { op: '+' | '-'; line: string; at: number }[] = []
   const w = n + 1
   const len = new Uint16Array((m + 1) * w)
   for (let i = m - 1; i >= 0; i--) {
@@ -125,9 +136,9 @@ export function pageDelta(
       i++
       j++
     } else if (j < n && (i === m || len[i * w + j + 1] >= len[(i + 1) * w + j])) {
-      ops.push({ op: '+', line: b[start + j++] })
+      ops.push({ op: '+', line: b[start + j], at: start + j++ })
     } else {
-      ops.push({ op: '-', line: a[start + i++] })
+      ops.push({ op: '-', line: a[start + i], at: start + i++ })
     }
   }
 
@@ -139,28 +150,63 @@ export function pageDelta(
     if (r) o.op === '+' ? added.add(r) : removed.set(r, o.line)
   }
   const partial = before.truncated || after.truncated
-  let crossed = false
+  const heads = headWhole(before) && headWhole(after)
   const out: string[] = []
+  /** Per line of `out`: set when it may only have crossed the limit, with its side's index. */
+  const unsure: ({ side: 'a' | 'b'; at: number } | null)[] = []
+  /** Lines dropped as still on the page: they sit in the shifted rows too. */
+  let pushedOut = 0
   for (const o of ops) {
     const r = refOf(o.line)
     if (o.op === '-' && r && added.has(r)) continue
     const was = o.op === '+' && r ? removed.get(r) : undefined
     if (was === undefined) {
-      if (o.op === '-' && r && after.truncated) {
+      const inHead = heads && o.at < (o.op === '+' ? after.head : before.head)
+      let maybe = false
+      if (!inHead && o.op === '-' && after.truncated) {
         // Still on the page, only past where the capture stopped.
-        if (opts.present?.has(r)) continue
-        // The page could not be asked: the removal is not proven either.
-        if (!opts.present) crossed = true
+        if (r && opts.present?.has(r)) {
+          pushedOut++
+          continue
+        }
+        // A text line cannot be asked about; nor anything when the page could not be.
+        maybe = !r || !opts.present
       }
-      if (o.op === '-' ? after.truncated && !r : before.truncated) crossed = true
+      if (!inHead && o.op === '+' && before.truncated) maybe = true
       out.push(`${o.op} ${o.line}`)
+      unsure.push(maybe ? { side: o.op === '+' ? 'b' : 'a', at: o.at } : null)
       continue
     }
     if (r === opts.skipRef && was.replace(VALUE, '') === o.line.replace(VALUE, '')) continue
     // A state that went away leaves nothing on the new line to show it.
     const wasState = stateOf(was)
     out.push(`~ ${o.line}${wasState && wasState !== stateOf(o.line) ? ` (was [${wasState}])` : ''}`)
+    unsure.push(null)
   }
+  // When something above grows or shrinks by k lines, the rows shifting
+  // across the limit are the last k lines of a capture. Those unsure lines are
+  // one fact, said once; an unsure line higher up stays where it is.
+  // Floating lines are never rows shifting at the limit, even when the head
+  // itself was cut: they stay inline, worded as unsure.
+  const body = (u: { side: 'a' | 'b'; at: number }): boolean => u.at >= (u.side === 'a' ? before.head : after.head)
+  const k = unsure.filter((u) => u && body(u)).length + pushedOut
+  let atLimit = 0
+  const kept: string[] = []
+  let crossed = false
+  out.forEach((line, n) => {
+    const u = unsure[n]
+    if (u && body(u) && u.at >= (u.side === 'a' ? a.length : b.length) - k) atLimit++
+    else {
+      if (u) crossed = true
+      kept.push(line)
+    }
+  })
+  if (atLimit) {
+    const one = atLimit === 1
+    kept.push(`… ${atLimit} line${one ? '' : 's'} near the capture limit ${one ? 'differs' : 'differ'}: changed, or only moved in or out of it`)
+  }
+  out.length = 0
+  out.push(...kept)
 
   // Focus landing on what was just clicked or typed into says nothing new.
   const moved = before.focused !== after.focused && !(after.focused && after.focused === opts.target)

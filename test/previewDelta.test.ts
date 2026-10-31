@@ -104,7 +104,7 @@ test('a reorder across the boundary is not a removal', () => {
   const a = obs(['- button "1" [ref=d:e1]', '- button "2" [ref=d:e2]'], null, true)
   const b = obs(['- button "2" [ref=d:e2]', '- button "3" [ref=d:e3]'], null, true)
   const d = pageDelta(a, b, { present: new Set(['d:e1']) })
-  assert.deepEqual(d, { kind: 'lines', lines: ['+ button "3" [ref=d:e3]'], partial: true, crossed: true })
+  assert.deepEqual(d, { kind: 'lines', lines: ['… 1 line near the capture limit differs: changed, or only moved in or out of it'], partial: true })
 })
 
 test('a ref gone from the page is a removal even when truncated', () => {
@@ -112,9 +112,8 @@ test('a ref gone from the page is a removal even when truncated', () => {
   const b = obs(['- heading "List" [ref=d:e1]', '- listitem: "x"', '- listitem: "y"'], null, true)
   assert.deepEqual(pageDelta(a, b, { present: new Set() }), {
     kind: 'lines',
-    lines: ['- button "Yes" [ref=d:e7]', '+ listitem: "y"'],
-    partial: true,
-    crossed: true
+    lines: ['- button "Yes" [ref=d:e7]', '… 1 line near the capture limit differs: changed, or only moved in or out of it'],
+    partial: true
   })
 })
 
@@ -128,7 +127,12 @@ test('a change above the boundary on a truncated page is exact', () => {
 test('equal text at the end of a truncated capture is never read as removed silently', () => {
   const a = obs(['- text: "a"', '- text: "b"', '- text: "repeat"', '- text: "repeat"'], null, true)
   const b = obs(['- status: "toast"', '- text: "a"', '- text: "b"', '- text: "repeat"'], null, true)
-  assert.deepEqual(pageDelta(a, b), { kind: 'lines', lines: ['+ status: "toast"', '- text: "repeat"'], partial: true, crossed: true })
+  assert.deepEqual(pageDelta(a, b), {
+    kind: 'lines',
+    lines: ['+ status: "toast"', '… 1 line near the capture limit differs: changed, or only moved in or out of it'],
+    partial: true,
+    crossed: true
+  })
 })
 
 test('a state change at the end of a truncated capture is kept and exact', () => {
@@ -162,4 +166,46 @@ test('a removal the page could not be asked about is worded as unproven', () => 
   const a = obs(['- button "1" [ref=d:e1]', '- button "2" [ref=d:e2]'], null, true)
   const b = obs(['- button "2" [ref=d:e2]'], null, true)
   assert.deepEqual(pageDelta(a, b), { kind: 'lines', lines: ['- button "1" [ref=d:e1]'], partial: true, crossed: true })
+})
+
+test('a dialog opening in the floating head of a truncated page is exact', () => {
+  const body = ['- heading "Big" [ref=d:e1]', '- button "Open" [ref=d:e2]', '- listitem: "r1"', '- listitem: "r2"']
+  const a = observe(body.join('\n'), null, true, 0)
+  const b = observe(['- floating:', '  - dialog "Confirm":', '    - button "Yes" [ref=d:e9]', ...body.slice(0, 3)].join('\n'), null, true, 3)
+  assert.deepEqual(pageDelta(a, b, { present: new Set() }), {
+    kind: 'lines',
+    lines: ['+ floating:', '+ dialog "Confirm":', '+ button "Yes" [ref=d:e9]', '… 1 line near the capture limit differs: changed, or only moved in or out of it'],
+    partial: true
+  })
+  // The body row pushed out is the only uncertain line; the dialog alone is exact.
+  const c = observe(['- floating:', '  - dialog "Confirm":', '    - button "Yes" [ref=d:e9]', ...body].join('\n'), null, true, 3)
+  assert.deepEqual(pageDelta(a, c), { kind: 'lines', lines: ['+ floating:', '+ dialog "Confirm":', '+ button "Yes" [ref=d:e9]'], partial: true })
+})
+
+test('a dialog closing from the floating head is an exact removal', () => {
+  const body = ['- heading "Big" [ref=d:e1]', '- listitem: "r1"']
+  const a = observe(['- floating:', '  - dialog "Confirm":', '    - button "Yes" [ref=d:e9]', ...body].join('\n'), null, true, 3)
+  const b = observe(body.join('\n'), null, true, 0)
+  assert.deepEqual(pageDelta(a, b), {
+    kind: 'lines',
+    lines: ['- floating:', '- dialog "Confirm":', '- button "Yes" [ref=d:e9]'],
+    partial: true
+  })
+})
+
+test('a head cut by the limit itself is not trusted', () => {
+  const a = observe('- heading "x" [ref=d:e1]', null, true, 0)
+  const b = observe(['- floating:', '  - text: "t"'].join('\n'), null, true, 2)
+  assert.equal((pageDelta(a, b) as { crossed?: boolean }).crossed, true)
+})
+
+test('a real change at the capture limit is not claimed to be a move', () => {
+  const same = Array.from({ length: 4 }, (_, i) => `- button "b${i}" [ref=d:e${i}]`)
+  const a = obs([...same, '- text: "Pending"'], null, true)
+  const b = obs([...same, '- text: "Saved"'], null, true)
+  assert.deepEqual(pageDelta(a, b), {
+    kind: 'lines',
+    lines: ['… 2 lines near the capture limit differ: changed, or only moved in or out of it'],
+    partial: true
+  })
 })

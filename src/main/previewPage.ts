@@ -283,6 +283,98 @@ export function carbonAgentRuntime(): unknown {
     return norm(s)
   }
 
+  /**
+   * Shown, counting every ancestor: a closed dialog's buttons are still
+   * connected, and `aria-hidden` on a shadow host hides its whole tree, which
+   * `closest()` cannot see across.
+   */
+  const shownDeep = (el: Element): boolean => {
+    for (let n: Element | null = el; n; n = n.parentElement || (((n.getRootNode() as ShadowRoot).host as Element | undefined) ?? null)) {
+      if (n.getAttribute('aria-hidden') === 'true') return false
+    }
+    const e = el as Element & { checkVisibility?: (o: object) => boolean }
+    return e.checkVisibility ? e.checkVisibility({ opacityProperty: true, visibilityProperty: true }) : !isHidden(el)
+  }
+
+  /** Always floating: the top layer, and what declares itself modal. */
+  const TOP_LAYER = '[aria-modal="true"], dialog[open], :popover-open'
+  /** Floating only when laid out in a fixed or absolute layer; in the flow they read in place. */
+  const MAYBE_FLOATING =
+    '[role="dialog"], [role="alertdialog"], [role="alert"], [role="status"], [role="menu"], [role="listbox"], [role="tooltip"], [aria-live="polite"], [aria-live="assertive"]'
+  /** The composed parent: across a shadow boundary, the host. */
+  const up = (n: Element): Element | null => n.parentElement || (((n.getRootNode() as ShadowRoot).host as Element | undefined) ?? null)
+  /**
+   * What floats over the page — dialogs, toasts, menus — outermost only.
+   * Portals put these at the end of `<body>`, which on a long page is past
+   * where the capture stops, so a dialog opening there was invisible to the
+   * snapshot and to the changes an action reports. Open shadow roots are
+   * searched too, as the snapshot's walk enters them.
+   */
+  const floating = (): Element[] => {
+    const roots: (Document | ShadowRoot)[] = [document]
+    // Bounded: finding shadow roots reads no styles, only each element's own field.
+    const all = document.querySelectorAll('*')
+    for (let i = 0; i < all.length && i < 60000; i++) {
+      const sr = all[i].shadowRoot
+      if (sr) roots.push(sr)
+    }
+    for (let r = 1; r < roots.length && r < 200; r++) {
+      for (const el of Array.from(roots[r].querySelectorAll('*'))) if (el.shadowRoot) roots.push(el.shadowRoot)
+    }
+    const pick = (sel: string): Element[] => {
+      const out: Element[] = []
+      for (const r of roots) {
+        try {
+          out.push(...Array.from(r.querySelectorAll(sel)))
+        } catch {
+          return [] // a selector this engine does not know (`:popover-open`)
+        }
+      }
+      return out
+    }
+    // Memoized per element, so a page of in-flow statuses costs one style
+    // read per element on their shared ancestry rather than per candidate.
+    const layered = new Map<Element, boolean>()
+    const inLayer = (el: Element): boolean => {
+      const seen: Element[] = []
+      let hit = false
+      for (let n: Element | null = el; n && n !== document.body && n !== document.documentElement; n = up(n)) {
+        const known = layered.get(n)
+        if (known !== undefined) {
+          hit = known
+          break
+        }
+        seen.push(n)
+        const p = styleOf(n).position
+        if (p === 'fixed' || p === 'absolute') {
+          hit = true
+          break
+        }
+      }
+      // Exact for every element walked: below a positioned one, all are layered;
+      // a walk that reached the body without one found none above any of them.
+      for (const n of seen) layered.set(n, hit)
+      return hit
+    }
+    // Outermost only, decided as each is taken, so the cap counts what is
+    // lifted: neither in-flow statuses ahead of a toast nor the regions inside
+    // an open modal can use it up.
+    const found: Element[] = []
+    const take = (el: Element): void => {
+      if (found.some((o) => contains(o, el))) return
+      for (let i = found.length - 1; i >= 0; i--) if (contains(el, found[i])) found.splice(i, 1)
+      found.push(el)
+    }
+    const top = new Set(pick(TOP_LAYER))
+    for (const el of top) if (found.length < 50 && shownDeep(el)) take(el)
+    for (const el of pick(MAYBE_FLOATING)) {
+      if (found.length >= 50) break
+      if (top.has(el) || found.some((o) => contains(o, el))) continue
+      if (inLayer(el) && shownDeep(el)) take(el)
+    }
+    return found
+  }
+
   const snapshot = (args: { maxLines?: number; maxChars?: number }): unknown => {
     prune()
     const maxLines = args.maxLines || 500
@@ -313,8 +405,11 @@ export function carbonAgentRuntime(): unknown {
       }
     }
 
+    const lifted = new Set<Element>()
+    let lifting: Element | null = null
     const visit = (el: Element, depth: number): void => {
       if (full) return
+      if (lifted.has(el) && el !== lifting) return
       if (++visited > 30000) {
         full = true
         return
@@ -386,6 +481,23 @@ export function carbonAgentRuntime(): unknown {
       walk(el, depth)
     }
 
+    // Floating content first, so the budget reaches it on any page. Its lines
+    // are the head of the tree (`head`), read whole whenever the capture is
+    // longer than them — which is what lets a change there be exact.
+    const over = floating()
+    for (const el of over) lifted.add(el)
+    for (const el of over) {
+      lifting = el
+      const at = lines.length
+      push(0, 'floating:')
+      visit(el, 1)
+      if (lines.length === at + 1) {
+        lines.pop()
+        total -= 12
+      }
+    }
+    lifting = null
+    const head = lines.length
     if (document.body) walk(document.body, 0)
     const doc = document.scrollingElement || document.documentElement
     const active = document.activeElement
@@ -395,7 +507,8 @@ export function carbonAgentRuntime(): unknown {
       viewport: { width: innerWidth, height: innerHeight, scrollY: Math.round(doc.scrollTop), scrollHeight: doc.scrollHeight },
       focused: active && active !== document.body ? describe(active) : null,
       tree: lines.join('\n'),
-      truncated: full
+      truncated: full,
+      head
     }
   }
 
@@ -791,14 +904,7 @@ export function carbonAgentRuntime(): unknown {
   const presentRefs = (keys: string[]): string[] =>
     keys.filter((k) => {
       const el = byRef.get(k)?.deref()
-      if (!el || !el.isConnected) return false
-      // Across shadow boundaries, as the snapshot's walk skips a hidden host's whole tree.
-      for (let n: Element | null = el; n; n = n.parentElement || (((n.getRootNode() as ShadowRoot).host as Element | undefined) ?? null)) {
-        if (n.getAttribute('aria-hidden') === 'true') return false
-      }
-      // Hidden through an ancestor counts too: a closed dialog's buttons are still connected.
-      const e = el as Element & { checkVisibility?: (o: object) => boolean }
-      return e.checkVisibility ? e.checkVisibility({ opacityProperty: true, visibilityProperty: true }) : !isHidden(el)
+      return !!el && el.isConnected && shownDeep(el)
     })
 
   const agent = { snapshot, presentRefs, point, prepareType, insertText, keyTarget, restoreSelection, syntheticKey, valueOf, present, scrollState, scrollTo, serialize, describe, focus }

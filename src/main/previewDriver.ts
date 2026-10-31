@@ -75,6 +75,8 @@ interface RawSnapshot {
   focused: string | null
   tree: string
   truncated: boolean
+  /** Leading lines that are floating content (`previewPage.ts`); absent from an older runtime. */
+  head?: number
 }
 
 /** What an action did, for its caller to report the page's changes after (`changes`). */
@@ -570,7 +572,7 @@ export class PreviewDriver {
   /** Records what `caller` has now seen of this document — the baseline an action's changes are read against. */
   private remember(g: Guest, caller: string, doc: number, snap: RawSnapshot): void {
     if (g.docGen !== doc) return
-    g.observed.set(caller, { doc, obs: observe(snap.tree, snap.focused, snap.truncated) })
+    g.observed.set(caller, { doc, obs: observe(snap.tree, snap.focused, snap.truncated, snap.head) })
   }
 
   /**
@@ -612,7 +614,7 @@ export class PreviewDriver {
       this.remember(g, caller, doc, snap)
       return ''
     }
-    const after = observe(snap.tree, snap.focused, snap.truncated)
+    const after = observe(snap.tree, snap.focused, snap.truncated, snap.head)
     const present = after.truncated ? await this.stillPresent(g, base.obs, after) : undefined
     if (g.docGen !== doc) return stale
     const d = pageDelta(base.obs, after, { skipRef: fx.skipRef, target: fx.target, present })
@@ -628,7 +630,10 @@ export class PreviewDriver {
         ? 'Page changes (the page is longer than the capture limit; lines near its end may only have moved in or out of it):'
         : 'Page changes:'
       out.push(`${head}\n${this.aliasRefs(g, d.lines.join('\n'))}`)
-      if (d.partial && !d.crossed) out.push('(Only the top of the page was compared; it is longer than the capture limit.)')
+      // The summary of rows shifting at the limit already says the capture stops there.
+      if (d.partial && !d.crossed && !d.lines[d.lines.length - 1].startsWith('… ')) {
+        out.push('(Only the top of the page was compared; it is longer than the capture limit.)')
+      }
     } else {
       out.push(d.partial ? 'No changes in the part of the page captured (it is longer than the capture limit).' : 'No text or control-state changes yet.')
     }
