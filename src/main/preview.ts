@@ -18,7 +18,7 @@ import {
 } from './carbonBridge.ts'
 import type { CarbonToolContext, CarbonToolHosts } from './carbonMcp.ts'
 import type { CanvasToolHost } from './canvasTools.ts'
-import { PreviewDriver } from './previewDriver.ts'
+import { PreviewDriver, type ActionEffect } from './previewDriver.ts'
 import { cwdBelongsTo, descendsFrom, probeHttp, processParents, scanLocalServers } from './localServers.ts'
 import { viewportPatch, type PreviewPageOp, type PreviewToolHost, type PreviewToolInput } from './previewTools.ts'
 import { detectDevPlan, planLabel } from './devServerPlan.ts'
@@ -756,7 +756,12 @@ export class PreviewManager implements PreviewToolHost {
         // recorded, and handed back by `release` the moment the input is in —
         // not after the settle, which held the user's keystrokes for up to 3 s
         // per call. Under `withWindow`, since focus is one per window.
-        return this.withWindow(async () => {
+      {
+        // The baseline for this action's page changes, read before the
+        // window's focus lock; free when an earlier action left one.
+        await this.driver.seed(g, caller)
+        const fx: ActionEffect = {}
+        const result = await this.withWindow(async () => {
           const focus = await this.send({ cwd, kind: 'focus', paneId: t.paneId })
           // In the background the pane is not given the keyboard (doing so
           // activates the app): typing then goes in through the page.
@@ -768,13 +773,17 @@ export class PreviewManager implements PreviewToolHost {
             await this.send({ cwd, kind: 'unfocus', paneId: t.paneId })
           }
           try {
-            if (op === 'click') return await this.driver.click(g, input, doc, release)
-            if (op === 'type') return await this.driver.type(g, input, doc, release, keyboard)
-            return await this.driver.press(g, input, doc, release, keyboard)
+            if (op === 'click') return await this.driver.click(g, input, doc, release, fx)
+            if (op === 'type') return await this.driver.type(g, input, doc, release, keyboard, fx)
+            return await this.driver.press(g, input, doc, release, keyboard, fx)
           } finally {
             await release()
           }
         })
+        // Read after the lock is let go: another chat's input waits on it.
+        const changes = fx.acted ? await this.driver.changes(g, caller, doc, fx) : ''
+        return changes ? `${result}\n${changes}` : result
+      }
       case 'scroll': {
         // A wheel scroll is input, which a hidden guest drops like any other.
         await this.send({ cwd, kind: 'expose', paneId: t.paneId })

@@ -3,6 +3,7 @@ import type { PreviewBox, PreviewEmulation, PreviewMark } from '@shared/types'
 import { formatConsole, formatConsoleArgs, formatNetwork, isProblem, PreviewLog, type ConsoleLevel, type RemoteObjectLike } from './previewLog.ts'
 import { agentCall, isFunctionSource, SERIALIZE_FN } from './previewPage.ts'
 import { parseKeyCombo } from './previewInput.ts'
+import { observe, pageDelta, type Observation } from './previewDelta.ts'
 import { isLoopbackUrl } from './previewSource.ts'
 import type { PreviewToolInput } from './previewTools.ts'
 
@@ -42,6 +43,8 @@ interface Guest {
   userAgent: string
   /** Per caller: the log position its last snapshot reported up to. */
   snapshotMarks: Map<string, number>
+  /** Per caller: the page as it last saw it, for the changes an action reports (`changes`). */
+  observed: Map<string, { doc: number; obs: Observation }>
   /** Agent actions in flight — a JS dialog that opens during one is answered. */
   acting: number
   /** Cross-document navigations of the main frame, so a queued action can tell the page changed under it. */
@@ -63,6 +66,25 @@ interface Guest {
   mainFrameId?: string
   mainContext?: { uniqueId: string; origin: string }
   dispose: () => void
+}
+
+interface RawSnapshot {
+  url: string
+  title: string
+  viewport: { width: number; height: number; scrollY: number; scrollHeight: number }
+  focused: string | null
+  tree: string
+  truncated: boolean
+}
+
+/** What an action did, for its caller to report the page's changes after (`changes`). */
+export interface ActionEffect {
+  /** The input went out — a refused action changed nothing to report. */
+  acted?: boolean
+  /** The element whose new value the action's own result already states. */
+  skipRef?: string
+  /** What was acted on, as the snapshot describes it: focus landing there is not news. */
+  target?: string
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
@@ -168,6 +190,7 @@ export class PreviewDriver {
       log: new PreviewLog(),
       userAgent: wc.getUserAgent(),
       snapshotMarks: new Map(),
+      observed: new Map(),
       acting: 0,
       docGen: ++this.docSeq,
       inflight: new Set(),
@@ -535,16 +558,114 @@ export class PreviewDriver {
     await replaced(10_000)
   }
 
+  /** The page's snapshot, raw: refs are page keys until `aliasRefs`. */
+  private capture(g: Guest): Promise<RawSnapshot> {
+    return this.evaluate<RawSnapshot>(g, agentCall('snapshot', { maxChars: 16_000 }))
+  }
+
+  private aliasRefs(g: Guest, text: string): string {
+    return text.replace(/\[ref=([a-z0-9]+:e\d+)\]/g, (_m, key: string) => `[ref=${this.alias(g, key)}]`)
+  }
+
+  /** Records what `caller` has now seen of this document — the baseline an action's changes are read against. */
+  private remember(g: Guest, caller: string, doc: number, snap: RawSnapshot): void {
+    if (g.docGen !== doc) return
+    g.observed.set(caller, { doc, obs: observe(snap.tree, snap.focused, snap.truncated) })
+  }
+
+  /**
+   * Before an action: a baseline for its changes, if this caller has none
+   * for this document — only the first action on a page pays for it, since
+   * every later one leaves the next baseline behind. Best effort: no
+   * baseline means the action reports no changes, never that it failed.
+   */
+  async seed(g: Guest, caller: string): Promise<void> {
+    const doc = g.docGen
+    if (g.observed.get(caller)?.doc === doc) return
+    try {
+      this.remember(g, caller, doc, await this.capture(g))
+    } catch {
+      // the action still runs
+    }
+  }
+
+  /**
+   * After an action: what changed on the page since this caller last looked,
+   * bounded (`previewDelta.ts`). Run outside the action's pinned context and
+   * the window's focus lock, and caught whole — a click that navigated has
+   * done its work, and a failed read here must not report it as "Not done"
+   * and invite a second submit.
+   */
+  async changes(g: Guest, caller: string, doc: number, fx: ActionEffect = {}): Promise<string> {
+    if (g.wc.isDestroyed()) return ''
+    const stale = 'Refs from before are stale: take a preview_snapshot to act on the new page.'
+    if (g.docGen !== doc) return stale
+    const base = g.observed.get(caller)
+    let snap: RawSnapshot
+    try {
+      snap = await this.capture(g)
+    } catch {
+      return g.docGen !== doc ? stale : ''
+    }
+    if (g.docGen !== doc) return stale
+    if (base?.doc !== doc) {
+      this.remember(g, caller, doc, snap)
+      return ''
+    }
+    const after = observe(snap.tree, snap.focused, snap.truncated)
+    const present = after.truncated ? await this.stillPresent(g, base.obs, after) : undefined
+    if (g.docGen !== doc) return stale
+    const d = pageDelta(base.obs, after, { skipRef: fx.skipRef, target: fx.target, present })
+    if (d.kind === 'large') {
+      // Not a baseline: what the agent was not shown must not be diffed against next time.
+      g.observed.delete(caller)
+      return `The page changed substantially (${d.count} lines): take a preview_snapshot for its content and refs.`
+    }
+    const out: string[] = []
+    g.observed.set(caller, { doc, obs: after })
+    if (d.kind === 'lines') {
+      const head = d.crossed
+        ? 'Page changes (the page is longer than the capture limit; lines near its end may only have moved in or out of it):'
+        : 'Page changes:'
+      out.push(`${head}\n${this.aliasRefs(g, d.lines.join('\n'))}`)
+      if (d.partial && !d.crossed) out.push('(Only the top of the page was compared; it is longer than the capture limit.)')
+    } else {
+      out.push(d.partial ? 'No changes in the part of the page captured (it is longer than the capture limit).' : 'No text or control-state changes yet.')
+    }
+    if (d.focus) out.push(d.focus)
+    return out.join('\n')
+  }
+
+  /**
+   * Of the refs a truncated capture lost, the ones whose element is still on
+   * the page and visible — pushed past the limit, not removed. One small
+   * evaluate, and only on a page longer than the capture.
+   */
+  private async stillPresent(g: Guest, before: Observation, after: Observation): Promise<Set<string> | undefined> {
+    const seen = new Set<string>()
+    for (const l of after.lines) {
+      const r = /\[ref=([^\]]+)\]/.exec(l)?.[1]
+      if (r) seen.add(r)
+    }
+    const lost: string[] = []
+    for (const l of before.lines) {
+      const r = /\[ref=([^\]]+)\]/.exec(l)?.[1]
+      if (r && !seen.has(r)) lost.push(r)
+    }
+    // An empty set is an answer ("none of them is still there"); undefined is no answer.
+    if (!lost.length) return new Set()
+    try {
+      return new Set(await this.evaluate<string[]>(g, agentCall('presentRefs', lost)))
+    } catch {
+      return undefined
+    }
+  }
+
   async snapshot(g: Guest, caller: string): Promise<string> {
-    const snap = await this.evaluate<{
-      url: string
-      title: string
-      viewport: { width: number; height: number; scrollY: number; scrollHeight: number }
-      focused: string | null
-      tree: string
-      dropped: number
-    }>(g, agentCall('snapshot', { maxChars: 16_000 }))
-    snap.tree = snap.tree.replace(/\[ref=([a-z0-9]+:e\d+)\]/g, (_m, key: string) => `[ref=${this.alias(g, key)}]`)
+    const doc = g.docGen
+    const snap = await this.capture(g)
+    this.remember(g, caller, doc, snap)
+    snap.tree = this.aliasRefs(g, snap.tree)
     const v = snap.viewport
     const below = Math.max(0, v.scrollHeight - v.scrollY - v.height)
     const lines = [
@@ -553,8 +674,8 @@ export class PreviewDriver {
       '',
       snap.tree || '(the page has no visible content)'
     ]
-    if (snap.dropped > 0) {
-      lines.push(`… ${snap.dropped} more lines not shown. Scroll, or use preview_evaluate to read a specific part.`)
+    if (snap.truncated) {
+      lines.push('… more of the page is not shown. Scroll, or use preview_evaluate to read a specific part.')
     }
     const mark = g.snapshotMarks.get(caller) ?? 0
     g.snapshotMarks.set(caller, g.log.mark())
@@ -613,7 +734,13 @@ export class PreviewDriver {
    * input needs it, not for the seconds a settle can take (see `act`'s
    * callers in `preview.ts`).
    */
-  async click(g: Guest, input: PreviewToolInput, expectDoc?: number, release?: () => Promise<void>): Promise<string> {
+  async click(
+    g: Guest,
+    input: PreviewToolInput,
+    expectDoc?: number,
+    release?: () => Promise<void>,
+    fx?: ActionEffect
+  ): Promise<string> {
     return this.act(g, () => this.exclusive(g, async () => {
       let x: number
       let y: number
@@ -634,6 +761,7 @@ export class PreviewDriver {
         rev = p.rev
         size = { vw: p.vw, vh: p.vh }
         desc = `${p.desc} [ref=${ref}]`
+        if (fx) fx.target = p.desc
       } else if (typeof input.x === 'number' && typeof input.y === 'number') {
         x = input.x
         y = input.y
@@ -649,6 +777,7 @@ export class PreviewDriver {
       const refused = await this.mouse(g, x, y, button, input.double === true, expectDoc, rev, size)
       await release?.()
       if (refused) return refused
+      if (fx) fx.acted = true
       await this.settle(g)
       return this.report(g, `${input.double ? 'Double-clicked' : 'Clicked'} ${desc}.`, mark, before)
     }), expectDoc)
@@ -719,7 +848,8 @@ export class PreviewDriver {
     expectDoc?: number,
     release?: () => Promise<void>,
     /** Whether the guest holds the window's keyboard focus (see `preview.ts`). */
-    keyboard = true
+    keyboard = true,
+    fx?: ActionEffect
   ): Promise<string> {
     return this.act(g, async () => {
       const t = this.target(g, { ref: input.ref, selector: input.selector })
@@ -735,7 +865,12 @@ export class PreviewDriver {
       }
       const mark = g.log.mark()
       const before = g.wc.getURL()
+      if (fx) {
+        fx.skipRef = prep.ref
+        fx.target = prep.desc
+      }
       if (prep.selected !== undefined) {
+        if (fx) fx.acted = true
         await this.settle(g)
         return this.report(g, `Selected ${JSON.stringify(prep.selected)} in ${prep.desc}.`, mark, before)
       }
@@ -767,6 +902,7 @@ export class PreviewDriver {
         }
       }
       await release?.()
+      if (fx) fx.acted = true
       await this.settle(g)
       const value = await this.evaluate<unknown>(g, agentCall('valueOf', prep.ref)).catch(() => null)
       const now =
@@ -788,7 +924,8 @@ export class PreviewDriver {
     expectDoc?: number,
     release?: () => Promise<void>,
     /** Whether the guest holds the window's keyboard focus (see `preview.ts`). */
-    keyboard = true
+    keyboard = true,
+    fx?: ActionEffect
   ): Promise<string> {
     return this.act(g, async () => {
       let where = 'the focused element'
@@ -800,6 +937,7 @@ export class PreviewDriver {
         const f = await this.evaluate<{ desc: string; ref: string; box?: MarkBox } | { error: string }>(g, agentCall('focus', t))
         if ('error' in f) return f.error
         where = `${f.desc} [ref=${this.alias(g, f.ref)}]`
+        if (fx) fx.target = f.desc
         at = f.box
         targetRef = f.ref
       }
@@ -815,6 +953,7 @@ export class PreviewDriver {
       const err = real ? await this.key(g, input.key ?? '', expectDoc) : await this.syntheticKey(g, input.key ?? '', targetRef)
       await release?.()
       if (err) return err
+      if (fx) fx.acted = true
       await this.settle(g)
       return this.report(g, `Pressed ${input.key} on ${where}${real ? '' : BACKGROUND_KEY}.`, mark, before)
     }, expectDoc)

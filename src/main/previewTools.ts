@@ -83,7 +83,7 @@ export interface PreviewParam {
 }
 
 const TARGET: Record<'ref' | 'selector' | 'text', PreviewParam> = {
-  ref: { type: 'string', description: 'Element ref from preview_snapshot, e.g. "e12". Preferred.' },
+  ref: { type: 'string', description: 'Element ref from preview_snapshot or an action\'s page changes, e.g. "e12". Preferred.' },
   selector: { type: 'string', description: 'CSS selector, when no ref fits.' },
   text: { type: 'string', description: 'Visible text or accessible name of the element, when no ref fits.' }
 }
@@ -142,7 +142,7 @@ export const PREVIEW_TOOL_INFO: Record<
   },
   screenshot: {
     description:
-      'Capture the preview page as the user sees it. full_page captures the whole scrollable page instead of the viewport. Start the dev server first if it is not running.',
+      'Capture the preview page as the user sees it, to judge how it looks — layout, styling, visual bugs. Not needed to learn what an action did: click/type/press report the page\'s changes. full_page captures the whole scrollable page instead of the viewport. Start the dev server first if it is not running.',
     readOnly: true,
     params: {
       full_page: { type: 'boolean', description: 'Capture the whole page rather than the visible viewport.' }
@@ -150,7 +150,7 @@ export const PREVIEW_TOOL_INFO: Record<
   },
   click: {
     description:
-      'Click an element in the preview with a real mouse event (scrolled into view first), then report what changed: navigation, new console errors, failed requests. Target it by ref (from preview_snapshot), selector or text — or x/y viewport coordinates.',
+      'Click an element in the preview with a real mouse event (scrolled into view first), then report what changed: the page lines that changed (a dialog, a toast, new values and states, with refs), navigation, new console errors, failed requests. Target it by ref (from preview_snapshot), selector or text — or x/y viewport coordinates.',
     readOnly: false,
     params: {
       ...TARGET,
@@ -162,7 +162,7 @@ export const PREVIEW_TOOL_INFO: Record<
   },
   type: {
     description:
-      'Type text into a field in the preview. Replaces what the field holds unless append is set; picks the matching option of a <select>. Targets the focused element when no ref/selector is given.',
+      'Type text into a field in the preview. Replaces what the field holds unless append is set; picks the matching option of a <select>. Targets the focused element when no ref/selector is given. Reports the field\'s new value and what else changed on the page.',
     readOnly: false,
     params: {
       text: { type: 'string', description: 'The text to type.', required: true },
@@ -174,7 +174,7 @@ export const PREVIEW_TOOL_INFO: Record<
   },
   press: {
     description:
-      'Press a key or shortcut in the preview, e.g. "Enter", "Escape", "Tab", "ArrowDown", "Shift+Tab", "Meta+K". Goes to the focused element, or to ref/selector after focusing it.',
+      'Press a key or shortcut in the preview, e.g. "Enter", "Escape", "Tab", "ArrowDown", "Shift+Tab", "Meta+K". Goes to the focused element, or to ref/selector after focusing it. Reports what changed on the page and where focus went.',
     readOnly: false,
     params: {
       key: { type: 'string', description: 'Key name or combo, e.g. "Enter" or "Control+A".', required: true },
@@ -282,7 +282,7 @@ export function coercePreviewParam(p: PreviewParam, value: unknown): string | nu
  * on the one `carbon` MCP server, beside the canvas ones.
  */
 export const PREVIEW_SESSION_RULES =
-  "You are running inside Carbon, a desktop GUI. The `carbon` MCP server drives this project's in-app browser preview: `preview_start` (dev server + open the preview), `preview_navigate`, `preview_snapshot` (the page as text with element refs), `preview_click` / `preview_type` / `preview_press` / `preview_scroll` (act on those refs), `preview_wait_for`, `preview_screenshot`, `preview_resize` (device sizes, dark mode), `preview_console` / `preview_network`, and `preview_evaluate`. Use them to check UI changes yourself — read with a snapshot, act on refs, confirm with a screenshot. Do not ask the user to open a browser or take a screenshot for you."
+  "You are running inside Carbon, a desktop GUI. The `carbon` MCP server drives this project's in-app browser preview: `preview_start` (dev server + open the preview), `preview_navigate`, `preview_snapshot` (the page as text with element refs), `preview_click` / `preview_type` / `preview_press` / `preview_scroll` (act on those refs), `preview_wait_for`, `preview_screenshot`, `preview_resize` (device sizes, dark mode), `preview_console` / `preview_network`, and `preview_evaluate`. Use them to check UI changes yourself: read with a snapshot and act on its refs. Each click/type/press reports what it changed on the page, so do not snapshot, screenshot or evaluate again just to see an action's result; use preview_wait_for for an outcome that arrives later. Take a screenshot to judge how the page looks. Do not ask the user to open a browser or take a screenshot for you."
 
 /** The arguments any preview tool can receive, already coerced. */
 export type PreviewToolInput = {

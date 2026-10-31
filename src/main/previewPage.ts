@@ -289,11 +289,16 @@ export function carbonAgentRuntime(): unknown {
     const maxChars = args.maxChars || 16000
     const lines: string[] = []
     let total = 0
-    let dropped = 0
+    // The walk stops at the output cap rather than counting what it drops:
+    // each element past it still cost a computed style, a rect and its text,
+    // which on a long page was most of the snapshot's time. Elements visited
+    // are capped too, for a page that is huge and mostly hidden.
+    let full = false
+    let visited = 0
     const push = (depth: number, s: string): void => {
       const line = '  '.repeat(depth) + '- ' + s
       if (lines.length >= maxLines || total + line.length > maxChars) {
-        dropped++
+        full = true
         return
       }
       lines.push(line)
@@ -309,6 +314,11 @@ export function carbonAgentRuntime(): unknown {
     }
 
     const visit = (el: Element, depth: number): void => {
+      if (full) return
+      if (++visited > 30000) {
+        full = true
+        return
+      }
       const tag = el.tagName.toLowerCase()
       if (tag === 'script' || tag === 'style' || tag === 'noscript' || tag === 'template' || tag === 'head' || tag === 'svg' && !el.getAttribute('aria-label')) return
       if (isHidden(el)) return
@@ -385,7 +395,7 @@ export function carbonAgentRuntime(): unknown {
       viewport: { width: innerWidth, height: innerHeight, scrollY: Math.round(doc.scrollTop), scrollHeight: doc.scrollHeight },
       focused: active && active !== document.body ? describe(active) : null,
       tree: lines.join('\n'),
-      dropped
+      truncated: full
     }
   }
 
@@ -777,7 +787,21 @@ export function carbonAgentRuntime(): unknown {
     return { desc: describe(el), ref: refFor(el), box: boxOf(el) }
   }
 
-  const agent = { snapshot, point, prepareType, insertText, keyTarget, restoreSelection, syntheticKey, valueOf, present, scrollState, scrollTo, serialize, describe, focus }
+  /** Of these refs, the ones whose element is still connected and visible (`PreviewDriver.stillPresent`). */
+  const presentRefs = (keys: string[]): string[] =>
+    keys.filter((k) => {
+      const el = byRef.get(k)?.deref()
+      if (!el || !el.isConnected) return false
+      // Across shadow boundaries, as the snapshot's walk skips a hidden host's whole tree.
+      for (let n: Element | null = el; n; n = n.parentElement || (((n.getRootNode() as ShadowRoot).host as Element | undefined) ?? null)) {
+        if (n.getAttribute('aria-hidden') === 'true') return false
+      }
+      // Hidden through an ancestor counts too: a closed dialog's buttons are still connected.
+      const e = el as Element & { checkVisibility?: (o: object) => boolean }
+      return e.checkVisibility ? e.checkVisibility({ opacityProperty: true, visibilityProperty: true }) : !isHidden(el)
+    })
+
+  const agent = { snapshot, presentRefs, point, prepareType, insertText, keyTarget, restoreSelection, syntheticKey, valueOf, present, scrollState, scrollTo, serialize, describe, focus }
   Object.defineProperty(w, '__carbonAgent', { value: agent, configurable: true })
   return agent
 }

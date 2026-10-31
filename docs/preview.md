@@ -37,6 +37,54 @@ visible text). A ref is a `WeakMap` entry in the page, so an element keeps its
 ref across snapshots, and a ref whose element left the DOM says so instead of
 acting on whatever now sits at the old point.
 
+**An action reports what it changed on the page** (`previewDelta.ts`,
+`PreviewDriver.seed` / `changes`). It used to report only navigation, console
+errors and failed requests, so the agent looked again after nearly every
+action. In the recorded chats, 51% of 813 clicks were followed directly by a
+screenshot, a snapshot or a `preview_evaluate`, and those evaluates were mostly
+hand-written `setTimeout` reads of a toast or a dialog. Claude took 1,155
+screenshots against 153 snapshots. Now click, type and press end with the
+snapshot lines that moved (`+`, `-`, and `~` for the same ref with a new line,
+naming a state that went away), capped at 40 lines / 2 KB. Past the cap, or when
+the middle is too big for a cheap LCS, the action says to take a snapshot
+rather than give a partial list. Some rules keep it cheap and honest:
+- **The baseline is per caller and per document.** An explicit snapshot seeds
+  it, every action leaves the next one, and an action with none reads one first
+  (only the first action on a page pays for that). A reload or navigation bumps
+  `docGen`, which voids it, and the action then says its refs are stale. A
+  "changed substantially" answer deletes the baseline, because the agent was
+  not shown what changed.
+- **Some lines are compared without their noise.** Indentation, `(offscreen)`
+  and `focused` are stripped before comparing, because a click scrolls its
+  target into view and moves focus. Focus is reported once, on its own line,
+  and not when it landed on the element acted on.
+- **The read runs after the window's focus lock and outside the action's
+  pinned context, and is caught whole.** A click that navigated has done its
+  work; a failed read must not turn it into "Not done" and invite a second
+  submit.
+- **A truncated capture is the top of the page, not all of it.** A toast
+  inserted above, or a reorder, can carry a row past the limit, where it would
+  read as removed. Aligning the two captures cannot tell that apart from a
+  real removal: equal text proves nothing, and an element both captures share
+  does not keep the rest on its side of the cut. So the page is asked instead
+  (`presentRefs`): a ref'd line gone from a truncated capture whose element is
+  still connected and visible (`checkVisibility`, so a closed dialog's buttons
+  count as gone) is dropped. A text line gone from one, or any line new after
+  one, may only have crossed the limit. Those are kept and worded as such in
+  the header, rather than dropped or counted. A ref changed in place (`~`) is
+  exact either way.
+- **`type` skips only a change to the typed field's value**, which its own
+  confirmation states. A change to the field's state (`[invalid]`), its name
+  or its presence is still reported.
+- **The snapshot walk stops at its output cap** (and at 30,000 elements),
+  instead of computing styles and rects for every element past it in order to
+  count them. Measured live: capture plus diff costs 1–5 ms per action, a
+  3,000-row table included.
+
+Timers still show up as changes (an "Uptime 3 → 4" line), which is the truth
+and costs a line. `settle` waits for loads and fetches, not for a `setTimeout`,
+so a delayed toast reads "No changes yet" and `wait_for` is the tool for it.
+
 **A ref can never come to mean something else.** Each document numbers from
 `e1`, so the page keys refs by a per-document token (`<doc>:eN`) and refuses a
 key from another document; the model sees short aliases the driver issues from

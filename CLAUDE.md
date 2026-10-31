@@ -431,6 +431,7 @@ it guards**, and put new reasoning in that file rather than back in this one.
   `MultiDiffView.tsx`, `lib/diffRows.ts`, `LazyDiffBody`).
 - **`docs/preview.md`** — the browser preview and the agent's `preview_*`
   tools: CDP in main (`previewDriver.ts`, `previewPage.ts`, `previewLog.ts`),
+  the page changes an action reports instead of a second look (`previewDelta.ts`),
   what the renderer still answers (`previewCommands.ts`, `previewRegistry.ts`,
   `BrowserPane.tsx`), dev servers and port scanning (`preview.ts`,
   `devServerPlan.ts`, `localServers.ts`), viewports (`shared/previewDevices.ts`),
