@@ -2679,7 +2679,14 @@ class ClaudeSession implements AgentSession {
           !part.text &&
           !(part.type === 'thinking' && part.tokens))
     )
-    if (parts.length > 0 || streamedNothing) {
+    // A guard, not a measured case: the aborted copy is the CLI's own record of
+    // a message it cut off, and nothing promises it holds everything Carbon
+    // already streamed. Replaced wholesale, a shorter copy would erase streamed
+    // text and calls from a turn the user is reading — so for that copy only,
+    // when it does not hold everything that streamed, the streamed message is
+    // kept as it stands.
+    const keepStreamed = !!orphan && !coversStreamed(parts, message.parts)
+    if (!keepStreamed && (parts.length > 0 || streamedNothing)) {
       message.parts = parts
       for (let i = 0; i < parts.length; i++) {
         const part = parts[i]
@@ -3235,6 +3242,25 @@ const RESUME_PROMPT =
   'Continue where you left off. Anything you had running in the background (a dev ' +
   'server, a watcher, a long command) stopped with it, so check before relying on it, ' +
   'and if you were waiting on an approval, ask again.'
+
+
+/**
+ * Whether an aborted message's final copy (`next`) holds everything Carbon
+ * streamed (`prior`): every call by id, and each streamed text and thought as
+ * a prefix of the copy's, matched by ordinal. Anything less and the streamed
+ * message is kept as it stands — an ordered merge of two shapes nothing
+ * promises line up would invent an order of its own.
+ */
+function coversStreamed(next: AssistantPart[], prior: AssistantPart[]): boolean {
+  const ids = new Set(next.flatMap((part) => (part?.type === 'tool' ? [part.toolUseId] : [])))
+  const texts = (parts: AssistantPart[], type: 'text' | 'thinking'): string[] =>
+    parts.flatMap((part) => (part?.type === type ? [part.text] : []))
+  for (const type of ['text', 'thinking'] as const) {
+    const copy = texts(next, type)
+    if (!texts(prior, type).every((text, i) => !text || (copy[i] ?? '').startsWith(text))) return false
+  }
+  return prior.every((part) => part?.type !== 'tool' || ids.has(part.toolUseId))
+}
 
 export class ChatManager {
   private sessions = new Map<string, AgentSession>()
@@ -5073,7 +5099,7 @@ export class ChatManager {
       }
       return {
         ok: true,
-        text: `Sent to ${view.name}, which is still working on its task; it will take this into account, and one outcome covering both will arrive in this conversation when it finishes. Do not poll or wait.`
+        text: `Sent to ${view.name} (id ${view.id}), which is still working on its task; it will take this into account, and one outcome covering both will arrive in this conversation when it finishes. Do not poll or wait.`
       }
     }
     // The last round's report may not have reached the parent yet — it ended
@@ -5106,7 +5132,7 @@ export class ChatManager {
     if (!started.ok) return started
     return {
       ok: true,
-      text: `Sent to ${view.name}; it is working on it now, in its own chat with its earlier context. Its outcome will arrive in this conversation as a new message when it finishes — do not poll or wait.${previous}`
+      text: `Sent to ${view.name} (id ${view.id}); it is working on it now, in its own chat with its earlier context. Its outcome will arrive in this conversation as a new message when it finishes — do not poll or wait.${previous}`
     }
   }
 

@@ -2,6 +2,7 @@ import * as React from 'react'
 import { ChevronRight } from 'lucide-react'
 import { formatAgentDuration } from '@shared/agentRuns'
 import { cn } from '@/lib/utils'
+import type { TurnChoice } from '@/lib/turnFold'
 
 /**
  * The row that opens every turn: `Working for 17s` while it runs, and
@@ -43,7 +44,8 @@ export const TurnHeader = React.memo(function TurnHeader({
    */
   collapsible: boolean
   expanded: boolean
-  onToggle: (userMessageId: string) => void
+  /** The reader's choice: `folded` from an open header, `open` from a folded one. */
+  onToggle: (userMessageId: string, choice: TurnChoice) => void
 }): React.JSX.Element {
   // Ticks in the component, off the prompt's timestamp, the way the tool and
   // agent clocks do. Routed through `RenderCtx` or the store instead, a value
@@ -86,7 +88,7 @@ export const TurnHeader = React.memo(function TurnHeader({
         <button
           type="button"
           data-turn-header={userMessageId}
-          onClick={() => onToggle(userMessageId)}
+          onClick={() => onToggle(userMessageId, expanded ? 'folded' : 'open')}
           aria-expanded={expanded}
           className={
             // `ToolCard`'s activity row, spelled out here because that constant

@@ -409,8 +409,10 @@ it guards**, and put new reasoning in that file rather than back in this one.
   asks you (`PromptDock`, `CodexReviewDialog`), the turn's changed files
   (`TurnChangesCard`, `lib/turnChanges.ts`), side questions (`/btw`,
   `shared/btw.ts`, `EventRow`), quoting a passage back at it
-  (`QuoteBar`, `lib/quoteSelection.ts`) and the turn rail with its bookmarks
-  (`TurnRail`, `lib/turnRail.ts`, `ChatMeta.bookmarks`).
+  (`QuoteBar`, `lib/quoteSelection.ts`), the turn rail with its bookmarks
+  (`TurnRail`, `lib/turnRail.ts`, `ChatMeta.bookmarks`) and the turn fold
+  (`lib/turnFold.ts`): decided stretch by stretch, a delegation round as one
+  turn, the reader's open/fold as an explicit choice (`turnChoices`).
 - **`docs/chat-layout.md`** — the one reading column (`lib/chatColumn.ts`),
   the composer's one-line/open shapes and its float over the transcript,
   tables in a message (`.markdown table`, `Markdown.tsx`), type in the chrome
@@ -746,7 +748,12 @@ names live in `docs/canvas.md`.
 
 ### Normalizing the three backends
 
-Keep provider behavior behind `AgentSession` and normalize it into `ChatEvent`. Claude has native per-tool permissions and `ExitPlanMode`; Codex maps permission choices to sandbox policies and synthesizes the same plan-review event so the renderer remains provider-neutral; Grok bridges ACP `session/request_permission` to the same event and synthesizes the plan review from a tool call (see Grok Build above).
+Keep provider behavior behind `AgentSession` and normalize it into `ChatEvent`.
+**A stopped turn writes no closing `turn` row, on every provider**: the
+transcript reads a stretch with no close as cut off (Stop, or a steered "Send
+now") and keeps it open, where a row would fold the turn the reader was
+watching (`foldState`, `docs/transcript.md`). A turn that ends with another
+already queued behind it reports no idle in between. Claude has native per-tool permissions and `ExitPlanMode`; Codex maps permission choices to sandbox policies and synthesizes the same plan-review event so the renderer remains provider-neutral; Grok bridges ACP `session/request_permission` to the same event and synthesizes the plan review from a tool call (see Grok Build above).
 
 **Codex's sandbox is spelled twice, and a turn takes the newer spelling.** Thread
 start and resume still accept the SDK's kebab-case `sandbox`, while an App

@@ -907,7 +907,11 @@ The same run is what the copy control hands over (`TurnFold.answer`).
 
 Never folded: the prompt, the event rows, the turn's changes card. Folded with
 its anchor: a `TasksCard`, iff the message it hangs off is omitted entirely.
-A turn that ends on work rather than prose folds to the header alone.
+A turn that ends on work after saying something keeps its last prose and the
+calls after it (`lastProse`): its last step is often a status check or a final
+command, and folding to the header alone hid every word it said — across two
+weeks of real chats that tail was 1–4 calls every time. Only a turn with no
+prose at all folds to the header alone.
 
 **A picture a call produced is a result, not work.** A screenshot arrives as
 `outputImages` on the call that took it, and `ToolOutputImages` already draws
@@ -943,14 +947,70 @@ cost readings stacked over its answer, since event rows never fold. So a turn
 carries `closed` (a `turn` or `error` row has landed) and `workEvents` (every
 `turn` row with more of the turn after it — only those: a switch divider, an
 error or a compaction mark inside a turn is not a turn end and draws as it
-always did), and three things follow. An interim stats row is work and folds. The answer run ends at an interim row — "four agents are
-running, I'll wait" is what the turn said *then*, not what it arrived at. And a
-turn that is live again after closing is a **continuation**: it stays folded
-while the continuation streams under it, with the chevron offered (the label
-and the control are independent in `TurnHeader`), because the alternative is
-the fold opening under the reader once per wake. A turn whose own work is
-still running is not in that state — nothing of it has folded — which is what
-`running` outranking `closed` in `renderMessages` says.
+always did), and an interim stats row is work and folds.
+
+**The fold is decided stretch by stretch** (`TurnFold.stretches`,
+`foldState`). A turn is cut where it stopped and started again — at each close
+(a `turn` or `error` row, which belongs to the stretch it ends) and at each
+delegate report that joined it (below). A stretch that closed folds its work
+and keeps its own answer; one that did not stays open. One flag for the whole
+turn got every mixed case wrong, each of them seen: a full two-bug diagnosis, a
+close, a background wake and a two-line "that failed fetch was my first
+attempt" folded down to the two lines, since only the last stretch's prose
+counted as the answer; a continuation the reader steered away from folded
+because an *earlier* stretch had closed; a diagnosis before a report that
+arrived after a Stop folded with no close to its name. Each stretch's answer is
+its own trailing prose, so two closes in a row cannot copy one answer twice,
+and "copy the answer" hands over every stretch's answer in order — what the
+folded turn shows.
+
+**A turn cut off by Stop or a steer stays open.** "Send now" on a queued
+message interrupts the running turn, which therefore gets no result row and is
+usually mid-call — its answer boundary was null, and its fold was the header
+alone. The turn the reader was watching disappeared the instant they steered
+(all 150 such Claude turns in two weeks of one heavy user's chats). No provider
+writes a closing row for a stopped turn — Grok, Antigravity and Cursor were
+taught not to — so the stretch reads as cut off and stays open; the header
+still offers the fold, which then folds every stretch.
+
+**What the reader clicks is a choice, not a flip** (`turnChoices`, `TurnChoice`):
+the header folds every stretch or opens every one. It was a set of turns
+flipped from their default, and that broke twice once the default could be
+half-folded: a flip cannot say "fold everything" when the default already
+folds some of it, and when a prepend merges a turn the default under a flip
+moves and the flip means the opposite of what was clicked. A prepend carries
+the choice onto the turn it merges (`carryDisclosure`, desktop and phone
+alike): one made on a leading report moves to the turn it joins, and a window
+that opened on a reply drew it open, so the merged turn opens rather than
+folding the rows under the cursor (a 1,079px jump, measured once).
+
+**A continuation folds only what had folded before it woke** (`resumeFrom`).
+It used to fold the whole turn from its *current* answer boundary while the
+continuation streamed — and that boundary moves with every message: the live
+message is drawn open, then the next one starts, the first becomes work, and
+it drops into the fold. In the same sample that was 201 of 207 woken turns: the
+reader watched a reply arrive and then vanish, worst under background agents
+and delegations, which wake the model most. So during a continuation the
+stretches up to the close it woke from fold as they would settled, that close's
+row stays (`keepRow` — it was the turn's closing row a moment ago), and
+everything after it draws open until the turn settles. "The close it woke
+from" is the last one at which nothing was running, read off the spawns' own
+clocks (`agent.endedAt`, a delegate's span): a turn that closed while its
+agents still worked was never shown folded — it stayed live, every card open —
+and when the last agent reported, the old rule folded all of it under the
+reader at once (the other 6 of 207). Such a turn has no resume point and stays
+open until it settles. One gap is left between the two: the last agent has
+reported and the model has not woken yet. Read naïvely the turn settles and
+folds for that second, then opens again, so a closed last turn whose spawns
+all ended *after* its close, with nothing of the turn since (a side question
+is not the turn), reads as live until `awaitingWakeUntil`: `WAKE_GRACE_MS`,
+the grace main gives the same wake (`wakeTimer`), from the later of the last
+one's end and the close — a delegate's report waits while the parent is busy,
+so one that finished minutes before the close is due from the close. A
+wake that never comes — a job the user stopped — must not hold the turn for
+good, so the bound is real and a timer in `useTranscript` re-renders when it
+runs out. Only the last turn, and only computed while idle. A Grok background agent (`untrackedBackground`) reports no
+completion at all and is not waited on, or its turn would be held for good.
 
 Not every wake is an agent. A backgrounded *shell* is deliberately not held
 open (`backgroundCalls` in `claude.ts` — a dev server would pin the turn for
@@ -973,11 +1033,11 @@ its duration and keeps the cost and the copy control.
 The label carries **no size of its own**. It sits in the same container as the
 prose it introduces, so inheriting is an exact match rather than a number kept
 level with `body`'s 14px by hand: a chrome *colour* on reading-size type. The
-expanded set lives in the renderer store (`expandedTurns`, a new `Set` per
-toggle so `sameHistory`'s identity compare fires) and rides `RenderCtx` —
+choices live in the renderer store (`turnChoices`, a new `Map` per click so
+`sameHistory`'s identity compare fires) and rides `RenderCtx` —
 folding is decided while the node array is built, which a `useState` inside the
-header could never reach. The live turn is never folded; settled ones start
-folded.
+header could never reach. The live turn is never folded; settled ones that
+closed start folded, and interrupted ones start open.
 
 **The fold is animated with a view transition**, for the same reason it is
 omission: there is no element here whose height could animate. Chromium
@@ -990,11 +1050,46 @@ removes height *above* the answer, so without the correction the transcript
 slides out from under the pointer by however much work the turn did. Reduced
 motion skips `startViewTransition` outright.
 
+**A delegation round is one turn** (`FoldOptions`). A delegate's report reaches
+the parent as a labelled user message (`isDelivery`), because that is how an
+outcome gets to the model, and every such message opened a turn of its own: the
+turn that sent the agent folded the moment the report landed, and the rail —
+which already counted the round as one turn — disagreed with the transcript.
+The fold, the changes card (`turnPresentations`) and the rail now all read a
+report as continuing the turn before it: its bubble draws inside that turn as
+work, with no header of its own, and folds with the work. A delegate still
+working holds its turn live, as a held background agent does: its spawn
+returns at once and its work goes on in another chat, so its span is read off
+**the transcript**: each call naming a delegate is a round, from the call to the
+first report naming it after (or the next call naming it). That never changes
+after the fact, so re-arming a delegate or deleting it cannot move an earlier
+turn's fold — which it did while the span came off the delegate's record,
+since the record holds only its *current* round. **A round is outstanding until
+its report arrives**, never until the moment the delegate finished: reports
+wait while the parent is busy (`flushDeliveries`), and a round that ended at
+the finish before its report and at the report after moved a close's fold the
+moment the report landed. A report is read only on the lines main generates
+for each delegate (`reportedDelegates`): the task and the delegate's own words
+ride in it too, and can name another delegate that is still working — or quote
+a whole header line from a log, which is why the id counts only directly under
+its own "Your agent …" line. The
+record answers the one thing the transcript cannot: whether the latest round,
+with no report yet, is still working — holding the turn live — or is done with
+its report due, the bounded wake above (`useDelegates`, keyed once per `chats`
+array so a streamed delta costs a map lookup). So a follow-up holds its own
+turn live, not the spawn's.
+Which delegate a call names is the id its result gives (`namedDelegateId`;
+`agents_send` results carry it now, as `agents_delegate`'s always did), or for
+an older result its `agent` argument read the way main reads it
+(`findDelegate` in `shared/delegateRef.ts` — two readers of one reference that
+disagree put a follow-up's liveness on the wrong turn). The turn rail reads the
+same rounds and the same due wake, or its live tick disagrees with the header.
+
 **`demo/e2e/stream-probe.js` needs re-baselining against this.** It pumps
-synthetic assistant messages with no user message, so all three shapes land in
-one turn that now folds at each `status: idle`; its DOM-identity readings
-measure omission rather than a remount until each shape gets a prompt of its
-own. `foot-probe.js` is unaffected — it only reads the foot label.
+synthetic assistant messages with no user message and no closing row, so all
+three shapes land in one turn that — never closed — no longer folds at all; its
+DOM-identity readings were written against a fold that is no longer there.
+`foot-probe.js` is unaffected — it only reads the foot label.
 
 ### The turn rail and bookmarks (`TurnRail`, `lib/turnRail.ts`)
 

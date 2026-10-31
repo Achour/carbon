@@ -540,7 +540,11 @@ export class AntigravitySession implements AgentSession {
       const part = loc.message.parts[loc.index]
       if (part?.type !== 'tool' || part.status !== 'running') this.toolLoc.delete(id)
     }
-    if (stopReason) {
+    // No closing row for a turn that was stopped — Stop, or a queued message
+    // sent with "Send now" — as Claude and Codex write none either: the
+    // transcript reads a turn with no row as cut off and keeps it open, where
+    // a row would fold the turn the reader was watching (`foldState`).
+    if (stopReason && !this.interrupted) {
       this.pushMessage({
         id: randomUUID(),
         role: 'event',
@@ -560,7 +564,10 @@ export class AntigravitySession implements AgentSession {
         this.offerPlanForReview()
       }
     }
-    this.setStatus(this.hasBlockingPrompt() ? 'waiting-permission' : 'idle')
+    // A turn already queued behind this one — a message sent while this one
+    // was being cancelled — starts next and reports its own status; idle in
+    // between would flash the chat as stopped.
+    if (!this.queued.size) this.setStatus(this.hasBlockingPrompt() ? 'waiting-permission' : 'idle')
     this.store.saveChat(this.chat.id)
   }
 

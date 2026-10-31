@@ -29,10 +29,10 @@ import { StreamingIndicator } from '@/components/messages/Parts'
 import { DelegatePrompts, PromptDock } from '@/components/PromptDock'
 import { QuoteBar } from '@/components/QuoteBar'
 import { TranscriptChat } from '@/components/messages/AgentRows'
-import { useTranscript } from '@/components/Transcript'
+import { useDelegates, useTranscript } from '@/components/Transcript'
 import { TurnRail } from '@/components/TurnRail'
 import { TurnBookmarks, type TurnBookmarksValue } from '@/components/messages/TurnBookmarks'
-import { foldTurns } from '@/lib/turnFold'
+import { foldTurns, type TurnChoice } from '@/lib/turnFold'
 import { bookmarkText, earlierBookmarks, railTurns, reconcileTurns, type RailTurn } from '@/lib/turnRail'
 import { isDelivery } from '@shared/delivery'
 
@@ -156,8 +156,8 @@ export const ChatView = React.memo(function ChatView({
   // changes on a click and nowhere else, so subscribing the transcript to it
   // costs nothing between clicks — and it has to be read here rather than in
   // the header, since folding is decided while the node array is built.
-  const expandedTurns = useApp((s) => s.expandedTurns)
-  const toggleTurnExpanded = useApp((s) => s.toggleTurnExpanded)
+  const turnChoices = useApp((s) => s.turnChoices)
+  const chooseTurn = useApp((s) => s.chooseTurn)
 
   const scrollRef = React.useRef<HTMLDivElement>(null)
   /** The scroller's positioned ancestor — what the quote bar is placed inside. */
@@ -401,7 +401,7 @@ export const ChatView = React.memo(function ChatView({
    * it moves.
    */
   const onToggleTurn = React.useCallback(
-    (userMessageId: string): void => {
+    (userMessageId: string, choice: TurnChoice): void => {
       const el = scrollRef.current
       const header = el?.querySelector<HTMLElement>(
         `[data-turn-header="${CSS.escape(userMessageId)}"]`
@@ -411,7 +411,7 @@ export const ChatView = React.memo(function ChatView({
         // Synchronous, so the measurement below sees the folded DOM: React
         // would otherwise batch this past the end of the callback and the
         // transition would capture the state it started from.
-        flushSync(() => toggleTurnExpanded(userMessageId))
+        flushSync(() => chooseTurn(userMessageId, choice))
         if (el && header && before !== null && header.isConnected) {
           el.scrollTop += header.getBoundingClientRect().top - before
         }
@@ -423,7 +423,7 @@ export const ChatView = React.memo(function ChatView({
       }
       document.startViewTransition(apply)
     },
-    [toggleTurnExpanded]
+    [chooseTurn]
   )
 
   /**
@@ -504,12 +504,12 @@ export const ChatView = React.memo(function ChatView({
     (plan: string) => openPlan(plan, pendingPlanId),
     [openPlan, pendingPlanId]
   )
-  const { nodes, showActivity, activityLabel, showActivityLabel, tasks } = useTranscript({
+  const { nodes, showActivity, activityLabel, showActivityLabel, tasks, awaitingWake } = useTranscript({
     chat,
     messages,
     busy,
     permissions,
-    expandedTurns,
+    turnChoices,
     onToggleTurn,
     onOpenPlan: openPlan
   })
@@ -550,12 +550,15 @@ export const ChatView = React.memo(function ChatView({
   // The turn rail's index of the loaded window. Rebuilt per delta like
   // everything fed from `messages`, and reconciled so only the live turn's
   // tick sees a new object.
+  // The rail reads delegates and a due wake the way the transcript does, or
+  // its live tick disagrees with the turn header.
+  const delegates = useDelegates(chat.id)
   const railRef = React.useRef<RailTurn[]>([])
   const turns = React.useMemo(() => {
-    const next = reconcileTurns(railRef.current, railTurns(messages, foldTurns(messages), busy, isDelivery))
+    const next = reconcileTurns(railRef.current, railTurns(messages, foldTurns(messages, { continues: isDelivery, delegates }), busy || awaitingWake, isDelivery))
     railRef.current = next
     return next
-  }, [messages, busy])
+  }, [messages, busy, awaitingWake, delegates])
   const setChatBookmark = useApp((s) => s.setChatBookmark)
   const marked = React.useMemo(
     () => new Set((chat.bookmarks ?? []).map((b) => b.id)),

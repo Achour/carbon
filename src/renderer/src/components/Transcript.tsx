@@ -18,7 +18,18 @@ import { TurnChangesCard } from '@/components/messages/TurnChangesCard'
 import { TurnHeader } from '@/components/messages/TurnHeader'
 import { InlineVisual, isInlineVisual } from '@/components/messages/InlineVisual'
 import { turnPresentations } from '@/lib/turnChanges'
-import { foldTurns, type TurnFold } from '@/lib/turnFold'
+import {
+  foldState,
+  foldTurns,
+  type AnswerStart,
+  type Delegates,
+  type FoldState,
+  type TurnChoice,
+  type TurnFold
+} from '@/lib/turnFold'
+import { isDelivery } from '@shared/delivery'
+import { DELEGATE_TOOL } from '@shared/agentRuns'
+import { findDelegate, namedDelegateId } from '@shared/delegateRef'
 import { useApp } from '@/store'
 
 /**
@@ -143,10 +154,17 @@ interface RenderCtx {
    * by identity — a toggle that mutated the set in place would leave the cached
    * history nodes exactly as they were and the click would draw nothing.
    */
-  expandedTurns: ReadonlySet<string>
-  onToggleTurn: (userMessageId: string) => void
+  turnChoices: ReadonlyMap<string, TurnChoice>
+  onToggleTurn: (userMessageId: string, choice: TurnChoice) => void
   /** Calls a run needs to draw as a group (`groupMin`). */
   groupMin: number
+  /**
+   * This chat's delegates (`useDelegates`), so a delegate still at it holds
+   * the turn that sent it live. Stable while no delegate starts or finishes.
+   */
+  delegates?: Delegates
+  /** The last turn is waiting on a wake that is due, and reads as live. */
+  awaitingWake?: boolean
 }
 
 /**
@@ -239,14 +257,17 @@ function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
   const out: React.ReactNode[] = []
   let run: AssistantMessage[] = []
   const messages = all.filter((m) => !isBlankMsg(m) && !isLegacyCodexGoalSummary(m))
-  const folds = foldTurns(messages)
+  // A delegate's report continues the turn that sent the agent rather than
+  // opening one (`FoldOptions`), and a delegate still working holds it live.
+  const folds = foldTurns(messages, { continues: isDelivery, delegates: ctx.delegates })
   // The live turn is never folded. It is the last one, and only while the chat
   // is busy — the live assistant message itself is not in this slice (it is the
   // live node), so the prompt that opened it is still the last user message
   // here whether or not the reply has started.
   let lastFold: TurnFold | undefined
+  // The last *turn* — a report that joined the turn before it has no fold.
   for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role === 'user') {
+    if (messages[i].role === 'user' && folds.has(messages[i].id)) {
       lastFold = folds.get(messages[i].id)
       break
     }
@@ -258,8 +279,9 @@ function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
   // continuation under the same prompt when each one reports — and a changes
   // card drawn at each of those pauses would be taken back at each
   // continuation, along with the mutation rows it stands in for.
-  const settled = !ctx.busy && !lastFold?.running
-  const presentations = turnPresentations(messages, ctx.cwd, !settled)
+  // A turn about to be woken by its agents' reports is not settled either.
+  const settled = !ctx.busy && !lastFold?.running && !ctx.awaitingWake
+  const presentations = turnPresentations(messages, ctx.cwd, !settled, isDelivery)
 
   /** The turn being walked, and whether its work is folded away. */
   let fold: TurnFold | undefined
@@ -272,19 +294,40 @@ function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
    * reassigns these, so the value a run reads is its own turn's.
    */
   let turnLive = false
-  /** Within a folded turn: has the walk reached the answer yet? */
+  /** The walked turn's fold, stretch by stretch (`foldState`). */
+  let state: FoldState | null = null
+  /**
+   * The stretch being walked (`TurnFold.stretchOf`), whether it folds, and
+   * where its answer starts. Each stretch folds on its own: one cut off by a
+   * Stop or a steer stays open while a closed one beside it folds.
+   */
+  let stretchAt = -1
+  let stretchFolded = false
+  let stretchStart: AnswerStart | null = null
+  /** Within a folded stretch: has the walk reached its answer yet? */
   let reachedAnswer = false
+
+  /** Step into the stretch `m` belongs to, if it is a new one. */
+  const enterStretch = (m: ChatMessage): void => {
+    const at = fold?.stretchOf.get(m.id)
+    if (at === undefined || at === stretchAt) return
+    // A run belongs to the stretch it was gathered in.
+    flush()
+    stretchAt = at
+    stretchFolded = !!state?.stretches[at]?.folded
+    stretchStart = state?.stretches[at]?.start ?? null
+    reachedAnswer = false
+  }
 
   /**
    * How much of an assistant message survives the fold — called once per
    * message, in order, because reaching the answer is what ends the folding.
    */
   const foldOf = (m: AssistantMessage): { hidden: boolean; fromPart?: number } => {
-    if (!folded || reachedAnswer) return { hidden: false }
-    const from = fold?.answerFrom
-    if (from && from.messageId === m.id) {
+    if (!stretchFolded || reachedAnswer) return { hidden: false }
+    if (stretchStart?.messageId === m.id) {
       reachedAnswer = true
-      return { hidden: false, fromPart: from.partIndex }
+      return { hidden: false, fromPart: stretchStart.partIndex }
     }
     return { hidden: true }
   }
@@ -351,7 +394,7 @@ function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
       // off its last message, and keeps the changes card, which is the turn's
       // result rather than its work. The card is pushed under the same key
       // either way, so folding and unfolding never rebuild it.
-      const hidden = folded && !reachedAnswer
+      const hidden = stretchFolded && !reachedAnswer
       const last = run[run.length - 1]
       if (hidden) {
         // Same rule as a folded message: the rows go, the pictures stay. A run
@@ -439,11 +482,18 @@ function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
   let lastAssistantId: string | undefined
   for (const m of messages) {
     if (m.role === 'assistant') lastAssistantId = m.id
+    enterStretch(m)
     if (m.role === 'assistant' && isGroupableMsg(m)) {
       run.push(m)
       continue
     }
     flush()
+    if (m.role === 'user' && fold && !folds.has(m.id)) {
+      // A delegate's report inside the turn that sent it: work, like the calls
+      // around it — drawn with them, folded with them, and no header of its own.
+      if (!stretchFolded || reachedAnswer) out.push(<UserBubble key={m.id} message={m} chatId={ctx.chatId} />)
+      continue
+    }
     if (m.role === 'user') {
       out.push(<UserBubble key={m.id} message={m} chatId={ctx.chatId} />)
       // The turn's header, as a keyed sibling of everything below it. It is
@@ -458,17 +508,18 @@ function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
       // `useRunDisclosure` gives a running group, at turn scale — and the
       // continuation lands under a header that never stopped. Folding it would
       // take a card that is still moving off screen.
-      const live = !!fold && (fold.userId === liveUserId || fold.running)
+      const live =
+        !!fold && (fold.userId === liveUserId || fold.running || (fold === lastFold && !!ctx.awaitingWake))
       turnLive = live
-      // A turn the CLI has already closed once and that is live again is a
-      // *continuation* (`TurnFold.closed`): it folded when it closed, and the
-      // continuation streams under the fold rather than throwing the work open
-      // — otherwise a backgrounded shell's notification, or any wake-up with
-      // no prompt behind it, is the turn expanding and collapsing under the
-      // reader once per wake. A turn whose own work is still running is not in
-      // that state: nothing of it has folded.
-      const continuing = live && !!fold && fold.closed && !fold.running
-      folded = !!fold && (!live || continuing) && !ctx.expandedTurns.has(m.id)
+      // A settled turn folds only if it closed; a closed turn live again (a
+      // *continuation* — a notification woke the model under the same prompt)
+      // keeps folded only what had folded before it woke. `foldState` holds
+      // the reasons.
+      state = fold ? foldState(fold, live, ctx.turnChoices.get(m.id)) : null
+      folded = !!state?.folded
+      stretchAt = -1
+      stretchFolded = false
+      stretchStart = null
       reachedAnswer = false
       if (fold && (live || fold.replied)) {
         out.push(
@@ -480,7 +531,7 @@ function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
             live={live}
             // A turn that is folded can always be opened, live or not; one
             // that is live and has never folded offers nothing.
-            collapsible={fold.collapsible && (!live || continuing)}
+            collapsible={fold.collapsible && !!state?.canFold}
             expanded={!folded}
             onToggle={ctx.onToggleTurn}
           />
@@ -506,7 +557,9 @@ function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
       // woke the model and the turn went on under the same prompt — is work,
       // and folds with it. Only the row that actually closes the turn is an
       // event row in the "never folded" sense.
-      if (folded && fold?.workEvents.has(m.id)) continue
+      // The close a continuation woke from stays: it was the turn's closing
+      // row a moment ago.
+      if (stretchFolded && fold?.workEvents.has(m.id) && m.id !== state?.keepRow) continue
       out.push(
         <EventRow
           key={m.id}
@@ -581,9 +634,11 @@ function sameHistory(
     prev.ctx.onOpenPlan !== ctx.onOpenPlan ||
     prev.ctx.switchPendingId !== ctx.switchPendingId ||
     prev.ctx.taskCompletions !== ctx.taskCompletions ||
-    prev.ctx.expandedTurns !== ctx.expandedTurns ||
+    prev.ctx.turnChoices !== ctx.turnChoices ||
     prev.ctx.onToggleTurn !== ctx.onToggleTurn ||
-    prev.ctx.groupMin !== ctx.groupMin
+    prev.ctx.groupMin !== ctx.groupMin ||
+    prev.ctx.delegates !== ctx.delegates ||
+    prev.ctx.awaitingWake !== ctx.awaitingWake
   ) {
     return false
   }
@@ -603,6 +658,88 @@ export interface TranscriptView {
   showActivityLabel: boolean
   /** The live checklist, for a dock; a finished one is drawn in `nodes`. */
   tasks: TaskItem[]
+  /** The last turn is waiting on a wake that is due (`TurnFold.awaitingWakeUntil`). */
+  awaitingWake: boolean
+}
+
+/**
+ * Each delegate's working span, as a string key per parent: read off
+ * `ChatMeta.delegation` once per `chats` array rather than once per selector
+ * run, since a selector runs on every streamed delta and `chats` changes only
+ * on a meta patch.
+ */
+const delegateKeys = new WeakMap<ChatMeta[], Map<string, string>>()
+
+function delegateKeyOf(chats: ChatMeta[], parentId: string): string {
+  let keys = delegateKeys.get(chats)
+  if (!keys) {
+    keys = new Map()
+    for (const c of chats) {
+      const d = c.delegation
+      if (!d) continue
+      // Names are letters, digits and hyphens (`slugName`), so `:` and `|`
+      // are safe separators.
+      const entry = `${c.id}:${d.name}:${c.provider}:${d.status === 'running' ? 1 : 0}:${d.finishedAt ?? ''}`
+      keys.set(d.parentId, keys.has(d.parentId) ? `${keys.get(d.parentId)}|${entry}` : entry)
+    }
+    delegateKeys.set(chats, keys)
+  }
+  return keys.get(parentId) ?? ''
+}
+
+/** `agents_send`: a follow-up that re-arms a delegate for another round. */
+const SEND_TOOL = 'mcp__carbon__agents_send'
+
+/**
+ * `FoldOptions.delegates` for one chat: which delegate a call names — the
+ * child id an `agents_delegate` or `agents_send` result names, or for an older
+ * `agents_send` result that named none, its `agent` argument read the way main
+ * read it (`findDelegate`) — and what each one's record says of its current
+ * round. Its identity changes only when a delegate starts, finishes or is
+ * renamed, so a cached history render survives everything else. Shared by the
+ * transcript and the turn rail. Always an object: a deleted delegate has no
+ * record, but its calls and reports are still in the transcript.
+ */
+export function useDelegates(chatId: string): Delegates {
+  const key = useApp((s) => delegateKeyOf(s.chats, chatId))
+  return React.useMemo(() => {
+    const views = key
+      ? key.split('|').map((entry) => {
+          const [id, name, provider, running, endedAt] = entry.split(':')
+          return { id, name, provider, running: running === '1', endedAt: endedAt ? Number(endedAt) : undefined }
+        })
+      : []
+    const byId = new Map(views.map((view) => [view.id, view]))
+    return {
+      childOf(part: ToolPart) {
+        if (part.status === 'error') return null
+        if (part.name === DELEGATE_TOOL) return namedDelegateId(part.output)
+        if (part.name !== SEND_TOOL) return null
+        const named = namedDelegateId(part.output)
+        if (named) return named
+        const agent = (part.input as { agent?: unknown } | undefined)?.agent
+        return typeof agent === 'string' ? (findDelegate(views, agent)?.id ?? null) : null
+      },
+      running: (child: string) => !!byId.get(child)?.running,
+      endedAt: (child: string) => byId.get(child)?.endedAt
+    }
+  }, [key])
+}
+
+/**
+ * Until when the last turn waits on a wake (`TurnFold.awaitingWakeUntil`), 0
+ * when it does not. Only computed while idle — the gap it covers is an idle
+ * one — so a streamed delta costs nothing here.
+ */
+function lastTurnWake(messages: ChatMessage[], busy: boolean, delegates: Delegates): number {
+  if (busy) return 0
+  // The last turn's key, by `foldTurns`' rule: the last prompt, or a report
+  // that opens the window and so heads a turn of its own.
+  let at = messages.findLastIndex((m) => m.role === 'user' && !isDelivery(m))
+  if (at < 0) at = messages.findIndex((m) => m.role === 'user')
+  if (at < 0) return 0
+  const folds = foldTurns(messages.slice(at).filter((m) => !isBlankMsg(m)), { continues: isDelivery, delegates })
+  return folds.get(messages[at].id)?.awaitingWakeUntil ?? 0
 }
 
 export function useTranscript({
@@ -610,7 +747,7 @@ export function useTranscript({
   messages,
   busy,
   permissions,
-  expandedTurns,
+  turnChoices,
   onToggleTurn,
   onOpenPlan
 }: {
@@ -618,8 +755,8 @@ export function useTranscript({
   messages: ChatMessage[]
   busy: boolean
   permissions: PermissionRequestPayload[]
-  expandedTurns: ReadonlySet<string>
-  onToggleTurn: (userMessageId: string) => void
+  turnChoices: ReadonlyMap<string, TurnChoice>
+  onToggleTurn: (userMessageId: string, choice: TurnChoice) => void
   /** Stable across renders, or every settled row re-renders with it. */
   onOpenPlan?: (plan: string, requestId: string | null) => void
 }): TranscriptView {
@@ -870,6 +1007,18 @@ export function useTranscript({
     }
     return undefined
   }, [busy, chat.switchingNote, messages])
+  const delegates = useDelegates(chat.id)
+  // The last turn read as live through a wake that is due, and no longer:
+  // a timer re-renders when the grace runs out.
+  const wakeUntil = React.useMemo(() => lastTurnWake(messages, busy, delegates), [messages, busy, delegates])
+  const [, setWakeClock] = React.useState(0)
+  React.useEffect(() => {
+    const left = wakeUntil - Date.now()
+    if (left <= 0) return
+    const timer = setTimeout(() => setWakeClock(Date.now()), left + 50)
+    return () => clearTimeout(timer)
+  }, [wakeUntil])
+  const awaitingWake = wakeUntil > Date.now()
   const historyCtx = React.useMemo<RenderCtx>(
     () => ({
       chatId: chat.id,
@@ -878,9 +1027,11 @@ export function useTranscript({
       onOpenPlan: openPlan,
       switchPendingId,
       taskCompletions: timeline.completions,
-      expandedTurns,
+      turnChoices,
       onToggleTurn,
-      groupMin: groupMin(foldActivity)
+      groupMin: groupMin(foldActivity),
+      delegates,
+      awaitingWake
     }),
     [
       chat.id,
@@ -889,9 +1040,11 @@ export function useTranscript({
       openPlan,
       switchPendingId,
       timeline.completions,
-      expandedTurns,
+      turnChoices,
       onToggleTurn,
-      foldActivity
+      foldActivity,
+      delegates,
+      awaitingWake
     ]
   )
   const historyNodes = useHistoryNodes(
@@ -936,6 +1089,7 @@ export function useTranscript({
     showActivity,
     activityLabel,
     showActivityLabel,
-    tasks
+    tasks,
+    awaitingWake
   }
 }

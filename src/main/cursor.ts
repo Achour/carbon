@@ -817,7 +817,11 @@ export class CursorSession implements AgentSession {
     this.streamSlot = null
     this.toolLoc.clear()
     this.children.clear()
-    if (status) {
+    // No closing row for a turn that was stopped — Stop, or a queued message
+    // sent with "Send now" — as Claude and Codex write none either: the
+    // transcript reads a turn with no row as cut off and keeps it open, where
+    // a row would fold the turn the reader was watching (`foldState`).
+    if (status && !this.interrupted) {
       const usage = this.turnUsage
       this.pushMessage({
         id: randomUUID(),
@@ -843,7 +847,10 @@ export class CursorSession implements AgentSession {
         this.offerPlanForReview(this.turnPlan)
       }
     }
-    this.setStatus(this.planReview ? 'waiting-permission' : 'idle')
+    // A turn already queued behind this one — a message sent while this one
+    // was being cancelled — starts next and reports its own status; idle in
+    // between would flash the chat as stopped.
+    if (!this.queued.size) this.setStatus(this.planReview ? 'waiting-permission' : 'idle')
     this.store.saveChat(this.chat.id)
   }
 

@@ -25,6 +25,7 @@ import { CodexReviewMenu } from '@/components/CodexReviewDialog'
 import { isNative, notifyApp, useNativeCommand } from './native'
 import { TaskDock } from '@/components/TaskDock'
 import { useTaskList } from '@/taskListStore'
+import type { TurnChoice } from '@/lib/turnFold'
 
 const NO_REQUESTS: PermissionRequestPayload[] = []
 
@@ -37,8 +38,8 @@ export function ChatScreen({ chatId }: { chatId: string }): React.JSX.Element {
   const connection = useRemote((s) => s.connection)
   const setOptions = useRemote((s) => s.setOptions)
   const busy = isBusy(status)
-  const expandedTurns = useApp((s) => s.expandedTurns)
-  const toggleTurnExpanded = useApp((s) => s.toggleTurnExpanded)
+  const turnChoices = useApp((s) => s.turnChoices)
+  const chooseTurn = useApp((s) => s.chooseTurn)
   const [plan, setPlan] = React.useState<string | null>(null)
   // Inside the iOS app the plan, a diff and a canvas open as the app's own
   // screens; only a sub-agent's transcript is still drawn here.
@@ -251,8 +252,8 @@ export function ChatScreen({ chatId }: { chatId: string }): React.JSX.Element {
                 chat={chat}
                 busy={busy}
                 requests={requests ?? NO_REQUESTS}
-                expandedTurns={expandedTurns}
-                onToggleTurn={toggleTurnExpanded}
+                turnChoices={turnChoices}
+                onToggleTurn={chooseTurn}
                 onOpenPlan={onOpenPlan}
               />
             </TranscriptChat.Provider>
@@ -408,15 +409,15 @@ function Transcript({
   chat,
   busy,
   requests,
-  expandedTurns,
+  turnChoices,
   onToggleTurn,
   onOpenPlan
 }: {
   chat: ChatMeta
   busy: boolean
   requests: PermissionRequestPayload[]
-  expandedTurns: ReadonlySet<string>
-  onToggleTurn: (userMessageId: string) => void
+  turnChoices: ReadonlyMap<string, TurnChoice>
+  onToggleTurn: (userMessageId: string, choice: TurnChoice) => void
   onOpenPlan: (plan: string) => void
 }): React.JSX.Element {
   const messages = useRemote((s) => (s.open?.id === chat.id ? s.open.messages : NO_MESSAGES))
@@ -425,7 +426,7 @@ function Transcript({
     messages,
     busy,
     permissions: requests,
-    expandedTurns,
+    turnChoices,
     onToggleTurn,
     onOpenPlan
   })

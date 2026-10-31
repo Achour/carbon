@@ -22,7 +22,7 @@
 // working as designed, and it silently invalidated half this probe when turn
 // folding arrived: the running checks kept passing, every check after a
 // `settle` read an empty transcript and failed. So the calls are injected under
-// a user message this probe pushes itself, and `toggleTurnExpanded` opens that
+// a user message this probe pushes itself, and `chooseTurn` opens that
 // turn back up before anything is asserted about a finished row.
 //
 //   ./demo/shoot.sh /tmp/canvas 6000 demo/e2e/canvas-edit.js
@@ -57,10 +57,9 @@
   const SUMMARY = { id: ID, title: 'Vite vs webpack' };
   const listing = (canvases) => app.setState({ canvases });
 
-  // Open the turn this probe's calls belong to, once. `toggleTurnExpanded` is a
-  // toggle, so asking twice folds it again.
+  // Open the turn this probe's calls belong to (`chooseTurn`).
   const unfold = async () => {
-    if (!app.getState().expandedTurns.has(TURN)) app.getState().toggleTurnExpanded(TURN);
+    app.getState().chooseTurn(TURN, 'open');
     await sleep(400);
   };
 

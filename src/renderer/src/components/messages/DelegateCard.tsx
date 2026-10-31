@@ -4,13 +4,14 @@ import { useApp } from '@/store'
 import { firstLine } from '@shared/agentRuns'
 import { useTranscriptSurface } from './surface'
 import { AgentRowShell, useElapsed } from './AgentRows'
+import { namedDelegateId } from '@shared/delegateRef'
 
 /**
  * The delegate's chat id, read off the `agents_delegate` result — "Started
  * Codex as "codex-a" (id …)". Absent until the call returns, and on a refusal.
  */
 export function delegateChildId(part: ToolPart): string | null {
-  return /\(id ([0-9a-f-]{36})\)/i.exec(part.output ?? '')?.[1] ?? null
+  return namedDelegateId(part.output)
 }
 
 type Look = { word: string; dot: string; live: boolean }

@@ -1,4 +1,4 @@
-import type { AssistantMessage, AssistantPart, ChatMessage } from '@shared/types'
+import type { AssistantMessage, AssistantPart, ChatMessage, UserMessage } from '@shared/types'
 
 export interface TurnPresentation {
   userMessageId: string
@@ -42,7 +42,9 @@ export function changedPathsFromParts(parts: AssistantPart[], cwd: string): stri
 export function turnPresentations(
   messages: ChatMessage[],
   cwd: string,
-  busy: boolean
+  busy: boolean,
+  /** A user message that continues the turn before it (`FoldOptions.continues`). */
+  continues: (message: UserMessage) => boolean = () => false
 ): Map<string, TurnPresentation> {
   const result = new Map<string, TurnPresentation>()
   let userMessageId: string | undefined
@@ -74,6 +76,7 @@ export function turnPresentations(
   }
 
   for (const message of messages) {
+    if (message.role === 'user' && userMessageId && continues(message)) continue
     if (message.role === 'user') {
       flush(true)
       userMessageId = message.id

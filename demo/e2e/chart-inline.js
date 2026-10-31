@@ -127,11 +127,11 @@
 
     // 4. Unfolded, the row is back — named for what it is — and the chart is
     //    still drawn once.
-    app.getState().toggleTurnExpanded(TURN);
+    app.getState().chooseTurn(TURN, 'open');
     await sleep(800);
     check('unfolded, the row reads as a chart', rows().includes('Chart') && rows().some((t) => t.includes('Edits per file')));
     check('and the chart is drawn once', charts().length === 1, `${charts().length}`);
-    app.getState().toggleTurnExpanded(TURN);
+    app.getState().chooseTurn(TURN, 'folded');
     await sleep(500);
 
     // 5. Grok wraps the call in `use_tool` with an empty result. One series:

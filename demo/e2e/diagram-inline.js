@@ -122,12 +122,12 @@
     const answer = [...document.querySelectorAll('[data-chatview] p')].find((p) => p.textContent.includes('fills what is still empty'));
     check('the diagram sits above the answer', !!answer && !!flow && (flow.compareDocumentPosition(answer) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0);
 
-    app.getState().toggleTurnExpanded(TURN);
+    app.getState().chooseTurn(TURN, 'open');
     await sleep(700);
     const rowText = [...document.querySelectorAll('[data-chatview] *')].filter((e) => !e.children.length).map((e) => e.textContent.trim());
     check('unfolded, the row reads as a diagram', rowText.includes('Diagram'));
     check('and the diagram is drawn once', diagrams().length === 1);
-    app.getState().toggleTurnExpanded(TURN);
+    app.getState().chooseTurn(TURN, 'folded');
     await sleep(400);
 
     // A left-to-right flow across two groups, through Grok's wrapping.

@@ -143,8 +143,8 @@ omission from `ChatView`'s flat array (see the turn header in
 `docs/transcript.md`), so every node above the answer unmounts the moment the
 turn settles — they are being hidden, so the cost is paid on content that is
 leaving. `sameHistory` comparing `ctx.busy` is what stops the header ticking
-after the turn ends, and comparing `expandedTurns` by identity is what makes a
-toggle reach the cached history nodes at all.
+after the turn ends, and comparing `turnChoices` by identity is what makes a
+click reach the cached history nodes at all.
 
 ### Smooth streaming (`lib/streamReveal.ts`, `useStreamText`)
 

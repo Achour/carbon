@@ -9,6 +9,7 @@ import type {
   Provider
 } from '../shared/types.ts'
 import { DELIVERIES_OPENER, DELIVERY_OPENER } from '../shared/delivery.ts'
+import { findDelegate, slugName } from '../shared/delegateRef.ts'
 
 /**
  * **Delegation: one chat's agent handing a task to another provider.**
@@ -21,7 +22,8 @@ import { DELIVERIES_OPENER, DELIVERY_OPENER } from '../shared/delivery.ts'
  * it is worded for the parent. `ChatManager` is the host and owns the
  * lifecycle. See `docs/delegation.md`.
  *
- * Dependency-free on purpose — type imports and `shared/delivery.ts` only — so
+ * Dependency-free on purpose — type imports, `shared/delivery.ts` and
+ * `shared/delegateRef.ts` only — so
  * `node --test` runs it straight off the `.ts`.
  */
 
@@ -164,17 +166,7 @@ export interface AgentsToolHost {
   cancel(parentId: string, agent: string): Promise<{ ok: true; text: string } | { ok: false; error: string }>
 }
 
-/** A name as the model or the user might write it — "Codex B" — as stored: `codex-b`. */
-export function slugName(raw: string): string {
-  return raw
-    .trim()
-    .toLowerCase()
-    .replace(/[\s_]+/g, '-')
-    .replace(/[^a-z0-9-]/g, '')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '')
-    .slice(0, 24)
-}
+export { slugName }
 
 /**
  * The first free `<provider>-<letter>` among a parent's delegates: codex-a,
@@ -206,15 +198,8 @@ export function resolveDelegate(
 ): { ok: true; view: DelegationView } | { ok: false; error: string } {
   const raw = ref.trim()
   if (!raw) return { ok: false, error: 'agent is required.' }
-  const byId = views.find((v) => v.id === raw)
-  if (byId) return { ok: true, view: byId }
-  const slug = slugName(raw)
-  const byName = views.find((v) => v.name === slug)
-  if (byName) return { ok: true, view: byName }
-  if (isProvider(slug)) {
-    const on = views.filter((v) => v.provider === slug)
-    if (on.length === 1) return { ok: true, view: on[0] }
-  }
+  const found = findDelegate(views, raw)
+  if (found) return { ok: true, view: found }
   const names = views.map((v) => v.name)
   return {
     ok: false,

@@ -543,7 +543,10 @@ export class GrokSession implements AgentSession {
     // accumulating every call of a long conversation.
     this.planToolIds.clear()
     if (result) this.recordTurn(result)
-    this.setStatus(this.hasBlockingPrompt() ? 'waiting-permission' : 'idle')
+    // A turn already queued behind this one — a message sent while this one
+    // was being cancelled — starts next and reports its own status; idle in
+    // between would flash the chat as stopped.
+    if (!this.queued.size) this.setStatus(this.hasBlockingPrompt() ? 'waiting-permission' : 'idle')
     this.store.saveChat(this.chat.id)
     if (result && !this.interrupted) void this.offerSuggestion()
   }
@@ -574,7 +577,11 @@ export class GrokSession implements AgentSession {
       })
     }
     const usage = result.usage
-    if (!usage) return
+    // No closing row for a turn that was stopped — Stop, or a queued message
+    // sent with "Send now" — as Claude and Codex write none either: the
+    // transcript reads a turn with no row as cut off and keeps it open, where
+    // a row would fold the turn the reader was watching (`foldState`).
+    if (!usage || this.interrupted) return
     this.pushMessage({
       id: randomUUID(),
       role: 'event',

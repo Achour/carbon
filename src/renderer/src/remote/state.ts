@@ -31,6 +31,9 @@ import { randomId } from '@/lib/insecureContext'
 import * as api from './api'
 import { usePrefs } from './prefs'
 import { clearCache, loadChat, loadSnapshot, saveChat, saveSnapshot } from './cache'
+import { useApp } from '@/store'
+import { carryDisclosure } from '@/lib/turnFold'
+import { isDelivery } from '@shared/delivery'
 
 /**
  * The phone's whole state. Deliberately not the desktop store: that one is
@@ -363,6 +366,14 @@ export const useRemote = create<RemoteState>((set, get) => {
       set({ open: { ...open, loading: true } })
       try {
         const older = await api.invoke<OlderMessages>('chats:load-older', open.id, open.hiddenBefore)
+        // The fold choices live in the shared store; the same carry as the
+        // desktop's prepend (`carryDisclosure`).
+        const current = get().open
+        if (current?.id === open.id) {
+          const app = useApp.getState()
+          const carried = carryDisclosure(older.messages, current.messages, app.turnChoices, isDelivery)
+          if (carried) useApp.setState({ turnChoices: carried })
+        }
         set((s) =>
           s.open?.id === open.id
             ? {

@@ -33,6 +33,8 @@ import { focusComposer } from '@/lib/composerFocus'
 import { omit } from '@/lib/utils'
 import { gitAction, gitActionPrompt, type GitActionId } from '@/lib/gitActions'
 import { changedPathsFromParts } from '@/lib/turnChanges'
+import { carryDisclosure, type TurnChoice } from '@/lib/turnFold'
+import { isDelivery } from '@shared/delivery'
 import { basename } from '@/lib/format'
 import {
   adoptDisk,
@@ -921,8 +923,12 @@ interface AppState {
    * coming back — which is the behaviour a reader who opened a turn to study it
    * expects.
    */
-  expandedTurns: ReadonlySet<string>
-  toggleTurnExpanded(userMessageId: string): void
+  /**
+   * Turns the reader flipped from their default: a closed, settled turn
+   * folds by default and an interrupted one stays open (`renderMessages`).
+   */
+  turnChoices: ReadonlyMap<string, TurnChoice>
+  chooseTurn(userMessageId: string, choice: TurnChoice): void
 
   // ---- Updates ----
   /** A release newer than this build, or null. Set by the periodic check. */
@@ -2433,7 +2439,7 @@ export const useApp = create<AppState>((set, get) => ({
   setRailHidden(hidden) {
     set({ railHidden: hidden })
   },
-  expandedTurns: new Set<string>(),
+  turnChoices: new Map<string, TurnChoice>(),
 
   update: null,
   updateDismissed: localStorage.getItem('updateDismissed'),
@@ -2466,13 +2472,11 @@ export const useApp = create<AppState>((set, get) => ({
     })
   },
 
-  toggleTurnExpanded(userMessageId) {
-    set((s) => {
-      const next = new Set(s.expandedTurns)
-      if (!next.delete(userMessageId)) next.add(userMessageId)
-      return { expandedTurns: next }
-    })
+  chooseTurn(userMessageId, choice) {
+    // A new Map per choice: `sameHistory` compares it by identity.
+    set((s) => ({ turnChoices: new Map(s.turnChoices).set(userMessageId, choice) }))
   },
+
 
   // ---- Terminal ----
 
@@ -4837,17 +4841,11 @@ export const useApp = create<AppState>((set, get) => ({
             messages: [...older.messages, ...now.messages],
             hiddenBefore: older.from
           }) ?? {}
-        // A window that opened mid-turn drew that turn's work unfolded — it had
-        // no prompt to fold under. The prepend supplies the prompt, and a
-        // settled turn would then fold away the very rows the reader is
-        // scrolling through (measured: a 1,079px jump under the cursor). It
-        // was open on screen, so it stays open.
-        if (now.messages[0] && now.messages[0].role !== 'user') {
-          const prompt = older.messages.findLast((m) => m.role === 'user')
-          if (prompt && !s.expandedTurns.has(prompt.id)) {
-            return { ...patch, expandedTurns: new Set(s.expandedTurns).add(prompt.id) }
-          }
-        }
+        // A window that opened mid-turn: the prepend merges its leading piece
+        // into the turn it belongs to, and how the reader saw it carries over
+        // (`carryDisclosure`).
+        const carried = carryDisclosure(older.messages, now.messages, s.turnChoices, isDelivery)
+        if (carried) return { ...patch, turnChoices: carried }
         return patch
       })
     } finally {
