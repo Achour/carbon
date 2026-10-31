@@ -749,11 +749,11 @@ names live in `docs/canvas.md`.
 ### Normalizing the three backends
 
 Keep provider behavior behind `AgentSession` and normalize it into `ChatEvent`.
-**A stopped turn writes no closing `turn` row, on every provider**: the
-transcript reads a stretch with no close as cut off (Stop, or a steered "Send
-now") and keeps it open, where a row would fold the turn the reader was
-watching (`foldState`, `docs/transcript.md`). A turn that ends with another
-already queued behind it reports no idle in between. Claude has native per-tool permissions and `ExitPlanMode`; Codex maps permission choices to sandbox policies and synthesizes the same plan-review event so the renderer remains provider-neutral; Grok bridges ACP `session/request_permission` to the same event and synthesizes the plan review from a tool call (see Grok Build above).
+**A stopped turn writes no closing `turn` row, on every provider**: a close is
+what a woken turn resumes folding from (`resumeFrom`, `docs/transcript.md`), and
+one written for a turn cut off by a steered "Send now" landed under the new
+message. A turn that ends with another already queued behind it reports no idle
+in between. Claude has native per-tool permissions and `ExitPlanMode`; Codex maps permission choices to sandbox policies and synthesizes the same plan-review event so the renderer remains provider-neutral; Grok bridges ACP `session/request_permission` to the same event and synthesizes the plan review from a tool call (see Grok Build above).
 
 **Codex's sandbox is spelled twice, and a turn takes the newer spelling.** Thread
 start and resume still accept the SDK's kebab-case `sandbox`, while an App

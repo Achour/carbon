@@ -298,8 +298,9 @@ function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
   let state: FoldState | null = null
   /**
    * The stretch being walked (`TurnFold.stretchOf`), whether it folds, and
-   * where its answer starts. Each stretch folds on its own: one cut off by a
-   * Stop or a steer stays open while a closed one beside it folds.
+   * where its answer starts. Each stretch folds on its own, to its own answer
+   * (`foldState`); while a continuation runs, the ones after its resume point
+   * stay open.
    */
   let stretchAt = -1
   let stretchFolded = false
@@ -373,7 +374,41 @@ function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
     )
   }
 
+  /**
+   * Flush the run in hand. A folded stretch's visible part can start inside a
+   * run — the call a cut-off stretch stopped on, or the calls after its last
+   * prose — so the run splits there: what is before it folds, the rest draws.
+   */
   const flush = (): void => {
+    if (run.length === 0) return
+    const at =
+      stretchFolded && !reachedAnswer && stretchStart
+        ? run.findIndex((m) => m.id === stretchStart!.messageId)
+        : -1
+    if (at < 0) {
+      flushRun()
+      return
+    }
+    const boundary = run[at]
+    const rest = run.slice(at + 1)
+    if (at > 0) {
+      run = run.slice(0, at)
+      flushRun()
+    }
+    if (stretchStart!.partIndex > 0) {
+      // The stretch starts partway into a message of several calls (Codex
+      // batches them): that message draws from its start part on, through
+      // `foldOf`, and what follows it in the run draws in full.
+      out.push(renderAssistant(boundary))
+      run = rest
+    } else {
+      run = [boundary, ...rest]
+      reachedAnswer = true
+    }
+    flushRun()
+  }
+
+  const flushRun = (): void => {
     // Called at every non-groupable message, so most calls have nothing in hand.
     if (run.length === 0) return
     // **Counted in tool calls, not in messages, because `liveRun` counts calls.**

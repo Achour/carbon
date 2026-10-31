@@ -94,15 +94,13 @@ export interface TurnFold {
   /**
    * The turn cut where it stopped and started again: at each close (a `turn`
    * or `error` row) and at each delegate report that joined it. **The fold is
-   * decided per stretch**: one that closed folds its work and keeps its own
-   * answer; one that did not — cut off by Stop, or by a queued message sent
-   * with "Send now", which interrupts — stays open.
+   * decided per stretch**: each folds its work and keeps its own answer — what
+   * it last said and the calls after, or with nothing said the call it was on,
+   * which for one cut off by a steer is where the reader interrupted it.
    *
-   * One flag for the whole turn got every mixed case wrong: a full diagnosis,
+   * One answer for the whole turn got the mixed cases wrong: a full diagnosis,
    * a close, a background wake and a two-line follow-up folded to the two
-   * lines; a continuation the reader steered away from folded because an
-   * *earlier* stretch had closed; a diagnosis before a report that arrived
-   * after a Stop folded with no close to its name.
+   * lines; a diagnosis before a report folded away with the work after it.
    */
   stretches: Stretch[]
   /** Which stretch each message after the prompt belongs to, by index. */
@@ -272,7 +270,10 @@ function answerBoundary(turn: TurnMessage[]): {
       // the fold stops at the turn's last prose instead, and the few calls
       // after it stay on screen with it.
       const last = lastProse(turn, mi, pi)
-      return { ...(last ?? { answerFrom: null, answer: '' }), collapsible: true, workEvents }
+      // With no prose at all, it keeps the call it ended on — for a turn cut
+      // off by a steer, the one it was in the middle of — so a folded stretch
+      // still shows where it stopped. Nothing to copy, though.
+      return { ...(last ?? { answerFrom: { messageId: message.id, partIndex: pi }, answer: '' }), collapsible: true, workEvents }
     }
   }
   // A turn that never did anything but talk. The boundary still points at its
@@ -532,7 +533,7 @@ export function foldTurns(messages: ChatMessage[], options: FoldOptions = {}): M
         stretches,
         stretchOf,
         // What the folded turn shows is what "copy the answer" hands over.
-        answer: answered.map((stretch) => stretch.answer).join('\n\n'),
+        answer: answered.map((stretch) => stretch.answer).filter(Boolean).join('\n\n'),
         answerFrom: answered[answered.length - 1]?.answerFrom ?? null,
         collapsible: stretches.some((stretch) => stretch.collapsible),
         workEvents: answerBoundary(turn).workEvents,
@@ -620,8 +621,11 @@ export type TurnChoice = 'open' | 'folded'
  * The fold for one turn, given whether it is live and what the reader chose
  * (`turnChoices`), if anything.
  *
- * - **Settled**, untouched: each stretch that closed folds to its answer; one
- *   cut off by Stop or a steered message stays open.
+ * - **Settled**, untouched: every stretch folds to its answer — what it last
+ *   said, and the few calls after; or, with nothing said, the call it was on.
+ *   That includes one cut off by Stop or a steered message: folding it to the
+ *   header alone lost the turn the reader was watching, and leaving it open
+ *   kept a wall of work above the message they had just sent.
  * - **Live** (the running turn, or one whose work outlives it) never folds —
  *   unless it is a *continuation* of a close that had folded (`resumeFrom`):
  *   stretches up to that close fold as settled, and everything after is open.
@@ -637,8 +641,10 @@ export function foldState(fold: TurnFold, live: boolean, choice?: TurnChoice): F
   const stretches = fold.stretches.map((stretch, i) => ({
     folded:
       canFold &&
-      (choice === 'folded' ||
-        (choice !== 'open' && stretch.closed && (resumeAt === undefined || i <= resumeAt))),
+      choice !== 'open' &&
+      // While a continuation runs, what came after the close it woke from is
+      // still being written and stays open.
+      (choice === 'folded' || resumeAt === undefined || i <= resumeAt),
     start: stretch.answerFrom
   }))
   return {

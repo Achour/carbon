@@ -924,8 +924,8 @@ interface AppState {
    * expects.
    */
   /**
-   * Turns the reader flipped from their default: a closed, settled turn
-   * folds by default and an interrupted one stays open (`renderMessages`).
+   * What the reader chose with a turn's header — everything open, or
+   * everything folded. A turn with no choice takes its default (`foldState`).
    */
   turnChoices: ReadonlyMap<string, TurnChoice>
   chooseTurn(userMessageId: string, choice: TurnChoice): void

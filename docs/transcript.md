@@ -910,8 +910,10 @@ its anchor: a `TasksCard`, iff the message it hangs off is omitted entirely.
 A turn that ends on work after saying something keeps its last prose and the
 calls after it (`lastProse`): its last step is often a status check or a final
 command, and folding to the header alone hid every word it said — across two
-weeks of real chats that tail was 1–4 calls every time. Only a turn with no
-prose at all folds to the header alone.
+weeks of real chats that tail was 1–4 calls every time. A stretch with no
+prose at all keeps the call it ended on, so a folded stretch always shows
+where it stopped — and when that call is one of several in a message, only it
+(the run splits at the part, not at the message).
 
 **A picture a call produced is a result, not work.** A screenshot arrives as
 `outputImages` on the call that took it, and `ToolOutputImages` already draws
@@ -952,8 +954,8 @@ always did), and an interim stats row is work and folds.
 **The fold is decided stretch by stretch** (`TurnFold.stretches`,
 `foldState`). A turn is cut where it stopped and started again — at each close
 (a `turn` or `error` row, which belongs to the stretch it ends) and at each
-delegate report that joined it (below). A stretch that closed folds its work
-and keeps its own answer; one that did not stays open. One flag for the whole
+delegate report that joined it (below). Each stretch folds its work and keeps
+its own answer. One flag for the whole
 turn got every mixed case wrong, each of them seen: a full two-bug diagnosis, a
 close, a background wake and a two-line "that failed fetch was my first
 attempt" folded down to the two lines, since only the last stretch's prose
@@ -964,14 +966,18 @@ its own trailing prose, so two closes in a row cannot copy one answer twice,
 and "copy the answer" hands over every stretch's answer in order — what the
 folded turn shows.
 
-**A turn cut off by Stop or a steer stays open.** "Send now" on a queued
-message interrupts the running turn, which therefore gets no result row and is
-usually mid-call — its answer boundary was null, and its fold was the header
-alone. The turn the reader was watching disappeared the instant they steered
-(all 150 such Claude turns in two weeks of one heavy user's chats). No provider
-writes a closing row for a stopped turn — Grok, Antigravity and Cursor were
-taught not to — so the stretch reads as cut off and stays open; the header
-still offers the fold, which then folds every stretch.
+**A turn cut off by Stop or a steer folds to where it stopped.** "Send now" on a
+queued message interrupts the running turn, which therefore gets no result row
+and is usually mid-call. Folded to the header alone — which is what an answer
+boundary of null meant — the turn the reader was watching disappeared the
+instant they steered (all 150 such Claude turns in two weeks of one heavy
+user's chats). Left open instead, the next fix, it kept a wall of work above
+the message they had just sent. It folds like any stretch now, to what it last
+said and the call it was on (`lastProse`), or with nothing said, to that call
+alone: the place it was cut off is exactly what a steer is a reply to. A
+stopped turn still writes no closing row on any provider — Grok, Antigravity
+and Cursor were taught not to — because a close is what a continuation resumes
+from (`resumeFrom`), and Grok's arrived *under* the steered message.
 
 **What the reader clicks is a choice, not a flip** (`turnChoices`, `TurnChoice`):
 the header folds every stretch or opens every one. It was a set of turns
@@ -1036,8 +1042,8 @@ level with `body`'s 14px by hand: a chrome *colour* on reading-size type. The
 choices live in the renderer store (`turnChoices`, a new `Map` per click so
 `sameHistory`'s identity compare fires) and rides `RenderCtx` —
 folding is decided while the node array is built, which a `useState` inside the
-header could never reach. The live turn is never folded; settled ones that
-closed start folded, and interrupted ones start open.
+header could never reach. The live turn is never folded; settled ones start
+folded, cut off or not.
 
 **The fold is animated with a view transition**, for the same reason it is
 omission: there is no element here whose height could animate. Chromium

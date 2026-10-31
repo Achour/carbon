@@ -77,11 +77,11 @@ test('a turn that ends on work keeps its last prose and the calls after it', () 
   assert.equal(folds.get('u1')?.collapsible, true)
 })
 
-test('a turn with no prose at all folds whole', () => {
-  const folds = foldTurns([user('u1'), assistant('a1', [tool('t0')]), assistant('a2', [tool('t1')])])
-  assert.equal(folds.get('u1')?.answerFrom, null)
-  assert.equal(folds.get('u1')?.answer, '')
-  assert.equal(folds.get('u1')?.collapsible, true)
+test('a turn with no prose at all keeps the call it ended on', () => {
+  const fold = foldTurns([user('u1'), assistant('a1', [tool('t0')]), assistant('a2', [tool('t1')])]).get('u1')!
+  assert.deepEqual(fold.answerFrom, { messageId: 'a2', partIndex: 0 })
+  assert.equal(fold.answer, '')
+  assert.equal(fold.collapsible, true)
 })
 
 test('a turn that only talked hides nothing', () => {
@@ -210,7 +210,7 @@ test('a turn closed once has no work events, whatever follows its last reply', (
   assert.deepEqual(folds.get('u1')?.answerFrom, { messageId: 'a1', partIndex: 1 })
 })
 
-test('an interim result followed only by work: the closed stretch keeps its line, the cut-off one stays open', () => {
+test('an interim result followed only by work: each stretch folds to what it last showed', () => {
   const fold = foldTurns([
     user('u1'),
     assistant('a1', [text('waiting on the agent')]),
@@ -219,13 +219,11 @@ test('an interim result followed only by work: the closed stretch keeps its line
   ]).get('u1')!
   assert.equal(fold.collapsible, true)
   assert.ok(fold.workEvents.has('e1'))
-  assert.deepEqual(
-    foldState(fold, false).stretches,
-    [
-      { folded: true, start: { messageId: 'a1', partIndex: 0 } },
-      { folded: false, start: null }
-    ]
-  )
+  assert.equal(fold.answer, 'waiting on the agent')
+  assert.deepEqual(foldState(fold, false).stretches, [
+    { folded: true, start: { messageId: 'a1', partIndex: 0 } },
+    { folded: true, start: { messageId: 'a2', partIndex: 0 } }
+  ])
 })
 
 test('a turn is closed once a result has landed, and not before', () => {
@@ -275,23 +273,23 @@ const close = (id: string, kind: 'turn' | 'error' = 'turn'): ChatMessage => ({
   ts: (clock += 1000)
 })
 
-test('a turn cut off by a steered message stays open; a closed one folds', () => {
-  // "Send now" interrupts: the turn gets no result row and is usually mid-call,
-  // so its fold was the header alone — the turn vanished as the reader sent.
+test('a turn cut off by a steered message folds to what it last said', () => {
+  // "Send now" interrupts: the turn gets no result row and is usually mid-call.
+  // Folded to the header alone, the turn vanished as the reader sent; left
+  // open, a wall of work sat above the message they had just sent. It keeps
+  // its last words and the call it was on.
   const folds = foldTurns([
     user('u1'),
-    assistant('a1', [text('looking'), tool('t1', { status: 'error' })]),
+    assistant('a1', [tool('t0'), text('looking'), tool('t1', { status: 'error' })]),
     user('u2'),
     assistant('a2', [text('ok')]),
     close('e2')
   ])
   const cut = folds.get('u1')!
   assert.equal(cut.closed, false)
-  assert.equal(foldState(cut, false).folded, false)
-  // …and the header still offers the fold, which the reader's choice applies.
-  assert.equal(foldState(cut, false).canFold, true)
-  assert.equal(foldState(cut, false, 'folded').folded, true)
-  // A turn that ended on its own folds unless opened.
+  assert.deepEqual(foldState(cut, false).stretches, [{ folded: true, start: { messageId: 'a1', partIndex: 1 } }])
+  assert.equal(foldState(cut, false, 'open').folded, false)
+  // A turn that ended on its own folds the same way.
   const done = folds.get('u2')!
   assert.equal(foldState(done, false).folded, true)
   assert.equal(foldState(done, false, 'open').folded, false)
@@ -330,10 +328,10 @@ test('a continuation keeps what folded before it woke and draws the rest open', 
     { folded: false, start: { messageId: 'a4', partIndex: 0 } }
   ])
   assert.equal(state.keepRow, 'e1')
-  // Settled with the continuation cut off (no close of its own), it stays open.
+  // Settled, the cut-off continuation folds too, to its last prose.
   assert.deepEqual(
     foldState(fold, false).stretches.map((stretch) => stretch.folded),
-    [true, false]
+    [true, true]
   )
 })
 
@@ -441,7 +439,7 @@ const report = (id: string): ChatMessage => ({
 })
 const isReport = (m: { text: string; label?: string }) => !!m.label && m.text.startsWith('Your agent ')
 
-test('a continuation the reader steered away from stays open, though an earlier stretch closed', () => {
+test('a continuation the reader steered away from folds to the call it was on', () => {
   const fold = foldTurns([
     user('u1'),
     assistant('a1', [text('answer')]),
@@ -449,7 +447,10 @@ test('a continuation the reader steered away from stays open, though an earlier 
     assistant('a2', [tool('t1'), tool('t2')]),
     user('u2')
   ]).get('u1')!
-  assert.deepEqual(foldState(fold, false).stretches.map((s) => s.folded), [true, false])
+  assert.deepEqual(foldState(fold, false).stretches, [
+    { folded: true, start: { messageId: 'a1', partIndex: 0 } },
+    { folded: true, start: { messageId: 'a2', partIndex: 1 } }
+  ])
 })
 
 test('a diagnosis before a report keeps showing when its stretch was stopped', () => {
@@ -463,8 +464,11 @@ test('a diagnosis before a report keeps showing when its stretch was stopped', (
     ],
     { continues: isReport }
   ).get('u1')!
-  // Stopped (no close): open. The report's stretch closed and folds whole.
-  assert.deepEqual(foldState(fold, false).stretches.map((s) => s.folded), [false, true])
+  // Both fold: the stopped stretch to its diagnosis, the report's to its last call.
+  assert.deepEqual(foldState(fold, false).stretches, [
+    { folded: true, start: { messageId: 'a1', partIndex: 1 } },
+    { folded: true, start: { messageId: 'a2', partIndex: 1 } }
+  ])
   assert.equal(fold.answer, 'the diagnosis')
 })
 
