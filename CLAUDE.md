@@ -477,7 +477,10 @@ it guards**, and put new reasoning in that file rather than back in this one.
   `sideColumns`, `focusedChatId`, `panelFloating`, the per-chat `agentsStore` /
   `taskListStore`) and the session details rail beside it (`SessionRail`,
   `quickRail`, `railHidden`), whose Agents and Background jobs cards stand in
-  for the header's robot menu and running pill while it is up (`SubagentRow`).
+  for the header's robot menu and running pill while it is up (`SubagentRow`),
+  and whose Chats card lists the thread's own chats, open and closed. The
+  header has no ⋯ menu: the branch's actions hang off the folder/branch pill
+  and the rail's branch row (`BranchMenu`).
   Agents open as a page in place of the columns, never as one (`agentView`,
   `openAgentView`, `AgentView`).
 - **`docs/drafts.md`** — text typed and not sent (`lib/drafts.ts`, `DraftItem`,

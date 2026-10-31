@@ -12,6 +12,7 @@ import {
   quietPillAction
 } from '@/lib/utils'
 import { WithTooltip } from '@/components/ui/tooltip'
+import { BranchMenu } from '@/components/BranchActions'
 
 /**
  * Repo · branch · working-tree changes — context for what you're about to send,
@@ -27,6 +28,7 @@ export function ContextStrip({
   project,
   onReviewChanges,
   onUpdateFromDefault,
+  threadId,
   className,
   quiet = false,
   children
@@ -53,6 +55,11 @@ export function ContextStrip({
    * it in, which is what turns the staleness marker from a label into a fix.
    */
   onUpdateFromDefault?: () => void
+  /**
+   * The open thread's own chat. Given, the folder/branch pill opens the
+   * branch's actions (`BranchMenu`) — merge, update, the worktree exits.
+   */
+  threadId?: string
   /** Replaces the spacing below it — the thread header draws it inline. */
   className?: string
   /**
@@ -75,29 +82,39 @@ export function ContextStrip({
   const base = git?.defaultBranch ?? 'main'
   const pill = quiet ? quietPill : contextPill
   const pillAction = quiet ? quietPillAction : contextPillAction
+  const where = missing ? `${cwd} — ${MISSING_TITLE.toLowerCase()}` : cwd
+  const whereContent = (
+    <>
+      <Folder className={cn('size-3 shrink-0', missing && 'text-muted-foreground/50')} />
+      <span className="max-w-44 truncate">{basename(project ?? cwd)}</span>
+      {git?.isRepo && shown && (
+        <>
+          <span className={quiet ? 'text-muted-foreground/40' : 'text-border'}>/</span>
+          <GitBranch className="size-3 shrink-0" />
+          <span className="max-w-32 truncate">{shown}</span>
+        </>
+      )}
+      {missing && (
+        <span className={missingTag} title={MISSING_TITLE}>
+          missing
+        </span>
+      )}
+    </>
+  )
   return (
     <div
       data-context-strip
       className={cn('flex items-center', quiet ? 'gap-1' : 'mb-2 gap-2', className)}
     >
-      <WithTooltip label={missing ? `${cwd} — ${MISSING_TITLE.toLowerCase()}` : cwd}>
-        <div className={pill}>
-          <Folder className={cn('size-3 shrink-0', missing && 'text-muted-foreground/50')} />
-          <span className="max-w-44 truncate">{basename(project ?? cwd)}</span>
-          {git?.isRepo && shown && (
-            <>
-              <span className={quiet ? 'text-muted-foreground/40' : 'text-border'}>/</span>
-              <GitBranch className="size-3 shrink-0" />
-              <span className="max-w-32 truncate">{shown}</span>
-            </>
-          )}
-          {missing && (
-            <span className={missingTag} title={MISSING_TITLE}>
-              missing
-            </span>
-          )}
-        </div>
-      </WithTooltip>
+      {threadId ? (
+        <BranchMenu chatId={threadId} tooltip={where} className={pill} actionClassName={pillAction}>
+          {whereContent}
+        </BranchMenu>
+      ) : (
+        <WithTooltip label={where}>
+          <div className={pill}>{whereContent}</div>
+        </WithTooltip>
+      )}
       {/* Drifting behind the default branch has no other symptom until it
           surfaces as a conflict, so it gets said out loud while it's cheap
           to fix. */}

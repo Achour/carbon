@@ -43,9 +43,8 @@ what "the active chat" means in the renderer.
   **same reference**, not merely the same length, since a fresh array with
   identical contents still re-renders that whole transcript on every delta.
   `messagesOf(s, id)` is the allocation-free read for a selector.
-- **The thread's own chat owns everything that acts on the thread**: the title,
-  the ⋯ menu (rename, delete, merge, the worktree exits) and its dialogs moved
-  out of `ChatView` into `ThreadView`'s header. So do the folder, branch and
+- **The thread's own chat owns everything that acts on the thread**: the title
+  moved out of `ChatView` into `ThreadView`'s header. So do the folder, branch and
   changes chips (`ContextStrip`) while several chats show: they describe the
   thread, which every column shares, and drawn in the first column alone they
   read as that chat's — the others looked like they had no branch and no
@@ -53,6 +52,17 @@ what "the active chat" means in the renderer.
   sit above that composer, as a chat's always have.
   With a single chat the header is the one the chat always had plus the `+`
   that adds a column, so a chat that never grew one looks as it did.
+- **The header has no ⋯ menu.** It held rename, delete, the branch's two
+  endings and the worktree's two exits, and cost the bar a button for actions
+  used rarely. Rename and delete were already on the sidebar row. The four
+  branch actions could not follow them there: they read the store's `git`
+  slice, which is the *open* thread's checkout, so a sidebar row would offer a
+  merge for any chat and run it against the wrong branch. They hang off what
+  names the branch instead (`BranchMenu`): the folder/branch pill of the strip,
+  wherever it is drawn, and the rail's branch row. Every state draws one of
+  the two — the strip steps aside only for the rail, or in the header for a
+  panel, and the rail toggle stays in the bar. Both are given the thread's own
+  chat, since a side chat carries no worktree.
 - **`listChats` is where side chats are hidden, and `listSideChats` is the
   second read that brings them back at launch.** `listChats` seeds the sidebar's
   order, the chat search, ⌘N's project list and Recents, and filtering at each of
@@ -200,7 +210,7 @@ draws no agent id.
   delegates, `useAgentRoster(…, parentId)`) and its own background-jobs pill,
   and the thread's bar keeps only what acts on the thread. They were one pair
   for the whole thread, in a bar that also held the title, the strip, the
-  layout switch, ＋, ⋯ and two toggles, and that bar ran out of room.
+  layout switch, ＋, a menu and two toggles, and that bar ran out of room.
 - **What an agent found reaches the chat that started it.** Its card in the
   transcript carries the first line of its report, or why it failed
   (`AgentRunView.result`, `firstLine`, the delegation's `result` / `error`), so
@@ -214,7 +224,7 @@ draws no agent id.
   them: four columns all reading "New chat" were four of the same.
 - **A floating panel never covers the thread's controls.** It lies over the
   thread's right edge, title bar included, so the bar reserves its width
-  (`useFloatingPanelInset`) and keeps ＋, ⋯, the layout switch and the rail
+  (`useFloatingPanelInset`) and keeps ＋, the layout switch and the rail
   toggle beside it rather than under it; the folder/branch strip gives up its
   place while the panel is open, as the rail carries the same facts.
 
@@ -228,7 +238,7 @@ added, closed, reopened and restored at launch by paths that know nothing about
 order — as a hint, a new column lands at the end, a closed one drops out and a
 reopened one comes back where it was, with none of those paths keeping a second
 list in step. The thread's own chat can be dragged anywhere too: position is
-presentation, while which chat *is* the thread (its title, its ⋯ menu, the one
+presentation, while which chat *is* the thread (its title, its branch, the one
 column with no ✕, the store's singular transcript slice) stays data.
 
 **A sidebar chat dragged onto the thread on screen joins it as a column**
@@ -416,8 +426,9 @@ reserve, and composer chips that never overlap — and shoots the five states.
 
 The top bar's dashboard button pins a column of cards beside the thread:
 **Environment** (project, branch with its ahead/behind, this Mac or a
-worktree), **Context**, **Changes** (opens the review, with the source-control
-button under it), **Agents**, **Background jobs** and **Open in panel**. It
+worktree; the branch row opens `BranchMenu`), **Context**, **Changes** (opens
+the review, with the source-control button under it), **Chats**, **Agents**,
+**Background jobs** and **Open in panel**. It
 follows the focused column. The pin is `quickRail` in `localStorage`, off by
 default.
 
@@ -434,6 +445,17 @@ default.
   Settled agents past the newest `SETTLED_ROWS` fold behind "Show N earlier";
   a running one is always listed.
 
+- **The Chats card is the chats you opened, apart from the agents.** The
+  thread's own chat and its side chats, open columns first in column order (a
+  click focuses one, ✕ closes it), then the closed ones newest first (a click
+  reopens, the bin asks to delete), with ＋ in its title. Delegates are side
+  chats too, but an agent started them, so they stay in the Agents card
+  (`isClosedSideChat` and the open rows both drop a `delegation`). Before it, a
+  closed side chat's only way back was ＋'s popover in the header, which stays.
+  It draws nothing until the thread has more than its own chat, and it reads
+  `chats` and the columns by identity, derived in a memo, with each row's
+  `ChatMark` reading its own status, so a streamed delta rebuilds nothing.
+
 - **It floats rather than squeezing.** With the panel open, several chats on
   screen, or less than `NARROW_PX` beside it, the chat has no width to give, so
   the rail lays over the chat's top-right edge and is only as tall as its
@@ -444,7 +466,11 @@ default.
 - **Floating, it dismisses like an overlay.** A pointer or focus anywhere
   outside it (the composer, the transcript), or Escape, sets `railHidden`. The
   top-bar button is exempt (`data-rail-toggle`), or its own click would dismiss
-  the rail it is toggling. `railHidden` is not the pin and is not persisted.
+  the rail it is toggling. Nothing dismisses it while a menu or dialog is
+  open: the branch menu and its dialogs are portaled out of the rail but
+  opened from it, and the dialog's focus guards sit beside its popup rather
+  than inside it, so a click — or a Tab past the last button — would unmount
+  the dialog under the user. Escape closes the overlay first, then the rail. `railHidden` is not the pin and is not persisted.
   Opening the panel sets it, so the cards never land over the chat by
   themselves — the top-bar button brings them up over the panel on demand —
   and closing the panel clears it, so the rail is back beside the chat.

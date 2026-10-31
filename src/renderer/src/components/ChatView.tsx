@@ -104,6 +104,9 @@ export const ChatView = React.memo(function ChatView({
   // While the session rail is up it carries the same three facts in its
   // Environment and Changes cards, so the strip steps aside rather than say
   // them twice.
+  // The branch's actions act on the thread, whose own chat carries the
+  // worktree — this one, unless it is a column expanded in it.
+  const threadId = chat.sideOf ?? chat.id
   const stripHere = useApp(
     (s) =>
       !severalChatsShown(s) &&
@@ -709,6 +712,7 @@ export const ChatView = React.memo(function ChatView({
               git={git}
               onReviewChanges={() => void reviewChanges()}
               onUpdateFromDefault={() => void runGitAction('update-from-main')}
+              threadId={threadId}
             />
           </div>
         </>
@@ -973,6 +977,7 @@ export const ChatView = React.memo(function ChatView({
                   git={git}
                   onReviewChanges={() => void reviewChanges()}
                   onUpdateFromDefault={() => void runGitAction('update-from-main')}
+                  threadId={threadId}
                 />
               )}
             </div>

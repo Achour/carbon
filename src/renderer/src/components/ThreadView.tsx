@@ -1,26 +1,18 @@
 import * as React from 'react'
 import { DotSpinner } from '@/components/ui/dot-spinner'
 import {
-  ArrowLeftRight,
   ArrowUpLeft,
   Bot,
   ChevronRight,
   Columns3,
-  GitMerge,
   LayoutDashboard,
   LayoutGrid,
   Maximize2,
-  MessageCircleQuestion,
   Minimize2,
-  MoreHorizontal,
   PanelLeft,
   PanelRight,
-  Pencil,
   PanelLeftOpen,
   Plus,
-  RefreshCw,
-  Trash,
-  Trash2,
   X
 } from 'lucide-react'
 import type { ChatMeta } from '@shared/types'
@@ -35,7 +27,6 @@ import { useAgents } from '@/agentsStore'
 import { AgentStreamBody } from '@/components/AgentStream'
 import { TranscriptChat, useAgentPart, useElapsed } from '@/components/messages/AgentRows'
 import { cn } from '@/lib/utils'
-import { chatActivityKind } from '@/lib/chatActivity'
 import { focusComposer } from '@/lib/composerFocus'
 import { orderByHint } from '@/lib/tabOrder'
 import { CHAT_BLEED } from '@/lib/chatColumn'
@@ -59,11 +50,11 @@ import { ChatView } from '@/components/ChatView'
 import { BackgroundJobs } from '@/components/BackgroundJobs'
 import { AgentRoster, rosterViewId, useAgentRoster } from '@/components/SubagentRow'
 import { ContextStrip } from '@/components/ContextStrip'
+import { ChatMark, threadChatTitle } from '@/components/ChatMark'
 import { ProviderMark } from '@/components/ui/provider-mark'
 import { Button } from '@/components/ui/button'
 import { WithTooltip } from '@/components/ui/tooltip'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import {
   ContextMenu,
   ContextMenuContent,
@@ -71,28 +62,14 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger
 } from '@/components/ui/context-menu'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger
-} from '@/components/ui/dropdown-menu'
-import { Input } from '@/components/ui/input'
 import { SessionRail } from '@/components/SessionRail'
-import {
-  MergeIntoMainDialog,
-  WorktreeFinishDialog,
-  WorktreeHandoffDialog
-} from '@/components/BranchActions'
 
 /**
  * A thread: one chat and the side chats opened beside it, drawn as up to
  * `MAX_THREAD_CHATS` columns that share the right panel.
  *
  * The thread's own chat is the one the sidebar shows, and it owns everything
- * that acts on the thread as a whole — its title, its ⋯ menu, its worktree and
- * branch. Each column is a full `ChatView`: its own transcript, prompts and
+ * that acts on the thread as a whole — its title, its worktree and branch. Each column is a full `ChatView`: its own transcript, prompts and
  * composer, on whatever model was picked for it.
  *
  * With one chat nothing here draws beyond the header, so a chat that never grew
@@ -365,6 +342,7 @@ function ThreadHeader({ chat, ids }: { chat: ChatMeta; ids: readonly string[] })
           cwd={chat.cwd}
           project={projectRoot(chat)}
           git={git}
+          threadId={chat.id}
           onReviewChanges={() => void reviewChanges()}
           onUpdateFromDefault={() => void runGitAction('update-from-main')}
           className="no-drag mb-0 shrink-0"
@@ -401,7 +379,6 @@ function ThreadHeader({ chat, ids }: { chat: ChatMeta; ids: readonly string[] })
       )}
       {!railShown && !severalChats && <SubagentsMenu chatIds={chatIds} threadId={chat.id} />}
       <AddChatControl count={ids.length} threadId={chat.id} />
-      <ThreadMenu chat={chat} />
       <WithTooltip label={railShown ? 'Hide session details' : 'Show session details'}>
         <Button
           size="icon-sm"
@@ -876,51 +853,6 @@ function AgentPane({ id }: { id: string }): React.JSX.Element | null {
 }
 
 /**
- * What a chat is doing, as the header draws it: waiting on you, working, a
- * background agent, finished while you were in another column — or nothing.
- * A primitive, from a non-allocating read, because it runs for every column on
- * every streamed delta.
- */
-function useChatMark(id: string): 'needs-input' | 'working' | 'background' | 'unread' | null {
-  return useApp((s) => {
-    const kind = chatActivityKind(s.statuses[id], s.backgroundJobs[id], s.permissions[id])
-    if (kind !== 'idle') return kind
-    return s.unreadChats[id] ? 'unread' : null
-  })
-}
-
-/**
- * A chat's status, drawn with the sidebar row's icons. `labelled` adds the words
- * a column header has room for.
- */
-function ChatMark({ id, labelled = false }: { id: string; labelled?: boolean }): React.JSX.Element | null {
-  const mark = useChatMark(id)
-  if (mark === 'needs-input') {
-    return (
-      <span className="flex shrink-0 items-center gap-1 text-[11px] text-warning" aria-label="Needs your input">
-        <MessageCircleQuestion className="size-3" />
-        {labelled && 'Needs input'}
-      </span>
-    )
-  }
-  if (mark === 'background') {
-    return <Bot aria-label="Background jobs running" className="size-3 shrink-0 animate-pulse-soft text-primary" />
-  }
-  if (mark === 'working') {
-    return <DotSpinner aria-label="Working" className="size-3 shrink-0 text-primary" />
-  }
-  if (mark === 'unread') {
-    return (
-      <span className="flex shrink-0 items-center gap-1 text-[11px] text-success" aria-label="Finished">
-        <span className="size-1.5 rounded-full bg-success" />
-        {labelled && 'Done'}
-      </span>
-    )
-  }
-  return null
-}
-
-/**
  * `+`: a new chat in this thread, or one closed earlier back into it.
  *
  * A plain button until a side chat has been closed — the common case needs no
@@ -1056,157 +988,6 @@ function ClosedSideChats({
           </div>
         ))}
       </div>
-    </>
-  )
-}
-
-/**
- * The thread chat's ⋯ menu and the dialogs it opens. Everything here acts on the
- * thread as a whole — its name in the sidebar, its branch, its worktree, and
- * deleting it (which takes its side chats with it).
- */
-function ThreadMenu({ chat }: { chat: ChatMeta }): React.JSX.Element {
-  const git = useApp((s) => s.git)
-  const busy = useApp((s) => (s.statuses[chat.id] ?? 'idle') !== 'idle')
-  const runGitAction = useApp((s) => s.runGitAction)
-  const renameChat = useApp((s) => s.renameChat)
-  const deleteChat = useApp((s) => s.deleteChat)
-  const [renameOpen, setRenameOpen] = React.useState(false)
-  // Whether the delete takes other chats with it, read when the dialog opens
-  // rather than subscribed: it only changes the dialog's wording.
-  const [deleteOpen, setDeleteOpen] = React.useState<{ withSideChats: boolean } | null>(null)
-  const [renameValue, setRenameValue] = React.useState('')
-  const [handoffOpen, setHandoffOpen] = React.useState(false)
-  const [mergeOpen, setMergeOpen] = React.useState(false)
-  const [finishOpen, setFinishOpen] = React.useState(false)
-
-  // Merging is only ever offered off the default branch — on it there is
-  // nothing to land, and the ladder's job there is to branch off instead.
-  // `git.defaultBranch` is the same field the ↓n chip and the merge dialog
-  // read, so the label always names the branch the operation actually targets.
-  const defaultBranch = git?.defaultBranch ?? 'main'
-  const canMerge = !!git?.defaultBranch && git.branch !== git.defaultBranch
-
-  return (
-    <>
-      <DropdownMenu>
-        <DropdownMenuTrigger
-          render={
-            <Button size="icon-sm" variant="ghost" className="no-drag" aria-label="Chat options">
-              <MoreHorizontal />
-            </Button>
-          }
-        />
-        <DropdownMenuContent align="end">
-          <DropdownMenuItem
-            onClick={() => {
-              setRenameValue(chat.title)
-              setRenameOpen(true)
-            }}
-          >
-            <Pencil /> Rename
-          </DropdownMenuItem>
-          {/* How the branch ends: keep it current, land it here, or — in a
-              worktree — move out of it or retire it once the work landed
-              through a PR. Merging rewrites the chat's own directory when
-              there's no worktree, so that one waits for idle. */}
-          {(chat.worktree || canMerge) && <DropdownMenuSeparator />}
-          {canMerge && (
-            <>
-              <DropdownMenuItem onClick={() => void runGitAction('update-from-main')}>
-                <RefreshCw /> Update from {defaultBranch}
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setMergeOpen(true)} disabled={busy}>
-                <GitMerge /> Merge into {defaultBranch}
-              </DropdownMenuItem>
-            </>
-          )}
-          {chat.worktree && (
-            <>
-              <DropdownMenuItem onClick={() => setHandoffOpen(true)}>
-                <ArrowLeftRight /> Continue in local checkout
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setFinishOpen(true)}>
-                <Trash /> Remove worktree
-              </DropdownMenuItem>
-            </>
-          )}
-          <DropdownMenuSeparator />
-          <DropdownMenuItem
-            destructive
-            onClick={() =>
-              setDeleteOpen({
-                withSideChats: useApp.getState().chats.some((c) => c.sideOf === chat.id)
-              })
-            }
-          >
-            <Trash2 /> Delete chat
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-
-      <Dialog open={renameOpen} onOpenChange={setRenameOpen}>
-        <DialogContent>
-          <DialogTitle>Rename chat</DialogTitle>
-          <form
-            className="mt-3 space-y-3"
-            onSubmit={(e) => {
-              e.preventDefault()
-              if (renameValue.trim()) {
-                void renameChat(chat.id, renameValue.trim())
-                setRenameOpen(false)
-              }
-            }}
-          >
-            <Input
-              value={renameValue}
-              onChange={(e) => setRenameValue(e.target.value)}
-              autoFocus
-              placeholder="Chat title"
-            />
-            <div className="flex justify-end gap-2">
-              <Button variant="ghost" onClick={() => setRenameOpen(false)}>
-                Cancel
-              </Button>
-              <Button type="submit" disabled={!renameValue.trim()}>
-                Rename
-              </Button>
-            </div>
-          </form>
-        </DialogContent>
-      </Dialog>
-
-      {chat.worktree && (
-        <>
-          <WorktreeHandoffDialog chat={chat} open={handoffOpen} onOpenChange={setHandoffOpen} />
-          <WorktreeFinishDialog chat={chat} open={finishOpen} onOpenChange={setFinishOpen} />
-        </>
-      )}
-      {canMerge && <MergeIntoMainDialog chat={chat} open={mergeOpen} onOpenChange={setMergeOpen} />}
-
-      <Dialog open={deleteOpen !== null} onOpenChange={(o) => !o && setDeleteOpen(null)}>
-        <DialogContent>
-          <DialogTitle>Delete this chat?</DialogTitle>
-          <DialogDescription>
-            “{chat.title || 'New chat'}” and its history will be removed permanently
-            {deleteOpen?.withSideChats ? ', along with the other chats in its thread.' : '.'}
-          </DialogDescription>
-          <div className="mt-4 flex justify-end gap-2">
-            <Button variant="ghost" onClick={() => setDeleteOpen(null)}>
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={() => {
-                setDeleteOpen(null)
-                void deleteChat(chat.id)
-              }}
-            >
-              Delete
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
     </>
   )
 }
@@ -1400,11 +1181,7 @@ function ColumnHeader({
   // back in one click. A question in front of an
   // undoable act was a toll on every close.
   const close = (): void => void closeSideChat(chat.id)
-  // Until its first answer names it, a column is told apart by what runs in
-  // it: four columns all reading "New chat" were four of the same.
-  const title =
-    chat.title?.trim() ||
-    (chat.model ? modelDisplayName(chat.model, chat.provider) : PROVIDER_LABELS[chat.provider])
+  const title = threadChatTitle(chat)
   return (
     <>
       <ContextMenu>

@@ -2,8 +2,17 @@ import * as React from 'react'
 import { DotSpinner } from '@/components/ui/dot-spinner'
 import type { ChatMeta, OpResult } from '@shared/types'
 import { basename } from '@/lib/format'
-import { useApp } from '@/store'
+import { chatMeta, useApp } from '@/store'
+import { ArrowLeftRight, GitMerge, RefreshCw, Trash } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { WithTooltip } from '@/components/ui/tooltip'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger
+} from '@/components/ui/dropdown-menu'
 import {
   Dialog,
   DialogContent,
@@ -261,5 +270,110 @@ export function MergeIntoMainDialog({
         </>
       }
     />
+  )
+}
+
+/**
+ * How a branch ends, on the thing that names the branch: keep it current, land
+ * it in the default branch, or — in a worktree — move out of it or retire it
+ * once the work landed through a PR. It hangs off the folder/branch pill and the
+ * session rail's branch row, which is where these lived after the thread's ⋯
+ * menu went: rename and delete were already on the sidebar row, but these
+ * cannot go there, because they read the store's `git` slice — the *open*
+ * thread's checkout — and a sidebar row would offer them for any chat.
+ *
+ * `chatId` names the thread's own chat, which carries the worktree. With nothing to
+ * offer (not a repo, on the default branch outside a worktree) the trigger is
+ * drawn as plain content, so a pill that does nothing does not look clickable.
+ */
+export function BranchMenu({
+  chatId,
+  tooltip,
+  className,
+  actionClassName,
+  children
+}: {
+  /**
+   * The thread's own chat, resolved here rather than by the caller: a column
+   * selecting the thread's whole meta would re-render on every patch to it,
+   * strip shown or not.
+   */
+  chatId: string
+  tooltip: React.ReactNode
+  /** The trigger with nothing to offer. */
+  className?: string
+  /** The trigger as a menu button. */
+  actionClassName?: string
+  children: React.ReactNode
+}): React.JSX.Element {
+  const chat = useApp((s) => chatMeta(s, chatId))
+  // Primitives, for `MergeIntoMainDialog`'s reason: `git` is replaced wholesale
+  // on every status refresh.
+  const branch = useApp((s) => (s.git?.isRepo ? s.git.branch : undefined))
+  const defaultBranch = useApp((s) => s.git?.defaultBranch)
+  const busy = useApp((s) => (s.statuses[chatId] ?? 'idle') !== 'idle')
+  const runGitAction = useApp((s) => s.runGitAction)
+  const [mergeOpen, setMergeOpen] = React.useState(false)
+  const [handoffOpen, setHandoffOpen] = React.useState(false)
+  const [finishOpen, setFinishOpen] = React.useState(false)
+  // Merging is only ever offered off the default branch — on it there is
+  // nothing to land. `defaultBranch` is the field the ↓n chip and the merge
+  // dialog read, so the label names the branch the operation targets.
+  const canMerge = !!branch && !!defaultBranch && branch !== defaultBranch
+  const target = defaultBranch ?? 'main'
+
+  if (!chat || (!canMerge && !chat.worktree)) {
+    return (
+      <WithTooltip label={tooltip}>
+        <div className={className}>{children}</div>
+      </WithTooltip>
+    )
+  }
+  return (
+    <>
+      <DropdownMenu>
+        <WithTooltip label={tooltip}>
+          <DropdownMenuTrigger
+            render={
+              <button type="button" className={actionClassName}>
+                {children}
+              </button>
+            }
+          />
+        </WithTooltip>
+        <DropdownMenuContent align="start">
+          {canMerge && (
+            <>
+              <DropdownMenuItem onClick={() => void runGitAction('update-from-main')}>
+                <RefreshCw /> Update from {target}
+              </DropdownMenuItem>
+              {/* Merging rewrites the chat's own directory when there's no
+                  worktree, so that one waits for idle. */}
+              <DropdownMenuItem onClick={() => setMergeOpen(true)} disabled={busy}>
+                <GitMerge /> Merge into {target}
+              </DropdownMenuItem>
+            </>
+          )}
+          {canMerge && chat.worktree && <DropdownMenuSeparator />}
+          {chat.worktree && (
+            <>
+              <DropdownMenuItem onClick={() => setHandoffOpen(true)}>
+                <ArrowLeftRight /> Continue in local checkout
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setFinishOpen(true)}>
+                <Trash /> Remove worktree
+              </DropdownMenuItem>
+            </>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
+      {canMerge && <MergeIntoMainDialog chat={chat} open={mergeOpen} onOpenChange={setMergeOpen} />}
+      {chat.worktree && (
+        <>
+          <WorktreeHandoffDialog chat={chat} open={handoffOpen} onOpenChange={setHandoffOpen} />
+          <WorktreeFinishDialog chat={chat} open={finishOpen} onOpenChange={setFinishOpen} />
+        </>
+      )}
+    </>
   )
 }
