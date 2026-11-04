@@ -1019,6 +1019,13 @@ function registerIpc(): void {
     }
   )
 
+  ipcMain.handle('chat:steer', (_e, chatId: string, text: string, attachments?: Attachment[]) =>
+    manager.steer(chatId, text, attachments)
+  )
+  ipcMain.handle('chat:cancel-steer', (_e, chatId: string, id: string) =>
+    manager.cancelSteer(chatId, id)
+  )
+
   ipcMain.handle('chat:review', (_e, chatId: string, target: CodexReviewTarget) =>
     manager.startReview(chatId, target)
   )
@@ -1038,7 +1045,9 @@ function registerIpc(): void {
   )
   ipcMain.handle('codex:goal:clear', (_e, chatId: string) => manager.codexGoalClear(chatId))
 
-  ipcMain.handle('chat:interrupt', (_e, chatId: string) => manager.interrupt(chatId))
+  ipcMain.handle('chat:interrupt', (_e, chatId: string, opts?: { dropSteers?: boolean }) =>
+    manager.interrupt(chatId, opts)
+  )
 
   ipcMain.handle('chat:stop-background-job', (_e, chatId: string, taskId: string) =>
     manager.stopBackgroundJob(chatId, taskId)

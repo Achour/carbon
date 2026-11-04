@@ -164,6 +164,10 @@ Path aliases: `@` → `src/renderer/src`, `@shared` → `src/shared` (renderer a
   once. The quadratic is read off the code rather than measured — no probe in
   `demo/e2e` spawns an agent — so unlike the transcript's own costs this one's
   size is unquantified.
+- **A message sent mid-turn steers it on Claude and Codex**: nothing is aborted, and
+  it lands in the transcript when the agent reads it, as a row above the composer
+  until then. See "Steering" in `docs/transcript.md`. The two bullets below are the
+  interrupting path, which remains for a send that cannot steer.
 - **Force-sending a queued message races the turn it interrupts.** The SDK
   writes the interrupt receipt *before* the aborted turn's result, so
   `interrupt()` resolves, the renderer's idle drain sends the queued prompt, a
@@ -408,7 +412,8 @@ it guards**, and put new reasoning in that file rather than back in this one.
   (`shared/agentRuns.ts`, the roster in `SubagentRow.tsx`), what the agent
   asks you (`PromptDock`, `CodexReviewDialog`), the turn's changed files
   (`TurnChangesCard`, `lib/turnChanges.ts`), side questions (`/btw`,
-  `shared/btw.ts`, `EventRow`), quoting a passage back at it
+  `shared/btw.ts`, `EventRow`), steering a running turn (`PendingSteers`,
+  `ChatManager.steer`), quoting a passage back at it
   (`QuoteBar`, `lib/quoteSelection.ts`), the turn rail with its bookmarks
   (`TurnRail`, `lib/turnRail.ts`, `ChatMeta.bookmarks`) and the turn fold
   (`lib/turnFold.ts`): decided stretch by stretch, a delegation round as one

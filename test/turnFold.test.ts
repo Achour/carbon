@@ -652,3 +652,21 @@ test('a report choice made on screen wins over an older choice on its turn', () 
   const cleared = carryDisclosure(older, current, new Map([['u1', 'folded']]), isReport)
   assert.deepEqual(cleared && [...cleared], [])
 })
+
+test('a stretch a steered message cut off worked until the agent read it', () => {
+  const opening = user('u1')
+  const call = assistant('a1', [tool('t1')])
+  const steered = { ...user('u2'), ts: call.ts + 60_000, joinedTurn: true } as ChatMessage
+  const reply = { ...assistant('a2', [text('done')]), ts: steered.ts + 3_000 }
+  const folds = foldTurns([opening, call, steered, reply])
+  assert.equal(folds.get('u1')!.endTs - folds.get('u1')!.startTs, call.ts + 60_000 - opening.ts)
+  assert.equal(folds.get('u2')!.endTs - folds.get('u2')!.startTs, 3_000)
+})
+
+test('a plain prompt does not stretch the turn before it', () => {
+  const opening = user('u1')
+  const call = assistant('a1', [tool('t1')])
+  const next = { ...user('u2'), ts: call.ts + 60_000 }
+  const folds = foldTurns([opening, call, next])
+  assert.equal(folds.get('u1')!.endTs, call.ts)
+})

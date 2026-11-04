@@ -81,6 +81,7 @@ import { canvasText } from '@shared/canvasText'
 import { parseBtw } from '@shared/btw'
 import type { PreviewViewport } from '@shared/previewDevices'
 import type {
+  PendingSteer,
   CanvasSummary,
   AppDefaults,
   DefaultsPatch,
@@ -693,6 +694,8 @@ interface AppState {
   permissions: Record<string, PermissionRequestPayload[]>
   /** Messages typed while a turn was running, sent when the chat goes idle. */
   queued: Record<string, QueuedMessage[]>
+  /** Sent into the running turn and not read yet. Main owns these (`steers`). */
+  steers: Record<string, PendingSteer[]>
   planPanel: PlanPanelState | null
   /**
    * Canvases for the active chat's *project*, newest first. Summaries only —
@@ -1494,7 +1497,8 @@ interface AppState {
     }
   ): Promise<void>
   /**
-   * Send to `chatId`, queueing if its turn is still running.
+   * Send to `chatId`: into its running turn if that can take it, otherwise queued
+   * behind it.
    *
    * The chat is named rather than resolved from `activeId`, here and on the
    * five actions below it. There are two conversations on screen now, and the
@@ -1505,11 +1509,15 @@ interface AppState {
     chatId: string,
     text: string,
     attachments?: Attachment[],
-    label?: string
+    label?: string,
+    /** `hold`: keep it for after the running turn rather than adding it to the turn. */
+    opts?: { hold?: boolean }
   ): Promise<void>
   /** Start Codex's native App Server reviewer; unlike messages, reviews are never queued. */
   startCodexReview(chatId: string, target: CodexReviewTarget): Promise<void>
-  /** Force a queued message through now: interrupt the running turn and send it. */
+  /** Withdraw a steer the agent has not read yet. */
+  cancelSteer(chatId: string, id: string): Promise<void>
+  /** Force a queued message through now: into the turn if it can take it, else interrupt it. */
   sendQueuedNow(chatId: string, id: string): Promise<void>
   removeQueued(chatId: string, id: string): void
   interrupt(chatId: string): Promise<void>
@@ -1900,6 +1908,7 @@ function forgetChat(
   s: Pick<
     AppState,
     | 'queued'
+    | 'steers'
     | 'statuses'
     | 'suggestions'
     | 'titling'
@@ -1917,6 +1926,7 @@ function forgetChat(
   return {
     unreadChats: omit(s.unreadChats, ids),
     queued: omit(s.queued, ids),
+    steers: omit(s.steers, ids),
     statuses: omit(s.statuses, ids),
     suggestions: omit(s.suggestions, ids),
     titling: omit(s.titling, ids),
@@ -2407,6 +2417,7 @@ export const useApp = create<AppState>((set, get) => ({
   providerInstall: {},
   permissions: {},
   queued: {},
+  steers: {},
   planPanel: null,
   canvases: [],
   canvasTabs: [],
@@ -5028,7 +5039,7 @@ export const useApp = create<AppState>((set, get) => ({
     else if (!setupCommand) set({ worktreeNotice: { chatId, kind: 'setup-missing' } })
   },
 
-  async sendMessage(id, text, attachments, label) {
+  async sendMessage(id, text, attachments, label, opts) {
     if (!id) return
     // Ahead of the queue: a side question is answered while the turn runs,
     // and main puts it in the transcript. An empty one, or one with files
@@ -5039,13 +5050,24 @@ export const useApp = create<AppState>((set, get) => ({
       void window.api.askBtw(id, question)
       return
     }
-    // Mid-turn sends wait in a queue until the chat goes idle.
-    if ((get().statuses[id] ?? 'idle') !== 'idle') {
-      const item: QueuedMessage = { id: crypto.randomUUID(), text, attachments, label }
-      set((s) => ({ queued: { ...s.queued, [id]: [...(s.queued[id] ?? []), item] } }))
-      return
+    const busy = (): boolean => (get().statuses[id] ?? 'idle') !== 'idle'
+    if (busy()) {
+      // Into the running turn where it can take it. An app-labelled action is a
+      // request of its own, and `hold` is the reader asking for the queue.
+      if (!opts?.hold && !label && (await window.api.steer(id, text, attachments))) return
+      // Refused because the turn just ended: the idle that would have drained a
+      // queue has already gone by, so this one would sit there for good.
+      if (busy()) {
+        const item: QueuedMessage = { id: crypto.randomUUID(), text, attachments, label }
+        set((s) => ({ queued: { ...s.queued, [id]: [...(s.queued[id] ?? []), item] } }))
+        return
+      }
     }
     await window.api.send(id, text, attachments, label)
+  },
+
+  async cancelSteer(chatId, id) {
+    await window.api.cancelSteer(chatId, id)
   },
 
   async startCodexReview(id, target) {
@@ -5078,22 +5100,23 @@ export const useApp = create<AppState>((set, get) => ({
   async sendQueuedNow(chatId, id) {
     const item = get().queued[chatId]?.find((q) => q.id === id)
     if (item == null) return
-    if ((get().statuses[chatId] ?? 'idle') !== 'idle') {
-      // Promote it to the front so the idle drain fires this one first, then
-      // interrupt the running turn so "idle" comes now instead of at turn end.
-      set((s) => ({
-        queued: {
-          ...s.queued,
-          [chatId]: [item, ...(s.queued[chatId] ?? []).filter((q) => q.id !== id)]
-        }
-      }))
-      await window.api.interrupt(chatId)
-      return
+    const busy = (): boolean => (get().statuses[chatId] ?? 'idle') !== 'idle'
+    // Out of the queue before anything is awaited, or the turn ending meanwhile
+    // would drain it, and this would then send it a second time.
+    get().removeQueued(chatId, id)
+    if (busy()) {
+      const steered =
+        !item.label && (await window.api.steer(chatId, item.text, item.attachments).catch(() => false))
+      if (steered) return
+      if (busy()) {
+        // To the front so the idle drain fires this one first, then interrupt the
+        // running turn so "idle" comes now instead of at turn end.
+        set((s) => ({ queued: { ...s.queued, [chatId]: [item, ...(s.queued[chatId] ?? [])] } }))
+        await window.api.interrupt(chatId)
+        return
+      }
     }
     // Already idle (e.g. the turn just ended) — send it straight away.
-    set((s) => ({
-      queued: { ...s.queued, [chatId]: (s.queued[chatId] ?? []).filter((q) => q.id !== id) }
-    }))
     await window.api.send(chatId, item.text, item.attachments, item.label)
   },
 
@@ -5707,6 +5730,11 @@ export const useApp = create<AppState>((set, get) => ({
         set((st) => ({
           backgroundJobs: { ...st.backgroundJobs, [ev.chatId]: ev.jobs }
         }))
+        break
+      }
+
+      case 'steers': {
+        set((st) => ({ steers: { ...st.steers, [ev.chatId]: ev.steers } }))
         break
       }
 

@@ -201,7 +201,7 @@ export interface CodexThreadLike {
   runStreamed(
     input: Input,
     options?: AppServerTurnOptions
-  ): Promise<{ events: AsyncGenerator<ThreadEvent> }>
+  ): Promise<{ events: AsyncGenerator<ThreadEvent>; turnId?: string }>
   run(
     input: Input,
     options?: TurnOptions
@@ -230,6 +230,8 @@ export interface CodexClientLike {
     options?: TurnOptions & { model?: string | null }
   ): Promise<{ events: AsyncGenerator<ThreadEvent> }>
   request?(method: string, params: unknown): Promise<unknown>
+  /** Add to a live turn. Rejects when that turn is no longer the active one. */
+  steerTurn?(threadId: string, turnId: string, input: Input, clientUserMessageId: string): Promise<void>
   dispose?(): void
 }
 
@@ -776,7 +778,7 @@ class CodexAppServerThread implements CodexThreadLike {
   async runStreamed(
     input: Input,
     turnOptions: AppServerTurnOptions = {}
-  ): Promise<{ events: AsyncGenerator<ThreadEvent> }> {
+  ): Promise<{ events: AsyncGenerator<ThreadEvent>; turnId: string }> {
     const threadId = await this.ensureThread()
     this.client.expectTurnStart(threadId)
     let response: { turn: NativeTurn }
@@ -824,6 +826,7 @@ class CodexAppServerThread implements CodexThreadLike {
     else turnOptions.signal?.addEventListener('abort', onAbort, { once: true })
     const events = run.queue.iterate()
     return {
+      turnId: response.turn.id,
       events: (async function* () {
         try {
           yield* events
@@ -939,6 +942,20 @@ export class CodexAppServerClient implements CodexClientLike {
     const run = new AppServerTurn(threadId, turnId, model)
     this.turns.set(key, run)
     return run
+  }
+
+  async steerTurn(
+    threadId: string,
+    turnId: string,
+    input: Input,
+    clientUserMessageId: string
+  ): Promise<void> {
+    await this.request('turn/steer', {
+      threadId,
+      expectedTurnId: turnId,
+      clientUserMessageId,
+      input: inputForAppServer(input)
+    })
   }
 
   expectTurnStart(threadId: string): void {

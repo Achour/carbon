@@ -966,9 +966,9 @@ its own trailing prose, so two closes in a row cannot copy one answer twice,
 and "copy the answer" hands over every stretch's answer in order — what the
 folded turn shows.
 
-**A turn cut off by Stop or a steer folds to where it stopped.** "Send now" on a
-queued message interrupts the running turn, which therefore gets no result row
-and is usually mid-call. Folded to the header alone — which is what an answer
+**A turn cut off by Stop or an interrupting send folds to where it stopped.**
+"Send now" on a provider that cannot be steered (see "Steering" below) interrupts
+the running turn, which therefore gets no result row and is usually mid-call. Folded to the header alone — which is what an answer
 boundary of null meant — the turn the reader was watching disappeared the
 instant they steered (all 150 such Claude turns in two weeks of one heavy
 user's chats). Left open instead, the next fix, it kept a wall of work above
@@ -1236,3 +1236,70 @@ real pointer events — because every question here is about the live selection:
 whether the bar waits for the drag, what `Selection.toString()` yields across a
 code block's hover controls (nothing: they are icon buttons with no text), and
 what lands in which composer.
+
+## Steering
+
+A message sent while a turn runs goes **into** that turn on Claude and Codex
+(`STEERABLE`, `Api.steer`, `ChatManager.steer`). Nothing is aborted: a running tool
+finishes and the agent reads the message at its next step. Grok, Antigravity and
+Cursor have no route Carbon uses, so they keep the queue and "Send now", which
+interrupts. Read off Claude Code 2.1.318 and codex-cli 0.166.0, each driven live.
+
+**The message lands where the agent read it, not where it was sent.** Until then it
+is a row above the composer (`PendingSteers`, the `steers` event). Written at send
+time, it would sit under a reply still streaming into the message above it, and the
+renderer takes the last message to be the live one. Landing at the next step needs
+none of that, because that moment is a boundary between messages.
+
+- **Claude says when.** A prompt pushed mid-turn goes on the same input stream as
+  any send, and the CLI reports it through `command_lifecycle` (`queued`, `started`,
+  `completed`, `cancelled`), which the SDK does not type. `started` is what lands it
+  (`landSteer`). Sent during a tool, it starts after that step's results and joins
+  the turn: the one `result` lists both prompts in `user_message_uuids`. Sent during
+  the turn's last words, it starts after that turn's `result`, as a turn of its own.
+  That `result` does not report idle (`awaitingSteer`), or the queue would drain into
+  a turn already starting. A CLI that sends no lifecycle is refused
+  (`namesCommands`), since nothing would ever clear its row.
+- **Codex does not.** `turn/steer` is accepted at once and its `userMessage` item is
+  echoed at once, while the tool is still running, so that echo says nothing about
+  when the model read it. The message lands at the next item that was not already
+  under way (`landSteers`), or at the turn's end. Sent while the model is writing,
+  it cuts that reply off and the model answers again with it in hand, so the partial
+  text stays above the message it was cut off by. `no active turn to steer` means
+  the turn ended first: the steer is refused and the message goes after the turn.
+
+**Main can refuse, and then the message queues** (`ChatManager.steer`, each session's
+`steer`): a permission prompt or plan review is up, a Stop is in flight, a switch to
+another provider is armed (it disposes this session), a slash command, or delegation
+outcomes still owed to the chat. A refusal can also mean the turn just ended, past
+the idle that drains a queue, so `sendMessage` checks the status again and sends
+outright rather than leave it queued for good.
+
+**Tab keeps it for after the turn** (`onHold`), since "change what you are doing"
+and "do this next" are different requests. "Send now" on a kept message steers it.
+
+**Stop on the desktop sends what is pending, which is how a message reaches an agent
+stuck in a long tool:** send it, then Stop. Claude's CLI keeps an unread prompt
+through an interrupt and runs it next, so `interrupt` reports no idle while one is
+held; its receipt (`still_queued`) names which, and any it leaves out is sent again.
+Codex cannot give one back, so together they become the next turn (`mergeSteers`),
+and the model may therefore have them twice. A steer is held from the moment it is
+sent, so a `turn/steer` still awaiting its answer goes with them; nothing lands it
+until Codex accepts (`unconfirmedSteers`), since a refusal means it was never sent.
+**Main does this rather than the renderer:** the desktop and every phone hear the
+same events, and each sending what came back meant a copy per client. The phone's Stop already meant "don't send what I queued", so it passes
+`dropSteers`: Claude's are withdrawn, Codex's land, since it has them regardless.
+Withdrawing one by hand is the × on its row, through `cancelAsyncMessage`, which the
+SDK also does not type; Codex's rows have none (`cancellable`).
+
+**A steered message joins a turn the provider counts as one** (`joinedTurn`), so
+there is one changes card and its Undo uses the opening prompt: the CLI answered
+"No file checkpoint found" for the steered message's own id. The fold still treats
+it as its own stretch, the place the reader spoke, and the turn rail gives it a
+tick. Editing one replays rather than forks: Codex's fork cuts at a turn boundary
+(`findTurnId`), which would lose the opening request, and Claude's anchor already
+declines a message that ends in a tool call.
+
+A session that ends with a steer unread writes it into the transcript, since it can
+no longer be delivered. When the process died, the error that follows asks for it to
+be sent again.

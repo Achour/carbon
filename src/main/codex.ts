@@ -84,6 +84,7 @@ import { TITLE_SYSTEM, buildTitlePrompt, cleanTitle, deriveTitle, firstUserText 
 import { PREVIEW_SESSION_RULES } from './previewTools.ts'
 import type { CarbonMcpProvider, CarbonMcpSession } from './carbonBridge.ts'
 import { projectRoot } from '../shared/types.ts'
+import { PendingSteers, mergeSteers, type HeldSteer } from './pendingSteers.ts'
 import { CANVAS_SESSION_RULES } from './canvasTools.ts'
 import { CHART_SESSION_RULES } from './chartTool.ts'
 import { DELEGATION_SESSION_RULES, canDelegate } from './delegation.ts'
@@ -542,6 +543,19 @@ export class CodexSession implements AgentSession {
   /** Autonomous root-thread turns waiting to enter the ordinary event reducer. */
   private nativeTurns: NativeTurnStream[] = []
   private nativeInterrupt: (() => void) | null = null
+  /** The turn `turn/steer` must name; null when there is none to add to. */
+  private activeTurnId: string | null = null
+  /** Sent into the running turn, waiting for the reply to it to begin (`steer`). */
+  private readonly steers = new PendingSteers(
+    (steers) => this.emit({ type: 'steers', chatId: this.chat.id, steers }),
+    false
+  )
+  /**
+   * Held, with `turn/steer` still awaiting its answer. A Stop takes these like any
+   * other, which is why they are held from the start, but nothing lands them until
+   * Codex accepts: a refusal means the message was never sent.
+   */
+  private readonly unconfirmedSteers = new Set<string>()
   // ---- Streaming text coalescing (mirrors ClaudeSession) ----
   // reasoning/agent_message items arrive as the full accumulated text on every
   // SDK update. Emit the part once, then only the appended suffix as coalesced
@@ -782,6 +796,80 @@ export class CodexSession implements AgentSession {
       this.pending.push(turn)
       void this.drain()
     })
+  }
+
+  /**
+   * Into the running turn with `turn/steer`. App Server takes it on the spot and
+   * the model reads it at its next request, so a message accepted here cannot be
+   * lost; it waits in `steers` only to land where the reply to it begins
+   * (`landSteers`).
+   *
+   * False covers everything that cannot take one, including the turn ending while
+   * the request was on its way (`no active turn to steer`): the message then goes
+   * out after the turn like any other. A review turn takes no input, a prompt must
+   * be answered first, and a Stop in flight is about to end the turn anyway.
+   */
+  async steer(text: string, attachments: Attachment[] = []): Promise<boolean> {
+    const turn = this.activeTurn
+    const turnId = this.activeTurnId
+    if (this.disposed || !turn || !turnId || !this.threadId || !this.codex.steerTurn) return false
+    if (turn.reviewTarget || this.interrupted || this.planReview) return false
+    if (this.lastEmittedStatus !== 'streaming' && this.lastEmittedStatus !== 'starting') return false
+    const id = randomUUID()
+    const { input, temps } = this.buildInput(text, attachments)
+    turn.temps.push(...temps)
+    this.unconfirmedSteers.add(id)
+    this.steers.add({ id, text, attachments })
+    try {
+      await this.codex.steerTurn(this.threadId, turnId, input, id)
+    } catch {
+      for (const f of temps) rmSync(f, { force: true })
+      this.unconfirmedSteers.delete(id)
+      // Gone already means a Stop took it, and it is on its way with what Stop sends.
+      return !this.steers.take(id)
+    }
+    this.unconfirmedSteers.delete(id)
+    // The turn finished before the answer got back here, so the model has it already
+    // and there is no reply left to wait for.
+    if (this.activeTurnId !== turnId) {
+      const steer = this.steers.take(id)
+      if (steer) this.pushSteer(steer)
+    }
+    return true
+  }
+
+  private pushSteer(steer: HeldSteer): void {
+    this.pushMessage({
+      id: steer.id,
+      role: 'user',
+      text: steer.text,
+      ts: Date.now(),
+      ...(steer.attachments.length ? { attachments: steer.attachments } : {}),
+      joinedTurn: true
+    })
+    this.emit({ type: 'meta', chatId: this.chat.id, patch: { updatedAt: this.chat.updatedAt } })
+  }
+
+  /**
+   * Steers go in the transcript as the next piece of the reply starts, the first
+   * moment the model can be answering them. Everything before that belongs above
+   * them, including a tool call that is still running.
+   *
+   * `splitReply` is false at the turn's end, where no more of the reply is coming
+   * and `current` is still owed the turn's changed files.
+   */
+  private landSteers(splitReply: boolean): void {
+    const steers = this.steers.takeExcept([...this.unconfirmedSteers])
+    if (!steers.length) return
+    if (splitReply) this.current = null
+    for (const steer of steers) this.pushSteer(steer)
+  }
+
+  async dropSteers(): Promise<void> {
+    // Codex has these, or is about to, and cannot give them back, so they are not
+    // dropped from the record: what was said stays on screen, and the Stop that
+    // follows still means nothing runs after it.
+    for (const steer of this.steers.takeAll()) this.pushSteer(steer)
   }
 
   private buildPendingTurn(
@@ -1178,6 +1266,7 @@ export class CodexSession implements AgentSession {
     const abort = new AbortController()
     this.abort = abort
     this.nativeInterrupt = nativeStream?.interrupt ?? null
+    this.activeTurnId = nativeStream?.turnId ?? null
     this.interrupted = false
     this.turnStart = Date.now()
     this.generatedBeforeTurn = this.threadGeneratedImages()
@@ -1248,6 +1337,8 @@ export class CodexSession implements AgentSession {
                   clientUserMessageId: turn.userMessageId
                 })
             const { events } = streamed
+            // A review answers with no turn id, and takes no steer either.
+            this.activeTurnId = (streamed as { turnId?: string }).turnId ?? null
             for await (const event of events) {
               if (this.disposed) break
               this.handleEvent(event, turn)
@@ -1299,6 +1390,10 @@ export class CodexSession implements AgentSession {
       // after the conversation process is no longer competing for cold-start
       // state. It deliberately sits outside the retry loop.
       void this.maybeGenerateTitle()
+      // Nothing more can reach this turn, so a steer arriving now is refused
+      // rather than held for a reply that is not coming.
+      this.activeTurnId = null
+      this.landSteers(false)
       // Event handlers called above populate `current`; TS cannot see mutation
       // through those method calls, so retain the runtime value explicitly.
       const completedMessage = this.current as AssistantMessage | null
@@ -1448,6 +1543,10 @@ export class CodexSession implements AgentSession {
         }
         break
       case 'item.started':
+        // A piece of the reply that was not under way before. An update to one
+        // that was, like a tool call still running, belongs above the steer.
+        if (!this.itemLoc.has(event.item.id)) this.landSteers(true)
+      // falls through
       case 'item.updated':
         this.sawItem = true
         void this.maybeGenerateTitle()
@@ -1463,11 +1562,13 @@ export class CodexSession implements AgentSession {
       case 'turn.completed':
         this.sawTerminal = true
         void this.maybeGenerateTitle()
+        this.landSteers(false)
         this.onTurnCompleted(event.usage, turn)
         break
       case 'turn.failed':
         this.sawTerminal = true
         void this.maybeGenerateTitle()
+        this.landSteers(false)
         if (!this.disposed && !this.interrupted) {
           this.pushError(event.error?.message ?? 'The turn failed.')
         }
@@ -2480,6 +2581,9 @@ export class CodexSession implements AgentSession {
 
   async interrupt(): Promise<void> {
     this.interrupted = true
+    // The turn these were waiting on is ending, and what was just said still has to
+    // reach the agent, so together they are the next turn.
+    const overtaken = mergeSteers(this.steers.takeAll())
     this.cleanupPendingTurns()
     this.abort?.abort()
     this.nativeInterrupt?.()
@@ -2490,6 +2594,7 @@ export class CodexSession implements AgentSession {
     // An active run still has terminalization/checkpoint cleanup to finish. Let
     // drain() publish idle afterward so the renderer cannot send into that gap.
     if (!this.running) this.setStatus('idle')
+    if (overtaken) this.send(overtaken.text, overtaken.attachments)
   }
 
   async setModel(model?: string): Promise<void> {
@@ -2789,10 +2894,13 @@ export class CodexSession implements AgentSession {
         // "demonstrably older" rather than "older by any amount"; being wrong in
         // this direction only costs another page.
         if (turn.startedAt && turn.startedAt * 1000 < sentAt - TURN_CLOCK_SLACK_MS) return null
-        const owns = (turn.items ?? []).some(
-          (item: RawTurnItem) => item?.type === 'userMessage' && item.clientId === messageId
-        )
-        if (owns && turn.id) return turn.id
+        const users = (turn.items ?? []).filter((item: RawTurnItem) => item?.type === 'userMessage')
+        // Only the message that opened a turn can be cut before. One steered into
+        // it sits mid-turn, and cutting at the turn would lose the opening request
+        // too, so that asks the caller to replay.
+        if (users.some((item: RawTurnItem) => item.clientId === messageId)) {
+          return users[0]?.clientId === messageId && turn.id ? turn.id : null
+        }
       }
       cursor = res?.nextCursor ?? null
     } while (cursor)
@@ -3016,6 +3124,8 @@ export class CodexSession implements AgentSession {
 
   dispose(): void {
     this.setTitlePending(false)
+    // Written down rather than dropped, ahead of `disposed`, which silences these.
+    for (const steer of this.steers.takeAll()) this.pushSteer(steer)
     this.clearUserQuestions(false)
     this.clearNativeApprovals(false)
     this.clearMcpElicitations(false)

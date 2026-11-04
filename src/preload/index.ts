@@ -107,6 +107,9 @@ const api: Api = {
       return ''
     }
   },
+  steer: (chatId: string, text: string, attachments?: Attachment[]) =>
+    invoke('chat:steer', chatId, text, attachments),
+  cancelSteer: (chatId: string, id: string) => invoke('chat:cancel-steer', chatId, id),
   interrupt: (chatId: string) => invoke('chat:interrupt', chatId),
   stopBackgroundJob: (chatId: string, taskId: string) =>
     invoke('chat:stop-background-job', chatId, taskId),

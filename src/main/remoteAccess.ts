@@ -20,6 +20,7 @@ import { projectRoot } from '@shared/types'
 import { git, gitDiff, gitStatus } from './git'
 import { promptLine } from '@shared/promptLine'
 import type {
+  PendingSteer,
   AppDefaults,
   BackgroundJob,
   ChatEvent,
@@ -125,6 +126,8 @@ export const REMOTE_CHANNELS = new Set([
   'chats:load-older',
   'chats:create',
   'chat:send',
+  'chat:steer',
+  'chat:cancel-steer',
   'chat:interrupt',
   'chat:respond-permission',
   // Stopping a dev server or shell the agent left running: the same kind of
@@ -271,6 +274,7 @@ export class RemoteAccess {
   private permissions = new Map<string, PermissionRequestPayload[]>()
   /** Each idle chat's suggested reply, so a phone that connects later still has it. */
   private suggestions = new Map<string, string>()
+  private steers = new Map<string, PendingSteer[]>()
   /** What each chat left running in the background, for the same reason. */
   private jobs = new Map<string, BackgroundJob[]>()
   private clients = new Map<string, EventClient>()
@@ -332,6 +336,9 @@ export class RemoteAccess {
     } else if (ev.type === 'suggestion') {
       if (ev.text) this.suggestions.set(ev.chatId, ev.text)
       else this.suggestions.delete(ev.chatId)
+    } else if (ev.type === 'steers') {
+      if (ev.steers.length) this.steers.set(ev.chatId, ev.steers)
+      else this.steers.delete(ev.chatId)
     } else if (ev.type === 'permission-request') {
       const prior = this.permissions.get(ev.chatId) ?? []
       fresh = !prior.some((r) => r.id === ev.request.id)
@@ -353,6 +360,7 @@ export class RemoteAccess {
   forgetChat(chatId: string): void {
     this.statuses.delete(chatId)
     this.suggestions.delete(chatId)
+    this.steers.delete(chatId)
     this.permissions.delete(chatId)
     this.jobs.delete(chatId)
     const s = this.settings()
@@ -782,6 +790,7 @@ export class RemoteAccess {
       statuses: Object.fromEntries(this.statuses),
       permissions: Object.fromEntries(this.permissions),
       suggestions: Object.fromEntries(this.suggestions),
+      steers: Object.fromEntries(this.steers),
       jobs: Object.fromEntries(this.jobs),
       projectParents: this.projectParents(),
       defaults,

@@ -1,7 +1,7 @@
 import * as React from 'react'
 import { ArrowUp, Clock, CornerDownRight, FileText, Paperclip, Square, X } from 'lucide-react'
-import type { Attachment, SlashCommand } from '@shared/types'
-import { PROVIDER_SHORT_LABELS, type Provider } from '@shared/types'
+import type { Attachment, PendingSteer, SlashCommand } from '@shared/types'
+import { PROVIDER_SHORT_LABELS, STEERABLE, type Provider } from '@shared/types'
 import { CODEX_SLASH_COMMANDS } from '@shared/codexCommands'
 import { withBtw } from '@shared/btw'
 import { FileIcon } from '@/lib/fileIcon'
@@ -107,6 +107,8 @@ function filesOf(data: DataTransfer | null): File[] {
 }
 
 const NO_QUEUE: QueuedMessage[] = []
+const NO_STEERS: PendingSteer[] = []
+const steerText = (s: PendingSteer): string => s.text || (s.attachmentNames?.join(', ') ?? '')
 
 /**
  * Each project's `/` commands, per provider, for the life of the page: the
@@ -154,9 +156,10 @@ const keepKeyboard = (e: React.MouseEvent): void => e.preventDefault()
 /**
  * The phone's composer, shaped like the desktop's: one card holding the text,
  * the photos, and a footer of controls — attach, the option chips (`tools`),
- * send. While a turn runs an empty composer offers Stop; anything typed is
- * queued behind the turn instead, and listed above the card with Send now,
- * which interrupts the turn for it, the way the desktop's queue does.
+ * send. While a turn runs an empty composer offers Stop; anything typed goes into
+ * the turn, and waits above the card until the agent reads it. Where the turn
+ * cannot take it, it is queued behind it instead, listed the same way with Send
+ * now, which interrupts the turn for it, as the desktop's queue does.
  */
 export function Composer({
   chatId,
@@ -220,6 +223,8 @@ export function Composer({
   const interrupt = useRemote((s) => s.interrupt)
   const setError = useRemote((s) => s.setError)
   const queued = useRemote((s) => (chatId ? s.queued[chatId] : undefined)) ?? NO_QUEUE
+  const steers = useRemote((s) => (chatId ? s.steers[chatId] : undefined)) ?? NO_STEERS
+  const busyPlaceholder = provider && STEERABLE[provider] ? 'Add to this turn…' : 'Queue a message…'
   const sendQueuedNow = useRemote((s) => s.sendQueuedNow)
   const removeQueued = useRemote((s) => s.removeQueued)
 
@@ -397,7 +402,7 @@ export function Composer({
     {
       key: draftKey ?? chatId ?? 'composer',
       chatId,
-      placeholder: placeholder ?? (busy ? 'Queue a message…' : 'Message…'),
+      placeholder: placeholder ?? (busy ? busyPlaceholder : 'Message…'),
       text,
       textRev: pageRev,
       caret,
@@ -406,7 +411,10 @@ export function Composer({
       sending,
       reading,
       attachments: attachments.map((a) => ({ id: a.id, name: a.name, kind: a.kind })),
-      queued: queued.map((q) => ({ id: q.id, text: q.text || (q.attachments?.map((a) => a.name).join(', ') ?? '') })),
+      queued: [
+        ...steers.map((s) => ({ id: s.id, text: steerText(s) })),
+        ...queued.map((q) => ({ id: q.id, text: q.text || (q.attachments?.map((a) => a.name).join(', ') ?? '') }))
+      ],
       suggestion: offer,
       menu
     },
@@ -450,8 +458,27 @@ export function Composer({
 
   return (
     <div className={cn('shrink-0 px-3 pt-1', typing ? 'pb-2' : 'pb-[max(env(safe-area-inset-bottom),10px)]')}>
-      {chatId && queued.length > 0 && (
+      {chatId && (queued.length > 0 || steers.length > 0) && (
         <div className="mb-1.5 space-y-1.5">
+          {steers.map((s) => (
+            <div
+              key={s.id}
+              className="flex min-h-10 items-center gap-2 rounded-2xl border border-border bg-secondary/40 py-1 pr-1 pl-3 text-[14px] text-muted-foreground"
+            >
+              <CornerDownRight className="size-3.5 shrink-0" />
+              <span className="min-w-0 flex-1 truncate">{steerText(s)}</span>
+              {s.cancellable && (
+                <button
+                  type="button"
+                  aria-label="Withdraw message"
+                  className="flex size-8 shrink-0 items-center justify-center rounded-full active:bg-accent"
+                  onClick={() => removeQueued(chatId, s.id)}
+                >
+                  <X className="size-3.5" />
+                </button>
+              )}
+            </div>
+          ))}
           {queued.map((q) => (
             <div
               key={q.id}
@@ -620,7 +647,7 @@ export function Composer({
           rows={1}
           value={text}
           autoFocus={autoFocus}
-          placeholder={placeholder ?? (busy ? 'Queue a follow-up…' : 'Message')}
+          placeholder={placeholder ?? (busy ? busyPlaceholder : 'Message')}
           onChange={(e) => {
             setText(e.target.value)
             setCaret(e.target.selectionStart ?? e.target.value.length)

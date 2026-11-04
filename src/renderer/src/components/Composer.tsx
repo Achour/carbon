@@ -728,10 +728,16 @@ function ModelSettingsPicker({
   )
 }
 
+/** What the send arrow will do only needs saying while a turn is running. */
+function SendArrow({ label, children }: { label?: string; children: React.ReactElement }): React.JSX.Element {
+  return label ? <WithTooltip label={label}>{children}</WithTooltip> : children
+}
+
 export function Composer({
   onSend,
   streaming = false,
   onStop,
+  onHold,
   model,
   onModelChange,
   effort,
@@ -765,6 +771,8 @@ export function Composer({
   onSend: (text: string, attachments: Attachment[]) => void | Promise<void>
   streaming?: boolean
   onStop?: () => void
+  /** Keep the message for after the running turn. Only where a send would steer it. */
+  onHold?: (text: string, attachments: Attachment[]) => void | Promise<void>
   model: string
   onModelChange: (model: string, provider: Provider) => void
   effort: EffortId | ''
@@ -1152,7 +1160,7 @@ export function Composer({
 
   const canSend = (text.trim().length > 0 || attachments.length > 0) && !locked
 
-  const submit = (): void => {
+  const submit = (hold = false): void => {
     if (!canSend) return
     const sentText = text.trim()
     const composerControl = isCodex ? codexComposerControl(sentText) : null
@@ -1170,7 +1178,7 @@ export function Composer({
     setAttachError(null)
     // Starting a chat can fail (e.g. creating its worktree) — put the draft back
     // rather than silently swallowing what the user typed.
-    void Promise.resolve(onSend(sentText, sentAttachments)).catch(() => {
+    void Promise.resolve((hold && onHold ? onHold : onSend)(sentText, sentAttachments)).catch(() => {
       setText(sentText)
       setAttachments(sentAttachments)
     })
@@ -1247,7 +1255,11 @@ export function Composer({
   }
   const inputPlaceholder =
     switchingNote ??
-    (streaming ? 'Queue a message for when this turn ends…' : ((collapsed ? ghost : undefined) ?? placeholder))
+    (streaming
+      ? onHold
+        ? 'Add to this turn…'
+        : 'Queue a message for when this turn ends…'
+      : ((collapsed ? ghost : undefined) ?? placeholder))
   const fitInput = React.useCallback(() => {
     const el = ref.current
     if (!el) return
@@ -1389,7 +1401,7 @@ export function Composer({
         />
       </div>
     ) : null
-  const sendButton =
+  const stopButton =
     streaming && onStop ? (
       <WithTooltip label="Stop generating">
         <Button
@@ -1402,25 +1414,47 @@ export function Composer({
           <Square className="fill-current" />
         </Button>
       </WithTooltip>
-    ) : submitLabel ? (
+    ) : null
+  const arrowButton = submitLabel ? (
       <Button
         size="sm"
-        onClick={submit}
+        onClick={() => submit()}
         disabled={!canSend}
         className={cn('h-8 shrink-0 rounded-full px-3.5 disabled:opacity-100 disabled:bg-[var(--surface-raised)] disabled:text-muted-foreground disabled:shadow-[var(--surface-control-shadow)]', inline && 'order-2')}
       >
         {submitLabel}
       </Button>
     ) : (
-      <Button
-        size="icon-sm"
-        onClick={submit}
-        disabled={!canSend}
-        className={cn('size-8 shrink-0 rounded-full disabled:opacity-100 disabled:bg-[var(--surface-raised)] disabled:text-muted-foreground disabled:shadow-[var(--surface-control-shadow)]', inline && 'order-2')}
-        aria-label="Send message"
+      <SendArrow
+        label={
+          streaming
+            ? onHold
+              ? 'Add to this turn · Tab to queue for after it'
+              : 'Queue for when this turn ends'
+            : undefined
+        }
       >
-        <ArrowUp className="size-4" strokeWidth={2.5} />
-      </Button>
+        <Button
+          size="icon-sm"
+          onClick={() => submit()}
+          disabled={!canSend}
+          className={cn('size-8 shrink-0 rounded-full disabled:opacity-100 disabled:bg-[var(--surface-raised)] disabled:text-muted-foreground disabled:shadow-[var(--surface-control-shadow)]', inline && 'order-2')}
+          aria-label="Send message"
+        >
+          <ArrowUp className="size-4" strokeWidth={2.5} />
+        </Button>
+      </SendArrow>
+    )
+  // Stop stays reachable while there is something typed: adding to a turn is no
+  // reason to lose the way to end it.
+  const sendButton =
+    stopButton && !canSend ? (
+      stopButton
+    ) : (
+      <>
+        {stopButton}
+        {arrowButton}
+      </>
     )
 
   return (
@@ -1669,6 +1703,11 @@ export function Composer({
             if (e.key === 'Tab' && !e.shiftKey && ghost) {
               e.preventDefault()
               takeSuggestion()
+              return
+            }
+            if (e.key === 'Tab' && !e.shiftKey && streaming && onHold && canSend) {
+              e.preventDefault()
+              submit(true)
               return
             }
             if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {

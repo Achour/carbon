@@ -176,6 +176,7 @@ import {
   type ConversationFork,
   type Emit
 } from './session'
+import { PendingSteers, mergeSteers, type HeldSteer } from './pendingSteers'
 import { DeltaCoalescer } from './deltaCoalescer'
 import { describeCanvas, describeElement, describeQuote, describeSelection } from './attachmentText.ts'
 import { parsePartialJson } from './partialJson'
@@ -831,6 +832,15 @@ class ClaudeSession implements AgentSession {
   // stream ends cleanly in between, surface that as a failed turn instead of
   // silently returning to idle with only the user's message persisted.
   private turnActive = false
+  /** Sent into the running turn and not read yet (`steer`). */
+  private readonly steers = new PendingSteers(
+    (steers) => this.emit({ type: 'steers', chatId: this.chat.id, steers }),
+    true
+  )
+  /** The CLI reports what it does with each prompt, which is what a steer rests on. */
+  private namesCommands = false
+  /** A result came in with a steer still held, so its turn is about to start. */
+  private awaitingSteer = false
   /**
    * The model is answering with no turn of ours open — a background job's
    * notification woke it. The status goes `streaming` at its first output like
@@ -1176,6 +1186,101 @@ class ClaudeSession implements AgentSession {
     this.emit({ type: 'title-pending', chatId: this.chat.id, pending })
   }
 
+  /**
+   * Into the running turn, on the same input stream as any send: the CLI holds a
+   * message pushed mid-turn and delivers it at the next step, after the running
+   * tools finish, or as a turn of its own if this one was on its last words. Its
+   * `command_lifecycle` says which and when, and that is when it lands in the
+   * transcript (`landSteer`).
+   *
+   * An older CLI that sends no lifecycle gets a refusal rather than this path: it
+   * would never say the message arrived, and the row would never clear.
+   */
+  steer(text: string, attachments: Attachment[] = []): boolean {
+    if (this.disposed || this.dead || !this.namesCommands || !this.turnActive) return false
+    // Stop is on its way, or a prompt is up: the message waits for what follows.
+    if (this.interruptedTurn || this.pending.size > 0) return false
+    if (this.lastEmittedStatus !== 'streaming' && this.lastEmittedStatus !== 'starting') return false
+    const id = randomUUID()
+    this.steers.add({ id, text, attachments })
+    this.input.push({
+      type: 'user',
+      message: { role: 'user', content: this.promptContent(text, attachments) },
+      parent_tool_use_id: null,
+      priority: 'next',
+      uuid: id
+    } as unknown as SDKUserMessage)
+    return true
+  }
+
+  /** The SDK has the method and does not type it, as with `askSideQuestion`. */
+  async cancelSteer(id: string): Promise<boolean> {
+    const q = this.q as unknown as { cancelAsyncMessage?: (id: string) => Promise<boolean> }
+    if (!q.cancelAsyncMessage || !this.steers.ids().includes(id)) return false
+    try {
+      const cancelled = await q.cancelAsyncMessage(id)
+      // Its `cancelled` lifecycle normally got here first; `take` is a no-op then.
+      if (cancelled) this.steers.take(id)
+      this.settleAfterSteer()
+      return cancelled
+    } catch (err) {
+      console.error('cancelAsyncMessage failed:', err)
+      return false
+    }
+  }
+
+  async dropSteers(): Promise<void> {
+    await Promise.all(this.steers.ids().map((id) => this.cancelSteer(id)))
+  }
+
+  /** The CLI naming what it did with a queued prompt; see `steer`. */
+  private handleCommandLifecycle(id: string | undefined, state: string | undefined): void {
+    this.namesCommands = true
+    if (!id) return
+    if (state === 'started') {
+      const steer = this.steers.take(id)
+      if (steer) this.landSteer(steer)
+    } else if (state === 'cancelled' && this.steers.take(id)) {
+      this.settleAfterSteer()
+    }
+  }
+
+  /**
+   * The agent has it, so it goes in the transcript here. This always falls
+   * between two messages (after the tool results, or after a result), so nothing
+   * is mid-stream, and everything from here on is a reply to it.
+   */
+  private landSteer(steer: HeldSteer): void {
+    // With the last turn's result already in, this one starts its own.
+    const joinedTurn = !this.awaitingSteer
+    this.current = null
+    this.awaitingSteer = false
+    this.turnUuid = steer.id
+    this.turnActive = true
+    this.writeSteer(steer, joinedTurn)
+    this.setStatus('streaming')
+  }
+
+  private writeSteer(steer: HeldSteer, joinedTurn: boolean): void {
+    this.pushMessage({
+      id: steer.id,
+      role: 'user',
+      text: steer.text,
+      ts: Date.now(),
+      ...(steer.attachments.length ? { attachments: steer.attachments } : {}),
+      ...(joinedTurn ? { joinedTurn: true as const } : {})
+    })
+    this.emit({ type: 'meta', chatId: this.chat.id, patch: { updatedAt: this.chat.updatedAt } })
+  }
+
+  /** A turn that ended waiting on a steer has nothing left if that one is withdrawn. */
+  private settleAfterSteer(): void {
+    if (!this.awaitingSteer || this.steers.size > 0) return
+    this.awaitingSteer = false
+    this.turnActive = false
+    this.setStatus('idle')
+  }
+
   send(
     text: string,
     attachments: Attachment[] = [],
@@ -1203,9 +1308,35 @@ class ClaudeSession implements AgentSession {
     this.setStatus(this.chat.sessionId ? 'streaming' : 'starting')
     this.turnActive = true
 
-    // Images go to the model as base64 blocks; other files are referenced by
-    // path so Claude can Read them itself. Picked UI elements contribute a
-    // screenshot (if captured) plus a text description of where they live.
+    const epoch = this.sendEpoch
+    const finish = (ctx?: string): void => {
+      if (this.disposed || epoch !== this.sendEpoch) return
+      this.turnUuid = messageId
+      this.input.push({
+        type: 'user',
+        message: { role: 'user', content: this.promptContent(text, attachments, ctx) },
+        parent_tool_use_id: null,
+        uuid: messageId
+      } as unknown as SDKUserMessage)
+    }
+    // Every send rides the chain so a plain message can never overtake one
+    // still waiting on its handoff context (the echo above stays instant).
+    this.sendChain = this.sendChain.then(
+      () => Promise.resolve(hiddenContext).then(finish, () => finish())
+    )
+  }
+
+  /**
+   * A prompt as the model takes it. Images go as base64 blocks; other files are
+   * referenced by path so Claude can Read them itself. Picked UI elements
+   * contribute a screenshot (if captured) plus a text description of where they
+   * live.
+   */
+  private promptContent(
+    text: string,
+    attachments: Attachment[],
+    hiddenContext?: string
+  ): Array<Record<string, unknown>> {
     const content: Array<Record<string, unknown>> = []
     const elementBlocks: string[] = []
     for (const a of attachments) {
@@ -1221,39 +1352,29 @@ class ClaudeSession implements AgentSession {
       if (a.kind === 'quote' && a.quote) elementBlocks.push(describeQuote(a.quote))
     }
     const filePaths = attachments.filter((a) => a.kind === 'file' && a.path).map((a) => a.path!)
-    const epoch = this.sendEpoch
-    const finish = (ctx?: string): void => {
-      if (this.disposed || epoch !== this.sendEpoch) return
-      let prompt = composePrompt(text, ctx)
-      if (filePaths.length) {
-        const list = filePaths.map((p) => `- ${p}`).join('\n')
-        prompt = `${prompt ? `${prompt}\n\n` : ''}Attached files:\n${list}`
-      }
-      if (elementBlocks.length) {
-        prompt = `${prompt ? `${prompt}\n\n` : ''}${elementBlocks.join('\n\n')}`
-      }
-      if (prompt || content.length === 0) content.push({ type: 'text', text: prompt })
-      this.turnUuid = messageId
-      this.input.push({
-        type: 'user',
-        message: { role: 'user', content },
-        parent_tool_use_id: null,
-        uuid: messageId
-      } as unknown as SDKUserMessage)
+    let prompt = composePrompt(text, hiddenContext)
+    if (filePaths.length) {
+      const list = filePaths.map((p) => `- ${p}`).join('\n')
+      prompt = `${prompt ? `${prompt}\n\n` : ''}Attached files:\n${list}`
     }
-    // Every send rides the chain so a plain message can never overtake one
-    // still waiting on its handoff context (the echo above stays instant).
-    this.sendChain = this.sendChain.then(
-      () => Promise.resolve(hiddenContext).then(finish, () => finish())
-    )
+    if (elementBlocks.length) {
+      prompt = `${prompt ? `${prompt}\n\n` : ''}${elementBlocks.join('\n\n')}`
+    }
+    if (prompt || content.length === 0) content.push({ type: 'text', text: prompt })
+    return content
   }
 
   async interrupt(): Promise<void> {
     this.sendEpoch += 1
     this.denyAllPending(true)
     this.interruptedTurn = true
+    let dropped: Pick<HeldSteer, 'text' | 'attachments'> | undefined
     try {
-      await this.q.interrupt()
+      // The receipt names what survives. One it leaves out will never start, and
+      // waiting on its `started` would hold the chat busy for good, so it is sent
+      // again as a turn of its own.
+      const receipt = await this.q.interrupt()
+      if (receipt?.still_queued) dropped = mergeSteers(this.steers.takeExcept(receipt.still_queued))
     } catch (err) {
       console.error('interrupt failed:', err)
     }
@@ -1268,7 +1389,12 @@ class ClaudeSession implements AgentSession {
     // copy, and that copy has nowhere else to land (see `reconcileAssistant`).
     this.abortedCurrent = this.current
     this.current = null
-    this.setStatus('idle')
+    // A steer the agent had not read outlives the interrupt: the CLI runs it as
+    // the next turn, which is how a message reaches an agent stuck in a long tool
+    // (send it, then Stop). So the chat is not idle, and saying so would drain the
+    // queue into a turn already starting.
+    if (!this.steers.size && !dropped) this.setStatus('idle')
+    if (dropped) this.send(dropped.text, dropped.attachments)
   }
 
   private emitBackgroundJobs(jobs: BackgroundJob[]): void {
@@ -1635,6 +1761,8 @@ class ClaudeSession implements AgentSession {
     // are not cleared alongside the two timer maps above: a sub-agent's last
     // few steps are exactly what a reader goes looking for after a session ends.
     this.terminalizeRunning('error')
+    // Written down rather than dropped, ahead of `disposed`, which silences these.
+    for (const steer of this.steers.takeAll()) this.writeSteer(steer, false)
     this.disposed = true
     this.dead = true
     this.resolveReady()
@@ -1732,6 +1860,9 @@ class ClaudeSession implements AgentSession {
     } finally {
       this.dead = true
       this.clearWake()
+      // The process that held them is gone, so they cannot be read. They go on the
+      // record ahead of the error below, which asks for them to be sent again.
+      for (const steer of this.steers.takeAll()) this.writeSteer(steer, false)
       if (this.turnActive && !this.disposed && !this.interruptedTurn) {
         this.pushMessage({
           id: randomUUID(),
@@ -1766,6 +1897,12 @@ class ClaudeSession implements AgentSession {
     // A message can arrive from the SDK subprocess after teardown; ignore it so
     // we don't emit events for a chat this session no longer represents.
     if (this.disposed) return
+    // Not in the SDK's types: the CLI's account of each prompt it was handed.
+    const lifecycle = msg as unknown as { type: string; command_uuid?: string; state?: string }
+    if (lifecycle.type === 'command_lifecycle') {
+      this.handleCommandLifecycle(lifecycle.command_uuid, lifecycle.state)
+      return
+    }
     switch (msg.type) {
       case 'system':
         if (msg.subtype === 'init') {
@@ -1982,7 +2119,10 @@ class ClaudeSession implements AgentSession {
         }
         // Covers valid itemless/silent turns and failures before assistant output.
         void this.maybeGenerateTitle()
-        this.turnActive = false
+        // A steer the agent did not reach in time starts its own turn right after
+        // this result, so the chat never goes idle in between (`landSteer`).
+        this.awaitingSteer = this.steers.size > 0
+        this.turnActive = this.awaitingSteer
         // A continuation the user stopped is already `idle`, so the closing
         // `setStatus` below would dedup and nothing would tell the manager the
         // chat can take a turn again; this idle is that word (deduplicated
@@ -2075,7 +2215,7 @@ class ClaudeSession implements AgentSession {
           this.terminalizeRunning(msg.subtype === 'success' ? 'success' : 'error')
         }
         this.current = null
-        this.setStatus('idle')
+        if (!this.awaitingSteer) this.setStatus('idle')
         this.emit({ type: 'meta', chatId: this.chat.id, patch: { updatedAt: this.chat.updatedAt } })
         this.store.saveChat(this.chat.id)
         break
@@ -3700,6 +3840,32 @@ export class ChatManager {
     }
   }
 
+  /**
+   * Into the running turn, if it can take it. False leaves the message with the
+   * caller to send after the turn: everything `send` does that a turn in progress
+   * cannot absorb goes that way, which is a pending switch to another provider
+   * (it disposes this very session), a handoff in flight, a slash command, and
+   * delegation outcomes still owed to this chat.
+   */
+  async steer(chatId: string, text: string, attachments?: Attachment[]): Promise<boolean> {
+    if (this.scheduledStarting.has(chatId)) return false
+    const chat = this.store.getChat(chatId)
+    const session = this.sessionFor(chatId)
+    if (!chat || !session?.steer) return false
+    if (chat.pendingModel || chat.switchingNote || /^\s*\/[\w-]+(?:\s|$)/.test(text)) return false
+    if (this.undelivered(chat).length) return false
+    const steered = await session.steer(text, attachments)
+    if (steered) {
+      this.touchScheduled(chat)
+      this.deliveryParked.delete(chat.id)
+    }
+    return steered
+  }
+
+  cancelSteer(chatId: string, id: string): Promise<boolean> {
+    return this.sessionFor(chatId)?.cancelSteer?.(id) ?? Promise.resolve(false)
+  }
+
   /** Start Codex review mode through App Server's structured `review/start`. */
   startReview(chatId: string, requestedTarget: CodexReviewTarget): void {
     const chat = this.store.getChat(chatId)
@@ -4613,7 +4779,8 @@ export class ChatManager {
     return (await this.sessionFor(chatId)?.usageInfo()) ?? null
   }
 
-  async interrupt(chatId: string): Promise<void> {
+  async interrupt(chatId: string, opts?: { dropSteers?: boolean }): Promise<void> {
+    if (opts?.dropSteers) await this.sessionFor(chatId)?.dropSteers?.()
     // The stopped turn will read as finished once it idles; this is how its
     // delegation is reported as stopped instead.
     if (this.store.getMeta(chatId)?.delegation?.status === 'running') this.delegationStopped.add(chatId)

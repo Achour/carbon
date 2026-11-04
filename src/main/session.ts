@@ -83,6 +83,17 @@ export interface AgentSession {
     hiddenContext?: string | Promise<string | undefined>
   ): void
   /**
+   * Hand a message to the running turn without stopping it. False means nothing
+   * was sent and nothing changed, so the caller keeps it for after the turn: no
+   * turn to steer, a prompt in the way, or a provider that cannot. Absent on
+   * providers with no such route.
+   */
+  steer?(text: string, attachments?: Attachment[]): boolean | Promise<boolean>
+  /** Withdraw a steer the agent has not read. False if it is too late. */
+  cancelSteer?(id: string): Promise<boolean>
+  /** Discard every steer not yet read, for a Stop that means stop everything. */
+  dropSteers?(): Promise<void>
+  /**
    * The plan text behind a pending review request, or null if `requestId`
    * isn't one. Lets the manager catch a plan approved into the *other*
    * provider before the approval reaches this session (see ChatManager).

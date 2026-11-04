@@ -932,6 +932,12 @@ export interface UserMessage {
    * verbose prompt `text` — the prompt still goes to the agent, just not the eye.
    */
   label?: string
+  /**
+   * Sent into a turn already running, which it then joined: one turn to the
+   * provider and one checkpoint, so one changes card (`turnPresentations`). The
+   * transcript still folds it as its own stretch, the place the reader spoke.
+   */
+  joinedTurn?: true
 }
 
 export interface AssistantMessage {
@@ -1474,6 +1480,9 @@ export type ChatEvent =
   // or is discarded for not matching it.
   | { type: 'commands'; chatId: string; cwd: string; provider: Provider; commands: SlashCommand[] }
   | { type: 'background-jobs'; chatId: string; jobs: BackgroundJob[] }
+  // What this chat's agent has been sent mid-turn and has not read yet. Only
+  // main knows, so the whole list comes each time.
+  | { type: 'steers'; chatId: string; steers: PendingSteer[] }
   | { type: 'rate-limit'; chatId: string; state: RateLimitState }
   // Transient (not persisted): whether the provider is honouring this chat's
   // Fast selection. Only Claude reports it; the Codex SDK exposes no equivalent.
@@ -1584,6 +1593,8 @@ export interface RemoteSnapshot {
   permissions: Record<string, PermissionRequestPayload[]>
   /** Each idle chat's suggested reply (`ChatEvent` `suggestion`). */
   suggestions: Record<string, string>
+  /** Messages sent into a running turn that its agent has not read yet. */
+  steers?: Record<string, PendingSteer[]>
   /**
    * What each chat left running in the background (`background-jobs`): a dev
    * server, a shell, a monitor. Only ever told as an event, so a phone that
@@ -2323,6 +2334,29 @@ export const PROVIDER_LABELS: Record<Provider, string> = {
  * which is a two-provider idiom that silently mislabels a third as Claude
  * rather than failing to compile.
  */
+/**
+ * Whether a provider can take a message into a running turn. Decides what the
+ * composer promises; main still has the last word (`Api.steer`), so a `true` here
+ * can be answered with a queue.
+ */
+export const STEERABLE: Record<Provider, boolean> = {
+  claude: true,
+  codex: true,
+  grok: false,
+  antigravity: false,
+  cursor: false
+}
+
+/** A message sent into a running turn that the agent has not picked up yet. */
+export interface PendingSteer {
+  id: string
+  text: string
+  /** Names only: the row draws no more, and images would ride every update. */
+  attachmentNames?: string[]
+  /** Whether it can still be withdrawn. Codex has it from the moment it accepts. */
+  cancellable: boolean
+}
+
 export const PROVIDER_SHORT_LABELS: Record<Provider, string> = {
   claude: 'Claude',
   codex: 'Codex',
@@ -3090,6 +3124,13 @@ export interface Api {
    */
   leaveThread(id: string): Promise<{ ok: true } | { ok: false; error: string }>
   send(chatId: string, text: string, attachments?: Attachment[], label?: string): Promise<void>
+  /**
+   * Hand a message to the running turn without stopping it. False means nothing
+   * was sent (no turn to steer, or a state that cannot take one): queue it.
+   */
+  steer(chatId: string, text: string, attachments?: Attachment[]): Promise<boolean>
+  /** Withdraw a steer the agent has not read yet. False if it was too late. */
+  cancelSteer(chatId: string, id: string): Promise<boolean>
   /** Start Codex's native reviewer with a structured App Server target. */
   startReview(chatId: string, target: CodexReviewTarget): Promise<void>
   /** Read and control the native goal persisted on a Codex App Server thread. */

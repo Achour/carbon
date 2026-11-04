@@ -564,6 +564,10 @@ export function foldTurns(messages: ChatMessage[], options: FoldOptions = {}): M
       continue
     }
     if (message.role === 'user') {
+      // Sent into this turn, which worked up to the moment the agent read it. The
+      // last message's own stamp says only when the call it holds began, so a long
+      // tool would otherwise count for nothing.
+      if (current && message.joinedTurn) current.endTs = Math.max(current.endTs, message.ts)
       close()
       current = {
         userId: message.id,

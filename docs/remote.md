@@ -414,12 +414,12 @@ the window open. The phone is one more window onto them.
   supported, so anything new the phone runs still has to avoid secure-only
   APIs or go through that file. Testing in a browser at `127.0.0.1` cannot
   catch this: localhost counts as secure.
-- **A message typed during a turn is queued on the phone**, and sent as that
-  chat goes idle, the way the desktop composer queues. "Goes idle" is not only
-  the live event: a phone that was locked when the turn ended never heard it,
-  and the message sat there for good. So every resync also sends what is
-  waiting behind a chat the snapshot reports idle. Sending straight into a
-  live turn means something different on each provider.
+- **A message typed during a turn goes into it where the provider can take one**
+  (see "Steering" in `docs/transcript.md`). Otherwise it is queued on the phone
+  and sent as that chat goes idle, the way the desktop composer queues. "Goes
+  idle" is not only the live event: a phone that was locked when the turn ended
+  never heard it, and the message sat there for good. So every resync also sends
+  what is waiting behind a chat the snapshot reports idle.
 - **The New-chat screen is the desktop's, question for question.** Beside the
   project chip, a repository gets the Run on chip (`WorktreeChip`): This Mac,
   each linked worktree, or New worktree, which turns the sheet to the branch —

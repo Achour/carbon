@@ -281,7 +281,12 @@ function renderMessages(all: ChatMessage[], ctx: RenderCtx): React.ReactNode[] {
   // continuation, along with the mutation rows it stands in for.
   // A turn about to be woken by its agents' reports is not settled either.
   const settled = !ctx.busy && !lastFold?.running && !ctx.awaitingWake
-  const presentations = turnPresentations(messages, ctx.cwd, !settled, isDelivery)
+  const presentations = turnPresentations(
+    messages,
+    ctx.cwd,
+    !settled,
+    (message) => isDelivery(message) || message.joinedTurn === true
+  )
 
   /** The turn being walked, and whether its work is folded away. */
   let fold: TurnFold | undefined

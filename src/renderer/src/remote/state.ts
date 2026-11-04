@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type {
+  PendingSteer,
   AppDefaults,
   AssistantMessage,
   BackgroundJob,
@@ -102,6 +103,8 @@ interface RemoteState {
   open: OpenChat | null
   /** Typed while a turn ran; sent, oldest first, as the chat goes idle. */
   queued: Record<string, QueuedMessage[]>
+  /** Sent into the running turn and not read yet. Main owns these (`steers`). */
+  steers: Record<string, PendingSteer[]>
   error: string | null
 
   start(): void
@@ -177,6 +180,7 @@ export const useRemote = create<RemoteState>((set, get) => {
         chats: snap.chats,
         statuses: snap.statuses,
         suggestions: snap.suggestions ?? {},
+        steers: snap.steers ?? {},
         permissions: snap.permissions,
         jobs: snap.jobs ?? {},
         unseen: snap.unseen ?? {},
@@ -282,6 +286,12 @@ export const useRemote = create<RemoteState>((set, get) => {
     })
   }
 
+  /**
+   * Stops pressed per chat. A send out of the queue awaiting main's answer is out of
+   * reach of the Stop that empties the queue, so it checks this before going on.
+   */
+  const stops: Record<string, number> = {}
+
   const drainQueue = async (chatId: string): Promise<void> => {
     const [next, ...rest] = get().queued[chatId] ?? []
     if (!next) return
@@ -295,6 +305,7 @@ export const useRemote = create<RemoteState>((set, get) => {
     chats: cached?.chats ?? [],
     statuses: {},
     suggestions: {},
+    steers: {},
     permissions: {},
     jobs: {},
     projectParents: [],
@@ -399,12 +410,20 @@ export const useRemote = create<RemoteState>((set, get) => {
         void api.invoke('chat:btw', chatId, question).catch((err) => set({ error: message(err) }))
         return
       }
-      const status = get().statuses[chatId] ?? 'idle'
-      if (status !== 'idle') {
-        set((s) => ({
-          queued: { ...s.queued, [chatId]: [...(s.queued[chatId] ?? []), { id: randomId(), text, attachments }] }
-        }))
-        return
+      const busy = (): boolean => (get().statuses[chatId] ?? 'idle') !== 'idle'
+      if (busy()) {
+        // Into the running turn where it can take it; the desktop's `sendMessage`.
+        const stopsBefore = stops[chatId]
+        const steered = await api
+          .invoke<boolean>('chat:steer', chatId, text, attachments?.length ? attachments : undefined)
+          .catch(() => false)
+        if (steered || stops[chatId] !== stopsBefore) return
+        if (busy()) {
+          set((s) => ({
+            queued: { ...s.queued, [chatId]: [...(s.queued[chatId] ?? []), { id: randomId(), text, attachments }] }
+          }))
+          return
+        }
       }
       try {
         await api.invoke('chat:send', chatId, text, attachments?.length ? attachments : undefined)
@@ -438,27 +457,43 @@ export const useRemote = create<RemoteState>((set, get) => {
 
     async interrupt(chatId) {
       // Stopping also means "don't send what I queued behind it".
+      stops[chatId] = (stops[chatId] ?? 0) + 1
       set((s) => ({ queued: { ...s.queued, [chatId]: [] } }))
-      await api.invoke('chat:interrupt', chatId).catch((err) => set({ error: message(err) }))
+      await api
+        .invoke('chat:interrupt', chatId, { dropSteers: true })
+        .catch((err) => set({ error: message(err) }))
     },
 
     async sendQueuedNow(chatId, id) {
       const item = get().queued[chatId]?.find((q) => q.id === id)
       if (!item) return
-      const rest = (get().queued[chatId] ?? []).filter((q) => q.id !== id)
-      if ((get().statuses[chatId] ?? 'idle') !== 'idle') {
-        // To the front, so the idle drain sends this one first, then interrupt
-        // so that idle comes now rather than at turn end. Not `interrupt()`:
-        // that one empties the queue.
-        set((s) => ({ queued: { ...s.queued, [chatId]: [item, ...rest] } }))
-        await api.invoke('chat:interrupt', chatId).catch((err) => set({ error: message(err) }))
-        return
+      const busy = (): boolean => (get().statuses[chatId] ?? 'idle') !== 'idle'
+      // Out of the queue before anything is awaited: the desktop's `sendQueuedNow`.
+      set((s) => ({ queued: { ...s.queued, [chatId]: (s.queued[chatId] ?? []).filter((q) => q.id !== id) } }))
+      if (busy()) {
+        const stopsBefore = stops[chatId]
+        const steered = await api
+          .invoke<boolean>('chat:steer', chatId, item.text, item.attachments?.length ? item.attachments : undefined)
+          .catch(() => false)
+        if (steered || stops[chatId] !== stopsBefore) return
+        if (busy()) {
+          // To the front, so the idle drain sends this one first, then interrupt
+          // so that idle comes now rather than at turn end. Not `interrupt()`:
+          // that one empties the queue.
+          set((s) => ({ queued: { ...s.queued, [chatId]: [item, ...(s.queued[chatId] ?? [])] } }))
+          await api.invoke('chat:interrupt', chatId).catch((err) => set({ error: message(err) }))
+          return
+        }
       }
-      set((s) => ({ queued: { ...s.queued, [chatId]: rest } }))
       await get().send(chatId, item.text, item.attachments)
     },
 
     removeQueued(chatId, id) {
+      // The native shell draws both lists as one (`queued` in `native.ts`).
+      if (get().steers[chatId]?.some((s) => s.id === id)) {
+        void api.invoke('chat:cancel-steer', chatId, id).catch((err) => set({ error: message(err) }))
+        return
+      }
       set((s) => ({
         queued: { ...s.queued, [chatId]: (s.queued[chatId] ?? []).filter((q) => q.id !== id) }
       }))
@@ -673,6 +708,10 @@ export function reduce(s: RemoteState, ev: ChatEvent): Partial<RemoteState> {
     case 'background-jobs': {
       const { [ev.chatId]: _prior, ...rest } = s.jobs
       return { jobs: ev.jobs.length ? { ...rest, [ev.chatId]: ev.jobs } : rest }
+    }
+    case 'steers': {
+      const { [ev.chatId]: _prior, ...rest } = s.steers
+      return { steers: ev.steers.length ? { ...rest, [ev.chatId]: ev.steers } : rest }
     }
     case 'permission-request':
       return {

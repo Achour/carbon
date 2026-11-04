@@ -4,13 +4,14 @@ import {
   ArrowDown,
   ArrowUp,
   Clock,
+  CornerDownRight,
   FileDiff,
   Folder,
   GitBranch,
   X
 } from 'lucide-react'
-import type { ChatMeta } from '@shared/types'
-import { PROVIDER_SHORT_LABELS, projectRoot } from '@shared/types'
+import type { ChatMeta, PendingSteer } from '@shared/types'
+import { PROVIDER_SHORT_LABELS, STEERABLE, projectRoot } from '@shared/types'
 import { CHAT_BLEED } from '@/lib/chatColumn'
 import { cn } from '@/lib/utils'
 import { basename } from '@/lib/format'
@@ -38,6 +39,7 @@ import { isDelivery } from '@shared/delivery'
 
 const NO_PERMISSIONS: never[] = []
 const NO_QUEUED: never[] = []
+const NO_STEERS: PendingSteer[] = []
 
 /**
  * Time constant of the pinned follow's glide: each frame closes
@@ -110,6 +112,11 @@ export const ChatView = React.memo(function ChatView({
   const lockedElsewhere = useApp((s) => !!s.lockedChats[chat.id])
   const permissions = useApp((s) => s.permissions[chat.id] ?? NO_PERMISSIONS)
   const queued = useApp((s) => s.queued[chat.id] ?? NO_QUEUED)
+  const steers = useApp((s) => s.steers[chat.id] ?? NO_STEERS)
+  const cancelSteer = useApp((s) => s.cancelSteer)
+  // A pick from another provider applies at the next send and disposes this
+  // session, so main refuses a steer until then (`ChatManager.steer`).
+  const canSteer = STEERABLE[chat.provider] && !chat.pendingModel
   const removeQueued = useApp((s) => s.removeQueued)
   const sendQueuedNow = useApp((s) => s.sendQueuedNow)
   const git = useApp((s) => s.git)
@@ -821,8 +828,33 @@ export const ChatView = React.memo(function ChatView({
                 like the composer, and they read as one column only while their
                 borders share an edge. */}
             <div className={cn(CHAT_BLEED, 'pointer-events-auto')}>
-              {queued.length > 0 && (
+              {(queued.length > 0 || steers.length > 0) && (
                 <div className="mb-2 space-y-1.5">
+                  {steers.map((s) => (
+                    <div
+                      key={s.id}
+                      title="The agent reads this at its next step"
+                      className="flex animate-enter items-center gap-2 rounded-lg border border-border bg-secondary/40 px-3 py-1.5 text-xs text-muted-foreground"
+                    >
+                      <CornerDownRight className="size-3 shrink-0" />
+                      <span className="min-w-0 flex-1 truncate">
+                        {s.text || s.attachmentNames?.join(', ')}
+                      </span>
+                      <span className="shrink-0 text-[10px] tracking-wide text-muted-foreground/60 uppercase">
+                        next step
+                      </span>
+                      {s.cancellable && (
+                        <button
+                          type="button"
+                          onClick={() => void cancelSteer(chat.id, s.id)}
+                          aria-label="Withdraw message"
+                          className="shrink-0 rounded p-0.5 transition-colors hover:bg-accent hover:text-foreground"
+                        >
+                          <X className="size-3" />
+                        </button>
+                      )}
+                    </div>
+                  ))}
                   {queued.map((q) => (
                     <div
                       key={q.id}
@@ -839,7 +871,11 @@ export const ChatView = React.memo(function ChatView({
                         type="button"
                         onClick={() => void sendQueuedNow(chat.id, q.id)}
                         aria-label="Send now"
-                        title="Send now — interrupts the current turn"
+                        title={
+                          STEERABLE[chat.provider]
+                            ? 'Send now — the agent reads it at its next step'
+                            : 'Send now — interrupts the current turn'
+                        }
                         className="shrink-0 rounded p-0.5 transition-colors hover:bg-accent hover:text-foreground"
                       >
                         <ArrowUp className="size-3" />
@@ -905,6 +941,13 @@ export const ChatView = React.memo(function ChatView({
                   }
                   return sendMessage(chat.id, text, attachments)
                 }}
+                // Tab: the same message, kept for after this turn.
+                onHold={
+                  canSteer
+                    ? (text, attachments) =>
+                        sendMessage(chat.id, text, attachments, undefined, { hold: true })
+                    : undefined
+                }
                 draft={initialDraft}
                 onDraftChange={(next) => saveChatDraft(chat.id, next)}
                 collapsible={collapsible}
