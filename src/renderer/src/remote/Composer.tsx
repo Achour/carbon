@@ -108,6 +108,8 @@ function filesOf(data: DataTransfer | null): File[] {
 
 const NO_QUEUE: QueuedMessage[] = []
 const NO_STEERS: PendingSteer[] = []
+/** How far past the send arrow a held press may end and still count. */
+const HOLD_SLACK_PX = 16
 const steerText = (s: PendingSteer): string => s.text || (s.attachmentNames?.join(', ') ?? '')
 
 /**
@@ -224,7 +226,20 @@ export function Composer({
   const setError = useRemote((s) => s.setError)
   const queued = useRemote((s) => (chatId ? s.queued[chatId] : undefined)) ?? NO_QUEUE
   const steers = useRemote((s) => (chatId ? s.steers[chatId] : undefined)) ?? NO_STEERS
-  const busyPlaceholder = provider && STEERABLE[provider] ? 'Add to this turn…' : 'Queue a message…'
+  const steerable = !!provider && STEERABLE[provider]
+  const busyPlaceholder = steerable ? 'Add to this turn…' : 'Queue a message…'
+  // A phone has no Tab: pressing and holding the arrow is how a message is kept for
+  // after the turn. It goes on release, so sliding off cancels it and nothing happens
+  // if the composer leaves first. Sending empties the draft, which turns this very
+  // button into Stop, so the click that follows the release must not reach it.
+  const holdTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+  const held = React.useRef(false)
+  const swallowClick = React.useRef(false)
+  const cancelHold = (): void => {
+    if (holdTimer.current) clearTimeout(holdTimer.current)
+    holdTimer.current = null
+    held.current = false
+  }
   const sendQueuedNow = useRemote((s) => s.sendQueuedNow)
   const removeQueued = useRemote((s) => s.removeQueued)
 
@@ -354,7 +369,7 @@ export function Composer({
   // input, and sending stays a second tap.
   const suggestion = useRemote((s) => (chatId ? s.suggestions[chatId] : undefined))
   const offer = suggestion && !busy && !sending && empty ? suggestion : undefined
-  const submit = async (override?: string): Promise<void> => {
+  const submit = async (override?: string, hold = false): Promise<void> => {
     const message = (override ?? text).trim()
     if ((!message && attachments.length === 0) || sending || reading) return
     if (onCommand && attachments.length === 0 && onCommand(message)) {
@@ -369,7 +384,7 @@ export function Composer({
     if (window.matchMedia('(pointer: coarse)').matches) area.current?.blur()
     try {
       if (onSubmit) await onSubmit(message, attachments)
-      else if (chatId) await send(chatId, message, attachments)
+      else if (chatId) await send(chatId, message, attachments, { hold })
       edit('')
       setAttachments([])
       latest.current = ''
@@ -411,8 +426,9 @@ export function Composer({
       sending,
       reading,
       attachments: attachments.map((a) => ({ id: a.id, name: a.name, kind: a.kind })),
+      steerable,
       queued: [
-        ...steers.map((s) => ({ id: s.id, text: steerText(s) })),
+        ...steers.map((s) => ({ id: s.id, text: steerText(s), steering: true, cancellable: s.cancellable })),
         ...queued.map((q) => ({ id: q.id, text: q.text || (q.attachments?.map((a) => a.name).join(', ') ?? '') }))
       ],
       suggestion: offer,
@@ -423,7 +439,7 @@ export function Composer({
         setText(next)
         setCaret(at)
       },
-      submit: () => void submit(),
+      submit: (hold) => void submit(undefined, hold),
       stop: () => {
         if (chatId) void interrupt(chatId)
       },
@@ -691,8 +707,14 @@ export function Composer({
               type="button"
               aria-label="Stop"
               onMouseDown={keepKeyboard}
+              onPointerDown={() => {
+                swallowClick.current = false
+              }}
               className="flex size-8 shrink-0 animate-in items-center justify-center rounded-full bg-foreground text-background duration-200 zoom-in-75 fade-in active:scale-90"
-              onClick={() => void interrupt(chatId)}
+              onClick={() => {
+                if (swallowClick.current) swallowClick.current = false
+                else void interrupt(chatId)
+              }}
             >
               <Square className="size-3 fill-current" />
             </button>
@@ -700,13 +722,48 @@ export function Composer({
             <button
               type="button"
               aria-label="Send"
+              title={busy && steerable ? 'Add to this turn · press and hold to queue for after it' : undefined}
               onMouseDown={keepKeyboard}
               disabled={sending || empty || reading > 0}
               className={cn(
-                'flex size-8 shrink-0 items-center justify-center rounded-full transition-[background-color,color,transform] duration-200 ease-out',
+                'flex size-8 shrink-0 touch-none items-center justify-center rounded-full transition-[background-color,color,transform] duration-200 ease-out [-webkit-touch-callout:none] select-none',
                 empty ? 'scale-90 bg-muted text-muted-foreground' : 'scale-100 bg-foreground text-background active:scale-90'
               )}
-              onClick={() => void submit()}
+              onPointerDown={() => {
+                cancelHold()
+                swallowClick.current = false
+                if (!busy || !steerable || empty) return
+                holdTimer.current = setTimeout(() => {
+                  holdTimer.current = null
+                  held.current = true
+                }, 450)
+              }}
+              onPointerUp={(e) => {
+                const hold = held.current
+                cancelHold()
+                if (!hold) return
+                swallowClick.current = true
+                // Not every browser sends a click after a long press.
+                setTimeout(() => {
+                  swallowClick.current = false
+                }, 600)
+                // A touch keeps reporting to this button wherever the finger goes, so
+                // leaving is only visible here. The slack is for a thumb that drifts.
+                const box = e.currentTarget.getBoundingClientRect()
+                const on =
+                  Math.abs(e.clientX - (box.left + box.width / 2)) <= box.width / 2 + HOLD_SLACK_PX &&
+                  Math.abs(e.clientY - (box.top + box.height / 2)) <= box.height / 2 + HOLD_SLACK_PX
+                if (on) void submit(undefined, true)
+              }}
+              onPointerLeave={cancelHold}
+              onPointerCancel={cancelHold}
+              onContextMenu={(e) => {
+                if (busy && steerable) e.preventDefault()
+              }}
+              onClick={() => {
+                if (swallowClick.current) swallowClick.current = false
+                else void submit()
+              }}
             >
               <ArrowUp className="size-[18px]" />
             </button>

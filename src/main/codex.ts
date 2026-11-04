@@ -2544,36 +2544,43 @@ export class CodexSession implements AgentSession {
    * which would otherwise leave the card spinning forever — and persist that way.
    */
   private terminalizeRunning(): void {
-    const message = this.current
-    if (!message) return
+    // Every message this turn put a call in, not only the last: a steered message
+    // starts a new one while a call above it is still running.
+    const messages = new Set(
+      [this.current, ...[...this.itemLoc.values()].map((loc) => loc.message)].filter(
+        (message): message is AssistantMessage => !!message
+      )
+    )
     let changed = false
-    message.parts.forEach((part, index) => {
-      if (!part || part.type !== 'tool') return
-      const children = part.children?.map((child) =>
-        child.type === 'tool' && (child.status === 'running' || child.status === 'pending')
-          ? { ...child, status: 'error' as const }
-          : child
-      )
-      const childrenChanged = children?.some(
-        (child, childIndex) => child !== part.children?.[childIndex]
-      )
-      const running = part.status === 'running' || part.status === 'pending'
-      if (running || childrenChanged) {
-        const patch: Partial<ToolPart> = {
-          ...(running ? { status: 'error' } : {}),
-          ...(childrenChanged ? { children } : {})
+    for (const message of messages) {
+      message.parts.forEach((part, index) => {
+        if (!part || part.type !== 'tool') return
+        const children = part.children?.map((child) =>
+          child.type === 'tool' && (child.status === 'running' || child.status === 'pending')
+            ? { ...child, status: 'error' as const }
+            : child
+        )
+        const childrenChanged = children?.some(
+          (child, childIndex) => child !== part.children?.[childIndex]
+        )
+        const running = part.status === 'running' || part.status === 'pending'
+        if (running || childrenChanged) {
+          const patch: Partial<ToolPart> = {
+            ...(running ? { status: 'error' } : {}),
+            ...(childrenChanged ? { children } : {})
+          }
+          message.parts[index] = { ...part, ...patch }
+          this.emit({
+            type: 'tool-update',
+            chatId: this.chat.id,
+            messageId: message.id,
+            toolUseId: part.toolUseId,
+            patch
+          })
+          changed = true
         }
-        message.parts[index] = { ...part, ...patch }
-        this.emit({
-          type: 'tool-update',
-          chatId: this.chat.id,
-          messageId: message.id,
-          toolUseId: part.toolUseId,
-          patch
-        })
-        changed = true
-      }
-    })
+      })
+    }
     if (changed) this.store.saveChatSoon(this.chat.id)
   }
 

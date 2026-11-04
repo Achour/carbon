@@ -110,7 +110,8 @@ interface RemoteState {
   start(): void
   openChat(id: string | null): Promise<void>
   loadOlder(): Promise<void>
-  send(chatId: string, text: string, attachments?: Attachment[]): Promise<void>
+  /** `hold`: keep it for after the running turn rather than adding it to the turn. */
+  send(chatId: string, text: string, attachments?: Attachment[], opts?: { hold?: boolean }): Promise<void>
   interrupt(chatId: string): Promise<void>
   /**
    * A new, empty project folder on the Mac (`projects:create`), listed among
@@ -402,7 +403,7 @@ export const useRemote = create<RemoteState>((set, get) => {
       }
     },
 
-    async send(chatId, text, attachments) {
+    async send(chatId, text, attachments, opts) {
       // Ahead of the queue, as on the desktop (`sendMessage`).
       const question = parseBtw(text)
       if (question !== null) {
@@ -414,9 +415,11 @@ export const useRemote = create<RemoteState>((set, get) => {
       if (busy()) {
         // Into the running turn where it can take it; the desktop's `sendMessage`.
         const stopsBefore = stops[chatId]
-        const steered = await api
-          .invoke<boolean>('chat:steer', chatId, text, attachments?.length ? attachments : undefined)
-          .catch(() => false)
+        const steered =
+          !opts?.hold &&
+          (await api
+            .invoke<boolean>('chat:steer', chatId, text, attachments?.length ? attachments : undefined)
+            .catch(() => false))
         if (steered || stops[chatId] !== stopsBefore) return
         if (busy()) {
           set((s) => ({

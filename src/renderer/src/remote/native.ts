@@ -97,14 +97,17 @@ export interface NativeComposer {
   /** Files still being read in. */
   reading: number
   attachments: { id: string; name: string; kind: string }[]
-  queued: { id: string; text: string }[]
+  /** A send while busy goes into the turn, and a long press keeps it for after. */
+  steerable: boolean
+  /** `steering` rows went into the running turn; the rest wait behind it. */
+  queued: { id: string; text: string; steering?: boolean; cancellable?: boolean }[]
   suggestion?: string
   menu?: { kind: 'files' | 'commands'; rows: { id: string; label: string; detail?: string }[] }
 }
 
 export interface NativeComposerActions {
   setText(text: string, caret: number): void
-  submit(): void
+  submit(hold?: boolean): void
   stop(): void
   pick(id: string): void
   dismissMenu(): void
@@ -235,7 +238,7 @@ export function useNativeComposer(spec: NativeComposer, actions: NativeComposerA
   const stable = React.useMemo<NativeComposerActions>(
     () => ({
       setText: (text, caret) => latest.current.setText(text, caret),
-      submit: () => latest.current.submit(),
+      submit: (hold) => latest.current.submit(hold),
       stop: () => latest.current.stop(),
       pick: (id) => latest.current.pick(id),
       dismissMenu: () => latest.current.dismissMenu(),
@@ -946,7 +949,7 @@ const commands: Record<string, (...args: never[]) => unknown> = {
   screen: (name: string, ...args: string[]) =>
     window.dispatchEvent(new CustomEvent('carbon-native', { detail: { name, args } })),
   setText: (text: string, caret: number) => useNative.getState().composerActions?.setText(text, caret),
-  submit: () => useNative.getState().composerActions?.submit(),
+  submit: (hold?: boolean) => useNative.getState().composerActions?.submit(hold),
   stop: () => useNative.getState().composerActions?.stop(),
   pick: (id: string) => useNative.getState().composerActions?.pick(id),
   dismissMenu: () => useNative.getState().composerActions?.dismissMenu(),

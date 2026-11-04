@@ -1277,6 +1277,8 @@ outright rather than leave it queued for good.
 
 **Tab keeps it for after the turn** (`onHold`), since "change what you are doing"
 and "do this next" are different requests. "Send now" on a kept message steers it.
+A phone has no Tab, so there it is a long press on the send arrow: a menu item in
+the iOS app, and on the web client the press itself, sent on release.
 
 **Stop on the desktop sends what is pending, which is how a message reaches an agent
 stuck in a long tool:** send it, then Stop. Claude's CLI keeps an unread prompt
