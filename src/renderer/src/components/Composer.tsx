@@ -758,6 +758,7 @@ export function Composer({
   header,
   collapsible = false,
   floating = false,
+  underlaid = false,
   submitLabel
 }: {
   /** May be async; if it rejects, the composer restores the draft. */
@@ -837,6 +838,8 @@ export function Composer({
   collapsible?: boolean
   /** Drawn over the transcript, which scrolls under it: the frame goes translucent. */
   floating?: boolean
+  /** Floating, and the transcript is scrolled so that it rests under the frame. */
+  underlaid?: boolean
   /**
    * Words on the send button instead of the arrow, for a composer whose send
    * is not a message — the Scheduled page's, where it saves the task.
@@ -1456,7 +1459,13 @@ export function Composer({
           CHAT_FRAME,
           // Over the transcript, the frame lets it through — blurred, so the
           // words passing under it never compete with the ones being typed.
-          floating && 'bg-card/60 backdrop-blur-md backdrop-saturate-150',
+          // With the reader at the bottom nothing rests under it but the
+          // column's foot spacer, so the same colour is painted solid and the
+          // compositor is spared the blur on every frame of a stream. Solid
+          // rather than clear, because a line landing passes under the frame
+          // for the few frames the follow takes to catch up.
+          floating &&
+            (underlaid ? 'bg-card/60 backdrop-blur-md backdrop-saturate-150' : 'composer-settled'),
           // A wrapping row, so folding is only a change of basis: folded, the
           // input and the toolbar share one line; open, each takes its own.
           // The container is the frame, since a content-sized toolbar cannot

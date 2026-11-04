@@ -630,6 +630,22 @@
 :root[data-translucent='true']:not(.dark) [data-composer] {
   background-color: oklch(from var(--card) l c h / 0.62);
 }
+/* The floating composer with nothing resting under it: the colour `bg-card/60`
+   comes to over the column, solid, so the compositor is spared the blur on every
+   frame of a stream. Glass has no one colour to paint (the desktop shows through
+   the column), so there the frame stays translucent and keeps its blur. The
+   chroma is `backdrop-saturate-150` applied by hand, without which a tinted
+   theme's frame shifts colour at the moment the blur comes on. */
+.composer-settled {
+  background-color: color-mix(
+    in srgb,
+    var(--card) 60%,
+    oklch(from var(--background) l calc(c * 1.5) h)
+  );
+}
+:root[data-translucent='true'] .composer-settled {
+  backdrop-filter: blur(12px) saturate(150%);
+}
 /* The same reasoning for a card on the frosted home column (the launch list):
    opaque, it reads as a chip pasted over glass. */
 /* A selected sidebar row over the frost: raised, but letting it through. */

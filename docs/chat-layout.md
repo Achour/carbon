@@ -81,6 +81,18 @@ border 508, prose 522.
   turn rail leave room for. The column's `ResizeObserver` already keeps a
   pinned reader on the bottom when it changes. The frame is translucent with a
   backdrop blur (`floating`), over a short gradient below the frame.
+- **The blur runs only while the transcript rests under the frame.** With the
+  reader pinned, only the foot spacer is there, yet `backdrop-filter` made the
+  compositor resample on every frame of a stream: `Display::DrawAndSwap` per
+  ~2.6 s stream measured ~89 → ~30 ms in one column and ~198 → ~94 ms in four,
+  median of three production runs on an M3 Pro. So a pinned frame paints the
+  colour the blur would come to (`.composer-settled`) and `underlaid` restores
+  the real thing when the reader scrolls up. Solid, not clear, because a landing
+  line passes under the frame until the follow catches up. Against the old
+  frame over the empty foot, no channel differs by more than 3/255 on the default
+  themes; a strongly tinted test theme reaches 6/255 (mean 1.5), since oklch
+  chroma only approximates `saturate()`. Translucent chrome has no one colour to
+  paint and keeps the blur throughout.
 - **No session-info button.** The activity glyph that opened `SessionPanel`
   was removed from the bar; the component remains, unmounted.
 

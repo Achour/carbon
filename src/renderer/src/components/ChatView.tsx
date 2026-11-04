@@ -909,6 +909,7 @@ export const ChatView = React.memo(function ChatView({
                 onDraftChange={(next) => saveChatDraft(chat.id, next)}
                 collapsible={collapsible}
                 floating
+                underlaid={showJump}
                 // Only the thread's own chat takes the caret on mount. Every
                 // column mounts at once when a thread opens, and each grabbing it
                 // left focus — and with it the thread's focused chat — on the
