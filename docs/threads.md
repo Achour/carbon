@@ -474,7 +474,12 @@ default.
   the dialog under the user. Escape closes the overlay first, then the rail. `railHidden` is not the pin and is not persisted.
   Opening the panel sets it, so the cards never land over the chat by
   themselves — the top-bar button brings them up over the panel on demand —
-  and closing the panel clears it, so the rail is back beside the chat.
+  and closing the panel clears it, so the rail is back beside the chat. It
+  clears only once the panel has finished closing (`PANEL_TRANSITION_MS`): a
+  docked panel gives its width up over that transition, and the rail landing at
+  once squeezed the chat from 581px to 293px for a frame, re-wrapping a long
+  transcript twice. Keeping the rail mounted while hidden was tried first and
+  saved nothing, because building the cards was never the cost.
 - **What it costs.** The focused chat's meta is subscribed inside the rail,
   not in `ThreadView`, so a side chat's update re-renders the rail and not
   every column. `useNarrow` stores only the crossing of the threshold, so a

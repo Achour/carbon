@@ -63,6 +63,7 @@ import {
   ContextMenuTrigger
 } from '@/components/ui/context-menu'
 import { SessionRail } from '@/components/SessionRail'
+import { PANEL_TRANSITION_MS } from '@/components/RightPanel'
 
 /**
  * A thread: one chat and the side chats opened beside it, drawn as up to
@@ -285,8 +286,22 @@ function ThreadHeader({ chat, ids }: { chat: ChatMeta; ids: readonly string[] })
   // away — it would otherwise land over the work until clicked off — and the
   // top bar's button brings it up on demand. Back to one chat and no panel, it
   // is beside the chat again: the pin is untouched, only the overlay goes.
+  //
+  // Coming back from a closing panel it waits for the panel to finish. A docked
+  // panel gives its width up over a transition, so the rail landing at once took
+  // its 288px out of what the chat still had: 581px to 293px for a frame, and a
+  // long transcript re-wrapped at that width and again straight after.
+  const panelWasOpen = React.useRef(panelOpen)
   React.useEffect(() => {
-    setRailHidden(panelOpen || severalChats)
+    const closing = panelWasOpen.current && !panelOpen
+    panelWasOpen.current = panelOpen
+    const hide = panelOpen || severalChats
+    if (hide || !closing) {
+      setRailHidden(hide)
+      return
+    }
+    const timer = window.setTimeout(() => setRailHidden(false), PANEL_TRANSITION_MS)
+    return () => window.clearTimeout(timer)
   }, [panelOpen, severalChats, setRailHidden])
   // A panel docked beside the columns: too little width left for a grid.
   const panelDocked = useApp((s) => s.panelOpen && !panelFloats(s))

@@ -249,7 +249,7 @@ const POPUP_MAX_W = 460
 const POPUP_TOP = 52
 const POPUP_INSET = 16
 const POPUP_RADIUS = 12
-const PANEL_TRANSITION_MS = 200
+export const PANEL_TRANSITION_MS = 200
 
 // File-tree dock bounds: never below a readable tree, never so wide the
 // viewer disappears.
