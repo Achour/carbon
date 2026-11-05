@@ -850,6 +850,15 @@ export const ChatView = React.memo(function ChatView({
                       <span className="shrink-0 text-[10px] tracking-wide text-muted-foreground/60 uppercase">
                         next step
                       </span>
+                      <button
+                        type="button"
+                        onClick={() => void interrupt(chat.id)}
+                        aria-label="Send now"
+                        title="Send now — stops the current step, and the agent reads this next"
+                        className="shrink-0 rounded p-0.5 transition-colors hover:bg-accent hover:text-foreground"
+                      >
+                        <ArrowUp className="size-3" />
+                      </button>
                       {s.cancellable && (
                         <button
                           type="button"

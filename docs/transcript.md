@@ -1280,6 +1280,12 @@ and "do this next" are different requests. "Send now" on a kept message steers i
 A phone has no Tab, so there it is a long press on the send arrow: a menu item in
 the iOS app, and on the web client the press itself, sent on release.
 
+**A step can take minutes, so a pending row has its own "Send now".** A long tool or
+a long stretch of writing holds a steer back for as long as it runs: measured on real
+sessions, the waits reached two and a half minutes, and with the button gone that
+read as being unable to send at all. It is Stop under another name, since Stop on the
+desktop sends what is pending anyway.
+
 **Stop on the desktop sends what is pending, which is how a message reaches an agent
 stuck in a long tool:** send it, then Stop. Claude's CLI keeps an unread prompt
 through an interrupt and runs it next, so `interrupt` reports no idle while one is

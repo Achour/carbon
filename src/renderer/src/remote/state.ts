@@ -468,6 +468,12 @@ export const useRemote = create<RemoteState>((set, get) => {
     },
 
     async sendQueuedNow(chatId, id) {
+      // One already in the turn is only waiting for the step to end, so it needs that
+      // step stopped. Not `interrupt()`: that one discards what is pending.
+      if (get().steers[chatId]?.some((s) => s.id === id)) {
+        await api.invoke('chat:interrupt', chatId).catch((err) => set({ error: message(err) }))
+        return
+      }
       const item = get().queued[chatId]?.find((q) => q.id === id)
       if (!item) return
       const busy = (): boolean => (get().statuses[chatId] ?? 'idle') !== 'idle'

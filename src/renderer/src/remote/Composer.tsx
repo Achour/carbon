@@ -483,6 +483,15 @@ export function Composer({
             >
               <CornerDownRight className="size-3.5 shrink-0" />
               <span className="min-w-0 flex-1 truncate">{steerText(s)}</span>
+              <button
+                type="button"
+                aria-label="Send now"
+                className="flex h-8 shrink-0 items-center gap-1 rounded-full px-2.5 text-[13px] text-foreground active:bg-accent"
+                onClick={() => void sendQueuedNow(chatId, s.id)}
+              >
+                <ArrowUp className="size-3.5" />
+                Send now
+              </button>
               {s.cancellable && (
                 <button
                   type="button"
