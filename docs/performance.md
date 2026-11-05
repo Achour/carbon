@@ -241,10 +241,13 @@ time.
   design: a lone call becoming the first row of a group, and a run whose
   summary card hides its edits down to a single card.
 - **The foot's "Thinking…" / "Working…" is a slot and a label, and they follow
-  different rules.** The *slot* is reserved for as long as the turn runs
-  (`showActivity`): keyed on whether a call was in flight it unmounted and
-  remounted once per call, and the ~28px it takes moved the foot of the column
-  each time. The *label* draws only while nothing else on screen is moving
+  different rules.** The *slot* lasts as long as the turn runs (`showActivity`):
+  as a row keyed on whether a call was in flight it unmounted and remounted once
+  per call, and the ~28px it takes moved the foot of the column each time.
+  Reserving that row for the whole turn stopped the motion and left an empty band
+  above the composer under every step, so the slot now takes no height: it is
+  placed out of flow inside the foot spacer's room above the composer, and neither
+  it nor a turn starting or ending moves the column. The *label* draws only while nothing else on screen is moving
   (`showActivityLabel`): drawn unconditionally it sat under a tool row that
   already carried a spinner and under a paragraph still growing — the same
   statement twice, and the reader noticed. So it appears before the turn has

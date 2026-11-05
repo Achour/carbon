@@ -730,7 +730,7 @@ export const ChatView = React.memo(function ChatView({
           onScroll={onScroll}
           className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]"
         >
-          <div ref={columnRef} className="mx-auto flex max-w-3xl flex-col gap-4 px-6 py-6">
+          <div ref={columnRef} className="mx-auto flex max-w-3xl flex-col gap-4 px-6 pt-6">
             {/* A new column opens on an empty pane, which on its own reads as a
                 conversation that failed to load — so it says, in one line,
                 what it is and where it runs. */}
@@ -752,15 +752,22 @@ export const ChatView = React.memo(function ChatView({
                 the two are separate children and the array is its own implicit
                 fragment, which puts the live node in a different parent again. */}
             {nodes}
-            {/* `-mt-2`: the label is a 28px row of its own, so the column's
-                full gap on top of it set it a paragraph-and-a-half below the
-                step it follows. */}
-            {showActivity && (
-              <div className="-mt-2 min-h-7">
-                <StreamingIndicator label={activityLabel} visible={showActivityLabel} />
-              </div>
-            )}
-            <div className="h-[calc(var(--composer-h,0px)+0.5rem)] shrink-0" />
+            {/* The whole of the room under the last line: the composer's height
+                plus 1.5rem, idle or running. `-mt-4` takes the column's gap back,
+                and the column has no bottom padding, or they stack into a band
+                of nothing above a composer that is already cleared.
+
+                The activity label draws inside that 1.5rem, out of flow. As a row
+                of its own it had to be reserved for the whole turn so the foot
+                would not move per call, and an empty reserved row under every
+                step is what the gap was. */}
+            <div className="relative -mt-4 h-[calc(var(--composer-h,0px)+1.5rem)] shrink-0">
+              {showActivity && (
+                <div className="pointer-events-none absolute inset-x-0 top-0 flex h-6 items-center">
+                  <StreamingIndicator label={activityLabel} visible={showActivityLabel} />
+                </div>
+              )}
+            </div>
           </div>
         </div>
 

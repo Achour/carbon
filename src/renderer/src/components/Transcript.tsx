@@ -840,7 +840,8 @@ export function useTranscript({
   // there is a moment when the last has returned and the next has not started
   // — so the row unmounted and remounted once per call, and the ~28px it takes
   // moved the foot of the column (and the follow-scroll with it) each time. So
-  // the height is reserved while the chat is busy, whatever the label does.
+  // the slot takes no height at all: it is a place inside the room the column
+  // already leaves above the composer (see the foot spacer in `ChatView`).
   //
   // The label is the part that must not *repeat*. Drawn unconditionally it sat
   // under a tool row that already carried a spinner, and under a paragraph that

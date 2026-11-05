@@ -81,6 +81,12 @@ border 508, prose 522.
   turn rail leave room for. The column's `ResizeObserver` already keeps a
   pinned reader on the bottom when it changes. The frame is translucent with a
   backdrop blur (`floating`), over a short gradient below the frame.
+- **The spacer is the only room under the last line.** The composer's height
+  plus 1.5rem, with `-mt-4` taking the column's gap back and no bottom padding on
+  the column. Those two stacked on top of it, with a reserved row for "Working…",
+  used to put 48px between an idle transcript and the frame and 84px during a
+  turn. The label now draws out of flow inside that 1.5rem, so the room is one
+  number whether a turn is running or not.
 - **The blur runs only while the transcript rests under the frame.** With the
   reader pinned, only the foot spacer is there, yet `backdrop-filter` made the
   compositor resample on every frame of a stream: `Display::DrawAndSwap` per
