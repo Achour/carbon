@@ -810,6 +810,10 @@ class ClaudeSession implements AgentSession {
     () => this.store.saveChatSoon(this.chat.id),
     () => this.disposed
   )
+
+  flushDeltas(): void {
+    this.deltas.flush()
+  }
   // Resolves once the SDK `init` message arrives (or the session dies), so
   // control requests (mcp status, models, account, usage) issued right after a
   // lazily-started session wait for the CLI to be ready instead of racing it.
@@ -4604,6 +4608,11 @@ export class ChatManager {
    */
   sessionLive(chatId: string): boolean {
     return this.sessionFor(chatId) !== null
+  }
+
+  /** Ship a chat's held stream deltas before it is snapshotted — see `AgentSession.flushDeltas`. */
+  flushDeltas(chatId: string): void {
+    this.sessions.get(chatId)?.flushDeltas?.()
   }
 
   async rewindFiles(chatId: string, userMessageId: string, dryRun: boolean): Promise<RewindResult> {

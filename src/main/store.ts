@@ -224,6 +224,23 @@ const HYDRATE_BYTES = 2 * 1024 * 1024
 const HYDRATE_MIN = 12
 
 /**
+ * A message's serialized size, for the window budget — measured once per
+ * message object. A message a session is still mutating in place keeps the
+ * size it was first measured at, which only nudges where a window starts;
+ * measuring it fresh each time would re-encode the largest message in the chat
+ * (the corpus holds a 5.3 MB one) on every open.
+ */
+const measuredBytes = new WeakMap<object, number>()
+function messageBytes(message: ChatMessage): number {
+  let bytes = measuredBytes.get(message)
+  if (bytes === undefined) {
+    bytes = JSON.stringify(message).length
+    measuredBytes.set(message, bytes)
+  }
+  return bytes
+}
+
+/**
  * Injected the way worktree.ts injects its clock and codex.ts its SDK factory:
  * so the residency and debounce behaviour can be exercised by `node --test`
  * without waiting seconds or allocating megabytes.
@@ -1300,6 +1317,20 @@ export class Store {
     }
   }
 
+  /**
+   * Where a message sits in a chat already in memory, searched from the tail
+   * (where nearly every message an event names is). Never hydrates or touches
+   * the LRU: it answers for events, which only a session holding the chat emits.
+   */
+  messageIndex(chatId: string, messageId: string): number | undefined {
+    const chat = this.resident.get(chatId)?.chat ?? this.live(chatId)
+    if (!chat) return undefined
+    for (let i = chat.messages.length - 1; i >= 0; i--) {
+      if (chat.messages[i].id === messageId) return i
+    }
+    return undefined
+  }
+
   getChat(id: string): ChatData | null {
     const resident = this.resident.get(id)
     if (resident) {
@@ -1409,6 +1440,25 @@ export class Store {
   }
 
   /**
+   * Where one window ending just below `upto` starts, over messages already in
+   * memory — `readWindow`'s rule (`HYDRATE_TAIL`, `HYDRATE_BYTES`,
+   * `HYDRATE_MIN`) without the disk, and never below `floor`, the first loaded
+   * index. Sizes come from `messageBytes`.
+   */
+  private windowFrom(chat: ChatData, upto: number, floor: number): number {
+    let from = upto
+    let taken = 0
+    let bytes = 0
+    while (from > floor) {
+      if (taken >= HYDRATE_MIN && (taken >= HYDRATE_TAIL || bytes >= HYDRATE_BYTES)) break
+      from--
+      taken++
+      bytes += messageBytes(chat.messages[from])
+    }
+    return from
+  }
+
+  /**
    * The first index that is actually loaded. `unloaded` is a contiguous prefix
    * by construction — hydration takes a suffix and loadOlder only ever extends
    * it downwards — but this reads the real maximum rather than assuming it, so a
@@ -1444,7 +1494,27 @@ export class Store {
     const chat = this.getChat(id)
     if (!chat) return null
     const entry = this.resident.get(id)
-    const hiddenBefore = entry ? this.loadedFrom(entry) : 0
+    // One window, not everything loaded. Hydration bounds what is read from
+    // disk, but a chat that stays resident keeps every window the reader
+    // scrolled back through and every message a session appended since, and
+    // the view used to hand all of it over — so reopening a chat that had been
+    // worked in for an hour cloned and mounted hundreds of messages to show the
+    // last screenful. `loadOlder` serves the rest from memory when asked.
+    //
+    // Except whatever is still running: a call held open by a background agent
+    // can sit many windows back, and the transcript is where its card, its
+    // roster entry and its live children are drawn from — left above the
+    // window, the agent would vanish from view for as long as it ran. So the
+    // window reaches back to the earliest message holding a live call, the
+    // same shallow scan the write pass makes over every loaded row.
+    const loaded = entry ? this.loadedFrom(entry) : 0
+    let hiddenBefore = this.windowFrom(chat, chat.messages.length, loaded)
+    for (let i = loaded; i < hiddenBefore; i++) {
+      if (hasLiveTool(chat.messages[i])) {
+        hiddenBefore = i
+        break
+      }
+    }
     if (!hiddenBefore) return { chat, hiddenBefore: 0 }
     // A detached copy, never handed to a session: its messages array is a slice,
     // so index no longer equals seq and every write path would mis-address it.
@@ -1464,6 +1534,16 @@ export class Store {
     if (!entry) return null
     const upto = Math.max(0, Math.min(Math.trunc(before), chat.messages.length))
     if (upto === 0) return { from: 0, messages: [] }
+    // Below a view that `viewChat` bounded, the next window is already in
+    // memory: served from there, never asked of the database, which may not
+    // hold it yet (a debounce behind, or a chat another instance owns, which
+    // this one never writes). Read from disk only once the window would reach
+    // a placeholder.
+    const loaded = this.loadedFrom(entry)
+    if (upto > loaded) {
+      const from = this.windowFrom(chat, upto, loaded)
+      return { from, messages: chat.messages.slice(from, upto) }
+    }
     let from = upto
     for (const row of this.readWindow(id, upto)) {
       from = row.seq

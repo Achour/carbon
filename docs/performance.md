@@ -1,4 +1,4 @@
-# Performance: first paint and streaming
+# Performance: first paint, opening a chat, and streaming
 
 *Part of Carbon's design notes. The contract, the session flow and the provider
 seams are in `CLAUDE.md`; the other surfaces are the neighbouring files in this
@@ -145,6 +145,68 @@ turn settles — they are being hidden, so the cost is paid on content that is
 leaving. `sameHistory` comparing `ctx.busy` is what stops the header ticking
 after the turn ends, and comparing `turnChoices` by identity is what makes a
 click reach the cached history nodes at all.
+
+### Opening a chat (`openChat`, `ChatView`'s landing, `parsedMarkdown`, `viewChat`)
+
+Switching chats was measured on copies of six real chats (`switch-probe`, an
+`AIGUI_E2E` script that times `openChat` per frame): the round trip to main
+was 2–10 ms and the mount one 60–100 ms long task, yet every switch took
+**500–770 ms to come to rest**, because the first frame with content was drawn
+up to 5,400 px above the bottom and the transcript then *glided* down for
+55–73 frames. None of the costs below was a slow algorithm; each was the open
+being treated as something else — a stream, an arrival, a first visit.
+
+- **The open is one commit, and it lands at the bottom.** `openChat` used to
+  switch first (an empty transcript under the new header) and fill in after the
+  round trip, so the column grew from nothing, the follow's `ResizeObserver`
+  read that as a pinned reader falling behind a stream, and eased the whole
+  window into view — painting every message on the way. Now the transcript is
+  fetched *before* anything switches (`openSeq` and an `activeId` check drop a
+  superseded open), and `ChatView` snaps in a layout effect on the commit where
+  messages first appear, then snaps rather than glides for `OPEN_SETTLE_MS`
+  while images and diagrams finish growing the column. Main answers `chats:get`
+  from the live in-memory chat after flushing the session's held stream deltas
+  (`flushDeltas`): a session appends text to the chat at once and ships it up to
+  80 ms later, so a snapshot taken in between would get that text printed twice.
+  A thread's columns are fetched alongside, so they no longer mount empty either.
+- **History plays no entrance.** Turn headers, tool rows and cards carry a
+  one-shot `step-in`/`enter` (450 ms, with a blur), and every one of them
+  replayed at once on each open. The landing — and a prepend of older history —
+  `finish()`es the entrances in the scroller; the infinite ones (spinners,
+  shimmer) are left alone, since `finish()` throws on them and they mean
+  something is running.
+- **Nothing settled is computed twice.** A chat switch unmounts the whole
+  transcript, so `memo` cannot carry anything across it. Three caches do, each
+  keyed by content because everything arrives as a fresh IPC clone:
+  react-markdown's element trees (`parsedMarkdown`, a text-length budget,
+  offered only settled text — sealed chunks, a finished tail, `<Markdown
+  cache>`), drawn Mermaid SVGs, and diagram layouts. And rehype-highlight's
+  attacher was building a new lowlight and registering every grammar on *each
+  render of each block* — ~10 ms per open and again on every re-parse of a
+  streaming tail — so the transform is built once.
+- **The view is one window, however much is loaded.** Hydration bounded what
+  was read from disk, but a resident chat keeps every window scrolled through
+  and every message a session appended, and `viewChat` handed all of it over.
+  It now returns one window by the hydration rule (`windowFrom`), reaching back
+  only to the earliest message holding a live call so a background agent keeps
+  its card; `loadOlder` serves windows from memory while they are loaded, which
+  matters for a chat this instance never writes. Two events can then address a
+  message above the window — a late `message` re-statement and a `truncate` —
+  and `shared/transcriptWindow.ts` is the one rule both reducers apply. A
+  message is placed by the index `emit` stamps on it, never by its timestamp:
+  two messages can share a millisecond. The phone's image endpoint authorizes
+  against everything loaded, not just the view, or an image in history the
+  phone paged in would be refused.
+- **A hidden column never pages.** A column under an expanded sibling or an
+  agent page is `display: none`, measures zero, and so read as a window too
+  short to scroll: it loaded window after window until the history ran out,
+  out of sight. `maybeLoadEarlier` skips a zero-height scroller and is asked
+  again when the scroller is shown.
+
+After: the first content frame is at the bottom and stays there; a revisit is
+30–60 ms with mostly no long task (dev build), markdown parsing in the profile
+fell from 345 ms to 71 ms over twelve switches and grammar registration from
+124 ms to nothing.
 
 ### Smooth streaming (`lib/streamReveal.ts`, `useStreamText`)
 

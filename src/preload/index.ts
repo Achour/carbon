@@ -63,6 +63,7 @@ const api: Api = {
   }) => invoke('canvas:save', input),
   canvasDelete: (id: string) => invoke('canvas:delete', id),
   getChat: (id: string) => invoke('chats:get', id),
+  getChats: (ids: string[]) => invoke('chats:get-many', ids),
   loadOlderMessages: (id: string, before: number) => invoke('chats:load-older', id, before),
   createChat: (opts: {
     cwd: string

@@ -421,6 +421,10 @@ export class CursorSession implements AgentSession {
     () => this.disposed
   )
 
+  flushDeltas(): void {
+    this.deltas.flush()
+  }
+
   constructor(
     chat: ChatData,
     emit: Emit,

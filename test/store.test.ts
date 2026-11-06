@@ -1388,6 +1388,76 @@ test('loadOlder promotes placeholders to the real messages, and is idempotent', 
   rmSync(dir, { recursive: true, force: true })
 })
 
+test('a resident chat reopens as one window, however much of it is loaded', async () => {
+  // A chat stays resident with every window the reader scrolled back through
+  // and every message a session appended since. The view must still be one
+  // window, or each reopen clones and mounts all of it.
+  const dir = userDir()
+  const id = await seedChat(dir, 300)
+  const store = new Store(dir)
+  let cursor = store.viewChat(id)!.hiddenBefore
+  for (let i = 0; i < 3; i++) cursor = store.loadOlder(id, cursor)!.from
+  assert.equal(cursor, 60, 'four windows are resident')
+  const chat = store.getChat(id)!
+  for (let i = 300; i < 400; i++) chat.messages.push(userMsg(`m${i}`, `${i}:`))
+
+  const view = store.viewChat(id)!
+  assert.equal(view.hiddenBefore, 340)
+  assert.deepEqual(view.chat.messages.map((m) => m.id), chat.messages.slice(340).map((m) => m.id))
+
+  // Walking back goes through memory (including the 100 never written), then
+  // reaches the disk at the placeholders, and covers the chat exactly once.
+  const seen = view.chat.messages.map((m) => m.id)
+  for (let before = view.hiddenBefore, guard = 0; before > 0 && guard < 20; guard++) {
+    const older = store.loadOlder(id, before)!
+    assert.ok(older.from < before, 'every window must move the cursor')
+    assert.equal(older.messages.length, before - older.from)
+    seen.unshift(...older.messages.map((m) => m.id))
+    before = older.from
+  }
+  assert.deepEqual(seen, Array.from({ length: 400 }, (_, i) => `m${i}`))
+  await store.flushAll()
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('the view reaches back to a call that is still running', async () => {
+  // A background agent's call stays open while the conversation moves on; its
+  // card and roster entry are drawn from the transcript, so it must stay in view.
+  const dir = userDir()
+  const store = new Store(dir)
+  const chat = makeChat()
+  store.addChat(chat)
+  for (let i = 0; i < 150; i++) {
+    chat.messages.push(i === 20 ? toolMsg(`m${i}`, 'running') : userMsg(`m${i}`, `${i}`))
+  }
+  assert.equal(store.viewChat(chat.id)!.hiddenBefore, 20)
+  ;(chat.messages[20] as AssistantMessage).parts = [
+    { type: 'tool', toolUseId: 't', name: 'Bash', status: 'success' }
+  ]
+  assert.equal(store.viewChat(chat.id)!.hiddenBefore, 90, 'once it settles, one window again')
+  await store.flushAll()
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('a window held only in memory is served from memory', async () => {
+  // A chat another instance owns is never written by this one, so messages it
+  // appended exist nowhere but in memory. Asking the database for them would
+  // return nothing and leave "load earlier" asking forever.
+  const dir = userDir()
+  const store = new Store(dir)
+  const chat = makeChat()
+  store.addChat(chat)
+  for (let i = 0; i < 150; i++) chat.messages.push(userMsg(`m${i}`, `${i}`))
+  const view = store.viewChat(chat.id)!
+  assert.equal(view.hiddenBefore, 90)
+  const older = store.loadOlder(chat.id, view.hiddenBefore)!
+  assert.equal(older.from, 30)
+  assert.equal(older.messages[0].id, 'm30')
+  assert.equal(store.loadOlder(chat.id, older.from)!.from, 0)
+  await store.flushAll()
+  rmSync(dir, { recursive: true, force: true })
+})
+
 test('a windowed chat is still evictable — placeholders do not pin it in memory', async () => {
   // Regression guard for the accounting: the reconcile pass cannot verify rows
   // it does not hold, and if that counted as "unverified" the chat would be

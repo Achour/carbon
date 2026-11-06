@@ -1,3 +1,4 @@
+import { placeMessage, truncateWindow } from '@shared/transcriptWindow'
 import { create } from 'zustand'
 import type {
   PendingSteer,
@@ -648,13 +649,7 @@ export function reduce(s: RemoteState, ev: ChatEvent): Partial<RemoteState> {
       const chats = s.chats.map((c) => (c.id === ev.chatId ? { ...c, updatedAt: Date.now() } : c))
       return {
         chats,
-        ...patchOpen((msgs) => {
-          const i = msgs.findIndex((m) => m.id === ev.message.id)
-          if (i < 0) return [...msgs, ev.message]
-          const next = msgs.slice()
-          next[i] = ev.message
-          return next
-        })
+        ...patchOpen((msgs) => placeMessage(msgs, ev.message, open?.hiddenBefore ?? 0, ev.index))
       }
     }
     case 'part':
@@ -687,14 +682,7 @@ export function reduce(s: RemoteState, ev: ChatEvent): Partial<RemoteState> {
     case 'context-usage':
       return open ? { open: { ...open, contextUsage: ev.usage } } : {}
     case 'truncate':
-      return open
-        ? {
-            open: {
-              ...open,
-              messages: open.messages.slice(0, Math.max(0, ev.keep - open.hiddenBefore))
-            }
-          }
-        : {}
+      return open ? { open: { ...open, ...truncateWindow(open.messages, open.hiddenBefore, ev.keep) } } : {}
     case 'meta': {
       // A cleared field crosses the wire as `null` (`wire` in remoteAccess.ts).
       const patch = Object.fromEntries(

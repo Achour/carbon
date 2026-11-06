@@ -35,6 +35,7 @@ import { gitAction, gitActionPrompt, type GitActionId } from '@/lib/gitActions'
 import { changedPathsFromParts } from '@/lib/turnChanges'
 import { carryDisclosure, type TurnChoice } from '@/lib/turnFold'
 import { isDelivery } from '@shared/delivery'
+import { placeMessage, truncateWindow } from '@shared/transcriptWindow'
 import { basename } from '@/lib/format'
 import {
   adoptDisk,
@@ -1793,6 +1794,36 @@ function canvasScopePatch(
 function homeCwdLeaving(outgoing: ChatMeta | undefined, selectedCwd: string | null): string | null {
   if (!outgoing) return selectedCwd
   return selectedCwd === outgoing.cwd ? projectRoot(outgoing) : selectedCwd
+}
+
+/**
+ * Bumped by every chat switch, so an `openChat` whose transcript lands after a
+ * newer switch began knows it was superseded. See `openChat`.
+ */
+let openSeq = 0
+
+/**
+ * A plan still waiting for review, restored with the chat that asked: its
+ * request goes back in `permissions` (replacing any copy of the same request)
+ * and the chat reads as waiting on it.
+ */
+function planReviewPatch(
+  s: Pick<AppState, 'permissions' | 'statuses'>,
+  id: string,
+  chat: { pendingPlanReview?: PersistedPlanReview }
+): Partial<AppState> {
+  const review = chat.pendingPlanReview
+  if (!review) return {}
+  return {
+    permissions: {
+      ...s.permissions,
+      [id]: [
+        ...(s.permissions[id] ?? []).filter((request) => request.id !== review.requestId),
+        persistedPlanRequest(id, review)
+      ]
+    },
+    statuses: { ...s.statuses, [id]: 'waiting-permission' }
+  }
 }
 
 /**
@@ -4685,7 +4716,16 @@ export const useApp = create<AppState>((set, get) => ({
     // a relaunch's restored chat land, and every one of them would otherwise
     // reach the one state the sidebar cannot draw — a chat on screen with no
     // row, no search hit and a composer still willing to send into it.
-    if (id && side?.archivedAt !== undefined) await get().setChatArchived(id, false)
+    //
+    // The open claims its place in line *before* that await, not after: claimed
+    // late, an archived chat whose restore was still in flight overtook a chat
+    // opened after it, and won.
+    const seq = ++openSeq
+    const from = get().activeId
+    if (id && side?.archivedAt !== undefined) {
+      await get().setChatArchived(id, false)
+      if (seq !== openSeq) return
+    }
     // Parked hidden-stream events are superseded: the target chat refetches
     // from main below, and events for the outgoing chat no longer apply.
     hiddenStream.length = 0
@@ -4725,17 +4765,57 @@ export const useApp = create<AppState>((set, get) => ({
       void get().refreshCanvases()
       return
     }
+    // The transcript is fetched *before* anything switches, and the switch is
+    // one commit carrying it. Switching first and filling in after the round
+    // trip drew the new chat empty for a frame or two — header, composer and a
+    // bare column — and then mounted the whole transcript into it a second
+    // time round, which is what opening a chat looked like: a blink, then a
+    // pop. The round trip is a few milliseconds (`viewChat` is a synchronous
+    // read of the resident window), so the outgoing chat simply stays up for
+    // them. Main answers from the live in-memory chat, and nothing it emits
+    // after answering can overtake the answer on the one IPC pipe, so the
+    // snapshot is complete as of the moment it lands — nothing to layer over it.
+    //
+    // Superseded while it was in flight — another open, `openChat(null)`, a new
+    // chat, a delete — and it is dropped: `openSeq` catches the opens, the
+    // `activeId` check everything else that moves the chat on screen.
+    // A thread's columns come back with it, and are fetched alongside its own
+    // transcript for the same reason: fetched after the switch, each column
+    // mounted empty and filled in a commit later. Only a column with no slot
+    // to keep — one coming back with a thread that was away — needs it. In
+    // **one** request (`getChats`): separate replies awaited together let an
+    // event for the chat answered first land before the switch, while it was
+    // still off screen, and be dropped.
+    const prefetch =
+      id === from
+        ? []
+        : liveColumns(get().chats, id, get().sideColumnsByChat[id] ?? []).filter(
+            (c) => !isAgentColumn(c) && !get().sideChats[c]
+          )
+    const [view, ...columnViews] = prefetch.length
+      ? await window.api.getChats([id, ...prefetch])
+      : [await window.api.getChat(id)]
+    if (seq !== openSeq || get().activeId !== from) return
+    // Drop cached local images so this chat's inline pictures re-read from
+    // disk — it may have been overwritten (by a background turn or externally)
+    // since it was last shown. Only now the switch is certain: done before the
+    // round trip, it made the chat being left re-read its own.
+    invalidateLocalImages()
+    const prefetched = new Map<string, SideChatSlot>()
+    prefetch.forEach((c, i) => {
+      const v = columnViews[i]
+      if (v) prefetched.set(c, { ...EMPTY_SIDE_SLOT, messages: v.chat.messages, hiddenBefore: v.hiddenBefore })
+    })
+    const chat = view?.chat
+    const cwdChanged = !!chat && get().selectedCwd !== chat.cwd
     set((s) => ({
       // Restore this chat's own tab set (empty if never visited); stash the
-      // outgoing chat's. Done synchronously so tabs swap on click, not after
-      // the getChat round-trip below.
+      // outgoing chat's.
       ...chatSwitchPatch(s, id),
       activeId: id,
-      messages: [],
+      messages: chat?.messages ?? [],
       contextUsage: null,
-      // Cleared synchronously, or the outgoing chat's count would briefly offer
-      // "load earlier" on a chat that has nothing earlier to load.
-      hiddenBefore: 0,
+      hiddenBefore: view?.hiddenBefore ?? 0,
       loadingOlder: false,
       planPanel: null,
       // Cleared synchronously when the *project* changes, for the reason
@@ -4749,7 +4829,8 @@ export const useApp = create<AppState>((set, get) => ({
       scheduledOpen: false,
       panelMaximized: false,
       // Panel visibility is per chat; unvisited chats start closed.
-      panelOpen: s.panelOpenByChat[id] ?? false
+      panelOpen: s.panelOpenByChat[id] ?? false,
+      ...(chat ? { selectedCwd: chat.cwd, ...planReviewPatch(s, id, chat) } : {})
     }))
     // The thread's columns came back with the switch, but a column restored
     // from storage after a relaunch — or one whose slot a close released — has
@@ -4764,7 +4845,7 @@ export const useApp = create<AppState>((set, get) => ({
       if (alive.length !== st.sideColumns.length || missing.length) {
         set((cur) => {
           const sideChats = { ...cur.sideChats }
-          for (const c of missing) sideChats[c] = EMPTY_SIDE_SLOT
+          for (const c of missing) sideChats[c] = prefetched.get(c) ?? EMPTY_SIDE_SLOT
           // An expansion or focus restored onto a column just dropped would
           // hide every column left, or send keys nowhere.
           const shown = (c: string | null): boolean => c === id || (!!c && alive.includes(c))
@@ -4776,45 +4857,10 @@ export const useApp = create<AppState>((set, get) => ({
           }
         })
       }
-      if (missing.length) void get().hydrateSideChats(missing)
+      const unfetched = missing.filter((c) => !prefetched.has(c))
+      if (unfetched.length) void get().hydrateSideChats(unfetched)
     }
-    // Drop cached local images so this chat's inline pictures re-read from disk —
-    // it may have been overwritten (by a background turn or externally) since it
-    // was last shown.
-    invalidateLocalImages()
-    const view = await window.api.getChat(id)
-    // Guard against a chat switch happening while we awaited.
-    if (get().activeId === id && view) {
-      const { chat, hiddenBefore } = view
-      const cwdChanged = get().selectedCwd !== chat.cwd
-      set((s) => {
-        // Events that streamed in for this chat *during* the getChat round-trip
-        // were applied to `messages` (it's the active chat now). The snapshot
-        // from disk can be up to a debounce behind, so layer the live-streamed
-        // messages over it (upsert by id) rather than clobbering them back to a
-        // stale state.
-        const messages = s.messages.reduce(upsertMessage, chat.messages)
-        // Tabs were already restored synchronously above; only the folder is
-        // deferred until now (it needs the chat's cwd from disk).
-        const review = chat.pendingPlanReview
-        const permissions = review
-          ? {
-              ...s.permissions,
-              [id]: [
-                ...(s.permissions[id] ?? []).filter((request) => request.id !== review.requestId),
-                persistedPlanRequest(id, review)
-              ]
-            }
-          : s.permissions
-        return {
-          messages,
-          hiddenBefore,
-          loadingOlder: false,
-          selectedCwd: chat.cwd,
-          permissions,
-          statuses: review ? { ...s.statuses, [id]: 'waiting-permission' } : s.statuses
-        }
-      })
+    if (chat) {
       // Keyed by provider too: switching Claude→Codex in the same folder must
       // clear Claude's commands (and Codex→Claude must restore them).
       get().loadCommands(chat.cwd, chat.provider)
@@ -4867,6 +4913,8 @@ export const useApp = create<AppState>((set, get) => ({
   async newChat(cwd, firstMessage, opts) {
     const { attachments, label, reviewTarget, ...createOpts } = opts ?? {}
     const meta = await window.api.createChat({ cwd, ...createOpts })
+    // An open still in flight must not land on top of the chat just created.
+    openSeq++
     // A worktree chat's cwd is the worktree, not the picked project folder —
     // the panel, git status and file tree all follow it.
     const chatCwd = meta.cwd
@@ -5603,7 +5651,9 @@ export const useApp = create<AppState>((set, get) => ({
         if (drawn || redraws) {
           set((st) => ({
             ...(drawn
-              ? patchTranscript(st, ev.chatId, (msgs) => upsertMessage(msgs, ev.message))
+              ? patchTranscript(st, ev.chatId, (msgs) =>
+                  placeMessage(msgs, ev.message, surfaceOf(st, ev.chatId)?.hiddenBefore ?? 0, ev.index)
+                )
               : {}),
             ...(redraws
               ? {
@@ -5851,16 +5901,17 @@ export const useApp = create<AppState>((set, get) => ({
 
       // An edit-and-resend rewound the conversation. `keep` counts the whole
       // chat, so it has to come back through `hiddenBefore` to address the
-      // window this store actually holds — main truncates to a loaded message,
-      // so the result is never negative and never touches the hidden prefix.
+      // window this store actually holds. Main truncates to a loaded message,
+      // and loaded is no longer the same as in this window (`viewChat` bounds
+      // it), so a point above the window empties it — `truncateWindow`.
       case 'truncate': {
         if (!onScreen(s, ev.chatId)) break
         set((st) => {
           const surface = surfaceOf(st, ev.chatId)
           if (!surface) return {}
-          const keep = Math.max(0, ev.keep - surface.hiddenBefore)
-          if (keep >= surface.messages.length) return {}
-          return patchSurface(st, ev.chatId, { messages: surface.messages.slice(0, keep) }) ?? {}
+          const next = truncateWindow(surface.messages, surface.hiddenBefore, ev.keep)
+          if (next.messages === surface.messages) return {}
+          return patchSurface(st, ev.chatId, next) ?? {}
         })
         break
       }

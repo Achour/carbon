@@ -218,11 +218,24 @@ function DiagramLightbox({ svg, onClose }: { svg: string; onClose: () => void })
  * raw code (the pre-existing behavior) until it renders cleanly — no flashing
  * parse errors, and worst case is exactly what we showed before.
  */
+/**
+ * Diagrams already drawn, by appearance and source. A chat switch unmounts every
+ * diagram in the transcript, and each one came back as its source text, then —
+ * after the debounce below and an async render — as a picture of a different
+ * height, moving everything under it a beat after the chat opened. Kept, a
+ * remount draws the SVG in its first frame. The ids inside the markup name the
+ * mount that rendered it; a later mount reusing it is the duplicate-id case the
+ * lightbox already relies on resolving fine.
+ */
+const drawnMermaid = new Map<string, string>()
+const DRAWN_MERMAID = 30
+
 function MermaidBlock({ code }: { code: string }): React.JSX.Element {
   const isDark = useApp((s) => s.resolvedAppearance === 'dark')
   const rawId = React.useId()
   const id = React.useMemo(() => 'mmd' + rawId.replace(/[^a-zA-Z0-9]/g, ''), [rawId])
-  const [svg, setSvg] = React.useState<string | null>(null)
+  const drawnKey = (isDark ? 'd' : 'l') + code.trim()
+  const [svg, setSvg] = React.useState<string | null>(() => drawnMermaid.get(drawnKey) ?? null)
   const [showSource, setShowSource] = React.useState(false)
   const [copied, setCopied] = React.useState(false)
   const [expanded, setExpanded] = React.useState(false)
@@ -233,11 +246,20 @@ function MermaidBlock({ code }: { code: string }): React.JSX.Element {
       setSvg(null)
       return undefined
     }
+    const key = (isDark ? 'd' : 'l') + trimmed
+    const drawn = drawnMermaid.get(key)
+    if (drawn) {
+      setSvg(drawn)
+      return undefined
+    }
     let alive = true
     // Debounce so streaming re-renders don't thrash the (async) mermaid parse.
     const t = setTimeout(() => {
       renderMermaid(id, trimmed, isDark)
         .then((svg) => {
+          drawnMermaid.delete(key)
+          drawnMermaid.set(key, svg)
+          if (drawnMermaid.size > DRAWN_MERMAID) drawnMermaid.delete(drawnMermaid.keys().next().value!)
           if (alive) setSvg(svg)
         })
         .catch(() => {
@@ -878,8 +900,18 @@ const REMARK_PLUGINS_BREAKS: React.ComponentProps<typeof ReactMarkdown>['remarkP
 // is lowlight's `common`, which is *almost* the same list — and "almost" is
 // the failure: `dockerfile` would highlight while streaming and go plain the
 // moment the turn ended.
+//
+// The transform is built **once**. rehype-highlight's attacher creates a fresh
+// lowlight and registers every grammar in it each time it is called, and
+// react-markdown builds a new processor — calling every attacher again — on
+// every render of every block. So each paragraph of each message paid for
+// thirty-odd grammar registrations before highlighting a thing: ~10 ms of every
+// chat open, and again on every re-parse of a streaming reply's tail. The
+// highlighter keeps no per-document state, so one instance serves them all.
+const highlightTransform = rehypeHighlight({ detect: false, languages: HLJS_LANGUAGES })
+const rehypeHighlightShared = (): typeof highlightTransform => highlightTransform
 const REHYPE_PLUGINS: React.ComponentProps<typeof ReactMarkdown>['rehypePlugins'] = [
-  [rehypeHighlight, { ignoreMissing: true, detect: false, languages: HLJS_LANGUAGES }]
+  rehypeHighlightShared
 ]
 
 /**
@@ -890,44 +922,99 @@ const REHYPE_PLUGINS: React.ComponentProps<typeof ReactMarkdown>['rehypePlugins'
 const URL_TRANSFORM: React.ComponentProps<typeof ReactMarkdown>['urlTransform'] = (url) =>
   defaultUrlTransform(url) || (isBareFileLineRef(url) ? url : '')
 
+/**
+ * Parsed fragments, kept across mounts, least recently used first.
+ *
+ * Opening a chat used to parse every block of its transcript from scratch —
+ * the largest single cost of the open — and switching back to a chat a moment
+ * later parsed all of it again. `memo` cannot help there: a chat switch
+ * unmounts the whole transcript. What react-markdown returns is a plain element
+ * tree that depends on the text and the plugins and nothing else — the
+ * components it names read their context (`MarkdownCwd`, the explicit images)
+ * when React renders them, not when the tree is built — so a tree built once is
+ * as good as a fresh one for any mount of the same text.
+ *
+ * Bounded by text length, which is a proxy: each tree also holds the hast
+ * nodes react-markdown hands its components, several times the text's size.
+ * The budget covers the windows of the last several chats opened. Only settled
+ * text is offered (`cache`); a streaming reply's tail is a new string per word
+ * and would only churn it.
+ */
+const parsedMarkdown = new Map<string, React.JSX.Element>()
+let parsedChars = 0
+const PARSED_MAX_CHARS = 600_000
+
+function parseMarkdown(text: string, breaks: boolean): React.JSX.Element {
+  return ReactMarkdown({
+    children: text,
+    remarkPlugins: breaks ? REMARK_PLUGINS_BREAKS : REMARK_PLUGINS,
+    rehypePlugins: REHYPE_PLUGINS,
+    urlTransform: URL_TRANSFORM,
+    components
+  })
+}
+
+function cachedMarkdown(text: string, breaks: boolean): React.JSX.Element {
+  const key = (breaks ? 'b' : 'p') + text
+  const hit = parsedMarkdown.get(key)
+  if (hit) {
+    parsedMarkdown.delete(key)
+    parsedMarkdown.set(key, hit)
+    return hit
+  }
+  const tree = parseMarkdown(text, breaks)
+  // A fragment larger than the whole budget would evict everything and then
+  // itself; it is parsed and not kept.
+  if (key.length > PARSED_MAX_CHARS) return tree
+  parsedMarkdown.set(key, tree)
+  parsedChars += key.length
+  for (const old of parsedMarkdown.keys()) {
+    if (parsedChars <= PARSED_MAX_CHARS) break
+    parsedMarkdown.delete(old)
+    parsedChars -= old.length
+  }
+  return tree
+}
+
 /** One parsed markdown fragment, no wrapper — chunks share a single wrapper div. */
 const MarkdownBody = React.memo(function MarkdownBody({
   text,
-  breaks = false
+  breaks = false,
+  cache = false
 }: {
   text: string
   breaks?: boolean
+  /** Settled text, worth keeping parsed across mounts — see `parsedMarkdown`. */
+  cache?: boolean
 }): React.JSX.Element {
-  return (
-    <ReactMarkdown
-      remarkPlugins={breaks ? REMARK_PLUGINS_BREAKS : REMARK_PLUGINS}
-      rehypePlugins={REHYPE_PLUGINS}
-      urlTransform={URL_TRANSFORM}
-      components={components}
-    >
-      {text}
-    </ReactMarkdown>
-  )
+  return cache ? cachedMarkdown(text, breaks) : parseMarkdown(text, breaks)
 })
 
 export const Markdown = React.memo(function Markdown({
   text,
   cwd = null,
   className,
-  breaks = false
+  breaks = false,
+  cache = false
 }: {
   text: string
   cwd?: string | null
   className?: string
   /** Treat single newlines as line breaks. See `REMARK_PLUGINS_BREAKS`. */
   breaks?: boolean
+  /**
+   * Text that will not change, drawn again every time its chat opens — a
+   * prompt in the transcript. Opt-in: a plan or a tool input that is still
+   * streaming would add a longer copy of itself per update. See `parsedMarkdown`.
+   */
+  cache?: boolean
 }): React.JSX.Element {
   const explicitImages = React.useMemo(() => explicitMarkdownImageTargets(text), [text])
   return (
     <div className={cn('markdown text-[14px] leading-[1.6]', className)}>
       <MarkdownCwd.Provider value={cwd}>
         <ExplicitMarkdownImages.Provider value={explicitImages}>
-          <MarkdownBody text={text} breaks={breaks} />
+          <MarkdownBody text={text} breaks={breaks} cache={cache} />
         </ExplicitMarkdownImages.Provider>
       </MarkdownCwd.Provider>
     </div>
@@ -1085,10 +1172,12 @@ export const AssistantMarkdown = React.memo(function AssistantMarkdown({
     <div className={cn('markdown text-[14px] leading-[1.6]', className)}>
       <MarkdownCwd.Provider value={cwd}>
         <ExplicitMarkdownImages.Provider value={explicitImages}>
+          {/* A chunk is sealed — it never changes again — so it is settled
+              text even mid-stream; the tail is only once the stream is. */}
           {chunks.map((chunk, i) => (
-            <MarkdownBody key={i} text={chunk} />
+            <MarkdownBody key={i} text={chunk} cache />
           ))}
-          <MarkdownBody text={tail} />
+          <MarkdownBody text={tail} cache={!streaming} />
           {code && <StreamingCode fence={code} />}
         </ExplicitMarkdownImages.Provider>
       </MarkdownCwd.Provider>

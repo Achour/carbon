@@ -50,6 +50,30 @@ const NO_STEERS: PendingSteer[] = []
 const FOLLOW_TAU_MS = 80
 
 /**
+ * How long after a chat's transcript lands its column's growth is *snapped* to
+ * rather than glided after. Long enough for what an open grows by on its own —
+ * images decoding, a diagram rendering, a lazy diff body measuring — and short
+ * of the first thing a reader would expect to watch arrive.
+ */
+const OPEN_SETTLE_MS = 1200
+
+/** The one-shot entrance keyframes (`index.css`) a chat's open finishes on the spot. */
+const ENTRANCES = new Set(['enter', 'step-in'])
+
+/**
+ * Jump every entrance playing inside `el` to its end. Only the one-shot ones:
+ * a spinner or a shimmer is infinite, which `finish()` throws on, and is saying
+ * something is still running.
+ */
+function finishEntrances(el: Element): void {
+  for (const animation of el.getAnimations({ subtree: true })) {
+    if (animation instanceof CSSAnimation && ENTRANCES.has(animation.animationName)) {
+      animation.finish()
+    }
+  }
+}
+
+/**
  * A terminal chat's CLI pane. Lazy for the reason the right panel's tabs are:
  * xterm is ~410 KB and most chats never draw one — and `preloadHeavyChunks`
  * already fetches this module on idle, so opening one waits on nothing.
@@ -193,6 +217,10 @@ export const ChatView = React.memo(function ChatView({
   const followFrame = React.useRef(0)
   /** `scrollTop` at the last scroll event — what "moved up" is measured from. */
   const lastTop = React.useRef(0)
+  /** Whether this chat's transcript has been on screen yet — see `opening`. */
+  const landed = React.useRef(false)
+  /** Until when column growth snaps instead of gliding: the open of a chat. */
+  const openingUntil = React.useRef(0)
 
   const setPinned = React.useCallback((pinned: boolean): void => {
     if (pinned === pinnedRef.current) return
@@ -335,8 +363,12 @@ export const ChatView = React.memo(function ChatView({
     const column = columnRef.current
     if (!scroller || !column) return
     const observer = new ResizeObserver((entries) => {
+      // Shown again, or resized taller: a window that no longer fills has
+      // nothing else that would ask for more.
+      if (entries.some((e) => e.target === scroller)) loadEarlierRef.current()
       if (!pinnedRef.current) return
       if (entries.some((e) => e.target === scroller)) jumpToBottom()
+      else if (performance.now() < openingUntil.current) jumpToBottom()
       else followBottom()
     })
     observer.observe(column)
@@ -359,6 +391,38 @@ export const ChatView = React.memo(function ChatView({
     observer.observe(el)
     return () => observer.disconnect()
   }, [])
+
+  // A chat opens at its bottom, already there on the first frame it is drawn.
+  //
+  // It used to open at the *top* and glide down: the column grew from nothing
+  // when the transcript landed, the observer above read that as the pinned
+  // reader falling behind, and the follow eased the whole height of the window
+  // into view — 55–73 frames, half a second or more, scrolling past every
+  // message on the way and painting each of them, on every switch. A stream's
+  // growth is something to watch arrive; a chat being opened is not. So the
+  // landing commit snaps before paint, and for `OPEN_SETTLE_MS` after it the
+  // observer snaps too, for what the open goes on growing by by itself.
+  //
+  // The rows mounted here are history, not arrivals, so their entrance
+  // animations are finished on the spot: a turn header, a tool card and a
+  // checklist each carry one, and an open replayed every one of them at once —
+  // dozens of blurred, scaling fade-ins, for content the reader has seen.
+  // Layout effects run in order, so the reset sits above the landing.
+  React.useLayoutEffect(() => {
+    landed.current = false
+    openingUntil.current = 0
+  }, [chat.id])
+  const hasMessages = messages.length > 0
+  React.useLayoutEffect(() => {
+    const el = scrollRef.current
+    if (landed.current || !hasMessages || !el) return
+    landed.current = true
+    openingUntil.current = performance.now() + OPEN_SETTLE_MS
+    finishEntrances(el)
+    pinnedRef.current = true
+    jumpToBottom()
+    lastTop.current = el.scrollTop
+  }, [chat.id, hasMessages, jumpToBottom])
 
   // Jump to the bottom when switching chats.
   React.useEffect(() => {
@@ -439,6 +503,12 @@ export const ChatView = React.memo(function ChatView({
   const maybeLoadEarlier = (): void => {
     const el = scrollRef.current
     if (!el || hiddenBefore <= 0 || loadingOlder || bottomAnchor.current !== null) return
+    // A hidden scroller — a thread's column under an expanded sibling or an
+    // agent page, `display: none` — measures zero, which reads as a window too
+    // short to scroll and so as one to fill: it fetched window after window
+    // until the whole history was loaded, out of sight. It is looked at again
+    // when it is shown (the scroller's observer below).
+    if (el.clientHeight === 0) return
     const overflows = el.scrollHeight > el.clientHeight
     const nearTop = el.scrollTop < Math.max(600, el.clientHeight)
     if (overflows ? !pinnedRef.current && nearTop : true) {
@@ -446,6 +516,10 @@ export const ChatView = React.memo(function ChatView({
       void loadOlderMessages(chat.id)
     }
   }
+
+  // The observer above outlives renders, so it reaches the current closure here.
+  const loadEarlierRef = React.useRef(maybeLoadEarlier)
+  loadEarlierRef.current = maybeLoadEarlier
 
   // `getSnapshotBeforeUpdate`, spelled for a function component: the render
   // that carries the prepend runs before its commit touches the DOM, so this is
@@ -474,6 +548,8 @@ export const ChatView = React.memo(function ChatView({
     rowAnchor.current = null
     if (!el || anchor === null) return
     bottomAnchor.current = null
+    // Older history is history: its rows play no entrance, as at the open.
+    finishEntrances(el)
     if (row?.el.isConnected) el.scrollTop += row.el.getBoundingClientRect().top - row.top
     else el.scrollTop = el.scrollHeight - anchor
   }, [hiddenBefore])

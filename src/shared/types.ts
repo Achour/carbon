@@ -1455,7 +1455,17 @@ export function fastModeNote(status?: FastModeStatus): string | null {
 }
 
 export type ChatEvent =
-  | { type: 'message'; chatId: string; message: ChatMessage }
+  | {
+      type: 'message'
+      chatId: string
+      message: ChatMessage
+      /**
+       * The message's index in the whole chat, stamped by main's `emit` — how
+       * a windowed transcript tells a re-stated message above its window from
+       * a new one (`placeMessage`). Absent when main could not place it.
+       */
+      index?: number
+    }
   | { type: 'part-delta'; chatId: string; messageId: string; partIndex: number; delta: string }
   | { type: 'part'; chatId: string; messageId: string; partIndex: number; part: AssistantPart }
   | { type: 'tool-update'; chatId: string; messageId: string; toolUseId: string; patch: Partial<ToolPart> }
@@ -3032,6 +3042,12 @@ export interface Api {
    */
   listSideChats(): Promise<ChatMeta[]>
   getChat(id: string): Promise<ChatView | null>
+  /**
+   * Several chats' views in one answer — a thread and its columns. One reply
+   * is one moment: an event main emits after it cannot land between two of the
+   * snapshots, which is what separate replies awaited together allowed.
+   */
+  getChats(ids: string[]): Promise<(ChatView | null)[]>
   /**
    * The window of messages immediately before `before`. Returns an empty list
    * once the beginning of the chat is reached.

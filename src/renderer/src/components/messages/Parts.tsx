@@ -362,7 +362,7 @@ export const UserBubble = React.memo(function UserBubble({
                   the user actually typed, which plain markdown would collapse
                   and which every prompt already in the transcript was written
                   expecting. */}
-              {message.text && <Markdown text={message.text} breaks className="leading-relaxed" />}
+              {message.text && <Markdown text={message.text} breaks cache className="leading-relaxed" />}
             </div>
             {/* Laid over the box, not stacked under it — and the reason is
                 layout, not taste. A hidden row is still a row: at `opacity-0` it
@@ -718,7 +718,7 @@ export const EventRow = React.memo(function EventRow({
         <div data-btw className="flex flex-col gap-4">
           <div data-message-role="user" className="animate-enter">
             <div className={cn(PROMPT_BOX, 'select-text py-2.5 break-words')}>
-              <Markdown text={`/btw ${b.question}`} breaks className="leading-relaxed" />
+              <Markdown text={`/btw ${b.question}`} breaks cache className="leading-relaxed" />
             </div>
           </div>
           {b.answer !== undefined ? (

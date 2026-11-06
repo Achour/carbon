@@ -1134,7 +1134,8 @@ export class RemoteAccess {
    * `LocalImage` reads it over IPC. Served only if it is an image, small
    * enough, and **named in that chat's transcript**: a paired phone can see
    * what the agent pointed at, never browse the disk by guessing paths. The
-   * transcript is the loaded window, where the image being drawn is.
+   * transcript is everything loaded — the newest window, and any older history
+   * the phone has paged in.
    */
   private async handleImage(url: URL, res: ServerResponse): Promise<void> {
     const view = this.host.store.viewChat(url.searchParams.get('chat') ?? '')
@@ -1144,8 +1145,18 @@ export class RemoteAccess {
     const file = resolve(cwd, asked)
     const type = IMAGE_TYPES[extname(file).toLowerCase()]
     if (!type) return json(res, 415, { error: 'Not an image' })
-    const text = JSON.stringify(view.chat.messages)
-    const named = [file, relative(cwd, file)].some((p) => p && text.includes(JSON.stringify(p).slice(1, -1)))
+    const needles = [file, relative(cwd, file)].filter(Boolean).map((p) => JSON.stringify(p).slice(1, -1))
+    const names = (messages: readonly unknown[]): boolean => {
+      const text = JSON.stringify(messages)
+      return needles.some((n) => text.includes(n))
+    }
+    // The view is the newest window; an image further back is one the phone
+    // loaded with older history, so the rest of what is loaded counts too
+    // (placeholders carry no content, so they name nothing).
+    const named =
+      names(view.chat.messages) ||
+      (view.hiddenBefore > 0 &&
+        names(this.host.store.getChat(view.chat.id)?.messages.slice(0, view.hiddenBefore) ?? []))
     if (!named) return json(res, 403, { error: 'Not named in this chat' })
     const info = await stat(file).catch(() => null)
     if (!info?.isFile()) return json(res, 404, { error: 'Not found' })

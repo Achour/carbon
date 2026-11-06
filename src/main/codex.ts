@@ -568,6 +568,10 @@ export class CodexSession implements AgentSession {
     () => this.store.saveChatSoon(this.chat.id),
     () => this.disposed
   )
+
+  flushDeltas(): void {
+    this.deltas.flush()
+  }
   // Last full text emitted per streaming slot (`${messageId}:${partIndex}`), so
   // the next update can be diffed down to its appended suffix.
   private lastText = new Map<string, string>()

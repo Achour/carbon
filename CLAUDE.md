@@ -401,7 +401,9 @@ it guards**, and put new reasoning in that file rather than back in this one.
 - **`docs/performance.md`** — first paint and the cost of every message
   (`main/shellEnv.ts`'s remembered PATH, `providerCli`'s versions off the
   critical path, `lib/preloadHeavy.ts`, `lib/lspBridge.ts`, `Sidebar`'s
-  memoization, the open-fence fast path) and smooth streaming
+  memoization, the open-fence fast path), opening a chat (`openChat`'s
+  one-commit switch, `ChatView`'s landing snap, `parsedMarkdown`, the bounded
+  `viewChat` window and `shared/transcriptWindow.ts`) and smooth streaming
   (`lib/streamReveal.ts`, `useStreamText`, the reading column's
   `ResizeObserver`, `useHistoryNodes`, the foot's Thinking…/Working… label).
   Read it before touching anything on the path to first paint or to a streamed

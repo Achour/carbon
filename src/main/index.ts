@@ -151,6 +151,11 @@ let translucentEnabled = false
 let resolvedDark = true
 
 function emit(ev: ChatEvent): void {
+  // A transcript holds one window of its chat, so a message event says where
+  // in the whole chat it belongs — see `placeMessage`.
+  if (ev.type === 'message' && ev.index === undefined) {
+    ev = { ...ev, index: store.messageIndex(ev.chatId, ev.message.id) }
+  }
   win?.webContents.send('chat:event', ev)
   remote?.observe(ev)
   if (ev.type === 'status') {
@@ -604,7 +609,16 @@ function registerIpc(): void {
 
   // viewChat, not getChat: the renderer gets the loaded suffix, while every
   // main-process caller keeps the full-length array whose index is the row's seq.
-  ipcMain.handle('chats:get', (_e, id: string) => store.viewChat(id))
+  // The held deltas go out first, so they land ahead of the snapshot that
+  // already contains their text rather than being appended to it a second time.
+  ipcMain.handle('chats:get', (_e, id: string) => {
+    manager.flushDeltas(id)
+    return store.viewChat(id)
+  })
+  ipcMain.handle('chats:get-many', (_e, ids: string[]) => {
+    for (const id of ids) manager.flushDeltas(id)
+    return ids.map((id) => store.viewChat(id))
+  })
 
   ipcMain.handle('chats:load-older', (_e, id: string, before: number) =>
     store.loadOlder(id, before)

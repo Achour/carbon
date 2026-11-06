@@ -74,6 +74,28 @@ function canvasMeasure(): Measure {
   }
 }
 
+/**
+ * Candidate layouts kept across mounts, keyed by the spec's content and the
+ * font it is measured in. A chat switch unmounts every diagram in the
+ * transcript and its `useMemo` with it, so each open laid every graph out
+ * again — dagre, at every candidate width it tried — for a picture that had
+ * not changed. The spec arrives as a fresh object each time (it crossed IPC),
+ * hence a content key rather than identity. Least recently used goes first.
+ */
+const keptLayouts = new Map<string, DiagramLayouts>()
+const KEPT_LAYOUTS = 40
+
+function layoutsFor(spec: DiagramSpec): DiagramLayouts {
+  const font = getComputedStyle(document.body).fontFamily
+  const key = font + '\n' + JSON.stringify(spec)
+  let layouts = keptLayouts.get(key)
+  if (layouts) keptLayouts.delete(key)
+  else layouts = new DiagramLayouts(spec, canvasMeasure())
+  keptLayouts.set(key, layouts)
+  if (keptLayouts.size > KEPT_LAYOUTS) keptLayouts.delete(keptLayouts.keys().next().value!)
+  return layouts
+}
+
 export default function DiagramCard({ spec }: { spec: DiagramSpec }): React.JSX.Element {
   const marker = React.useId().replace(/:/g, '')
   const wrapRef = React.useRef<HTMLDivElement>(null)
@@ -97,7 +119,7 @@ export default function DiagramCard({ spec }: { spec: DiagramSpec }): React.JSX.
 
   // One set of candidate layouts per spec, built lazily and kept: a resize
   // chooses among them rather than laying the graph out again.
-  const layouts = React.useMemo(() => new DiagramLayouts(spec, canvasMeasure()), [spec])
+  const layouts = React.useMemo(() => layoutsFor(spec), [spec])
   const layout = React.useMemo(() => layouts.pick(avail), [layouts, avail])
 
   // Never enlarged; shrunk to fit the column down to MIN_SCALE, then scrolled.

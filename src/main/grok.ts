@@ -204,6 +204,10 @@ export class GrokSession implements AgentSession {
     () => this.disposed
   )
 
+  flushDeltas(): void {
+    this.deltas.flush()
+  }
+
   constructor(
     chat: ChatData,
     emit: Emit,

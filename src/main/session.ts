@@ -70,6 +70,14 @@ export interface AgentSession {
    */
   promptAnswered?(promptId: string): boolean | undefined
   /**
+   * Emit any streamed text still held in the delta coalescer, now. A session
+   * appends a delta to its chat the moment it arrives but ships it up to ~80ms
+   * later, so a snapshot of the chat taken in between already holds text whose
+   * `part-delta` is still to come — and applied on top of that snapshot, it is
+   * printed twice. Called before a chat is handed to a viewer (`chats:get`).
+   */
+  flushDeltas?(): void
+  /**
    * `hiddenContext` is prepended to the prompt the provider sees but never to
    * the displayed/persisted user message — the cross-provider handoff rides
    * it. A promise is allowed (the handoff brief resolving): the user message
