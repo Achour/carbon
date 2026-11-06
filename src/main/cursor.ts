@@ -28,6 +28,7 @@ import {
 import type { Store } from './store'
 import { composePrompt, withTimeout, type AgentSession, type Emit } from './session.ts'
 import { DeltaCoalescer } from './deltaCoalescer.ts'
+import { partialInputDelay } from './streamThrottle.ts'
 import { providerEnabled } from './providerCli.ts'
 import { deriveTitle } from './titles.ts'
 import { PREVIEW_SESSION_RULES } from './previewTools.ts'
@@ -393,6 +394,13 @@ export class CursorSession implements AgentSession {
   private toolLoc = new Map<string, { message: AssistantMessage; index: number }>()
   private children = new Map<string, CursorChildStream>()
   private childTimers = new Map<string, NodeJS.Timeout>()
+  /**
+   * Call id → the newest `partial-tool-call` not yet shipped. Each one carries
+   * the call's whole growing input, so it is held to `partialInputDelay` the
+   * way Claude's `input_json_delta` is; the payload is the latest call, read
+   * when the window closes.
+   */
+  private partialCalls = new Map<string, { timer: NodeJS.Timeout; call: CursorToolCall }>()
   private streamSlot: { kind: 'text' | 'thinking'; index: number } | null = null
   private streamedText = false
   /** The last `createPlan` of this turn — the plan a review offers. */
@@ -580,10 +588,18 @@ export class CursorSession implements AgentSession {
 
   dispose(): void {
     if (this.disposed) return
+    // A parked partial is the only copy of the newest input — the part still
+    // holds the previous one — so land it while emits are still allowed, or a
+    // quit inside the window persists the older prefix.
+    for (const callId of [...this.partialCalls.keys()]) this.flushPartial(callId)
+    // Same for a subagent's parked transcript: its stream is not the part.
+    for (const callId of [...this.childTimers.keys()]) this.flushChildren(callId)
     this.disposed = true
     this.queued.clear()
     for (const timer of this.childTimers.values()) clearTimeout(timer)
     this.childTimers.clear()
+    for (const { timer } of this.partialCalls.values()) clearTimeout(timer)
+    this.partialCalls.clear()
     const run = this.run
     if (run?.status === 'running') void run.cancel().catch(() => {})
     this.closeAgent()
@@ -809,6 +825,7 @@ export class CursorSession implements AgentSession {
     for (const [callId, loc] of this.toolLoc) {
       const part = loc.message.parts[loc.index]
       if (part?.type !== 'tool' || (part.status !== 'running' && part.status !== 'pending')) continue
+      this.flushPartial(callId)
       this.flushChildren(callId)
       this.patchTool(callId, {
         status: 'error',
@@ -817,6 +834,7 @@ export class CursorSession implements AgentSession {
         ...(part.agent ? { agent: { ...part.agent, endedAt: Date.now() } } : {})
       })
     }
+    for (const callId of [...this.partialCalls.keys()]) this.dropPartial(callId)
     this.current = null
     this.streamSlot = null
     this.toolLoc.clear()
@@ -940,6 +958,13 @@ export class CursorSession implements AgentSession {
     const part = existing.message.parts[existing.index]
     if (part?.type !== 'tool') return
     const status = cursorToolStatus(call, completed)
+    if (kind === 'partial-tool-call' && status === 'running') {
+      this.parkPartial(callId, call)
+      return
+    }
+    // A start or a completion is authoritative: whatever partial was parked
+    // is older than it.
+    this.dropPartial(callId)
     const patch: Partial<ToolPart> = {
       name: cursorToolName(call),
       input: cursorToolInput(call),
@@ -956,6 +981,47 @@ export class CursorSession implements AgentSession {
       }
     }
     this.patchTool(callId, patch)
+  }
+
+  /**
+   * Hold a still-streaming call's input to `partialInputDelay`. Each partial
+   * update carries the whole input so far, and every one went out as its own
+   * IPC — one input growing to 80 KB was ~1,000 updates and ~40 MB.
+   */
+  private parkPartial(callId: string, call: CursorToolCall): void {
+    const parked = this.partialCalls.get(callId)
+    if (parked) {
+      parked.call = call
+      return
+    }
+    // Sized off the call that opens the window; the one shipped is whatever is
+    // newest when it closes.
+    const size = JSON.stringify(call.args ?? null)?.length ?? 0
+    const timer = setTimeout(() => this.flushPartial(callId), partialInputDelay(size))
+    this.partialCalls.set(callId, { timer, call })
+  }
+
+  /** Ship the parked partial now, if there is one. */
+  private flushPartial(callId: string): void {
+    const parked = this.partialCalls.get(callId)
+    if (!parked) return
+    clearTimeout(parked.timer)
+    this.partialCalls.delete(callId)
+    if (this.disposed) return
+    const { call } = parked
+    this.patchTool(callId, {
+      name: cursorToolName(call),
+      input: cursorToolInput(call),
+      status: 'running',
+      partial: true
+    })
+  }
+
+  private dropPartial(callId: string): void {
+    const parked = this.partialCalls.get(callId)
+    if (!parked) return
+    clearTimeout(parked.timer)
+    this.partialCalls.delete(callId)
   }
 
   /** A subagent's own update, routed onto its `Agent` card's children. */

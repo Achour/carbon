@@ -56,8 +56,7 @@ function summary(row: Row): CanvasSummary {
  * Every canvas in `chats.db`, keyed by project.
  *
  * Takes the open handle rather than opening its own: one database means one
- * WAL, one lock and one rolling `.bak`, so a canvas is backed up by the
- * machinery that already backs up the chats.
+ * WAL and one lock.
  */
 export class CanvasStore {
   private selList: StatementSync

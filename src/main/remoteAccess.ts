@@ -35,6 +35,7 @@ import type {
 } from '@shared/types'
 import type { RemoteSettings, Store } from './store'
 import { fetchTailscaleCert } from './tailscaleCert'
+import { mentionsText } from './mentionsText'
 import { generateVapidKeys, sendPush, type VapidKeys } from './webPush'
 import {
   hashToken,
@@ -1145,11 +1146,8 @@ export class RemoteAccess {
     const file = resolve(cwd, asked)
     const type = IMAGE_TYPES[extname(file).toLowerCase()]
     if (!type) return json(res, 415, { error: 'Not an image' })
-    const needles = [file, relative(cwd, file)].filter(Boolean).map((p) => JSON.stringify(p).slice(1, -1))
-    const names = (messages: readonly unknown[]): boolean => {
-      const text = JSON.stringify(messages)
-      return needles.some((n) => text.includes(n))
-    }
+    const needles = [file, relative(cwd, file)].filter(Boolean)
+    const names = (messages: readonly unknown[]): boolean => mentionsText(messages, needles)
     // The view is the newest window; an image further back is one the phone
     // loaded with older history, so the rest of what is loaded counts too
     // (placeholders carry no content, so they name nothing).

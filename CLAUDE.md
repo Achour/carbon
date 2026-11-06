@@ -161,7 +161,10 @@ Path aliases: `@` → `src/renderer/src`, `@shared` → `src/shared` (renderer a
   persistence behaves exactly as before. `terminalizeRunning` flushes — and
   `dispose` reaches it, which is the only moment a parked update could be lost
   rather than merely late. Four agents from one `/simplify` is four of these at
-  once. The quadratic is read off the code rather than measured — no probe in
+  once. Both windows live in `main/streamThrottle.ts` and are shared:
+  Codex's sub-agent transcripts (`emitCodexChildren`) and Cursor's
+  `partial-tool-call` inputs (`parkPartial`) had the same shape with no bound
+  until they were routed through them. The quadratic is read off the code rather than measured — no probe in
   `demo/e2e` spawns an agent — so unlike the transcript's own costs this one's
   size is unquantified.
 - **A message sent mid-turn steers it on Claude and Codex**: nothing is aborted, and
@@ -382,7 +385,7 @@ first build is ~16 s off-thread for that corpus and ~45 MB; a query is ~1 ms.
 It is disposable: delete `search.db` and it is rebuilt. `chats:search` is the
 one entry (`ChatSearch`); tests in `test/chatIndex.test.ts`.
 
-Two safeguards for the shared-userData design: a per-chat advisory `locks` row (heartbeat, 30s staleness) so two instances never write one chat at once, and a `chats.rev` counter asserted inside the write transaction so an instance holding a view from before another's changes cannot overwrite them. A rolling `chats.db.bak` (`node:sqlite` `backup()`, refreshed when dirty and on quit) is the real backup; recovery goes damaged DB → backup → archive.
+Two safeguards for the shared-userData design: a per-chat advisory `locks` row (heartbeat, 30s staleness) so two instances never write one chat at once, and a `chats.rev` counter asserted inside the write transaction so an instance holding a view from before another's changes cannot overwrite them. **There is no rolling backup, on purpose.** One used to copy the whole of `chats.db` to `chats.db.bak` every five minutes while anything was dirty — at 3.5 GB that measured ~40 GB of disk writes an hour, to guard against a total loss SQLite's WAL already makes rare. Recovery goes damaged DB (salvage the readable rows) → archive, and the store deletes any leftover `.bak` at startup.
 
 The legacy `chats/<id>.json` files are imported once and then **never written, moved, or deleted** — so `rm chats.db` rolls back to the pre-migration corpus. They are an *archive, not a live backup*: they stop tracking reality the moment the migration lands. See `store.ts` for the corruption path (salvage the readable rows first, fall back to the archive only if nothing survives).
 

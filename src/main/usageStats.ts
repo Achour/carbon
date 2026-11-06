@@ -18,6 +18,7 @@ import {
 } from './usageScan'
 import { loadRates } from './usageRates'
 import { resolveProjects } from './usageProjects'
+import { LineSplitter } from './lineSplitter'
 
 /**
  * Walks every CLI's session logs and turns them into the Usage page's report.
@@ -163,21 +164,10 @@ async function listSources(home: string): Promise<Source[]> {
 function forEachLine(path: string, onLine: (line: string) => void): Promise<void> {
   return new Promise((resolve, reject) => {
     const stream = createReadStream(path, { encoding: 'utf8' })
-    let carry = ''
-    stream.on('data', (chunk) => {
-      const text = carry + (chunk as string)
-      let start = 0
-      for (;;) {
-        const nl = text.indexOf('\n', start)
-        if (nl === -1) break
-        const line = text.slice(start, nl)
-        if (line) onLine(line)
-        start = nl + 1
-      }
-      carry = text.slice(start)
-    })
+    const lines = new LineSplitter(onLine)
+    stream.on('data', (chunk) => lines.push(chunk as string))
     stream.on('end', () => {
-      if (carry) onLine(carry)
+      lines.end()
       resolve()
     })
     stream.on('error', reject)

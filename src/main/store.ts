@@ -4,12 +4,13 @@ import {
   readdirSync,
   readFileSync,
   renameSync,
+  rmSync,
   statSync,
   writeFileSync
 } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
-import { DatabaseSync, backup, type StatementSync } from 'node:sqlite'
+import { DatabaseSync, type StatementSync } from 'node:sqlite'
 // Relative and .ts-extensioned, like codex.ts: this is a *runtime* import, and
 // `node --test` runs this file directly with no bundler to resolve `@shared`.
 import { knownProvider } from '../shared/types.ts'
@@ -171,16 +172,6 @@ const SCHEMA_VERSION = 2
  */
 export const LOCK_STALE_MS = 30_000
 const HEARTBEAT_MS = 10_000
-
-/**
- * How often a rolling backup of chats.db is taken, and how many pages each
- * step copies. The legacy chats/*.json archive stops tracking reality the
- * moment the migration lands, so it cannot answer "the database is a total
- * loss" — only a real backup can. Incremental (`rate`) so the copy yields to
- * the event loop instead of stalling the window for the size of the corpus.
- */
-const BACKUP_MS = 5 * 60_000
-const BACKUP_RATE = 256
 
 /**
  * Ceiling on parsed message bytes we keep in memory. A budget in BYTES rather
@@ -444,8 +435,7 @@ export class Store {
   private db: DatabaseSync
   private closed = false
   /**
-   * Canvases live in the same database — one WAL, one lock, and the rolling
-   * `chats.db.bak` covers them for free. Public because they are their own
+   * Canvases live in the same database — one WAL, one lock. Public because they are their own
    * surface: nothing about a canvas goes through the chat read/write path.
    */
   readonly canvases: CanvasStore
@@ -511,11 +501,6 @@ export class Store {
   private unverified = new Set<string>()
   private onLockDenied?: (chatId: string) => void
   private heartbeat: NodeJS.Timeout | null = null
-  private backupPath: string
-  private backupTimer: NodeJS.Timeout | null = null
-  private backupInFlight = false
-  /** Something has been written since the last successful backup. */
-  private backupDue = false
 
   /**
    * Instrumentation, not API. The acceptance tests pin the two properties that
@@ -547,22 +532,27 @@ export class Store {
     this.settingsPath = join(userDataDir, 'settings.json')
     mkdirSync(this.chatsDir, { recursive: true })
     this.settings = this.readSettings()
-    this.backupPath = join(userDataDir, 'chats.db.bak')
     this.db = this.openDb(join(userDataDir, 'chats.db'))
+    // Builds up to 0.1.230 kept a rolling full copy of chats.db beside it —
+    // 3.5 GB on a long-used profile, rewritten every five minutes. Nothing
+    // reads it any more, so reclaim the space.
+    // Best effort: a file that will not go (locked, permissions) must never
+    // keep a usable database from opening.
+    for (const leftover of ['chats.db.bak', 'chats.db.bak.tmp', 'chats.db.bak.tmp.failed']) {
+      try {
+        rmSync(join(userDataDir, leftover), { force: true })
+      } catch (err) {
+        console.error(`Could not remove the old ${leftover}:`, err)
+      }
+    }
     this.prepare()
     this.canvases = new CanvasStore(this.db)
-    // A task edit is a reason to refresh the rolling backup like a chat edit
-    // is — without it a session that only touched tasks never backed them up.
-    this.schedules = new ScheduleStore(this.db, () => {
-      this.backupDue = true
-    })
+    this.schedules = new ScheduleStore(this.db)
     this.migrate()
     this.seedSortKeys()
     // unref: a heartbeat must never be the reason the process stays alive.
     this.heartbeat = setInterval(() => this.beat(), HEARTBEAT_MS)
     this.heartbeat.unref?.()
-    this.backupTimer = setInterval(() => void this.backup(), BACKUP_MS)
-    this.backupTimer.unref?.()
   }
 
   // ---------- Database ----------
@@ -592,15 +582,15 @@ export class Store {
       }
       const fresh = this.connect(path)
       // Precedence: the damaged live database first (newest, maybe partial),
-      // then the rolling backup (recent and known-good), and only then the
-      // chats/ archive — which is frozen at the migration and therefore the
-      // last resort, not the backstop it looks like.
+      // and only then the chats/ archive — which is frozen at the migration and
+      // therefore the last resort. There is deliberately no rolling copy of
+      // chats.db: copying the whole corpus every few minutes wrote ~40 GB an
+      // hour once it reached 3.5 GB, to guard against a failure SQLite's WAL
+      // already makes rare.
       const salvaged = moved ? this.salvage(aside, fresh) : 0
-      const restored = existsSync(this.backupPath) ? this.salvage(this.backupPath, fresh, true) : 0
       console.error(
-        `Chat database rebuild: ${salvaged} chats salvaged from ${moved ? aside : 'nothing'}, ` +
-          `${restored} restored from the backup. Anything still missing comes from chats/, ` +
-          `which is only current as of the migration.`
+        `Chat database rebuild: ${salvaged} chats salvaged from ${moved ? aside : 'nothing'}. ` +
+          `Anything still missing comes from chats/, which is only current as of the migration.`
       )
       return fresh
     }
@@ -612,18 +602,12 @@ export class Store {
    * comes too — it carries `migrated_at` and the deletion tombstones, without
    * which the JSON archive would resurrect every chat the user has deleted.
    */
-  private salvage(fromPath: string, into: DatabaseSync, onlyMissing = false): number {
+  private salvage(fromPath: string, into: DatabaseSync): number {
     let chats = 0
     let old: DatabaseSync | null = null
     try {
       old = new DatabaseSync(fromPath, { readOnly: true })
-      // OR IGNORE in gap-fill mode: the newer source's kv (tombstones above all)
-      // must win, or restoring from an older backup would undo deletions.
-      const insKv = into.prepare(
-        onlyMissing
-          ? 'INSERT OR IGNORE INTO kv (k, v) VALUES (?, ?)'
-          : 'INSERT OR REPLACE INTO kv (k, v) VALUES (?, ?)'
-      )
+      const insKv = into.prepare('INSERT OR REPLACE INTO kv (k, v) VALUES (?, ?)')
       try {
         for (const raw of old.prepare('SELECT k, v FROM kv').all()) {
           const row = raw as unknown as { k: string; v: string }
@@ -632,28 +616,20 @@ export class Store {
       } catch (kvErr) {
         console.error('Could not salvage kv (tombstones/migration marker):', kvErr)
       }
-      // Scheduled tasks ride the same precedence: the newer source's rows win,
-      // a backup only fills ids it lacks. The table may not exist yet on
-      // either side — `ScheduleStore` creates it after recovery.
+      // Scheduled tasks come too. The table may not exist yet on either side —
+      // `ScheduleStore` creates it after recovery.
       try {
         into.exec(SCHEDULE_SCHEMA)
         const hasTasks = old
           .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'scheduled_tasks'")
           .get()
         if (hasTasks) {
-          // Gap-fill from an older backup brings a task back **paused** and
-          // with no next run: tasks keep no tombstones, so the row may be one
-          // the user deleted, and an overdue next run would fire it on the
-          // first tick. The page shows it; resuming is the user's call.
           const insTask = into.prepare(
-            onlyMissing
-              ? "INSERT OR IGNORE INTO scheduled_tasks (id, data, next_run, updated_at) VALUES (?, json_set(?, '$.enabled', json('false')), NULL, ?)"
-              : 'INSERT OR REPLACE INTO scheduled_tasks (id, data, next_run, updated_at) VALUES (?, ?, ?, ?)'
+            'INSERT OR REPLACE INTO scheduled_tasks (id, data, next_run, updated_at) VALUES (?, ?, ?, ?)'
           )
           for (const raw of old.prepare('SELECT id, data, next_run, updated_at FROM scheduled_tasks').all()) {
             const t = raw as unknown as { id: string; data: string; next_run: number | null; updated_at: number }
-            if (onlyMissing) insTask.run(t.id, t.data, t.updated_at)
-            else insTask.run(t.id, t.data, t.next_run, t.updated_at)
+            insTask.run(t.id, t.data, t.next_run, t.updated_at)
           }
         }
       } catch (taskErr) {
@@ -667,22 +643,8 @@ export class Store {
       )
       const selMsgs = old.prepare('SELECT seq, body FROM messages WHERE chat_id = ?')
       const rows = old.prepare('SELECT id, updated_at, cwd, meta FROM chats').all()
-      const present = onlyMissing
-        ? new Set((into.prepare('SELECT id FROM chats').all() as { id: string }[]).map((r) => r.id))
-        : new Set<string>()
       for (const raw of rows) {
         const c = raw as unknown as { id: string; updated_at: number; cwd: string; meta: string }
-        // A chat already recovered from the newer source wins; the backup only
-        // fills what that source could not produce.
-        if (present.has(c.id)) continue
-        // And never resurrect a chat the user deleted: the tombstone recorded at
-        // deletion outranks any backup taken before it.
-        if (onlyMissing) {
-          const tomb = into.prepare('SELECT v FROM kv WHERE k = ?').get(`tomb:${c.id}`) as
-            | { v: string }
-            | undefined
-          if (tomb) continue
-        }
         try {
           into.exec('BEGIN IMMEDIATE')
           insChat.run(c.id, c.updated_at, c.cwd, c.meta)
@@ -937,8 +899,7 @@ export class Store {
 
   /**
    * The record of turns to resume after a restart (`resumeTurns.ts`). Written
-   * without marking a backup due: its heartbeat writes every minute while a
-   * turn runs, and is not history worth a backup refresh.
+   * as a plain kv row: its heartbeat writes every minute while a turn runs.
    */
   readResume(key: string): string | null {
     return this.kvGet(key)
@@ -959,7 +920,6 @@ export class Store {
   }
 
   private kvSet(key: string, value: string): void {
-    this.backupDue = true
     this.db.prepare('INSERT INTO kv (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v')
       .run(key, value)
   }
@@ -1636,7 +1596,6 @@ export class Store {
       entry.bytes = Math.max(0, entry.bytes - freed)
       this.sizes.set(id, entry.bytes)
     }
-    this.backupDue = true
     // `guarded` clears `dirty` on success, but this pass wrote no message rows —
     // a kept message mutated and not yet flushed would lose its place in the
     // quit-time flush set. Re-arm the ordinary debounce, which now has a pruned
@@ -1832,10 +1791,6 @@ export class Store {
     const known = !!meta || !!this.db.prepare('SELECT 1 FROM chats WHERE id = ?').get(id)
     try {
       this.tx(() => {
-        // A deletion is a change the backup must capture: without this the next
-        // clean quit skips the snapshot, and a later rebuild restores the chat
-        // the user deleted from a backup that predates the deletion.
-        this.backupDue = true
         this.db.prepare('DELETE FROM messages WHERE chat_id = ?').run(id)
         this.db.prepare('DELETE FROM chats WHERE id = ?').run(id)
         this.db.prepare('DELETE FROM locks WHERE chat_id = ?').run(id)
@@ -1958,41 +1913,7 @@ export class Store {
       json
     ) as { rev?: number } | undefined
     this.stats.metaWrites++
-    // Metadata is data: a rename, a resumed sessionId, a cwd move. Without this
-    // a meta-only change never triggers a snapshot, and a rebuild restores the
-    // stale value from a backup taken before it.
-    this.backupDue = true
     return { json, rev: Number(row?.rev ?? 0) }
-  }
-
-  /**
-   * Roll a fresh copy of chats.db to chats.db.bak. Written to a temp path and
-   * renamed, so a backup interrupted half way never replaces a good one with a
-   * torn file — the whole point is that this copy is trustworthy when the live
-   * database is not.
-   */
-  async backup(): Promise<boolean> {
-    if (this.closed || this.backupInFlight || !this.backupDue) return false
-    this.backupInFlight = true
-    const tmp = `${this.backupPath}.tmp`
-    try {
-      await backup(this.db, tmp, { rate: BACKUP_RATE })
-      renameSync(tmp, this.backupPath)
-      // Only now: a write that landed mid-copy may not be in this snapshot, and
-      // clearing the flag first would let it be missed by the next one too.
-      this.backupDue = false
-      return true
-    } catch (err) {
-      console.error('Failed to back up the chat database:', err)
-      try {
-        if (existsSync(tmp)) renameSync(tmp, `${tmp}.failed`)
-      } catch {
-        // Nothing further to do; the previous good backup is still in place.
-      }
-      return false
-    } finally {
-      this.backupInFlight = false
-    }
   }
 
   /**
@@ -2003,7 +1924,6 @@ export class Store {
    * it the moment it acquired the lock.
    */
   private bumpRev(id: string): number {
-    this.backupDue = true
     const row = this.db
       .prepare('UPDATE chats SET rev = rev + 1 WHERE id = ? RETURNING rev')
       .get(id) as { rev?: number } | undefined
@@ -2025,7 +1945,6 @@ export class Store {
   private putRow(chatId: string, seq: number, body: string): void {
     this.upsertMsg.run(chatId, seq, body)
     this.stats.rowWrites++
-    this.backupDue = true
   }
 
   /**
@@ -2319,11 +2238,6 @@ export class Store {
     this.unverified.clear()
     if (this.heartbeat) clearInterval(this.heartbeat)
     this.heartbeat = null
-    if (this.backupTimer) clearInterval(this.backupTimer)
-    this.backupTimer = null
-    // A clean quit is the best moment to snapshot: everything dirty has just
-    // been flushed, so the backup is exactly the state the user last saw.
-    await this.backup()
     // Hand every claim back before closing, so the next instance to open these
     // chats does not have to wait out LOCK_STALE_MS.
     this.releaseLocks()

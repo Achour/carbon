@@ -55,12 +55,8 @@ export class ScheduleStore {
   private del: StatementSync
   private cas: StatementSync
 
-  /** Told after every write, so the store's rolling backup knows it is due. */
-  private onWrite: () => void
-
-  constructor(db: DatabaseSync, onWrite: () => void = () => {}) {
+  constructor(db: DatabaseSync) {
     this.db = db
-    this.onWrite = onWrite
     this.db.exec(SCHEDULE_SCHEMA)
     this.selAll = this.db.prepare('SELECT id, data, next_run FROM scheduled_tasks')
     this.selOne = this.db.prepare('SELECT id, data, next_run FROM scheduled_tasks WHERE id = ?')
@@ -94,7 +90,6 @@ export class ScheduleStore {
   put(task: ScheduledTask): ScheduledTask {
     const { nextRunAt, ...data } = task
     this.upsert.run(task.id, JSON.stringify(data), nextRunAt, Date.now())
-    this.onWrite()
     return task
   }
 
@@ -134,8 +129,7 @@ export class ScheduleStore {
       }
       const saved = this.get(task.id) ?? task
       this.db.exec('COMMIT')
-      this.onWrite()
-      return saved
+        return saved
     } catch (err) {
       try {
         this.db.exec('ROLLBACK')
@@ -158,12 +152,10 @@ export class ScheduleStore {
     this.db
       .prepare(`UPDATE scheduled_tasks SET data = json_set(data, ${paths}), updated_at = ? WHERE id = ?`)
       .run(...entries.map(([, v]) => v as string | number), Date.now(), id)
-    this.onWrite()
   }
 
   delete(id: string): void {
     this.del.run(id)
-    this.onWrite()
   }
 
   /**
@@ -172,8 +164,6 @@ export class ScheduleStore {
    * already moved and fire nothing.
    */
   claim(id: string, due: number, next: number | null): boolean {
-    const claimed = Number(this.cas.run(next, Date.now(), id, due).changes) === 1
-    if (claimed) this.onWrite()
-    return claimed
+    return Number(this.cas.run(next, Date.now(), id, due).changes) === 1
   }
 }

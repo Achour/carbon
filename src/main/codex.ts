@@ -90,6 +90,7 @@ import { CHART_SESSION_RULES } from './chartTool.ts'
 import { DELEGATION_SESSION_RULES, canDelegate } from './delegation.ts'
 import { SCHEDULE_SESSION_RULES, canSchedule } from './scheduleTools.ts'
 import { codexChromeRules } from './codexChrome.ts'
+import { childUpdateDelay } from './streamThrottle.ts'
 import { describeCanvas, describeElement, describeQuote, describeSelection } from './attachmentText.ts'
 
 const OUTPUT_CAP = 100_000
@@ -510,6 +511,15 @@ export class CodexSession implements AgentSession {
   >()
   /** Child tool call id → location within its parent Agent card. */
   private codexChildTools = new Map<string, { parent: ToolPart; index: number }>()
+  /**
+   * Child thread id → its parked transcript update. One trailing entry per
+   * agent: the payload is the whole `children` array, read at fire time, so a
+   * superseded update carries nothing the next one does not.
+   */
+  private codexChildUpdates = new Map<
+    string,
+    { timer: NodeJS.Timeout; loc: { message: AssistantMessage; index: number; part: ToolPart } }
+  >()
   private readonly activeCodexJobs = new Map<string, BackgroundJob>()
   private readonly rolloutWatcher: CodexRolloutWatcher
   private turnStart = 0
@@ -1281,6 +1291,7 @@ export class CodexSession implements AgentSession {
     this.itemLoc.clear()
     this.compactedItems.clear()
     this.lastText.clear()
+    this.flushCodexChildren()
     this.codexAgents.clear()
     this.codexChildTools.clear()
     this.clearCodexJobs()
@@ -2251,12 +2262,55 @@ export class CodexSession implements AgentSession {
     this.store.saveChatSoon(this.chat.id)
   }
 
+  /**
+   * Ship an agent's transcript to its card, at most every `childUpdateDelay`.
+   *
+   * Each update carries the *whole* `children` array, and it went out on every
+   * child text, tool start and tool completion — quadratic in the agent's own
+   * output (a synthetic 100-call agent: 200 updates, ~400 MB, for a 4 MB
+   * transcript). The rollout watcher hands over a poll's records back to back,
+   * so its interval coalesced nothing. Claude's `emitChildUpdate` is the same
+   * fix. Children are mutated in place, so the parked entry only has to keep
+   * the location; anything terminal flushes (`flushCodexChildren`).
+   */
   private emitCodexChildren(loc: {
     message: AssistantMessage
     index: number
     part: ToolPart
   }): void {
+    const key = loc.part.toolUseId
+    const parked = this.codexChildUpdates.get(key)
+    if (parked) {
+      parked.loc = loc
+      return
+    }
+    const timer = setTimeout(() => {
+      const entry = this.codexChildUpdates.get(key)
+      this.codexChildUpdates.delete(key)
+      if (entry && !this.disposed) this.sendCodexChildren(entry.loc)
+    }, childUpdateDelay(loc.part.children?.length ?? 0))
+    this.codexChildUpdates.set(key, { timer, loc })
+  }
+
+  private sendCodexChildren(loc: { message: AssistantMessage; index: number; part: ToolPart }): void {
     this.updateCodexAgent(loc, { children: [...(loc.part.children ?? [])] })
+  }
+
+  /** Deliver every parked transcript now — a turn ending, a dispose. */
+  private flushCodexChildren(): void {
+    for (const { timer, loc } of this.codexChildUpdates.values()) {
+      clearTimeout(timer)
+      this.sendCodexChildren(loc)
+    }
+    this.codexChildUpdates.clear()
+  }
+
+  /** Drop one agent's parked update: its caller is about to ship the children itself. */
+  private unparkCodexChildren(loc: { part: ToolPart }): void {
+    const parked = this.codexChildUpdates.get(loc.part.toolUseId)
+    if (!parked) return
+    clearTimeout(parked.timer)
+    this.codexChildUpdates.delete(loc.part.toolUseId)
   }
 
   private appendCodexAgentText(threadId: string, text: string): void {
@@ -2352,6 +2406,8 @@ export class CodexSession implements AgentSession {
 
   private completeCodexAgent(threadId: string, failed: boolean, result?: string): void {
     const loc = this.ensureCodexAgent(threadId)
+    // The completion below carries the children itself.
+    this.unparkCodexChildren(loc)
     if (loc.part.children) {
       loc.part.children = loc.part.children.map((child) =>
         child.type === 'tool' && (child.status === 'running' || child.status === 'pending')
@@ -2548,6 +2604,9 @@ export class CodexSession implements AgentSession {
    * which would otherwise leave the card spinning forever — and persist that way.
    */
   private terminalizeRunning(): void {
+    // Ahead of the sweep, so a transcript parked in the window lands before the
+    // turn's end rather than after it, or not at all.
+    this.flushCodexChildren()
     // Every message this turn put a call in, not only the last: a steered message
     // starts a new one while a call above it is still running.
     const messages = new Set(
@@ -3140,6 +3199,9 @@ export class CodexSession implements AgentSession {
     this.clearUserQuestions(false)
     this.clearNativeApprovals(false)
     this.clearMcpElicitations(false)
+    // The one moment a parked transcript could be lost rather than late: the
+    // children are already on the part, but nothing has persisted them.
+    this.flushCodexChildren()
     this.disposed = true
     this.dead = true
     this.abort?.abort()

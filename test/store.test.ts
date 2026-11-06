@@ -430,81 +430,6 @@ test('an unreadable row keeps its slot instead of shifting later history', async
   rmSync(dir, { recursive: true, force: true })
 })
 
-test('a corrupt database salvages post-migration history instead of reverting to stale JSON', async () => {
-  // Reported repro: chats/*.json stop being written after the migration, so
-  // rebuilding from them alone silently drops everything recorded since.
-  const dir = userDir()
-  const legacy: ChatData = {
-    ...makeChat({ id: 'legacy-chat', updatedAt: 500 }),
-    messages: [userMsg('old', 'from the archive')]
-  }
-  writeFileSync(join(dir, 'chats', 'legacy-chat.json'), JSON.stringify(legacy))
-
-  const store = new Store(dir) // migrates the archive in
-  const live = store.getChat('legacy-chat')!
-  live.messages.push(userMsg('new', 'recorded after the migration'))
-  live.updatedAt = 900
-  store.saveChat('legacy-chat')
-  await store.flushAll()
-
-  // Corrupt the database header so it cannot be opened at all.
-  writeFileSync(join(dir, 'chats.db'), Buffer.from('this is not a sqlite file at all'))
-  rmSync(join(dir, 'chats.db-wal'), { force: true })
-  rmSync(join(dir, 'chats.db-shm'), { force: true })
-
-  const rebuilt = new Store(dir)
-  const after = rebuilt.getChat('legacy-chat')
-  assert.ok(after, 'the chat must survive a rebuild')
-  // Recovery is complete here because flushAll left a backup — the archive is
-  // the last rung of the ladder, not the one that answers this.
-  assert.deepEqual(
-    after.messages.map((m) => m.id),
-    ['old', 'new'],
-    'a rebuild must not silently roll history back to the migration'
-  )
-  // The damaged file is kept, never deleted, so nothing is unrecoverable.
-  const setAside = readdirSync(dir).filter((f) => f.includes('chats.db.corrupt-'))
-  assert.ok(setAside.length > 0, 'the corrupt database must be set aside, not discarded')
-  await rebuilt.flushAll()
-  rmSync(dir, { recursive: true, force: true })
-})
-
-test('a totally destroyed database recovers post-migration history from the backup', async () => {
-  // The case the archive cannot answer: the live database is unreadable, so
-  // localized salvage yields nothing. Without a real backup the only fallback is
-  // chats/*.json, which stopped being written at the migration — so every
-  // message recorded since would be lost.
-  const dir = userDir()
-  const legacy: ChatData = {
-    ...makeChat({ id: 'c1', updatedAt: 500 }),
-    messages: [userMsg('old', 'from the archive')]
-  }
-  writeFileSync(join(dir, 'chats', 'c1.json'), JSON.stringify(legacy))
-
-  const store = new Store(dir)
-  const live = store.getChat('c1')!
-  live.messages.push(userMsg('new', 'recorded long after the migration'))
-  live.updatedAt = 900
-  store.saveChat('c1')
-  await store.flushAll() // flushAll takes the snapshot
-  assert.ok(existsSync(join(dir, 'chats.db.bak')), 'quit must leave a backup behind')
-
-  // Total loss: the header itself is gone, so nothing is salvageable.
-  writeFileSync(join(dir, 'chats.db'), Buffer.from('not a sqlite file'))
-  rmSync(join(dir, 'chats.db-wal'), { force: true })
-  rmSync(join(dir, 'chats.db-shm'), { force: true })
-
-  const rebuilt = new Store(dir)
-  const after = rebuilt.getChat('c1')!
-  assert.deepEqual(
-    after.messages.map((m) => m.id),
-    ['old', 'new'],
-    'the post-migration message must come back from the backup, not be lost to the archive'
-  )
-  await rebuilt.flushAll()
-  rmSync(dir, { recursive: true, force: true })
-})
-
 test('salvage carries readable rows and tombstones out of a damaged database', async () => {
   const dir = userDir()
   const store = new Store(dir)
@@ -687,38 +612,6 @@ test('a streamed message row protects itself even when the chat meta never chang
   rmSync(dir, { recursive: true, force: true })
 })
 
-test('a deletion refreshes the backup, so a rebuild does not resurrect the chat', async () => {
-  // Reported repro: deleteChat did not mark the backup stale, so a clean quit
-  // skipped the snapshot and a later rebuild restored the deleted chat from a
-  // backup taken before the deletion.
-  const dir = userDir()
-  const store = new Store(dir)
-  const keep = makeChat({ id: 'keep' })
-  store.addChat(keep)
-  keep.messages.push(userMsg('k0', 'keep me'))
-  store.saveChat('keep')
-  const doomed = makeChat({ id: 'doomed' })
-  store.addChat(doomed)
-  doomed.messages.push(userMsg('d0', 'delete me'))
-  store.saveChat('doomed')
-  await store.flushAll() // backup #1 — contains 'doomed'
-
-  const second = new Store(dir)
-  second.deleteChat('doomed')
-  await second.flushAll() // must take backup #2, without 'doomed'
-
-  // Total loss of the live database.
-  writeFileSync(join(dir, 'chats.db'), Buffer.from('not a sqlite file'))
-  rmSync(join(dir, 'chats.db-wal'), { force: true })
-  rmSync(join(dir, 'chats.db-shm'), { force: true })
-
-  const rebuilt = new Store(dir)
-  assert.equal(rebuilt.getChat('doomed'), null, 'a deleted chat must stay deleted')
-  assert.ok(rebuilt.getChat('keep'), 'the surviving chat must still come back')
-  await rebuilt.flushAll()
-  rmSync(dir, { recursive: true, force: true })
-})
-
 test('a lock left behind by a crashed instance goes stale and can be taken over', async () => {
   const dir = userDir()
   const owner = new Store(dir, { instanceId: 'crashed' })
@@ -848,37 +741,6 @@ test('a mutation missed by a bounded pass is still caught at quit, and survives 
     'the mutation must survive the restart, not revert'
   )
   await third.flushAll()
-  rmSync(dir, { recursive: true, force: true })
-})
-
-test('a metadata-only change reaches the backup', async () => {
-  // Reported repro: writeMeta did not mark the backup stale, so a rename (or a
-  // resumed sessionId, or a cwd move) was restored as its old value.
-  const dir = userDir()
-  const store = new Store(dir)
-  const chat = makeChat({ id: 'meta1', title: 'original title' })
-  store.addChat(chat)
-  chat.messages.push(userMsg('m0', 'body'))
-  store.saveChat('meta1')
-  await store.flushAll() // backup #1 — holds "original title"
-
-  const second = new Store(dir)
-  const live = second.getChat('meta1')!
-  live.title = 'renamed after the first backup'
-  live.sessionId = 'resumed-session-id'
-  live.updatedAt = 8888
-  second.saveChat('meta1')
-  await second.flushAll() // must refresh the backup for a meta-only change
-
-  writeFileSync(join(dir, 'chats.db'), Buffer.from('not a sqlite file'))
-  rmSync(join(dir, 'chats.db-wal'), { force: true })
-  rmSync(join(dir, 'chats.db-shm'), { force: true })
-
-  const rebuilt = new Store(dir)
-  const meta = rebuilt.getMeta('meta1')
-  assert.equal(meta?.title, 'renamed after the first backup', 'the rename must survive')
-  assert.equal(meta?.sessionId, 'resumed-session-id', 'the sessionId must survive')
-  await rebuilt.flushAll()
   rmSync(dir, { recursive: true, force: true })
 })
 

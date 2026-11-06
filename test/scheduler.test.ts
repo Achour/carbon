@@ -116,17 +116,6 @@ test('an edit never resurrects a task deleted under it', () => {
   assert.equal(b.get('t1'), null)
 })
 
-test('every write tells the store a backup is due', () => {
-  let writes = 0
-  const store = new ScheduleStore(new DatabaseSync(':memory:'), () => writes++)
-  store.put(task())
-  store.patch('t1', { lastRunAt: 1 })
-  store.save('t1', (t) => ({ task: { ...t!, name: 'x' }, keepClaim: true }))
-  store.claim('t1', at(2026, 10, 14, 9), null)
-  store.delete('t1')
-  assert.equal(writes, 5)
-})
-
 test('a task naming a provider this build lacks is shown paused, as Claude', () => {
   const store = new ScheduleStore(new DatabaseSync(':memory:'))
   store.put(task({ provider: 'muse' as never, model: 'muse-1' }))

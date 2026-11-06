@@ -59,12 +59,8 @@ installed app. The table is additive and unversioned, like `canvases`.
 - **A provider this build lacks** (a branch wrote the row) is coerced at the
   read, as chats are, and the task comes back **paused**: running it on Claude
   is not what anyone scheduled.
-- **Every write marks the rolling backup due**, as a chat write does; a
-  session that only touched tasks otherwise never backed them up.
-- **Corruption recovery copies the table** with the chats' source precedence.
-  Tasks keep no tombstones, so a row filled in from an older backup may be one
-  the user deleted: it comes back **paused, with no next run**, rather than
-  firing on the first tick.
+- **Corruption recovery copies the table** along with the chats it salvages
+  from the damaged file.
 
 ### The clock (`main/scheduler.ts`)
 
