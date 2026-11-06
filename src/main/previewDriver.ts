@@ -1114,7 +1114,7 @@ export class PreviewDriver {
     }, expectDoc)
   }
 
-  async history(g: Guest, action: 'back' | 'forward' | 'reload'): Promise<string> {
+  async history(g: Guest, caller: string, action: 'back' | 'forward' | 'reload'): Promise<string> {
     const nav = g.wc.navigationHistory
     const before = g.wc.getURL()
     const mark = g.log.mark()
@@ -1128,15 +1128,39 @@ export class PreviewDriver {
       g.wc.reload()
     }
     await this.settle(g, 10_000)
-    return this.report(g, `${action === 'reload' ? 'Reloaded' : `Went ${action}`}: ${g.wc.getURL()} — ${g.wc.getTitle()}`, mark, action === 'reload' ? g.wc.getURL() : before)
+    const head = `${action === 'reload' ? 'Reloaded' : `Went ${action}`}: ${g.wc.getURL()} — ${g.wc.getTitle()}`
+    return this.landed(g, caller, head, mark, action === 'reload' ? g.wc.getURL() : before)
   }
 
   /** After a navigation the renderer started: wait for it to land, then say where it is. */
-  async afterNavigate(g: Guest, mark: number): Promise<string> {
+  async afterNavigate(g: Guest, caller: string, mark: number): Promise<string> {
     await sleep(150)
     await this.settle(g, 15_000)
     const url = g.wc.getURL()
-    return this.report(g, `Loaded ${url} — ${g.wc.getTitle() || '(untitled)'}`, mark, url)
+    return this.landed(g, caller, `Loaded ${url} — ${g.wc.getTitle() || '(untitled)'}`, mark, url)
+  }
+
+  /**
+   * A navigation answers with the page it landed on, read as a snapshot. It
+   * used to answer with the URL and title alone, which left the agent's next
+   * step a look at a page it knew nothing about — and that look was a
+   * screenshot about seven times in eight (1,491 screenshots against 222
+   * snapshots in one user's history). Clicks and typing already report what
+   * changed; this closes the one way onto a page that reported nothing.
+   *
+   * The snapshot's "since your last snapshot" window starts at the
+   * navigation, so its console and failed requests are this page's, and the
+   * old page's are not repeated. A snapshot that cannot be taken (the page
+   * died mid-load) falls back to the old report.
+   */
+  private async landed(g: Guest, caller: string, head: string, mark: number, beforeUrl: string): Promise<string> {
+    if (g.wc.isDestroyed()) return this.report(g, head, mark, beforeUrl)
+    g.snapshotMarks.set(caller, mark)
+    try {
+      return `${head}\n\n${await this.snapshot(g, caller)}`
+    } catch {
+      return this.report(g, head, mark, beforeUrl)
+    }
   }
 
   console(g: Guest | undefined, caller: string, all: boolean): string {

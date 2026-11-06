@@ -123,7 +123,7 @@ export const PREVIEW_TOOL_INFO: Record<
   },
   navigate: {
     description:
-      'Load a URL in the in-app preview (e.g. a route of the running app), or go back/forward/reload. Opens the preview if it is not open. Each chat has its own preview tab on the shared dev server, so other agents testing at the same time never move your page.',
+      'Load a URL in the in-app preview (e.g. a route of the running app), or go back/forward/reload. Opens the preview if it is not open. Answers with the page it landed on as structured text, the same as preview_snapshot, with refs ready for click/type — no need to look again before acting. Each chat has its own preview tab on the shared dev server, so other agents testing at the same time never move your page.',
     readOnly: false,
     params: {
       url: { type: 'string', description: 'The URL to load.' },
@@ -142,7 +142,7 @@ export const PREVIEW_TOOL_INFO: Record<
   },
   screenshot: {
     description:
-      'Capture the preview page as the user sees it, to judge how it looks — layout, styling, visual bugs. Not needed to learn what an action did: click/type/press report the page\'s changes. full_page captures the whole scrollable page instead of the viewport. Start the dev server first if it is not running.',
+      'Capture the preview page as the user sees it, only to judge how it looks — layout, styling, visual bugs. Not needed to read the page or learn what an action did: navigate answers with the page as text, and click/type/press report its changes. full_page captures the whole scrollable page instead of the viewport. Start the dev server first if it is not running.',
     readOnly: true,
     params: {
       full_page: { type: 'boolean', description: 'Capture the whole page rather than the visible viewport.' }

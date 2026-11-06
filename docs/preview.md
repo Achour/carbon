@@ -37,6 +37,17 @@ visible text). A ref is a `WeakMap` entry in the page, so an element keeps its
 ref across snapshots, and a ref whose element left the DOM says so instead of
 acting on whatever now sits at the old point.
 
+**A navigation answers with the page it landed on** (`PreviewDriver.landed`):
+`navigate`, and back/forward/reload, return the landing line followed by a
+full snapshot, which also seeds that caller's refs. It used to return only the
+URL and title, so the agent's next call had to be a look at a page it knew
+nothing about, and it was a screenshot about seven times in eight (1,491
+screenshots against 222 snapshots by November). The snapshot's problem window
+starts at the navigation, so the console lines are the new page's. If the page
+dies mid-load, the old URL-and-console report stands in. Verified with a real
+Haiku turn: one `preview_navigate` came back with the headings, the textbox,
+button and link refs, and the page's console error.
+
 **An action reports what it changed on the page** (`previewDelta.ts`,
 `PreviewDriver.seed` / `changes`). It used to report only navigation, console
 errors and failed requests, so the agent looked again after nearly every

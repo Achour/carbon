@@ -729,7 +729,7 @@ export class PreviewManager implements PreviewToolHost {
       if (!res.ok || !res.paneId) return `Failed to navigate: ${res.error ?? 'unknown'}`
       const guest = this.driver.guest(res.paneId)
       if (!guest) return `Navigating to ${url}.`
-      return this.driver.afterNavigate(guest, 'error' in before || before.guest !== guest ? 0 : mark)
+      return this.driver.afterNavigate(guest, caller, 'error' in before || before.guest !== guest ? 0 : mark)
     }
     const t = await this.target(cwd, caller, op !== 'network')
     if ('error' in t) return t.error
@@ -742,7 +742,7 @@ export class PreviewManager implements PreviewToolHost {
     const doc = g.docGen
     switch (op) {
       case 'navigate':
-        return this.driver.history(g, input.action as 'back' | 'forward' | 'reload')
+        return this.driver.history(g, caller, input.action as 'back' | 'forward' | 'reload')
       case 'snapshot':
         return this.driver.snapshot(g, caller)
       case 'click':
