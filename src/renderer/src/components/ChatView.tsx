@@ -753,17 +753,27 @@ export const ChatView = React.memo(function ChatView({
                 fragment, which puts the live node in a different parent again. */}
             {nodes}
             {/* The whole of the room under the last line: the composer's height
-                plus 1.5rem, idle or running. `-mt-4` takes the column's gap back,
-                and the column has no bottom padding, or they stack into a band
-                of nothing above a composer that is already cleared.
+                plus 1.5rem idle, 2.5rem while a turn runs. `-mt-4` takes the
+                column's gap back, and the column has no bottom padding, or they
+                stack into a band of nothing above a composer that is already
+                cleared.
 
-                The activity label draws inside that 1.5rem, out of flow. As a row
-                of its own it had to be reserved for the whole turn so the foot
-                would not move per call, and an empty reserved row under every
-                step is what the gap was. */}
-            <div className="relative -mt-4 h-[calc(var(--composer-h,0px)+1.5rem)] shrink-0">
+                While running, the activity label draws inside that room, out of
+                flow: a 28px row like the activity rows above it, with 12px clear
+                below. As a row of its own it had to be reserved for the whole
+                turn so the foot would not move per call, and that empty row under
+                every step was the gap. In 1.5rem it touched the composer. The
+                room changes only when a turn starts or ends, never per call. */}
+            <div
+              className={cn(
+                'relative -mt-4 shrink-0',
+                showActivity
+                  ? 'h-[calc(var(--composer-h,0px)+2.5rem)]'
+                  : 'h-[calc(var(--composer-h,0px)+1.5rem)]'
+              )}
+            >
               {showActivity && (
-                <div className="pointer-events-none absolute inset-x-0 top-0 flex h-6 items-center">
+                <div className="pointer-events-none absolute inset-x-0 top-0 flex h-7 items-center">
                   <StreamingIndicator label={activityLabel} visible={showActivityLabel} />
                 </div>
               )}
