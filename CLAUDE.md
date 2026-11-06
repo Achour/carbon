@@ -376,6 +376,29 @@ The last explicitly chosen model/effort/permission-mode become the defaults for 
 
 **Writes are incremental.** `saveChatSoon` (1.5s trailing debounce, 5s cap) re-serializes only the rows that can have changed — appended-since-last-write, the tail, anything holding a live tool, and anything flagged via `markMessageDirty`. `saveChat` (turn boundaries) and a 30s floor run a reconcile against what the database actually holds; that pass never DELETEs rows it lacks in memory. The reconcile is **bounded** — it verifies the tail plus a rotating window (`RECONCILE_VERIFY_BYTES`) rather than re-serializing the whole chat, so a big chat cannot stall the main thread at every turn; the cursor covers everything over successive passes, and quit runs one thorough pass over `dirty` ∪ `unverified` — a chat leaves `dirty` after a bounded pass that may have skipped the very mutation the thorough pass exists to catch, so tracking it separately is what stops that mutation reverting on the next launch. Eviction writes a **thorough** pass for the same reason: it is the last moment the object is guaranteed reachable, and a chat that is only WeakRef-held can be collected before quit ever sees it. `flushAll` on quit writes only chats that were actually mutated.
 
+**Images live beside the transcript, not in it** (`main/blobStore.ts`,
+`shared/blobRef.ts`). Base64 images were 74% of a real 3.4 GB `chats.db`, and
+inline they rode every parse, write pass and IPC clone. A message's images are
+now files under `userData/blobs/`, named by the SHA-256 of their bytes
+(`StoredImage.ref`), and the message carries the ref. They leave at three
+boundaries, each on a *copy*: `emit` (`store.blobs.event`), the three history
+handlers (`viewWithRefs`, `chats:load-older`) and the store's row encoder
+(`Store.encode`). The session's own objects keep their base64, because an
+attachment can still be on its way to the provider when its echo is emitted.
+They come back as bytes at the two doors to a session, `ChatManager.deliver` and
+`steer` (`blobs.inline`), since every provider reads `data` and a resend or a
+resumed request carries refs. The desktop draws a ref through the
+`carbon-blob:` protocol and the phone through `/api/blob/`, both via
+`lib/imageSrc.ts`. `blobWorker.ts` rewrites old rows once, compare-and-swap on
+the old body so it never clobbers a store write, then sweeps unreferenced files
+daily after a 7-day grace. Measured on four screenshot-heavy chats: the
+migration rewrote 816 rows in 1.3 s, the rows went from 236 MB to 21.5 MB
+(154 MB of files), and with a 3,124-message chat fully loaded and scrolled the
+renderer's settled JS heap was 107 MB against 354 MB inline. **The file does not
+shrink**: freed pages are reused, and only a `VACUUM` returns them. **A build
+from before this change shows a migrated row's images as broken**, and dev and
+packaged share one database.
+
 **Search reads a derived index, never `chats.db` itself.** A `LIKE` over the
 2.8 GB of message bodies took ~5 s on the main thread, nearly all of it tool
 output. `chatIndex.ts` keeps an FTS5 index of the conversation alone (prompts

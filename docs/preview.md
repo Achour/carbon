@@ -207,6 +207,18 @@ gained focus shortly after a preview command, and on macOS `blur()` is
 `orderBack:` — it fired mostly when the *user* switched back to Carbon while an
 agent drove the preview, and threw the window behind every other app's.
 
+**Focus transfers check the native window synchronously** (`isWindowFocused`),
+immediately before focusing the guest or restoring the composer. DOM focus
+and a renderer `focus` event are not proof that Carbon is foreground. The
+deferred hand-back listens for native window activation (the host renderer may
+receive no DOM focus event when the guest owns the keyboard), checks again on
+delivery and keeps listening if the native window is still inactive. The
+original focus target survives repeated background actions until the user
+returns. A renderer focus signal delivered with Chrome in front used to restore
+the composer anyway; the guarded callback leaves focus alone and still
+restores it when the user returns. An isolated Electron probe verified this
+DOM-focus difference, but did not reproduce OS activation with either version.
+
 One activation is still unexplained: in a real agent turn, the first
 `preview_navigate` brought Carbon forward for about a second, and the same
 navigate driven with no provider turn did not.

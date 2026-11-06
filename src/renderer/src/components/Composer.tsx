@@ -61,6 +61,7 @@ import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { ProviderAvatar, ProviderMark } from '@/components/ui/provider-mark'
 import { WithTooltip } from '@/components/ui/tooltip'
+import { hasImage, imageSrc } from '@/lib/imageSrc'
 
 /**
  * How long typing pauses before the draft reaches the store. Long enough that a
@@ -140,7 +141,7 @@ function AttachmentChip({
     <div className={cn('group/att relative', fit ? 'min-w-0 shrink' : 'shrink-0')}>
       {att.kind === 'image' ? (
         <img
-          src={`data:${att.mediaType};base64,${att.data}`}
+          src={imageSrc(att)}
           alt={att.name}
           title={att.name}
           className="h-14 w-14 rounded-lg border border-border object-cover"
@@ -150,9 +151,9 @@ function AttachmentChip({
           title={elementTitle}
           className="flex h-7 max-w-52 items-center gap-1.5 rounded-md border border-primary/30 bg-primary/10 px-2"
         >
-          {att.data ? (
+          {hasImage(att) ? (
             <img
-              src={`data:${att.mediaType};base64,${att.data}`}
+              src={imageSrc(att)}
               alt=""
               className="-ml-1 h-6 w-6 rounded border border-border object-cover"
             />

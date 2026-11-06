@@ -3787,7 +3787,8 @@ export class ChatManager {
     if (!chat || !session?.steer) return false
     if (chat.pendingModel || chat.switchingNote || /^\s*\/[\w-]+(?:\s|$)/.test(text)) return false
     if (this.undelivered(chat).length) return false
-    const steered = await session.steer(text, attachments)
+    // Same as `deliver`: images back to bytes before a session sees them.
+    const steered = await session.steer(text, this.store.blobs.inline(attachments))
     if (steered) {
       this.touchScheduled(chat)
       this.deliveryParked.delete(chat.id)
@@ -3961,6 +3962,9 @@ export class ChatManager {
     label?: string,
     hiddenContext?: string | Promise<string | undefined>
   ): boolean {
+    // A resend or a resumed request carries its images as refs, and every
+    // provider reads `data`: the bytes go back in here, the one door to a session.
+    attachments = this.store.blobs.inline(attachments)
     try {
       const session = this.sessionFor(chat.id) ?? this.createSession(chat)
       session.send(text, attachments, label, hiddenContext)

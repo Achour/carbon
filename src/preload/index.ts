@@ -221,6 +221,12 @@ const api: Api = {
   forgetDir: (dir: string) => invoke('app:forget-dir', dir),
   revealPath: (path: string) => invoke('app:reveal-path', path),
   focusWindow: () => invoke('app:focus-window'),
+  isWindowFocused: () => ipcRenderer.sendSync('app:is-window-focused') === true,
+  onWindowFocus: (cb) => {
+    const listener = (): void => cb()
+    ipcRenderer.on('window:focus', listener)
+    return () => ipcRenderer.removeListener('window:focus', listener)
+  },
   openExternal: (url: string) => invoke('app:open-external', url),
   checkForUpdate: () => invoke('app:check-update'),
   remoteState: () => invoke('remote:state'),

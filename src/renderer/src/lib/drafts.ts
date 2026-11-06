@@ -88,8 +88,9 @@ export function isEmptyDraft(draft: ComposerDraft): boolean {
  * Images and picked elements carry raw base64 in `Attachment.data`, and are the
  * one thing here that runs to megabytes. `localStorage` throws once its ~5 MB
  * quota is gone, and that throw would take the *text* of every other draft with
- * it — so only reference-shaped attachments (a file path, an element ref)
- * survive a restart. Text is the part you cannot cheaply retype; an image you
+ * it — so only reference-shaped attachments (a file path, an element ref, an
+ * image already in the blob store by `ref`, as a resent message's are) survive
+ * a restart. Text is the part you cannot cheaply retype; an image you
  * can paste again. Both stay live in memory for the session either way.
  */
 export function persistableAttachments(list: Attachment[]): Attachment[] {

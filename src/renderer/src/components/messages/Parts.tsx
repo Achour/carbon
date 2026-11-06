@@ -42,6 +42,7 @@ import {
 import { AgentGroupCard, AgentPartRow } from './AgentRows'
 import { InlineVisual, isInlineVisual } from './InlineVisual'
 import { isAgentish } from '@shared/agentRuns'
+import { hasImage, imageSrc } from '@/lib/imageSrc'
 
 /**
  * One button in a user message's hover row. Shared so the two actions cannot
@@ -209,10 +210,10 @@ function PromptAttachments({ message }: { message: UserMessage }): React.JSX.Ele
   return (
     <div className="flex flex-wrap gap-1.5">
       {message.attachments.map((att) =>
-        att.kind === 'image' || (att.kind === 'element' && att.data) ? (
+        att.kind === 'image' || (att.kind === 'element' && hasImage(att)) ? (
           <img
             key={att.id}
-            src={`data:${att.mediaType};base64,${att.data}`}
+            src={imageSrc(att)}
             alt={att.name}
             title={att.name}
             // The chip is a thumbnail — `object-cover`, so it is also *cropped*.
@@ -220,7 +221,7 @@ function PromptAttachments({ message }: { message: UserMessage }): React.JSX.Ele
             onClick={() =>
               openLightbox({
                 kind: 'data',
-                src: `data:${att.mediaType};base64,${att.data}`,
+                src: imageSrc(att),
                 name: att.name
               })
             }

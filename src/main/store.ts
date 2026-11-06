@@ -14,6 +14,7 @@ import { DatabaseSync, type StatementSync } from 'node:sqlite'
 // Relative and .ts-extensioned, like codex.ts: this is a *runtime* import, and
 // `node --test` runs this file directly with no bundler to resolve `@shared`.
 import { knownProvider } from '../shared/types.ts'
+import { BlobStore } from './blobStore.ts'
 import { CanvasStore } from './canvasStore.ts'
 import { SCHEDULE_SCHEMA, ScheduleStore } from './scheduleStore.ts'
 import type {
@@ -522,6 +523,19 @@ export class Store {
   private selDropped!: StatementSync
   private delFrom!: StatementSync
 
+  /** Where a message's images live once it is written — see `blobStore.ts`. */
+  readonly blobs: BlobStore
+
+  /**
+   * A message as its row holds it: images out of line. Every write pass goes
+   * through here, so no row is written with base64 in it again, and a row
+   * still holding some from before is rewritten without it the first time a
+   * pass compares it.
+   */
+  private encode(m: ChatMessage): string {
+    return JSON.stringify(this.blobs.message(m))
+  }
+
   constructor(userDataDir: string, opts: StoreOptions = {}) {
     this.budget = opts.residentBudget ?? RESIDENT_BUDGET
     this.saveDelayMs = opts.saveDelayMs ?? 1500
@@ -529,6 +543,7 @@ export class Store {
     this.instanceId = opts.instanceId ?? randomUUID()
     this.onLockDenied = opts.onLockDenied
     this.chatsDir = join(userDataDir, 'chats')
+    this.blobs = new BlobStore(join(userDataDir, 'blobs'))
     this.settingsPath = join(userDataDir, 'settings.json')
     mkdirSync(this.chatsDir, { recursive: true })
     this.settings = this.readSettings()
@@ -1055,7 +1070,7 @@ export class Store {
       const floor = Math.max(known?.updated_at ?? 0, tomb)
       if (!(Number(chat.updatedAt) > floor)) return false
     }
-    const bodies = chat.messages.map((m) => JSON.stringify(m))
+    const bodies = chat.messages.map((m) => this.encode(m))
     try {
       this.tx(() => {
         this.db.prepare('DELETE FROM messages WHERE chat_id = ?').run(chat.id)
@@ -2045,7 +2060,7 @@ export class Store {
     const kept = new Map<number, string>()
     let wroteRows = false
     for (const i of indices) {
-      const body = JSON.stringify(chat.messages[i])
+      const body = this.encode(chat.messages[i])
       const previous = entry.bodies.get(i)
       if (body !== previous) {
         this.putRow(chat.id, i, body)
@@ -2184,14 +2199,14 @@ export class Store {
         unchecked++
         continue
       }
-      const body = JSON.stringify(messages[i])
+      const body = this.encode(messages[i])
       if (!has || body !== this.bodyOf(chat.id, i)) changed.push([i, body])
       bytes += body.length
       if (i === messages.length - 1) tail = body
     }
     // The tail must always have a baseline, even when it was trusted unverified.
     if (!tail && messages.length && !entry.corrupt.has(messages.length - 1)) {
-      tail = JSON.stringify(messages[messages.length - 1])
+      tail = this.encode(messages[messages.length - 1])
     }
     for (const [seq, body] of changed) this.putRow(chat.id, seq, body)
     if (stored > messages.length) {

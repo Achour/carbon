@@ -67,6 +67,7 @@ import {
   resolveCanvasTitle,
   type CanvasRef
 } from '@/lib/canvasRef'
+import { imageSrc } from '@/lib/imageSrc'
 
 type Glyph = React.ComponentType<{ className?: string }>
 
@@ -1118,7 +1119,7 @@ export function ToolOutputImages({
   return (
     <div className="space-y-2 pt-1">
       {images.map((img, i) => {
-        const src = `data:${img.mediaType};base64,${img.data}`
+        const src = imageSrc(img)
         return (
           <img
             key={i}
@@ -1128,7 +1129,7 @@ export function ToolOutputImages({
             decoding="async"
             // A capture is drawn at the transcript's width, which is where a
             // screenshot of a whole window stops being readable. It never had a
-            // file, so the lightbox takes the data itself.
+            // file, so the lightbox takes the image's own source.
             onClick={() =>
               useApp.getState().openLightbox({ kind: 'data', src, name: 'Screenshot' })
             }

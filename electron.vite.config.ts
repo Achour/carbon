@@ -14,7 +14,9 @@ export default defineConfig({
         input: {
           index: resolve('src/main/index.ts'),
           // The search index's thread (`chatSearch.ts`), loaded by path.
-          searchWorker: resolve('src/main/searchWorker.ts')
+          searchWorker: resolve('src/main/searchWorker.ts'),
+          // The blob store's migration and sweep (`blobStore.ts`), loaded by path.
+          blobWorker: resolve('src/main/blobWorker.ts')
         }
       }
     }

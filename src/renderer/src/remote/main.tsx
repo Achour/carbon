@@ -8,7 +8,11 @@ import { installDesktopBridge } from './desktop'
 import { installPushWorker } from './push'
 import { installPrefs } from './prefs'
 import { installNativeBridge, isNative } from './native'
+import { setBlobBase } from '@/lib/imageSrc'
 import './remote.css'
+
+// A message's stored images come from this server, not main's desktop protocol.
+setBlobBase('/api/blob/')
 
 // The palette, the color mode (System follows the phone, live) and both type
 // sizes. `remote.html` has already painted the first frame in the right one.

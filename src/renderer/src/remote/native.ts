@@ -21,7 +21,7 @@ import { THEMES } from '@/lib/themes'
 import { baseName, chatTitle, isBusy, listedChats, sidebarSections, toolLine } from './format'
 import { groupByProvider, type OptionValues, type Pickers } from './options'
 import { placeChat, rename, setArchived, setPinned } from './chatActions'
-import { changes, diff, invoke, markSeen } from './api'
+import { blobBase64, changes, diff, invoke, markSeen } from './api'
 import { deriveBoard } from './board'
 import { greeting } from '@/lib/format'
 import { promptLine } from '@shared/promptLine'
@@ -1005,11 +1005,14 @@ const commands: Record<string, (...args: never[]) => unknown> = {
     })),
   stopJob: (chatId: string, id: string) => invoke('chat:stop-background-job', chatId, id),
   /** One screenshot's bytes (`shots`), base64, from the open chat. */
-  shot: (toolUseId: string, index: number) => {
+  shot: async (toolUseId: string, index: number) => {
     const r = useRemote.getState()
     const part = r.open ? findToolPart(r.open.messages, toolUseId) : undefined
     const image = part?.outputImages?.[index]
-    return image ? { mediaType: image.mediaType, data: image.data } : null
+    if (!image) return null
+    // A sent message names its images by ref; the bytes are one fetch away.
+    const data = image.data ?? (image.ref ? await blobBase64(image.ref) : null)
+    return data ? { mediaType: image.mediaType, data } : null
   },
   /** The Mac's scheduled tasks, each with how its last run went (that run is a chat). */
   schedules: async () => {

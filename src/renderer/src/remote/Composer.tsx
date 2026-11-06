@@ -13,6 +13,7 @@ import { Sheet } from './Sheet'
 import { clearDraft, patchDraft, readDraft } from './drafts'
 import * as api from './api'
 import { isNative, useNativeComposer } from './native'
+import { imageSrc } from '@/lib/imageSrc'
 
 /** Longest side of an attached photo. A phone camera's 12 MP is wasted on a model. */
 const MAX_SIDE = 2000
@@ -640,7 +641,7 @@ export function Composer({
               <div key={a.id} className="relative size-16 shrink-0">
                 {a.kind === 'image' ? (
                   <img
-                    src={`data:${a.mediaType};base64,${a.data}`}
+                    src={imageSrc(a)}
                     alt={a.name}
                     className="size-16 rounded-xl border border-border object-cover"
                   />

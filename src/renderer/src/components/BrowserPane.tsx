@@ -758,7 +758,7 @@ export function BrowserPane({
     // What had keyboard focus before an agent `focus`, to hand it back after —
     // later, when the window is next focused, if Carbon is in the background.
     let priorFocus: HTMLElement | null = null
-    let pendingHandBack: (() => void) | null = null
+    let cancelHandBack: (() => void) | null = null
     const root = (): HTMLDivElement | null => rootRef.current
     // **A hidden pane is a hidden page.** A guest whose pane is
     // `visibility: hidden` — a tab behind another, or any pane while the panel
@@ -873,7 +873,7 @@ export function BrowserPane({
         // so an agent clicking in a preview pulled the user out of whatever
         // they were doing. In the background the input goes in without the
         // guest's focus instead (`insertText` in the page).
-        if (!document.hasFocus()) return document.activeElement === wv
+        if (!window.api.isWindowFocused()) return document.activeElement === wv
         try {
           wv.focus()
         } catch {
@@ -883,8 +883,13 @@ export function BrowserPane({
       },
       unfocus: () => {
         const back = priorFocus
-        priorFocus = null
         const handBack = (): void => {
+          // Recheck native activation on delivery too: the user may have
+          // switched away again while the event was queued in the renderer.
+          if (!window.api.isWindowFocused()) return
+          cancelHandBack?.()
+          cancelHandBack = null
+          priorFocus = null
           if (document.activeElement !== wv) return
           if (back && back !== document.body && back.isConnected) back.focus({ preventScroll: true })
           // Nothing focusable had it (or it would not take it back): just let go.
@@ -894,13 +899,12 @@ export function BrowserPane({
         // is in the background, it would bring the app to the front (see
         // `focus`), so it waits for the user to come back to the window.
         if (document.activeElement === wv) {
-          if (pendingHandBack) window.removeEventListener('focus', pendingHandBack)
-          pendingHandBack = null
-          if (document.hasFocus()) handBack()
-          else {
-            pendingHandBack = handBack
-            window.addEventListener('focus', handBack, { once: true })
-          }
+          cancelHandBack?.()
+          // Subscribe before checking to cover a return during this call.
+          // The host renderer need not receive a DOM focus event when the
+          // guest owns the keyboard, so listen to the native window instead.
+          cancelHandBack = window.api.onWindowFocus(handBack)
+          handBack()
         }
         unexpose()
       },
@@ -933,7 +937,7 @@ export function BrowserPane({
     registerPreview(id, handle)
 
     return () => {
-      if (pendingHandBack) window.removeEventListener('focus', pendingHandBack)
+      cancelHandBack?.()
       wv.removeEventListener('dom-ready', onDomReady)
       wv.removeEventListener('did-navigate', onCommit)
       wv.removeEventListener('did-navigate-in-page', onNavigate)

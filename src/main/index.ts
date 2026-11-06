@@ -8,6 +8,7 @@ import {
   nativeTheme,
   Notification,
   powerMonitor,
+  protocol,
   shell
 } from 'electron'
 import { randomUUID } from 'node:crypto'
@@ -15,6 +16,8 @@ import { forgetChat, noteJobs, noteStatus, setKeepAwake } from './keepAwake'
 import { ResumeTurns } from './resumeTurns'
 import { Buddy } from './buddy'
 import { existsSync, writeFileSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
+import { Worker } from 'node:worker_threads'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type {
@@ -59,6 +62,7 @@ import type {
   WorktreeStatus
 } from '@shared/types'
 import { PROVIDERS, effortForProvider, providerForRememberedModel } from '@shared/types'
+import { BLOB_SCHEME, blobMediaType } from '@shared/blobRef'
 import { withTimeout } from './session'
 import { ChatManager } from './claude'
 import { ChatTerminalManager } from './chatTerminal'
@@ -150,12 +154,36 @@ let buddy: Buddy
 let translucentEnabled = false
 let resolvedDark = true
 
+function startBlobWorker(chatsDb: string, blobDir: string): void {
+  const worker = new Worker(join(__dirname, 'blobWorker.js'), { workerData: { chatsDb, blobDir } })
+  // Never what keeps the app alive; killed mid-batch, SQLite rolls the batch back.
+  worker.unref()
+  worker.on('message', (m: Record<string, unknown>) => console.log('[blobs]', JSON.stringify(m)))
+  worker.on('error', (err) => console.warn('[blobs] worker stopped:', err))
+}
+
+function viewWithRefs<V extends { chat: ChatData } | null>(view: V): V {
+  if (!view) return view
+  const messages = store.blobs.messages(view.chat.messages)
+  return messages === view.chat.messages ? view : { ...view, chat: { ...view.chat, messages } }
+}
+
+// Registered before `ready`, as Electron requires: `standard` gives the URL a
+// host and path, `secure` keeps it loadable from the packaged `file://` page,
+// and `supportFetchAPI` lets the lightbox's copy and save read the bytes back.
+protocol.registerSchemesAsPrivileged([
+  { scheme: BLOB_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true } }
+])
+
 function emit(ev: ChatEvent): void {
   // A transcript holds one window of its chat, so a message event says where
   // in the whole chat it belongs — see `placeMessage`.
   if (ev.type === 'message' && ev.index === undefined) {
     ev = { ...ev, index: store.messageIndex(ev.chatId, ev.message.id) }
   }
+  // Images leave main as refs, never as base64 — see `blobStore.ts`. A copy:
+  // the session keeps its own objects as they are.
+  ev = store.blobs.event(ev)
   win?.webContents.send('chat:event', ev)
   remote?.observe(ev)
   if (ev.type === 'status') {
@@ -385,6 +413,7 @@ function createWindow(): void {
   })
 
   win.on('ready-to-show', () => win?.show())
+  win.on('focus', () => win?.webContents.send('window:focus'))
   // No focus bounce after preview commands, on purpose: on macOS `blur()` is
   // `orderBack:`. See "That focus is the renderer's" in docs/preview.md.
   win.on('close', (event) => {
@@ -611,18 +640,24 @@ function registerIpc(): void {
   // main-process caller keeps the full-length array whose index is the row's seq.
   // The held deltas go out first, so they land ahead of the snapshot that
   // already contains their text rather than being appended to it a second time.
+  //
+  // Both hand over history with its images as refs (`viewWithRefs`): a chat
+  // its session is still writing holds the newest ones inline.
   ipcMain.handle('chats:get', (_e, id: string) => {
     manager.flushDeltas(id)
-    return store.viewChat(id)
+    return viewWithRefs(store.viewChat(id))
   })
   ipcMain.handle('chats:get-many', (_e, ids: string[]) => {
     for (const id of ids) manager.flushDeltas(id)
-    return ids.map((id) => store.viewChat(id))
+    return ids.map((id) => viewWithRefs(store.viewChat(id)))
   })
 
-  ipcMain.handle('chats:load-older', (_e, id: string, before: number) =>
-    store.loadOlder(id, before)
-  )
+  ipcMain.handle('chats:load-older', (_e, id: string, before: number) => {
+    const older = store.loadOlder(id, before)
+    if (!older) return older
+    const messages = store.blobs.messages(older.messages)
+    return messages === older.messages ? older : { ...older, messages }
+  })
 
   ipcMain.handle(
     'chats:create',
@@ -1233,6 +1268,14 @@ function registerIpc(): void {
     win.focus()
   })
 
+  // DOM focus (including a guest's focus emulation) is not native window
+  // activation. Answer synchronously so preview focus cannot use a stale
+  // renderer event or cross an await after checking whether the user is here.
+  ipcMain.on('app:is-window-focused', (e) => {
+    const owner = BrowserWindow.fromWebContents(e.sender)
+    e.returnValue = !!owner && !owner.isDestroyed() && owner.isFocused()
+  })
+
   ipcMain.handle('fs:list', (_e, dir: string) => listDir(dir))
 
   ipcMain.handle('fs:read', (_e, path: string) => readFileContent(path))
@@ -1439,6 +1482,17 @@ app.whenReady().then(() => {
     // instance owns the chat.
     onLockDenied: (chatId) => emit({ type: 'chat-locked', chatId })
   })
+  // A stored image, by ref: `carbon-blob://img/<ref>`. Read off the main
+  // thread's critical path, and cached for good, since a ref is its content.
+  protocol.handle(BLOB_SCHEME, async (request) => {
+    const ref = decodeURIComponent(new URL(request.url).pathname.slice(1))
+    const file = store.blobs.pathOf(ref)
+    const bytes = file ? await readFile(file).catch(() => null) : null
+    if (!bytes) return new Response(null, { status: 404 })
+    return new Response(new Uint8Array(bytes), {
+      headers: { 'content-type': blobMediaType(ref), 'cache-control': 'public, max-age=31536000, immutable' }
+    })
+  })
   // Its own thread and its own file; the worker waits for launch to settle
   // before its first build.
   chatSearch = new ChatSearch(
@@ -1447,6 +1501,9 @@ app.whenReady().then(() => {
     join(app.getPath('userData'), 'search.db')
   )
   chatSearch.start()
+  // Moves images still inline in old rows out to the blob store, once, then
+  // sweeps unreferenced ones daily — both on its own thread (`blobWorker.ts`).
+  startBlobWorker(join(app.getPath('userData'), 'chats.db'), store.blobs.dir)
   // Right after the store and before any manager, because `emit` feeds it:
   // it keeps the statuses and open prompts a phone needs on connect.
   remote = new RemoteAccess({

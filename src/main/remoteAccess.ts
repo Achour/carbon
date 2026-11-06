@@ -19,6 +19,7 @@ import type { IpcMain, IpcMainInvokeEvent } from 'electron'
 import { projectRoot } from '@shared/types'
 import { git, gitDiff, gitStatus } from './git'
 import { promptLine } from '@shared/promptLine'
+import { blobMediaType } from '@shared/blobRef'
 import type {
   PendingSteer,
   AppDefaults,
@@ -675,6 +676,7 @@ export class RemoteAccess {
       if (path === '/api/diff') return this.handleDiff(url, res)
       if (path === '/api/changes') return this.handleChanges(url, res)
       if (path === '/api/image') return this.handleImage(url, res)
+      if (path.startsWith('/api/blob/')) return this.handleBlob(path.slice('/api/blob/'.length), res)
       json(res, 404, { error: 'Not found' })
       return
     }
@@ -1161,6 +1163,24 @@ export class RemoteAccess {
     if (info.size > MAX_IMAGE_BYTES) return json(res, 413, { error: 'Too large' })
     const data = await readFile(file)
     json(res, 200, { dataUri: `data:${type};base64,${data.toString('base64')}` })
+  }
+
+  /**
+   * A message's stored image (`blobStore.ts`), the phone's half of the desktop's
+   * `carbon-blob:` protocol. Any paired device may read any ref: a ref is the
+   * SHA-256 of the bytes, so it can only be asked for by someone who was already
+   * shown the message that names it.
+   */
+  private async handleBlob(ref: string, res: ServerResponse): Promise<void> {
+    const file = this.host.store.blobs.pathOf(decodeURIComponent(ref))
+    const bytes = file ? await readFile(file).catch(() => null) : null
+    if (!bytes) return json(res, 404, { error: 'Not found' })
+    res.writeHead(200, {
+      'content-type': blobMediaType(ref),
+      'content-length': bytes.length,
+      'cache-control': 'private, max-age=31536000, immutable'
+    })
+    res.end(bytes)
   }
 
   /** Uploads past `UPLOAD_TTL_MS`. Run at start; a missing folder is nothing to prune. */

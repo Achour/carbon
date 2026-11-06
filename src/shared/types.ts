@@ -714,8 +714,8 @@ export interface ToolPart {
    */
   startedAt?: number
   output?: string
-  /** Image blocks a tool returned (e.g. preview_screenshot) — base64, no prefix. */
-  outputImages?: { mediaType: string; data: string }[]
+  /** Image blocks a tool returned (e.g. preview_screenshot) — see `StoredImage`. */
+  outputImages?: StoredImage[]
   denied?: boolean
   /** Sub-agent activity for Task/Agent tools: the spawned agent's own stream. */
   children?: AssistantPart[]
@@ -880,13 +880,33 @@ export interface QuoteRef {
  */
 export const QUOTE_MAX_CHARS = 4000
 
+/**
+ * An image a message carries. `data` is raw base64 (no data: prefix); `ref` names
+ * the same bytes in main's blob store (`main/blobStore.ts`), which is what every
+ * message holds once it has left the session that produced it: images are three
+ * quarters of the stored transcript by volume, and kept inline they rode every
+ * parse, write and IPC clone of the message. Exactly one is normally set; a
+ * reader draws either through `imageSrc` and main reads bytes back with
+ * `BlobStore.inline` before an image is sent to a provider.
+ */
+export interface StoredImage {
+  mediaType: string
+  data?: string
+  ref?: string
+}
+
 export interface Attachment {
   id: string
   kind: 'image' | 'file' | 'element' | 'selection' | 'canvas' | 'quote'
   name: string
-  /** Images (and element screenshots): IANA media type + raw base64 (no data: prefix). */
+  /**
+   * Images (and element screenshots): IANA media type, and the bytes either
+   * inline as raw base64 (no data: prefix) or as a `ref` into the blob store —
+   * see `StoredImage`. A composer holds `data`; a sent message holds `ref`.
+   */
   mediaType?: string
   data?: string
+  ref?: string
   /**
    * Files: absolute path on disk, passed to Claude as a reference to read.
    * Deliberately *not* set for a selection, whose file lives on `selection`
@@ -3403,6 +3423,10 @@ export interface Api {
   revealPath(path: string): Promise<void>
   /** Bring the app window to the foreground (notification clicks). */
   focusWindow(): Promise<void>
+  /** Native window focus, read synchronously immediately before moving preview focus. */
+  isWindowFocused(): boolean
+  /** Native activation, including when keyboard focus belongs to a preview guest. */
+  onWindowFocus(cb: () => void): () => void
   /** Open an http(s) URL in the user's default browser. */
   openExternal(url: string): Promise<void>
   /**

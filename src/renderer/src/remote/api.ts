@@ -120,6 +120,16 @@ export async function changes(chatId: string): Promise<{ isRepo: boolean; branch
   return { isRepo: !!data.isRepo, branch: data.branch ?? '', files: data.files ?? [] }
 }
 
+/** A stored image's bytes as base64 (`/api/blob/`), for the native app's viewer. */
+export async function blobBase64(ref: string): Promise<string | null> {
+  const res = await fetch(`/api/blob/${encodeURIComponent(ref)}`, { credentials: 'same-origin' })
+  if (!res.ok) return null
+  const bytes = new Uint8Array(await res.arrayBuffer())
+  let binary = ''
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+  return btoa(binary)
+}
+
 /** The Mac's cap on one request, and so on one file sent from the phone. */
 export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 
