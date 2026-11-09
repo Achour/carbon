@@ -69,7 +69,17 @@ export function placeChat(zone: string, from: string, target: { id: string; afte
     target.id,
     target.after
   )
-  if (key === null) return
-  patch(from, { sortKey: key })
-  void api.invoke('chats:place', from, key).catch(fail)
+  if (key !== null) place(from, key)
+}
+
+function place(id: string, sortKey: number): void {
+  patch(id, { sortKey })
+  void api.invoke('chats:place', id, sortKey).catch(fail)
+}
+
+/** The desktop's `moveChatToTop`: key `now`; a pin or a side chat is left alone. */
+export function moveToTop(id: string): void {
+  const chat = useRemote.getState().chats.find((c) => c.id === id)
+  if (!chat || chat.pinnedAt !== undefined || chat.sideOf) return
+  place(id, Date.now())
 }

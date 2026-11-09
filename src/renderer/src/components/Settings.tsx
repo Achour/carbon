@@ -8,6 +8,7 @@ import {
   Check,
   Copy,
   FolderGit2,
+  GripVertical,
   History,
   Info,
   LayoutList,
@@ -71,6 +72,7 @@ import {
   modelDisplayName,
   providerForRememberedModel,
   resolvedModelName,
+  type ChatOrder,
   type EffortId,
   type ModelOption,
   type PermissionModeId,
@@ -999,6 +1001,11 @@ const SIDEBAR_DENSITIES = [
   { id: 'detailed', label: 'Detailed', icon: LayoutList }
 ] as const
 
+const CHAT_ORDERS: { id: ChatOrder; label: string; icon: LucideIcon }[] = [
+  { id: 'manual', label: 'Manual', icon: GripVertical },
+  { id: 'recent', label: 'Recent activity', icon: History }
+]
+
 /** New-chat defaults: remembered from the last pick, or fixed here. */
 const DEFAULTS_MODES: { id: 'last' | 'fixed'; label: string; icon: LucideIcon }[] = [
   { id: 'last', label: 'Last used', icon: History },
@@ -1439,6 +1446,7 @@ function SettingsBody(): React.JSX.Element {
   const buddy = useApp((s) => !!s.defaults?.buddy)
   const allowDelegation = useApp((s) => s.defaults?.allowDelegation !== false)
   const resumeAfterRestart = useApp((s) => s.defaults?.resumeAfterRestart !== false)
+  const chatOrder: ChatOrder = useApp((s) => s.defaults?.chatOrder ?? 'manual')
   const setDefaults = useApp((s) => s.setDefaults)
 
   // Which section is open lives in the store: the sidebar's project menu and
@@ -1593,6 +1601,21 @@ function SettingsBody(): React.JSX.Element {
                         value={sidebarDensity}
                         options={SIDEBAR_DENSITIES}
                         onChange={setSidebarDensity}
+                      />
+                    </Row>
+                    <Row
+                      label="Chat order"
+                      description={
+                        chatOrder === 'recent'
+                          ? 'A chat moves to the top when you send a message in it. You can still drag chats to rearrange them.'
+                          : 'Chats stay where you put them. Drag to rearrange, or use Move to top from a chat’s menu or from search (⌘↵).'
+                      }
+                    >
+                      <Segmented
+                        ariaLabel="Chat order"
+                        value={chatOrder}
+                        options={CHAT_ORDERS}
+                        onChange={(order) => void setDefaults({ chatOrder: order })}
                       />
                     </Row>
                     <Row

@@ -390,8 +390,9 @@ export interface ChatMeta {
   bookmarks?: TurnBookmark[]
   /**
    * Where the chat sits in the sidebar's lists, higher first. Set once when the
-   * chat is made and moved only by dragging its row — never by a turn — so the
-   * list is the order the user left it in. Databases from before it existed are
+   * chat is made and moved only by the user — a drag, "Move to top", or a send
+   * under `AppDefaults.chatOrder` `recent` — never by a turn, so the list is
+   * the order the user left it in. Databases from before it existed are
    * seeded from `updatedAt` (`Store.seedSortKeys`), which is the order they were
    * last drawn in.
    */
@@ -1991,7 +1992,14 @@ export interface AppDefaults {
    * unless explicitly `false`.
    */
   resumeAfterRestart?: boolean
+  /**
+   * Settings → Chats → "Chat order"; absent is `manual`. `recent` also stamps
+   * `ChatMeta.sortKey` on the user's sends — see `docs/sidebar.md`.
+   */
+  chatOrder?: ChatOrder
 }
+
+export type ChatOrder = 'manual' | 'recent'
 
 /** What Settings can write into `AppDefaults` directly. */
 export interface DefaultsPatch {
@@ -2007,6 +2015,7 @@ export interface DefaultsPatch {
   buddy?: boolean
   allowDelegation?: boolean
   resumeAfterRestart?: boolean
+  chatOrder?: ChatOrder
 }
 
 /**

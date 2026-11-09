@@ -45,7 +45,7 @@ other:
   "Previous 30 days"); the buckets went when the order became hand-made, since a
   row dragged above a newer one would sit under a date that isn't its own.
 
-**The order is the user's: `ChatMeta.sortKey`, and only a drag moves it.** A
+**The order is the user's: `ChatMeta.sortKey`, and only the user moves it.** A
 new chat gets `now`, so it lands on top; after that its row stays where it is
 until it is dragged (`placeChat`, `lib/chatOrder.ts`). Dropped between two rows,
 a chat takes the midpoint of their keys — one meta write, where renumbering the
@@ -64,6 +64,30 @@ chats", and a drag that snaps back the next time the chat runs does not
 answer it. Pins alone were tried first and were not enough — someone with no
 pins, in detailed mode, drags a chat to a new spot in the list and expects it
 to stay.
+
+**"Move to top" is the drag a long list cannot do** (`moveChatToTop`).
+Search is how an old chat comes back, and once it is opened it sits where it
+always was — often hundreds of rows down, or in compact mode past the project's
+"recent chats" cut-off with no row on screen at all. So the row menus carry it,
+and so does the search palette itself (the highlighted row's button, or ⌘↵,
+which open the chat too), since the palette is the one place a chat past the
+cut-off can be reached. The key is `now`, the one a new chat gets, so "top" has
+a single meaning everywhere it is written. A pin is left alone — it is ordered
+in its own section, and `placeChat` would unpin it — so the action is a no-op
+for one and the menus don't offer it.
+
+**Settings → Chats → "Chat order: Recent activity" is the opt-in for the old
+behaviour** (`AppDefaults.chatOrder`): something the user sends — a message, a
+steer, an edited resend, a review — stamps `sortKey` with `now`
+(`hoistIfRecent` in `main/index.ts`). Writing the key rather than sorting on a
+second field means a drag still holds until the next send, switching modes
+rearranges nothing on the spot, and the phone, which sorts on the same key and
+sends through the same handlers, agrees without reading the setting. It is not
+`manager.send`, because a delegation's outcome and a resumed turn go through
+that too, and neither is the user doing anything. The renderer re-sorts only
+when the stamped row is out of order with its neighbours (`patchChats`), since
+nearly every stamp lands on the chat already on top. Manual stays the default:
+that is what the paragraph above was asked for.
 
 `updatedAt` still tracks the last message and a turn start still stamps it —
 it is what a row's timestamp shows. It decides nothing else. Databases from

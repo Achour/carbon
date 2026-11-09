@@ -2354,6 +2354,8 @@ export class Store {
       defaults.allowDelegation = patch.allowDelegation ? undefined : false
     if (patch.resumeAfterRestart !== undefined)
       defaults.resumeAfterRestart = patch.resumeAfterRestart ? undefined : false
+    if (patch.chatOrder !== undefined)
+      defaults.chatOrder = patch.chatOrder === 'recent' ? 'recent' : undefined
     this.writeSettings()
     return defaults
   }
