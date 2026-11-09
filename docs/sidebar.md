@@ -45,7 +45,7 @@ other:
   "Previous 30 days"); the buckets went when the order became hand-made, since a
   row dragged above a newer one would sit under a date that isn't its own.
 
-**The order is the user's: `ChatMeta.sortKey`, and only a drag moves it.** A
+**The order is the user's: `ChatMeta.sortKey`, and only the user moves it.** A
 new chat gets `now`, so it lands on top; after that its row stays where it is
 until it is dragged (`placeChat`, `lib/chatOrder.ts`). Dropped between two rows,
 a chat takes the midpoint of their keys — one meta write, where renumbering the
@@ -64,6 +64,26 @@ chats", and a drag that snaps back the next time the chat runs does not
 answer it. Pins alone were tried first and were not enough — someone with no
 pins, in detailed mode, drags a chat to a new spot in the list and expects it
 to stay.
+
+**"Move to top" is the drag a long list cannot do** (`moveChatToTop`,
+`keyForTop`). Search is how an old chat comes back, and once it is opened it
+sits where it always was — often hundreds of rows down, or in compact mode past
+the project's "recent chats" cut-off with no row on screen at all. So the row
+menus carry it (unpinned rows only: a pin is ordered in its own section, and
+`placeChat` would unpin it), and so does the search palette itself, as the
+highlighted row's button and ⌘↵, which open the chat too — the palette is the
+one place a chat past the cut-off can be reached. The key is `now`, or one
+above a key already past it, and goes through `placeChat` like a drop.
+
+**Settings → Chats → "Chat order: Recent activity" is the opt-in for the old
+behaviour** (`AppDefaults.chatOrder`): the user's own send moves the chat to
+the top. It writes `sortKey` in the `chat:send` handler rather than sorting on
+a second field, so a drag still holds until the next send, switching modes
+rearranges nothing on the spot, and the phone — which sorts on the same key
+and is relayed through the same handler — agrees without reading the setting.
+It is not `manager.send`, because a delegation's outcome and a resumed turn go
+through that too, and neither is the user doing anything. Manual stays the
+default: that is what the paragraph above was asked for.
 
 `updatedAt` still tracks the last message and a turn start still stamps it —
 it is what a row's timestamp shows. It decides nothing else. Databases from

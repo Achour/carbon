@@ -1,4 +1,4 @@
-import { keyForDrop } from '@/lib/chatOrder'
+import { keyForDrop, keyForTop } from '@/lib/chatOrder'
 import * as api from './api'
 import { useRemote } from './state'
 import { listedChats } from './format'
@@ -72,4 +72,12 @@ export function placeChat(zone: string, from: string, target: { id: string; afte
   if (key === null) return
   patch(from, { sortKey: key })
   void api.invoke('chats:place', from, key).catch(fail)
+}
+
+/** "Move to top": above every unpinned row, the desktop's own key (`keyForTop`). */
+export function moveToTop(id: string): void {
+  const rest = listedChats(useRemote.getState().chats).filter((c) => c.pinnedAt === undefined)
+  const key = keyForTop(rest, id, Date.now())
+  patch(id, { sortKey: key })
+  void api.invoke('chats:place', id, key).catch(fail)
 }

@@ -2,6 +2,7 @@ import * as React from 'react'
 import {
   Archive,
   ArchiveRestore,
+  ArrowUpToLine,
   Bot,
   ChartColumn,
   Check,
@@ -115,6 +116,12 @@ interface RowActions {
   remove(chat: ChatMeta): void
   /** Move the chat to (or out of) the Pinned section at the top of the sidebar. */
   togglePin(chat: ChatMeta): void
+  /**
+   * Put the chat above every other row in the list. Offered only on unpinned
+   * rows: a pin is ordered within its own section, and moving it here would
+   * unpin it (`placeChat`), which is a different gesture.
+   */
+  moveToTop(chat: ChatMeta): void
   /**
    * Take the chat out of the sidebar without deleting it. One direction only:
    * a row that is on screen is by definition not archived, and the way back is
@@ -371,6 +378,7 @@ function ChatItemRow({
   const onRename = (): void => actions.rename(chat)
   const onDelete = (): void => actions.remove(chat)
   const onTogglePin = (): void => actions.togglePin(chat)
+  const onMoveToTop = (): void => actions.moveToTop(chat)
   const onArchive = (): void => actions.archive(chat)
   const onNewInWorktree = (): void => actions.newInWorktree(chat)
   const pinned = chat.pinnedAt !== undefined
@@ -558,6 +566,11 @@ function ChatItemRow({
             <DropdownMenuItem onClick={onTogglePin}>
               {pinned ? <PinOff /> : <Pin />} {pinned ? 'Unpin' : 'Pin'}
             </DropdownMenuItem>
+            {!pinned && (
+              <DropdownMenuItem onClick={onMoveToTop}>
+                <ArrowUpToLine /> Move to top
+              </DropdownMenuItem>
+            )}
             <DropdownMenuItem onClick={onRename}>
               <Pencil /> Rename
             </DropdownMenuItem>
@@ -581,6 +594,11 @@ function ChatItemRow({
         <ContextMenuItem onClick={onTogglePin}>
           {pinned ? <PinOff /> : <Pin />} {pinned ? 'Unpin' : 'Pin'}
         </ContextMenuItem>
+        {!pinned && (
+          <ContextMenuItem onClick={onMoveToTop}>
+            <ArrowUpToLine /> Move to top
+          </ContextMenuItem>
+        )}
         <ContextMenuItem onClick={onRename}>
           <Pencil /> Rename
         </ContextMenuItem>
@@ -669,13 +687,21 @@ function SearchChatsDialog({
   onOpenChange,
   chats,
   now,
-  onOpen
+  onOpen,
+  onMoveToTop
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   chats: ChatMeta[]
   now: number
   onOpen: (id: string) => void
+  /**
+   * Search is how an old chat is found, and in compact mode it is often past
+   * the project's "recent chats" cut-off — no row to right-click, nothing to
+   * drag. So the palette carries "Move to top" itself (⌘↵, or the row's
+   * button), which opens the chat as well.
+   */
+  onMoveToTop: (id: string) => void
 }): React.JSX.Element {
   const [q, setQ] = React.useState('')
   const [idx, setIdx] = React.useState(0)
@@ -702,7 +728,8 @@ function SearchChatsDialog({
 
   React.useEffect(() => setIdx(0), [q])
 
-  const choose = (c: ChatMeta): void => {
+  const choose = (c: ChatMeta, toTop = false): void => {
+    if (toTop && c.pinnedAt === undefined) onMoveToTop(c.id)
     onOpen(c.id)
     onOpenChange(false)
   }
@@ -726,7 +753,7 @@ function SearchChatsDialog({
                 setIdx((i) => Math.max(i - 1, 0))
               } else if (e.key === 'Enter') {
                 e.preventDefault()
-                if (results[idx]) choose(results[idx])
+                if (results[idx]) choose(results[idx], e.metaKey || e.ctrlKey)
               }
             }}
             placeholder="Search chats across projects…"
@@ -741,10 +768,9 @@ function SearchChatsDialog({
             </div>
           ) : (
             results.map((c, i) => (
+              <div key={c.id} className="relative" onMouseEnter={() => setIdx(i)}>
               <button
-                key={c.id}
                 type="button"
-                onMouseEnter={() => setIdx(i)}
                 onClick={() => choose(c)}
                 className={cn(
                   'flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left transition-colors',
@@ -764,10 +790,33 @@ function SearchChatsDialog({
                   />
                   <span className="min-w-0 truncate">{labelOf(projectRoot(c), projectNames)}</span>
                 </span>
-                <span className="shrink-0 text-[11px] text-muted-foreground/50">
+                <span
+                  className={cn(
+                    'shrink-0 text-[11px] text-muted-foreground/50',
+                    // Yields its corner to the highlighted row's button, as a
+                    // sidebar row's timestamp yields to its ⋯.
+                    i === idx && c.pinnedAt === undefined && 'opacity-0'
+                  )}
+                >
                   {relativeTime(c.updatedAt, now)}
                 </span>
               </button>
+              {/* A sibling rather than a child: a button can't hold a button.
+                  Not offered on a pin, which is ordered in its own section. */}
+              {i === idx && c.pinnedAt === undefined && (
+                <WithTooltip label="Open and move to top · ⌘↵">
+                  <Button
+                    size="icon-sm"
+                    variant="ghost"
+                    aria-label="Open and move to top"
+                    className="absolute top-1/2 right-1 -translate-y-1/2"
+                    onClick={() => choose(c, true)}
+                  >
+                    <ArrowUpToLine />
+                  </Button>
+                </WithTooltip>
+              )}
+              </div>
             ))
           )}
         </div>
@@ -1343,6 +1392,7 @@ export function Sidebar(): React.JSX.Element {
   const [deleting, setDeleting] = React.useState<ChatMeta | null>(null)
   const [renameValue, setRenameValue] = React.useState('')
   const setChatPinned = useApp((s) => s.setChatPinned)
+  const moveChatToTop = useApp((s) => s.moveChatToTop)
   const setPinnedOrder = useApp((s) => s.setPinnedOrder)
   const placeChat = useApp((s) => s.placeChat)
   const setChatArchived = useApp((s) => s.setChatArchived)
@@ -1808,6 +1858,7 @@ export function Sidebar(): React.JSX.Element {
       },
       remove: (chat) => setDeleting(chat),
       togglePin: (chat) => void setChatPinned(chat.id, chat.pinnedAt === undefined),
+      moveToTop: (chat) => void moveChatToTop(chat.id),
       archive: (chat) => void setChatArchived(chat.id, true),
       newInWorktree: (chat) => {
         // Drops to the composer with the worktree preselected; the model picker
@@ -1823,7 +1874,7 @@ export function Sidebar(): React.JSX.Element {
       confirmProject: (kind, cwd) => setProjectPrompt({ kind, cwd }),
       removeProject: (cwd) => setProjectPrompt({ kind: 'remove', cwd })
     }),
-    [openChat, setChatPinned, setChatArchived, startInWorktree]
+    [openChat, setChatPinned, setChatArchived, moveChatToTop, startInWorktree]
   )
 
   // A chat row is identical wherever it appears — in its project group or in the
@@ -2444,6 +2495,7 @@ export function Sidebar(): React.JSX.Element {
         chats={chats}
         now={now}
         onOpen={(id) => void openChat(id)}
+        onMoveToTop={(id) => void moveChatToTop(id)}
       />
 
       {/* Which project a new chat starts in */}

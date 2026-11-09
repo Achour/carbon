@@ -1064,6 +1064,17 @@ function registerIpc(): void {
   ipcMain.handle(
     'chat:send',
     (_e, chatId: string, text: string, attachments?: Attachment[], label?: string) => {
+      // Settings → Chats → "Chat order: Recent activity". Here rather than in
+      // `manager.send`, which is also how a delegation's outcome and a resumed
+      // turn arrive: only the user's own send counts as activity. The phone's
+      // send is relayed through this same handler. A thread's side column is
+      // in no list, so there is nothing to move.
+      const chat = store.getDefaults().chatOrder === 'recent' ? store.getChat(chatId) : undefined
+      if (chat && !chat.sideOf) {
+        chat.sortKey = Date.now()
+        store.saveChatSoon(chatId)
+        emit({ type: 'meta', chatId, patch: { sortKey: chat.sortKey } })
+      }
       manager.send(chatId, text, attachments, label)
     }
   )

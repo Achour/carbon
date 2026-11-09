@@ -22,7 +22,7 @@ import {
   storedTranslucent,
   storedDepth
 } from '@/lib/themes'
-import { sortChats } from '@/lib/chatOrder'
+import { keyForTop, sortChats } from '@/lib/chatOrder'
 import type { ResolvedAppearance, ThemeDef, ThemeMode } from '@/lib/themes'
 import type { ImportedTheme } from '@shared/themeImport'
 import { loadNotifyPrefs, notify, saveNotifyPrefs, type NotifyPrefs } from '@/lib/notify'
@@ -1585,6 +1585,11 @@ interface AppState {
   setChatBookmark(chatId: string, messageId: string, text: string | null): Promise<void>
   setPinnedOrder(ids: string[]): Promise<void>
   placeChat(id: string, sortKey: number): Promise<void>
+  /**
+   * "Move to top": above every other row in the list (`keyForTop`). The way
+   * back for a chat that search found and a drag cannot reach.
+   */
+  moveChatToTop(id: string): Promise<void>
   /**
    * Archive/restore a chat. Archiving takes it out of every list (see
    * `listedChats`) and, if it is the chat on screen, drops to the home screen —
@@ -5481,6 +5486,13 @@ export const useApp = create<AppState>((set, get) => ({
       )
     }))
     await window.api.placeChat(id, sortKey)
+  },
+
+  async moveChatToTop(id) {
+    // Against the unpinned rows: the pins are their own section, and the list
+    // this key orders is the one under them.
+    const rest = get().chats.filter((c) => c.pinnedAt === undefined)
+    await get().placeChat(id, keyForTop(rest, id, Date.now()))
   },
 
   async setChatArchived(id, archived) {

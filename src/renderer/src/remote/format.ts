@@ -19,7 +19,7 @@ export function chatTitle(chat: Pick<ChatMeta, 'title'>): string {
 export function listedChats(chats: ChatMeta[]): ChatMeta[] {
   return chats
     .filter((c) => !c.ephemeral && !c.sideOf && !c.archivedAt && c.surface !== 'terminal')
-    // The desktop sidebar's order: `sortKey`, which only a drag moves.
+    // The desktop sidebar's order: `sortKey`, which only the user moves.
     .sort((a, b) => (b.sortKey ?? b.updatedAt) - (a.sortKey ?? a.updatedAt))
 }
 

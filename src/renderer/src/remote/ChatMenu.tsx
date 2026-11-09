@@ -1,9 +1,9 @@
 import * as React from 'react'
-import { Archive, Ellipsis, FileDiff, GitBranch, Pencil, Pin, PinOff } from 'lucide-react'
+import { Archive, ArrowUpToLine, Ellipsis, FileDiff, GitBranch, Pencil, Pin, PinOff } from 'lucide-react'
 import type { ChatMeta } from '@shared/types'
 import { navigate, newChatInWorktreeHash } from './App'
 import { chatTitle } from './format'
-import { rename, setArchived, setPinned } from './chatActions'
+import { moveToTop, rename, setArchived, setPinned } from './chatActions'
 import { Sheet, SheetRow } from './Sheet'
 
 /**
@@ -105,6 +105,16 @@ export function ChatMenu({ chat, onViewChanges }: { chat: ChatMeta; onViewChange
                 close()
               }}
             />
+            {!pinned && (
+              <SheetRow
+                icon={<ArrowUpToLine className="size-[18px]" />}
+                label="Move to top"
+                onClick={() => {
+                  moveToTop(chat.id)
+                  close()
+                }}
+              />
+            )}
             <SheetRow
               icon={<Archive className="size-[18px]" />}
               label="Archive"
