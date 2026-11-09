@@ -77,8 +77,9 @@ function place(id: string, sortKey: number): void {
   void api.invoke('chats:place', id, sortKey).catch(fail)
 }
 
-/** The desktop's `moveChatToTop`: key `now`, and a pin is left alone. */
+/** The desktop's `moveChatToTop`: key `now`; a pin or a side chat is left alone. */
 export function moveToTop(id: string): void {
-  if (useRemote.getState().chats.find((c) => c.id === id)?.pinnedAt !== undefined) return
+  const chat = useRemote.getState().chats.find((c) => c.id === id)
+  if (!chat || chat.pinnedAt !== undefined || chat.sideOf) return
   place(id, Date.now())
 }

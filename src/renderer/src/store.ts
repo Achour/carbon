@@ -570,6 +570,14 @@ export function visibleChats(chats: ChatMeta[]): ChatMeta[] {
  * — through the single call site at the top of `Sidebar` — the chat search's,
  * ⌘N's project list's, Recents' and the Pinned section's too.
  */
+/**
+ * Whether "Move to top" means anything for this chat: a pin is ordered in its
+ * own section (and `placeChat` would unpin it), and a side chat is in no list.
+ */
+export function canMoveToTop(chat: Pick<ChatMeta, 'pinnedAt' | 'sideOf'>): boolean {
+  return chat.pinnedAt === undefined && !chat.sideOf
+}
+
 export function listedChats(chats: ChatMeta[]): ChatMeta[] {
   return chats.filter((c) => !c.ephemeral && c.archivedAt === undefined)
 }
@@ -1585,7 +1593,7 @@ interface AppState {
   setChatBookmark(chatId: string, messageId: string, text: string | null): Promise<void>
   setPinnedOrder(ids: string[]): Promise<void>
   placeChat(id: string, sortKey: number): Promise<void>
-  /** Key `now`, as a new chat gets. A pin is left alone: `placeChat` would unpin it. */
+  /** Key `now`, as a new chat gets. A pin or a side chat is left alone (`canMoveToTop`). */
   moveChatToTop(id: string): Promise<void>
   /**
    * Archive/restore a chat. Archiving takes it out of every list (see
@@ -5504,7 +5512,8 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   async moveChatToTop(id) {
-    if (get().chats.find((c) => c.id === id)?.pinnedAt !== undefined) return
+    const chat = get().chats.find((c) => c.id === id)
+    if (!chat || !canMoveToTop(chat)) return
     await get().placeChat(id, Date.now())
   },
 

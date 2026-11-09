@@ -55,7 +55,7 @@ import {
   setDraggedRow
 } from '@/lib/threadDrag'
 import { draftSummary, sortedProjectDrafts, type ProjectDraft } from '@/lib/drafts'
-import { chatMeta, columnsOf, listedChats, useApp } from '@/store'
+import { canMoveToTop, chatMeta, columnsOf, listedChats, useApp } from '@/store'
 import { UpdateBanner } from '@/components/UpdateBanner'
 import { UsagePanel } from '@/components/UsagePanel'
 import { Button } from '@/components/ui/button'
@@ -759,52 +759,53 @@ function SearchChatsDialog({
             </div>
           ) : (
             results.map((c, i) => {
-              // A pin is ordered in its own section; the corner keeps its time.
-              const showTop = i === idx && c.pinnedAt === undefined
+              // A pin is ordered in its own section and a side chat is in no
+              // list; for either the corner keeps its time.
+              const showTop = i === idx && canMoveToTop(c)
               return (
-              <div key={c.id} className="relative" onMouseEnter={() => setIdx(i)}>
-              <button
-                type="button"
-                onClick={() => choose(c)}
-                className={cn(
-                  'flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left transition-colors',
-                  i === idx && 'bg-accent'
-                )}
-              >
-                <span className="min-w-0 flex-1 truncate text-[13px]">{c.title || 'New chat'}</span>
-                {/* This list is every project at once and groups by nothing, so
-                    the project caption is what tells two similarly-titled chats
-                    apart — and a caption is read, where a mark is recognized. */}
-                <span className="flex max-w-32 shrink-0 items-center gap-1.5 text-[11px] text-muted-foreground/70">
-                  <ProjectAvatar
-                    size="xs"
-                    root={projectRoot(c)}
-                    name={labelOf(projectRoot(c), projectNames)}
-                    icon={projectIcons[projectRoot(c)] ?? null}
-                  />
-                  <span className="min-w-0 truncate">{labelOf(projectRoot(c), projectNames)}</span>
-                </span>
-                <span
-                  className={cn('shrink-0 text-[11px] text-muted-foreground/50', showTop && 'opacity-0')}
+                <div key={c.id} className="relative" onMouseEnter={() => setIdx(i)}>
+                <button
+                  type="button"
+                  onClick={() => choose(c)}
+                  className={cn(
+                    'flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left transition-colors',
+                    i === idx && 'bg-accent'
+                  )}
                 >
-                  {relativeTime(c.updatedAt, now)}
-                </span>
-              </button>
-              {/* A sibling rather than a child: a button can't hold a button. */}
-              {showTop && (
-                <WithTooltip label="Open and move to top · ⌘↵">
-                  <Button
-                    size="icon-sm"
-                    variant="ghost"
-                    aria-label="Open and move to top"
-                    className="absolute top-1/2 right-1 -translate-y-1/2"
-                    onClick={() => choose(c, true)}
+                  <span className="min-w-0 flex-1 truncate text-[13px]">{c.title || 'New chat'}</span>
+                  {/* This list is every project at once and groups by nothing, so
+                      the project caption is what tells two similarly-titled chats
+                      apart — and a caption is read, where a mark is recognized. */}
+                  <span className="flex max-w-32 shrink-0 items-center gap-1.5 text-[11px] text-muted-foreground/70">
+                    <ProjectAvatar
+                      size="xs"
+                      root={projectRoot(c)}
+                      name={labelOf(projectRoot(c), projectNames)}
+                      icon={projectIcons[projectRoot(c)] ?? null}
+                    />
+                    <span className="min-w-0 truncate">{labelOf(projectRoot(c), projectNames)}</span>
+                  </span>
+                  <span
+                    className={cn('shrink-0 text-[11px] text-muted-foreground/50', showTop && 'opacity-0')}
                   >
-                    <ArrowUpToLine />
-                  </Button>
-                </WithTooltip>
-              )}
-              </div>
+                    {relativeTime(c.updatedAt, now)}
+                  </span>
+                </button>
+                {/* A sibling rather than a child: a button can't hold a button. */}
+                {showTop && (
+                  <WithTooltip label="Open and move to top · ⌘↵">
+                    <Button
+                      size="icon-sm"
+                      variant="ghost"
+                      aria-label="Open and move to top"
+                      className="absolute top-1/2 right-1 -translate-y-1/2"
+                      onClick={() => choose(c, true)}
+                    >
+                      <ArrowUpToLine />
+                    </Button>
+                  </WithTooltip>
+                )}
+                </div>
               )
             })
           )}
