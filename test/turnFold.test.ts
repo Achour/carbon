@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import type { AssistantPart, ChatMessage } from '../src/shared/types.ts'
-import { carryDisclosure, foldState, foldTurns, reportedDelegates } from '../src/renderer/src/lib/turnFold.ts'
+import { carryDisclosure, foldState, foldTurns, reportedDelegates, substantial } from '../src/renderer/src/lib/turnFold.ts'
 
 let clock = 0
 const user = (id: string): ChatMessage => ({ id, role: 'user', text: 'go', ts: (clock += 1000) })
@@ -669,4 +669,37 @@ test('a plain prompt does not stretch the turn before it', () => {
   const next = { ...user('u2'), ts: call.ts + 60_000 }
   const folds = foldTurns([opening, call, next])
   assert.equal(folds.get('u1')!.endTs, call.ts)
+})
+
+test('prose that says something survives the fold; narration does not', () => {
+  const finding = 'The cache key drops the tenant. '.repeat(12)
+  assert.equal(substantial('let me check the store'), false)
+  assert.equal(substantial(finding), true)
+  // Built like a document, however short.
+  assert.equal(substantial('## Findings\n\none bug'), true)
+  assert.equal(substantial('| a | b |\n|---|---|\n| 1 | 2 |'), true)
+  assert.equal(substantial('run this:\n```sh\nnpm test\n```'), true)
+
+  const fold = foldTurns([
+    user('u1'),
+    assistant('a1', [text('let me check')]),
+    assistant('a2', [tool('t1')]),
+    assistant('a3', [text(finding)]),
+    assistant('a4', [tool('t2')]),
+    assistant('a5', [text('Done.')])
+  ]).get('u1')!
+  // The boundary is still the trailing run — the kept prose draws ahead of it
+  // (`AssistantBlock`) — and the copy is what the folded turn shows.
+  assert.deepEqual(fold.answerFrom, { messageId: 'a5', partIndex: 0 })
+  assert.equal(fold.answer, `${finding}\n\nDone.`)
+})
+
+test('kept prose is not copied twice when it is the answer itself', () => {
+  const finding = 'The cache key drops the tenant. '.repeat(12)
+  const fold = foldTurns([
+    user('u1'),
+    assistant('a1', [tool('t1'), text(finding), tool('t2')])
+  ]).get('u1')!
+  assert.deepEqual(fold.answerFrom, { messageId: 'a1', partIndex: 1 })
+  assert.equal(fold.answer, finding)
 })

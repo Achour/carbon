@@ -915,6 +915,20 @@ prose at all keeps the call it ended on, so a folded stretch always shows
 where it stopped — and when that call is one of several in a message, only it
 (the run splits at the part, not at the message).
 
+**Prose that says something is a result too** (`substantial`). The answer is
+the trailing run, and everything said before it folded with the calls around
+it as a "let me check" preamble. Mostly it is one. But a model also stops
+mid-turn to say what it found (the diagnosis, the table, the plan), then runs
+one more command and ends on "Done.": the reader watched the important part
+stream and lost it when the turn settled. So a text part ahead of the boundary
+that is long (`SUBSTANTIAL_CHARS`) or built like a document (a heading, a
+fenced block, a table) draws where it was written, through the same
+hidden-prefix pass in `AssistantBlock` that keeps a screenshot, and leads the
+copied answer, since the copy is what the folded turn shows. One-line narration
+still folds. The boundary itself does not move, so nothing that reads
+`answerFrom` changed. The cut is a guess at intent from shape and is not
+measured against real chats.
+
 **A picture a call produced is a result, not work.** A screenshot arrives as
 `outputImages` on the call that took it, and `ToolOutputImages` already draws
 *outside* the activity row's disclosure precisely so a capture survives that row

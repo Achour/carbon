@@ -22,6 +22,7 @@ import {
 import type { AssistantMessage, EventMessage, ToolPart, UserMessage } from '@shared/types'
 import { CHAT_BLEED, CHAT_BLEED_PAD, CHAT_FRAME } from '@/lib/chatColumn'
 import { groupToolRuns, type PartRun } from '@/lib/toolRuns'
+import { substantial } from '@/lib/turnFold'
 import { copyText } from '@/lib/insecureContext'
 import { cn } from '@/lib/utils'
 import { formatCost } from '@/lib/format'
@@ -509,6 +510,11 @@ export const AssistantBlock = React.memo(function AssistantBlock({
     else if (part?.type === 'tool' && part.status === 'success' && isInlineVisual(part)) {
       items.push({ kind: 'visual', part })
     } else if (part?.type === 'tool' && isAgentish(part)) survivors.push(part)
+    // …and so is prose that says something. A diagnosis written between two
+    // calls streamed past the reader and then folded with them (`substantial`
+    // in `turnFold.ts`); it draws where it was written, under its own index
+    // as key, so opening the turn re-renders it rather than rebuilding it.
+    else if (part?.type === 'text' && substantial(part.text)) items.push({ kind: 'single', part, index: i })
   }
   if (survivors.length) items.push({ kind: 'agents', parts: survivors })
   items.push(

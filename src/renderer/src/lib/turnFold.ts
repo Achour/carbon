@@ -145,6 +145,7 @@ export interface Stretch {
   closed: boolean
   /** Its answer — the trailing prose, or its last prose before a few calls. */
   answerFrom: AnswerStart | null
+  /** The answer's text, led by the earlier prose the fold keeps (`substantial`). */
   answer: string
   /** Folding it would hide something. */
   collapsible: boolean
@@ -199,6 +200,46 @@ export interface FoldOptions {
    * call's turn live, not the spawn's.
    */
   delegates?: Delegates
+}
+
+/** Prose this long is taken to be saying something (`substantial`). */
+export const SUBSTANTIAL_CHARS = 280
+
+/**
+ * Prose written *between* calls that a folded turn still shows.
+ *
+ * The answer is the trailing text run, and everything said before it used to
+ * fold with the calls around it, on the reasoning that it is a "let me check"
+ * preamble. Mostly it is. But a model also stops mid-turn to say what it found
+ * — the diagnosis, the table, the plan — and then runs one more command and
+ * ends on "Done.": the reader watched the important part stream and lost it
+ * the moment the turn settled, with nothing on the folded turn to say it was
+ * there. So prose that is long, or built like a document (a heading, a fenced
+ * block, a table), survives where it was written, and one-line narration still
+ * folds. The cut is a guess at intent from shape, not measured against real
+ * chats; wrong in the keeping direction costs a paragraph of height, wrong in
+ * the other loses the thing the turn was for.
+ */
+export function substantial(text: string): boolean {
+  const trimmed = text.trim()
+  return trimmed.length >= SUBSTANTIAL_CHARS || /^(?:#{1,6} |```|\|.*\|\s*$)/m.test(trimmed)
+}
+
+/**
+ * The substantial prose of a stretch ahead of its answer, in order: what the
+ * fold keeps on screen besides the answer, and so what the copy leads with.
+ */
+function keptProse(piece: TurnMessage[], answerFrom: AnswerStart | null): string[] {
+  const kept: string[] = []
+  for (const message of piece) {
+    if (message.role !== 'assistant') continue
+    for (let pi = 0; pi < message.parts.length; pi++) {
+      if (answerFrom?.messageId === message.id && pi >= answerFrom.partIndex) return kept
+      const part = message.parts[pi]
+      if (part?.type === 'text' && substantial(part.text)) kept.push(part.text)
+    }
+  }
+  return kept
 }
 
 /** A part that draws nothing: a hole, or text/thinking whose text is withheld. */
@@ -483,7 +524,8 @@ function cutStretches(turn: TurnMessage[]): { stretches: Stretch[]; stretchOf: M
       ...(close ? { closeId: close.id } : {}),
       closed: !!close,
       answerFrom,
-      answer,
+      // What the folded stretch shows: the prose it keeps, then its answer.
+      answer: [...(collapsible ? keptProse(piece, answerFrom) : []), answer].filter(Boolean).join('\n\n'),
       collapsible
     })
     piece = []
