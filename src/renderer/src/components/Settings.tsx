@@ -1001,11 +1001,6 @@ const SIDEBAR_DENSITIES = [
   { id: 'detailed', label: 'Detailed', icon: LayoutList }
 ] as const
 
-/**
- * `AppDefaults.chatOrder`. Both orders live in one key (`ChatMeta.sortKey`), so
- * switching rearranges nothing on the spot: Recent activity only starts moving
- * chats from the next send.
- */
 const CHAT_ORDERS: { id: ChatOrder; label: string; icon: LucideIcon }[] = [
   { id: 'manual', label: 'Manual', icon: GripVertical },
   { id: 'recent', label: 'Recent activity', icon: History }

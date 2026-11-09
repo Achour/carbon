@@ -116,11 +116,7 @@ interface RowActions {
   remove(chat: ChatMeta): void
   /** Move the chat to (or out of) the Pinned section at the top of the sidebar. */
   togglePin(chat: ChatMeta): void
-  /**
-   * Put the chat above every other row in the list. Offered only on unpinned
-   * rows: a pin is ordered within its own section, and moving it here would
-   * unpin it (`placeChat`), which is a different gesture.
-   */
+  /** Unpinned rows only (`moveChatToTop`). */
   moveToTop(chat: ChatMeta): void
   /**
    * Take the chat out of the sidebar without deleting it. One direction only:
@@ -695,12 +691,7 @@ function SearchChatsDialog({
   chats: ChatMeta[]
   now: number
   onOpen: (id: string) => void
-  /**
-   * Search is how an old chat is found, and in compact mode it is often past
-   * the project's "recent chats" cut-off — no row to right-click, nothing to
-   * drag. So the palette carries "Move to top" itself (⌘↵, or the row's
-   * button), which opens the chat as well.
-   */
+  /** ⌘↵ or the row's button; see "Move to top" in `docs/sidebar.md`. */
   onMoveToTop: (id: string) => void
 }): React.JSX.Element {
   const [q, setQ] = React.useState('')
@@ -729,7 +720,7 @@ function SearchChatsDialog({
   React.useEffect(() => setIdx(0), [q])
 
   const choose = (c: ChatMeta, toTop = false): void => {
-    if (toTop && c.pinnedAt === undefined) onMoveToTop(c.id)
+    if (toTop) onMoveToTop(c.id)
     onOpen(c.id)
     onOpenChange(false)
   }
@@ -767,7 +758,10 @@ function SearchChatsDialog({
               {q.trim() ? 'No chats match your search.' : 'No chats yet.'}
             </div>
           ) : (
-            results.map((c, i) => (
+            results.map((c, i) => {
+              // A pin is ordered in its own section; the corner keeps its time.
+              const showTop = i === idx && c.pinnedAt === undefined
+              return (
               <div key={c.id} className="relative" onMouseEnter={() => setIdx(i)}>
               <button
                 type="button"
@@ -791,19 +785,13 @@ function SearchChatsDialog({
                   <span className="min-w-0 truncate">{labelOf(projectRoot(c), projectNames)}</span>
                 </span>
                 <span
-                  className={cn(
-                    'shrink-0 text-[11px] text-muted-foreground/50',
-                    // Yields its corner to the highlighted row's button, as a
-                    // sidebar row's timestamp yields to its ⋯.
-                    i === idx && c.pinnedAt === undefined && 'opacity-0'
-                  )}
+                  className={cn('shrink-0 text-[11px] text-muted-foreground/50', showTop && 'opacity-0')}
                 >
                   {relativeTime(c.updatedAt, now)}
                 </span>
               </button>
-              {/* A sibling rather than a child: a button can't hold a button.
-                  Not offered on a pin, which is ordered in its own section. */}
-              {i === idx && c.pinnedAt === undefined && (
+              {/* A sibling rather than a child: a button can't hold a button. */}
+              {showTop && (
                 <WithTooltip label="Open and move to top · ⌘↵">
                   <Button
                     size="icon-sm"
@@ -817,7 +805,8 @@ function SearchChatsDialog({
                 </WithTooltip>
               )}
               </div>
-            ))
+              )
+            })
           )}
         </div>
       </DialogContent>

@@ -1061,34 +1061,40 @@ function registerIpc(): void {
     return { ok: true }
   })
 
+  // Settings → Chats → "Chat order: Recent activity": something the user sent
+  // moves the chat to the top. Called from the handlers the user's own sends
+  // arrive on (the phone's are relayed through the same ones), not from
+  // `manager.send`, which a delegation's outcome and a resumed turn also use.
+  // A thread's side column is in no list, so there is nothing to move.
+  const hoistIfRecent = (chatId: string): void => {
+    if (store.getDefaults().chatOrder !== 'recent') return
+    const chat = store.getChat(chatId)
+    if (!chat || chat.sideOf) return
+    chat.sortKey = Date.now()
+    store.saveChatSoon(chatId)
+    emit({ type: 'meta', chatId, patch: { sortKey: chat.sortKey } })
+  }
+
   ipcMain.handle(
     'chat:send',
     (_e, chatId: string, text: string, attachments?: Attachment[], label?: string) => {
-      // Settings → Chats → "Chat order: Recent activity". Here rather than in
-      // `manager.send`, which is also how a delegation's outcome and a resumed
-      // turn arrive: only the user's own send counts as activity. The phone's
-      // send is relayed through this same handler. A thread's side column is
-      // in no list, so there is nothing to move.
-      const chat = store.getDefaults().chatOrder === 'recent' ? store.getChat(chatId) : undefined
-      if (chat && !chat.sideOf) {
-        chat.sortKey = Date.now()
-        store.saveChatSoon(chatId)
-        emit({ type: 'meta', chatId, patch: { sortKey: chat.sortKey } })
-      }
+      hoistIfRecent(chatId)
       manager.send(chatId, text, attachments, label)
     }
   )
 
-  ipcMain.handle('chat:steer', (_e, chatId: string, text: string, attachments?: Attachment[]) =>
-    manager.steer(chatId, text, attachments)
-  )
+  ipcMain.handle('chat:steer', (_e, chatId: string, text: string, attachments?: Attachment[]) => {
+    hoistIfRecent(chatId)
+    return manager.steer(chatId, text, attachments)
+  })
   ipcMain.handle('chat:cancel-steer', (_e, chatId: string, id: string) =>
     manager.cancelSteer(chatId, id)
   )
 
-  ipcMain.handle('chat:review', (_e, chatId: string, target: CodexReviewTarget) =>
-    manager.startReview(chatId, target)
-  )
+  ipcMain.handle('chat:review', (_e, chatId: string, target: CodexReviewTarget) => {
+    hoistIfRecent(chatId)
+    return manager.startReview(chatId, target)
+  })
 
   ipcMain.handle('codex:goal:get', (_e, chatId: string) => manager.codexGoalGet(chatId))
   ipcMain.handle(
@@ -1125,9 +1131,10 @@ function registerIpc(): void {
     (_e, chatId: string, patch: ChatOptionsPatch) => manager.setOptions(chatId, patch)
   )
 
-  ipcMain.handle('chat:edit-message', (_e, chatId: string, messageId: string, text: string) =>
-    manager.editMessage(chatId, messageId, text)
-  )
+  ipcMain.handle('chat:edit-message', (_e, chatId: string, messageId: string, text: string) => {
+    hoistIfRecent(chatId)
+    return manager.editMessage(chatId, messageId, text)
+  })
   ipcMain.handle('chat:rewind-files', (_e, chatId: string, userMessageId: string, dryRun: boolean) =>
     manager.rewindFiles(chatId, userMessageId, dryRun)
   )

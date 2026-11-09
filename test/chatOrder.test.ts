@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { keyForDrop, keyForTop, sortChats } from '../src/renderer/src/lib/chatOrder.ts'
+import { keyForDrop, sortChats } from '../src/renderer/src/lib/chatOrder.ts'
 
 const list = [
   { id: 'a', sortKey: 400, updatedAt: 0 },
@@ -40,12 +40,4 @@ test('a chat with no key sorts by updatedAt', () => {
     { id: 'z', sortKey: 200, updatedAt: 999 }
   ]
   assert.deepEqual(sortChats(mixed).map((c) => c.id), ['y', 'x', 'z'])
-})
-
-test('move to top takes now, or one above a key already past it', () => {
-  assert.equal(keyForTop(list, 'c', 1000), 1000)
-  assert.equal(keyForTop(list, 'c', 50), 401)
-  // A chat already on top is not measured against its own key.
-  assert.equal(keyForTop(list, 'a', 50), 301)
-  assert.equal(keyForTop([], 'a', 50), 50)
 })

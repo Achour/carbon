@@ -56,23 +56,3 @@ export function keyForDrop(
   // still lands the chat below `above`, which ties sort in list order.
   return hi > lo ? lo + (hi - lo) / 2 : lo
 }
-
-/**
- * The key that puts a chat above every other row: "Move to top", which is the
- * way back for a chat found through search that sits too far down to drag.
- *
- * `now` normally wins, since that is the key a new chat gets. It loses only to
- * a key already above it (a chat dragged to the top takes its neighbour's key
- * + 1, and a clock that went backwards leaves keys in the future), and then
- * the chat goes one above that instead. `id` is left out so a chat already on
- * top is not measured against itself.
- */
-export function keyForTop(
-  list: Pick<ChatMeta, 'id' | 'sortKey' | 'updatedAt'>[],
-  id: string,
-  now: number
-): number {
-  let top = -Infinity
-  for (const c of list) if (c.id !== id) top = Math.max(top, sortKeyOf(c))
-  return Math.max(now, top + 1)
-}

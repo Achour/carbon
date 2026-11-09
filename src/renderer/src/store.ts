@@ -22,7 +22,7 @@ import {
   storedTranslucent,
   storedDepth
 } from '@/lib/themes'
-import { keyForTop, sortChats } from '@/lib/chatOrder'
+import { sortChats, sortKeyOf } from '@/lib/chatOrder'
 import type { ResolvedAppearance, ThemeDef, ThemeMode } from '@/lib/themes'
 import type { ImportedTheme } from '@shared/themeImport'
 import { loadNotifyPrefs, notify, saveNotifyPrefs, type NotifyPrefs } from '@/lib/notify'
@@ -1585,10 +1585,7 @@ interface AppState {
   setChatBookmark(chatId: string, messageId: string, text: string | null): Promise<void>
   setPinnedOrder(ids: string[]): Promise<void>
   placeChat(id: string, sortKey: number): Promise<void>
-  /**
-   * "Move to top": above every other row in the list (`keyForTop`). The way
-   * back for a chat that search found and a drag cannot reach.
-   */
+  /** Key `now`, as a new chat gets. A pin is left alone: `placeChat` would unpin it. */
   moveChatToTop(id: string): Promise<void>
   /**
    * Archive/restore a chat. Archiving takes it out of every list (see
@@ -2426,6 +2423,24 @@ function saveThreadOrder(order: Record<string, string[]>): void {
 function readThreadLayout(): ThreadLayout | null {
   const v = localStorage.getItem('threadLayout')
   return v === 'columns' || v === 'grid' ? v : null
+}
+
+/**
+ * A `meta` patch applied to `chats`. Only a `sortKey` moves a row, and even
+ * then only when the row's new key is out of order with its neighbours —
+ * Recent activity stamps one on every send, nearly always to the chat that is
+ * already on top, and re-sorting the whole list for that changes nothing.
+ */
+function patchChats(chats: ChatMeta[], id: string, patch: Partial<ChatMeta>): ChatMeta[] {
+  const next = chats.map((c) => (c.id === id ? { ...c, ...patch } : c))
+  if (!('sortKey' in patch)) return next
+  const i = next.findIndex((c) => c.id === id)
+  if (i === -1) return next
+  const key = sortKeyOf(next[i])
+  const inOrder =
+    (i === 0 || sortKeyOf(next[i - 1]) >= key) &&
+    (i === next.length - 1 || key >= sortKeyOf(next[i + 1]))
+  return inOrder ? next : sortChats(next)
 }
 
 export const useApp = create<AppState>((set, get) => ({
@@ -5489,10 +5504,8 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   async moveChatToTop(id) {
-    // Against the unpinned rows: the pins are their own section, and the list
-    // this key orders is the one under them.
-    const rest = get().chats.filter((c) => c.pinnedAt === undefined)
-    await get().placeChat(id, keyForTop(rest, id, Date.now()))
+    if (get().chats.find((c) => c.id === id)?.pinnedAt !== undefined) return
+    await get().placeChat(id, Date.now())
   },
 
   async setChatArchived(id, archived) {
@@ -5760,10 +5773,7 @@ export const useApp = create<AppState>((set, get) => ({
           // would replay all the churn `message` no longer causes.
           // A `sortKey` is the one field that *is* a position — a drop, or a
           // chat leaving its thread — so that patch alone re-sorts.
-          chats:
-            'sortKey' in ev.patch
-              ? sortChats(st.chats.map((c) => (c.id === ev.chatId ? { ...c, ...ev.patch } : c)))
-              : st.chats.map((c) => (c.id === ev.chatId ? { ...c, ...ev.patch } : c)),
+          chats: patchChats(st.chats, ev.chatId, ev.patch),
           // Any options patch invalidates a Fast reading — it always carries the
           // tier, and a model change can flip Fast support on its own. Drop it
           // and wait for the session to report again; it re-inits on a live
